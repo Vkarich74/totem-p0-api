@@ -1,53 +1,57 @@
 import Database from "better-sqlite3";
 
-export const db = new Database("totem.db");
+const db = new Database("totem.db");
 
-// === TABLES ===
+// ===== CONTEXT =====
+export function getBookingContextBySlugs(db, { master_slug, salon_slug }) {
+  return db.prepare(`
+    SELECT
+      m.id AS master_id, m.active AS master_active,
+      s.id AS salon_id,  s.active AS salon_active,
+      sm.active AS link_active
+    FROM masters m
+    JOIN salon_masters sm ON sm.master_id = m.id
+    JOIN salons s ON s.id = sm.salon_id
+    WHERE m.slug = ? AND s.slug = ?
+    LIMIT 1
+  `).get(master_slug, salon_slug);
+}
 
-// masters
-db.prepare(`
-  CREATE TABLE IF NOT EXISTS masters (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    slug TEXT UNIQUE NOT NULL
-  )
-`).run();
+// ===== SCHEDULE =====
+export function getActiveScheduleForWeekday(db, { master_id, salon_id, weekday }) {
+  return db.prepare(`
+    SELECT start_time, end_time
+    FROM master_schedule
+    WHERE master_id = ?
+      AND salon_id = ?
+      AND weekday = ?
+      AND active = 1
+    ORDER BY start_time
+  `).all(master_id, salon_id, weekday);
+}
 
-// salons
-db.prepare(`
-  CREATE TABLE IF NOT EXISTS salons (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    slug TEXT UNIQUE NOT NULL
-  )
-`).run();
+// ===== BOOKINGS =====
+export function getBookingsForDate(db, { master_id, salon_id, date }) {
+  return db.prepare(`
+    SELECT start_time, end_time
+    FROM bookings
+    WHERE master_id = ?
+      AND salon_id = ?
+      AND date = ?
+      AND active = 1
+  `).all(master_id, salon_id, date);
+}
 
-// master ↔ salon
-db.prepare(`
-  CREATE TABLE IF NOT EXISTS salon_masters (
-    master_id TEXT NOT NULL,
-    salon_id TEXT NOT NULL,
-    active INTEGER NOT NULL,
-    PRIMARY KEY (master_id, salon_id)
-  )
-`).run();
+// ===== BLOCKS =====
+export function getBlocksForDate(db, { master_id, salon_id, date }) {
+  return db.prepare(`
+    SELECT start_time, end_time
+    FROM booking_blocks
+    WHERE master_id = ?
+      AND salon_id = ?
+      AND date = ?
+      AND active = 1
+  `).all(master_id, salon_id, date);
+}
 
-// === SEED (idempotent) ===
-
-// master
-db.prepare(`
-  INSERT OR IGNORE INTO masters (id, name, slug)
-  VALUES ('m1', 'Test Master', 'test-master')
-`).run();
-
-// salon
-db.prepare(`
-  INSERT OR IGNORE INTO salons (id, name, slug)
-  VALUES ('s1', 'Totem Demo Salon', 'totem-demo-salon')
-`).run();
-
-// relation
-db.prepare(`
-  INSERT OR IGNORE INTO salon_masters (master_id, salon_id, active)
-  VALUES ('m1', 's1', 1)
-`).run();
+export default db;
