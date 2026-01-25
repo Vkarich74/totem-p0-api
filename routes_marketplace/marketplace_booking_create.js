@@ -1,74 +1,53 @@
-/**
- * P3.3 Marketplace Booking Create
- * Core booking logic is NOT duplicated.
- */
+import crypto from "node:crypto";
+import { validateRange, findOverlap } from "../lib/overlap.js";
 
 export function registerMarketplaceBookingCreate(app, db) {
-  app.post("/marketplace/booking/create", (req, res, next) => {
-    const {
-      owner_id,
-      client_id,
-      master_slug,
-      salon_slug,
-      service_id,
-      date,
-      start_time
-    } = req.body || {};
+  app.post("/marketplace/booking/create", (req, res) => {
+    const { salon_slug, master_slug, service_id, day } = req.body;
+    const startMin = Number(req.body?.start_min);
+    const endMin = Number(req.body?.end_min);
 
-    if (!owner_id || !client_id || !master_slug || !salon_slug || !service_id || !date || !start_time) {
-      return res.status(400).json({ error: "missing_params" });
+    if (!salon_slug || !master_slug || !service_id || !day) {
+      return res.status(400).json({ ok: false, error: "missing_fields" });
     }
 
-    try {
-      const tx = db.transaction(() => {
-        // 1. commission (P3.3 — фикс 10%)
-        const commission_pct = 10;
+    const vr = validateRange(startMin, endMin);
+    if (!vr.ok) return res.status(400).json({ ok: false, error: vr.error });
 
-        // 2. создаём booking через core-таблицы
-        const master = db.prepare("SELECT id FROM masters WHERE slug = ?").get(master_slug);
-        if (!master) throw { code: 404, msg: "master_not_found" };
+    const existing = db.all(
+      `SELECT booking_id, start_min, end_min
+       FROM marketplace_bookings
+       WHERE salon_slug = ? AND master_slug = ? AND day = ?`,
+      [salon_slug, master_slug, day]
+    );
 
-        const salon = db.prepare("SELECT id FROM salons WHERE slug = ?").get(salon_slug);
-        if (!salon) throw { code: 404, msg: "salon_not_found" };
-
-        const service = db.prepare(`
-          SELECT duration_min, price
-          FROM services
-          WHERE id = ? AND active = 1
-        `).get(service_id);
-        if (!service) throw { code: 404, msg: "service_not_found" };
-
-        // считаем end_time
-        const [h, m] = start_time.split(":").map(Number);
-        const endMin = h * 60 + m + service.duration_min;
-        const end_time =
-          String(Math.floor(endMin / 60)).padStart(2, "0") +
-          ":" +
-          String(endMin % 60).padStart(2, "0");
-
-        // 3. вставка в core bookings (БЕЗ дублирования логики overlap — она уже в БД-фактах)
-        const info = db.prepare(`
-          INSERT INTO bookings
-            (master_id, salon_id, service_id, date, start_time, end_time, active)
-          VALUES (?, ?, ?, ?, ?, ?, 1)
-        `).run(master.id, salon.id, service_id, date, start_time, end_time);
-
-        // 4. marketplace ledger
-        db.prepare(`
-          INSERT INTO marketplace_bookings
-            (booking_id, owner_id, client_id, price, commission_pct)
-          VALUES (?, ?, ?, ?, ?)
-        `).run(info.lastInsertRowid, owner_id, client_id, service.price, commission_pct);
-
-        return {
-          booking_id: info.lastInsertRowid,
-          commission_pct
-        };
+    const conflict = findOverlap(existing, startMin, endMin);
+    if (conflict) {
+      return res.status(409).json({
+        ok: false,
+        error: "time_overlap",
+        conflict,
       });
-
-      res.json({ ok: true, ...tx() });
-    } catch (err) {
-      next(err);
     }
+
+    const bookingId = "bk_" + crypto.randomBytes(6).toString("hex");
+
+    db.run(
+      `INSERT INTO marketplace_bookings
+       (booking_id, salon_slug, master_slug, service_id, day, start_min, end_min, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        bookingId,
+        salon_slug,
+        master_slug,
+        service_id,
+        day,
+        startMin,
+        endMin,
+        new Date().toISOString(),
+      ]
+    );
+
+    res.json({ ok: true, booking_id: bookingId });
   });
 }
