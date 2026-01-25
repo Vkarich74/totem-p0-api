@@ -1,36 +1,49 @@
 import express from "express";
+import { db } from "./db.js";
 
-console.log("=== TOTEM P1.1 INDEX LOADED ===");
+console.log("=== TOTEM P1.2 DB MODE ===");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const masters = [
-  { id: "m1", name: "Test Master", slug: "test-master" }
-];
-
-const salons = [
-  { id: "s1", name: "Totem Demo Salon", slug: "totem-demo-salon" }
-];
-
-const salonMasters = [
-  { masterId: "m1", salonId: "s1", active: true }
-];
-
 app.get("/booking/start", (req, res) => {
-  const master = masters.find(m => m.slug === req.query.master_slug);
-  if (!master) return res.json({ ok: false, error: "MASTER_NOT_FOUND" });
+  const { master_slug, source } = req.query;
 
-  const rel = salonMasters.find(sm => sm.masterId === master.id && sm.active);
-  if (!rel) return res.json({ ok: false, error: "MASTER_NOT_ACTIVE" });
+  if (!master_slug) {
+    return res.json({ ok: false, error: "MASTER_SLUG_REQUIRED" });
+  }
 
-  const salon = salons.find(s => s.id === rel.salonId);
+  const master = db
+    .prepare("SELECT id, name, slug FROM masters WHERE slug = ?")
+    .get(master_slug);
+
+  if (!master) {
+    return res.json({ ok: false, error: "MASTER_NOT_FOUND" });
+  }
+
+  const relation = db
+    .prepare(
+      "SELECT salon_id FROM salon_masters WHERE master_id = ? AND active = 1"
+    )
+    .get(master.id);
+
+  if (!relation) {
+    return res.json({ ok: false, error: "MASTER_NOT_ACTIVE" });
+  }
+
+  const salon = db
+    .prepare("SELECT id, name, slug FROM salons WHERE id = ?")
+    .get(relation.salon_id);
+
+  if (!salon) {
+    return res.json({ ok: false, error: "SALON_NOT_FOUND" });
+  }
 
   return res.json({
     ok: true,
     master,
     salon,
-    source: req.query.source || null
+    source: source || null
   });
 });
 
