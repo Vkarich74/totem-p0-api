@@ -1,65 +1,50 @@
 import express from "express";
-import db from "./db/index.js";
+import bodyParser from "body-parser";
+import db from "./db.js";
 
-console.log("=== TOTEM P1.4.2 SALON SELECT MODE ===");
+// BOOKINGS
+import { registerBookingSlots } from "./routes/booking_slots.js";
+import { registerBookingCreate } from "./routes/booking_create.js";
+import { registerBookingCancel } from "./routes/booking_cancel.js";
+
+// BLOCKS
+import { registerBlocksCreate } from "./routes/blocks_create.js";
+import { registerBlocksCancel } from "./routes/blocks_cancel.js";
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = 3000;
 
-app.get("/booking/start", async (req, res) => {
-  const { master_slug, salon_slug, source } = req.query;
+app.use(bodyParser.json());
 
-  if (!master_slug) {
-    return res.json({ ok: false, error: "MASTER_SLUG_REQUIRED" });
+app.get("/", (req, res) => {
+  res.json({ ok: true, service: "TOTEM API", version: "P2.5" });
+});
+
+// routes
+registerBookingSlots(app, db);
+registerBookingCreate(app, db);
+registerBookingCancel(app, db);
+
+registerBlocksCreate(app, db);
+registerBlocksCancel(app, db);
+
+// 🔥 ГЛОБАЛЬНЫЙ ERROR HANDLER (КАНОН)
+app.use((err, req, res, next) => {
+  console.error("GLOBAL ERROR:", err);
+
+  if (typeof err?.code === "number") {
+    return res.status(err.code).json({ error: err.msg });
   }
 
-  try {
-    const master = await db.getMasterBySlug(master_slug);
-    if (!master) {
-      return res.json({ ok: false, error: "MASTER_NOT_FOUND" });
-    }
+  return res.status(500).json({ error: "internal_error" });
+});
 
-    // Если salon_slug указан — проверяем конкретный салон
-    if (salon_slug) {
-      const salon = await db.getActiveSalonBySlug(master.id, salon_slug);
-      if (!salon) {
-        return res.json({ ok: false, error: "SALON_NOT_ALLOWED" });
-      }
-
-      return res.json({
-        ok: true,
-        master,
-        salon,
-        source: source || null
-      });
-    }
-
-    // salon_slug не указан — смотрим количество салонов
-    const salons = await db.getActiveSalonsByMasterId(master.id);
-    if (!salons || salons.length === 0) {
-      return res.json({ ok: false, error: "MASTER_NOT_ACTIVE" });
-    }
-
-    if (salons.length > 1) {
-      return res.json({
-        ok: false,
-        error: "SALON_REQUIRED",
-        salons
-      });
-    }
-
-    // ровно один салон — авто-выбор
-    return res.json({
-      ok: true,
-      master,
-      salon: salons[0],
-      source: source || null
-    });
-  } catch (e) {
-    return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
-  }
+// 404
+app.use((req, res) => {
+  res.status(404).json({ error: "route_not_found" });
 });
 
 app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
+  console.log("=== TOTEM CORE P2.5 ===");
+  console.log(`Server running on port ${PORT}`);
 });

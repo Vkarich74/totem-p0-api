@@ -1,80 +1,131 @@
 import Database from "better-sqlite3";
-import pkg from "pg";
-const { Pool } = pkg;
 
-let db;
+const db = new Database("totem.db");
 
-if (process.env.DATABASE_URL) {
-  // ===== POSTGRES =====
-  const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }
-  });
+// ===== TABLES =====
 
-  db = {
-    async getMasterBySlug(slug) {
-      const r = await pool.query(
-        "SELECT id, name, slug FROM masters WHERE slug = $1",
-        [slug]
-      );
-      return r.rows[0] || null;
-    },
+db.prepare(`
+CREATE TABLE IF NOT EXISTS masters (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  slug TEXT UNIQUE NOT NULL,
+  active INTEGER DEFAULT 1
+)
+`).run();
 
-    async getActiveSalonsByMasterId(masterId) {
-      const r = await pool.query(
-        `SELECT s.id, s.name, s.slug
-         FROM salon_masters sm
-         JOIN salons s ON s.id = sm.salon_id
-         WHERE sm.master_id = $1 AND sm.active = true`,
-        [masterId]
-      );
-      return r.rows;
-    },
+db.prepare(`
+CREATE TABLE IF NOT EXISTS salons (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  slug TEXT UNIQUE NOT NULL,
+  active INTEGER DEFAULT 1
+)
+`).run();
 
-    async getActiveSalonBySlug(masterId, salonSlug) {
-      const r = await pool.query(
-        `SELECT s.id, s.name, s.slug
-         FROM salon_masters sm
-         JOIN salons s ON s.id = sm.salon_id
-         WHERE sm.master_id = $1 AND sm.active = true AND s.slug = $2`,
-        [masterId, salonSlug]
-      );
-      return r.rows[0] || null;
+db.prepare(`
+CREATE TABLE IF NOT EXISTS salon_masters (
+  master_id TEXT NOT NULL,
+  salon_id TEXT NOT NULL,
+  active INTEGER DEFAULT 1,
+  PRIMARY KEY (master_id, salon_id)
+)
+`).run();
+
+db.prepare(`
+CREATE TABLE IF NOT EXISTS services (
+  id TEXT PRIMARY KEY,
+  salon_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  duration_min INTEGER NOT NULL,
+  price INTEGER NOT NULL,
+  active INTEGER DEFAULT 1
+)
+`).run();
+
+db.prepare(`
+CREATE TABLE IF NOT EXISTS master_services (
+  master_id TEXT NOT NULL,
+  service_id TEXT NOT NULL,
+  PRIMARY KEY (master_id, service_id)
+)
+`).run();
+
+// ===== SEED =====
+
+db.prepare(`
+INSERT OR IGNORE INTO masters (id, name, slug)
+VALUES ('m1', 'Test Master', 'test-master')
+`).run();
+
+db.prepare(`
+INSERT OR IGNORE INTO salons (id, name, slug)
+VALUES ('s1', 'Totem Demo Salon', 'totem-demo-salon')
+`).run();
+
+db.prepare(`
+INSERT OR IGNORE INTO salon_masters (master_id, salon_id, active)
+VALUES ('m1', 's1', 1)
+`).run();
+
+db.prepare(`
+INSERT OR IGNORE INTO services
+(id, salon_id, name, duration_min, price)
+VALUES ('srv1', 's1', 'Haircut', 60, 1000)
+`).run();
+
+db.prepare(`
+INSERT OR IGNORE INTO master_services
+(master_id, service_id)
+VALUES ('m1', 'srv1')
+`).run();
+
+// ===== API HELPERS =====
+
+export default {
+  getMasterBySlug(slug) {
+    return db.prepare(
+      "SELECT * FROM masters WHERE slug = ? AND active = 1"
+    ).get(slug);
+  },
+
+  getSalonBySlug(slug) {
+    return db.prepare(
+      "SELECT * FROM salons WHERE slug = ? AND active = 1"
+    ).get(slug);
+  },
+
+  getActiveSalonByMaster(masterId, salonId = null) {
+    if (salonId) {
+      return db.prepare(`
+        SELECT s.*
+        FROM salons s
+        JOIN salon_masters sm ON sm.salon_id = s.id
+        WHERE sm.master_id = ?
+          AND sm.salon_id = ?
+          AND sm.active = 1
+          AND s.active = 1
+      `).get(masterId, salonId);
     }
-  };
-} else {
-  // ===== SQLITE =====
-  const sqlite = new Database("totem.db");
 
-  db = {
-    async getMasterBySlug(slug) {
-      return sqlite
-        .prepare("SELECT id, name, slug FROM masters WHERE slug = ?")
-        .get(slug);
-    },
+    return db.prepare(`
+      SELECT s.*
+      FROM salons s
+      JOIN salon_masters sm ON sm.salon_id = s.id
+      WHERE sm.master_id = ?
+        AND sm.active = 1
+        AND s.active = 1
+      LIMIT 1
+    `).get(masterId);
+  },
 
-    async getActiveSalonsByMasterId(masterId) {
-      return sqlite
-        .prepare(
-          `SELECT s.id, s.name, s.slug
-           FROM salon_masters sm
-           JOIN salons s ON s.id = sm.salon_id
-           WHERE sm.master_id = ? AND sm.active = 1`
-        )
-        .all(masterId);
-    },
-
-    async getActiveSalonBySlug(masterId, salonSlug) {
-      return sqlite
-        .prepare(
-          `SELECT s.id, s.name, s.slug
-           FROM salon_masters sm
-           JOIN salons s ON s.id = sm.salon_id
-           WHERE sm.master_id = ? AND sm.active = 1 AND s.slug = ?`
-        )
-        .get(masterId, salonSlug);
-    }
-  };
-}
-
-export default db;
+  getServices(masterId, salonId) {
+    return db.prepare(`
+      SELECT s.id, s.name, s.duration_min, s.price
+      FROM services s
+      JOIN master_services ms ON ms.service_id = s.id
+      WHERE s.salon_id = ?
+        AND ms.master_id = ?
+        AND s.active = 1
+    `).all(salonId, masterId);
+  }
+};
