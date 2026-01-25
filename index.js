@@ -1,50 +1,38 @@
 import express from "express";
-import { db } from "./db.js";
+import db from "./db/index.js";
 
-console.log("=== TOTEM P1.2 DB MODE ===");
+console.log("=== TOTEM P1.4 MULTI-SALON MODE ===");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.get("/booking/start", (req, res) => {
+app.get("/booking/start", async (req, res) => {
   const { master_slug, source } = req.query;
 
   if (!master_slug) {
     return res.json({ ok: false, error: "MASTER_SLUG_REQUIRED" });
   }
 
-  const master = db
-    .prepare("SELECT id, name, slug FROM masters WHERE slug = ?")
-    .get(master_slug);
+  try {
+    const master = await db.getMasterBySlug(master_slug);
+    if (!master) {
+      return res.json({ ok: false, error: "MASTER_NOT_FOUND" });
+    }
 
-  if (!master) {
-    return res.json({ ok: false, error: "MASTER_NOT_FOUND" });
+    const salons = await db.getActiveSalonsByMasterId(master.id);
+    if (!salons || salons.length === 0) {
+      return res.json({ ok: false, error: "MASTER_NOT_ACTIVE" });
+    }
+
+    return res.json({
+      ok: true,
+      master,
+      salons,
+      source: source || null
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
   }
-
-  const relation = db
-    .prepare(
-      "SELECT salon_id FROM salon_masters WHERE master_id = ? AND active = 1"
-    )
-    .get(master.id);
-
-  if (!relation) {
-    return res.json({ ok: false, error: "MASTER_NOT_ACTIVE" });
-  }
-
-  const salon = db
-    .prepare("SELECT id, name, slug FROM salons WHERE id = ?")
-    .get(relation.salon_id);
-
-  if (!salon) {
-    return res.json({ ok: false, error: "SALON_NOT_FOUND" });
-  }
-
-  return res.json({
-    ok: true,
-    master,
-    salon,
-    source: source || null
-  });
 });
 
 app.listen(PORT, () => {
