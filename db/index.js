@@ -29,6 +29,17 @@ if (process.env.DATABASE_URL) {
         [masterId]
       );
       return r.rows;
+    },
+
+    async getActiveSalonBySlug(masterId, salonSlug) {
+      const r = await pool.query(
+        `SELECT s.id, s.name, s.slug
+         FROM salon_masters sm
+         JOIN salons s ON s.id = sm.salon_id
+         WHERE sm.master_id = $1 AND sm.active = true AND s.slug = $2`,
+        [masterId, salonSlug]
+      );
+      return r.rows[0] || null;
     }
   };
 } else {
@@ -51,6 +62,17 @@ if (process.env.DATABASE_URL) {
            WHERE sm.master_id = ? AND sm.active = 1`
         )
         .all(masterId);
+    },
+
+    async getActiveSalonBySlug(masterId, salonSlug) {
+      return sqlite
+        .prepare(
+          `SELECT s.id, s.name, s.slug
+           FROM salon_masters sm
+           JOIN salons s ON s.id = sm.salon_id
+           WHERE sm.master_id = ? AND sm.active = 1 AND s.slug = ?`
+        )
+        .get(masterId, salonSlug);
     }
   };
 }
