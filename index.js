@@ -1,5 +1,4 @@
-// index.js — SAFE BOOT + PUBLIC API (with dotenv)
-import 'dotenv/config'
+// index.js — PROD SAFE (NO dotenv)
 import express from 'express'
 
 import publicBooking from './routes/public_booking.js'
@@ -15,12 +14,13 @@ app.get('/health', (req, res) => {
   res.json({ ok: true })
 })
 
-// PUBLIC API v1
+// public api
 app.use('/public/booking', publicBooking)
 app.use('/public/payment', publicPayment)
 app.use('/public/payment', publicPaymentWebhook)
 app.use('/public/status', publicStatus)
 
+// boot
 const PORT = process.env.PORT || 3000
 app.listen(PORT, '0.0.0.0', () => {
   console.log('BOOT OK on port', PORT)
