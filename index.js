@@ -50,6 +50,7 @@ app.use("/system", systemReports);
  * =========================
  * MARKETPLACE — SIDE EFFECT
  * =========================
+ * ⚠️ AUTO SETTLEMENT ВРЕМЕННО ОТКЛЮЧЁН
  */
 require("./routes_marketplace/marketplace_booking_create.js");
 require("./routes_marketplace/bookingStatus.js");
@@ -67,23 +68,10 @@ require("./routes_marketplace/publicRequestProcess.js");
 require("./routes_marketplace/publicPaymentsWebhook.js");
 
 /**
- * =========================
- * SCHEDULER (AUTO SETTLEMENT)
- * =========================
- * ⚠️ В PROD по умолчанию ОТКЛЮЧЕН
- * Включается только если:
- *   SCHEDULER_ENABLED=1
+ * AUTO SETTLEMENT — ОТКЛЮЧЁН ПОЛНОСТЬЮ
+ * (включим позже отдельным PR)
  */
-if (process.env.SCHEDULER_ENABLED === "1") {
-  try {
-    require("./routes_marketplace/autoSettlement.js");
-    console.log("Scheduler enabled");
-  } catch (err) {
-    console.error("Scheduler failed to start", err);
-  }
-} else {
-  console.log("Scheduler disabled");
-}
+console.log("AutoSettlement disabled (safe mode)");
 
 /**
  * 404
