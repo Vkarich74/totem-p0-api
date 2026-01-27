@@ -60,12 +60,30 @@ require("./routes_marketplace/audit.js");
 require("./routes_marketplace/reports.js");
 require("./routes_marketplace/refunds.js");
 require("./routes_marketplace/maintenance.js");
-require("./routes_marketplace/autoSettlement.js");
 require("./routes_marketplace/metricsTenants.js");
 require("./routes_marketplace/publicTokens.js");
 require("./routes_marketplace/publicRequests.js");
 require("./routes_marketplace/publicRequestProcess.js");
 require("./routes_marketplace/publicPaymentsWebhook.js");
+
+/**
+ * =========================
+ * SCHEDULER (AUTO SETTLEMENT)
+ * =========================
+ * ⚠️ В PROD по умолчанию ОТКЛЮЧЕН
+ * Включается только если:
+ *   SCHEDULER_ENABLED=1
+ */
+if (process.env.SCHEDULER_ENABLED === "1") {
+  try {
+    require("./routes_marketplace/autoSettlement.js");
+    console.log("Scheduler enabled");
+  } catch (err) {
+    console.error("Scheduler failed to start", err);
+  }
+} else {
+  console.log("Scheduler disabled");
+}
 
 /**
  * 404
