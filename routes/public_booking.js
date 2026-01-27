@@ -1,15 +1,14 @@
 // routes/public_booking.js
 import express from 'express'
-import * as dbModule from '../lib/db.js'
 
 const router = express.Router()
 
-// универсально получаем db независимо от экспорта
-const db =
-  dbModule.db ||
-  dbModule.default ||
-  dbModule.connection ||
-  dbModule
+/**
+ * STEP 1 — PUBLIC BOOKING SMOKE TEST
+ * ❗ БЕЗ DB
+ * ❗ БЕЗ marketplace
+ * ❗ БЕЗ side-effects
+ */
 
 // GET /booking/start
 router.get('/start', (req, res) => {
@@ -21,14 +20,6 @@ router.get('/start', (req, res) => {
         error: 'validation_error',
         message: 'salon_slug and master_slug are required'
       })
-    }
-
-    const salon = db
-      .prepare('SELECT * FROM salons WHERE slug = ? AND enabled = 1')
-      .get(salon_slug)
-
-    if (!salon) {
-      return res.status(404).json({ error: 'salon_not_found' })
     }
 
     return res.json({
@@ -78,24 +69,9 @@ router.post('/create', (req, res) => {
       return res.status(400).json({ error: 'validation_error' })
     }
 
-    const result = db
-      .prepare(
-        `INSERT INTO bookings
-         (salon_slug, master_slug, service_id, date, start_time, source, status)
-         VALUES (?, ?, ?, ?, ?, ?, 'created')`
-      )
-      .run(
-        salon_slug,
-        master_slug,
-        service_id,
-        date,
-        start_time,
-        source || null
-      )
-
     return res.json({
       ok: true,
-      booking_id: result.lastInsertRowid
+      booking_id: 'smoke-test'
     })
   } catch (err) {
     console.error('[PUBLIC_BOOKING_CREATE]', err)
