@@ -1,35 +1,97 @@
-import Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
+import Database from "better-sqlite3";
 
 /**
- * DB PATH
- * - Local: ./totem.db
- * - Railway / Prod: /tmp/totem.db
+ * Resolve DB path via ENV
+ * prod (Railway): /tmp/totem.db
+ * dev (local): ./totem.db
  */
-const DEFAULT_DB_PATH =
-  process.env.DB_PATH ||
-  (process.env.NODE_ENV === "production"
-    ? "/tmp/totem.db"
-    : path.resolve("./totem.db"));
+function resolveDbPath() {
+  const envPath = process.env.DB_PATH && String(process.env.DB_PATH).trim();
 
-const dir = path.dirname(DEFAULT_DB_PATH);
-if (!fs.existsSync(dir)) {
-  fs.mkdirSync(dir, { recursive: true });
+  if (envPath) {
+    return path.isAbsolute(envPath)
+      ? envPath
+      : path.resolve(process.cwd(), envPath);
+  }
+
+  const isProd =
+    process.env.NODE_ENV === "production" ||
+    process.env.RAILWAY_PROJECT_ID ||
+    process.env.RAILWAY_ENVIRONMENT_NAME;
+
+  return isProd
+    ? "/tmp/totem.db"
+    : path.resolve(process.cwd(), "totem.db");
 }
 
-export const db = new Database(DEFAULT_DB_PATH);
+const dbPath = resolveDbPath();
+const dbDir = path.dirname(dbPath);
+
+// ensure directory exists
+fs.mkdirSync(dbDir, { recursive: true });
+
+/** singleton DB */
+const db = new Database(dbPath);
+
+// sane defaults
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 
 /**
- * Helpers (если уже были — сохраняем контракт)
+ * Helpers (⚠️ ВАЖНО: они уже используются в коде)
  */
-export function nowIso() {
-  return new Date().toISOString();
+
+function openDb() {
+  return db;
 }
 
-export function runInTx(fn) {
+function runInTx(fn) {
   const tx = db.transaction(fn);
   return tx();
 }
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function auditLog({ actor_type, actor_id, action, entity_type, entity_id, meta }) {
+  try {
+    db.prepare(`
+      INSERT INTO audit_log (
+        actor_type,
+        actor_id,
+        action,
+        entity_type,
+        entity_id,
+        meta,
+        created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      actor_type ?? null,
+      actor_id ?? null,
+      action,
+      entity_type ?? null,
+      entity_id ?? null,
+      meta ? JSON.stringify(meta) : null,
+      nowIso()
+    );
+  } catch (e) {
+    // audit НЕ должен валить приложение
+    console.error("AUDIT_LOG_FAILED", e.message);
+  }
+}
+
+/**
+ * Exports — КОНТРАКТ МОДУЛЯ
+ */
+export default db;
+export {
+  db,
+  dbPath,
+  openDb,
+  runInTx,
+  nowIso,
+  auditLog
+};
