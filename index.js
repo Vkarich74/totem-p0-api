@@ -50,7 +50,7 @@ app.use("/system", systemReports);
  * =========================
  * MARKETPLACE — SIDE EFFECT
  * =========================
- * ⚠️ AUTO SETTLEMENT ВРЕМЕННО ОТКЛЮЧЁН
+ * AUTO SETTLEMENT ОТКЛЮЧЁН
  */
 require("./routes_marketplace/marketplace_booking_create.js");
 require("./routes_marketplace/bookingStatus.js");
@@ -67,10 +67,6 @@ require("./routes_marketplace/publicRequests.js");
 require("./routes_marketplace/publicRequestProcess.js");
 require("./routes_marketplace/publicPaymentsWebhook.js");
 
-/**
- * AUTO SETTLEMENT — ОТКЛЮЧЁН ПОЛНОСТЬЮ
- * (включим позже отдельным PR)
- */
 console.log("AutoSettlement disabled (safe mode)");
 
 /**
@@ -81,9 +77,9 @@ app.use((req, res) => {
 });
 
 /**
- * START
+ * START — ⚠️ CRITICAL FOR RAILWAY
  */
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`TOTEM API listening on ${PORT}`);
 });
