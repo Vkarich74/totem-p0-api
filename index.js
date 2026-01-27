@@ -1,21 +1,83 @@
 import express from "express";
-import { createDb } from "./lib/db.js";
-import { registerMarketplaceSalonRoutes } from "./routes_marketplace/salon.js";
-import { registerMarketplaceBookingCreate } from "./routes_marketplace/marketplace_booking_create.js";
+import bodyParser from "body-parser";
+import crypto from "crypto";
+import { createRequire } from "module";
 
+const require = createRequire(import.meta.url);
 const app = express();
-app.use(express.json());
 
-const db = createDb({ filename: "data.db" });
-
-app.get("/health", (req, res) => {
-  res.json({ ok: true });
+/**
+ * BASE
+ */
+app.use(bodyParser.json({ limit: "1mb" }));
+app.use((req, res, next) => {
+  const id = crypto.randomUUID();
+  req.request_id = id;
+  res.setHeader("X-Request-Id", id);
+  next();
 });
 
-registerMarketplaceSalonRoutes(app, db);
-registerMarketplaceBookingCreate(app, db);
+/**
+ * HEALTH
+ */
+app.get("/health", (req, res) => res.json({ ok: true }));
 
+/**
+ * =========================
+ * PUBLIC API
+ * =========================
+ */
+import publicBooking from "./routes/public_booking.js";
+import publicPayment from "./routes/public_payment.js";
+
+app.use("/", publicBooking);
+app.use("/", publicPayment);
+
+/**
+ * =========================
+ * SYSTEM API
+ * =========================
+ */
+import systemPaymentConfirm from "./routes_marketplace/system_payment_confirm.js";
+import systemSettlement from "./routes_marketplace/system_settlement.js";
+import systemReports from "./routes_marketplace/system_reports.js";
+
+app.use("/system", systemPaymentConfirm);
+app.use("/system", systemSettlement);
+app.use("/system", systemReports);
+
+/**
+ * =========================
+ * MARKETPLACE — SIDE EFFECT
+ * =========================
+ */
+require("./routes_marketplace/marketplace_booking_create.js");
+require("./routes_marketplace/bookingStatus.js");
+require("./routes_marketplace/payments.js");
+require("./routes_marketplace/payouts.js");
+require("./routes_marketplace/settlement.js");
+require("./routes_marketplace/audit.js");
+require("./routes_marketplace/reports.js");
+require("./routes_marketplace/refunds.js");
+require("./routes_marketplace/maintenance.js");
+require("./routes_marketplace/autoSettlement.js");
+require("./routes_marketplace/metricsTenants.js");
+require("./routes_marketplace/publicTokens.js");
+require("./routes_marketplace/publicRequests.js");
+require("./routes_marketplace/publicRequestProcess.js");
+require("./routes_marketplace/publicPaymentsWebhook.js");
+
+/**
+ * 404
+ */
+app.use((req, res) => {
+  res.status(404).json({ error: "not_found" });
+});
+
+/**
+ * START
+ */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`TOTEM P0 API listening on http://localhost:${PORT}`);
+  console.log(`TOTEM API listening on ${PORT}`);
 });
