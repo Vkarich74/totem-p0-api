@@ -1,0 +1,234 @@
+openapi: 3.0.3
+
+info:
+  title: TOTEM Public Booking API
+  description: |
+    Public Booking API v1 for TOTEM.
+    Thin facade over CORE booking engine.
+    Contract is immutable (only additive changes allowed).
+  version: "1.0.0"
+
+servers:
+  - url: http://localhost:3000
+    description: Local
+  - url: https://<your-railway-domain>
+    description: Production
+
+tags:
+  - name: Public Booking
+    description: Public booking flow (start → slots → create)
+
+paths:
+  /public/booking/start:
+    get:
+      tags: [Public Booking]
+      summary: Start booking flow (smoke-safe)
+      parameters:
+        - in: query
+          name: salon_slug
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: master_slug
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: source
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StartResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
+
+  /public/booking/slots:
+    get:
+      tags: [Public Booking]
+      summary: Get available slots (read-only)
+      parameters:
+        - in: query
+          name: salon_slug
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: master_slug
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: date
+          required: true
+          schema:
+            type: string
+            example: "2026-01-26"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SlotsResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InternalError"
+
+  /public/booking/create:
+    post:
+      tags: [Public Booking]
+      summary: Create booking (delegates to CORE)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBookingRequest"
+      responses:
+        "200":
+          description: Booking created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateBookingResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InternalError"
+
+components:
+  schemas:
+
+    StartResponse:
+      type: object
+      required: [ok, salon_slug, master_slug]
+      properties:
+        ok:
+          type: boolean
+          example: true
+        salon_slug:
+          type: string
+        master_slug:
+          type: string
+        source:
+          type: string
+          nullable: true
+
+    Slot:
+      type: object
+      required: [start_time, end_time, available]
+      properties:
+        start_time:
+          type: string
+          example: "10:00"
+        end_time:
+          type: string
+          example: "10:30"
+        available:
+          type: integer
+          example: 1
+
+    SlotsResponse:
+      type: object
+      required: [ok, date, slots]
+      properties:
+        ok:
+          type: boolean
+          example: true
+        date:
+          type: string
+          example: "2026-01-26"
+        slots:
+          type: array
+          items:
+            $ref: "#/components/schemas/Slot"
+
+    CreateBookingRequest:
+      type: object
+      required:
+        - salon_slug
+        - master_slug
+        - service_id
+        - date
+        - start_time
+      properties:
+        salon_slug:
+          type: string
+          example: "totem-demo-salon"
+        master_slug:
+          type: string
+          example: "test-master"
+        service_id:
+          type: string
+          example: "srv1"
+        date:
+          type: string
+          example: "2026-01-26"
+        start_time:
+          type: string
+          example: "10:00"
+        source:
+          type: string
+          nullable: true
+          example: "widget"
+
+    CreateBookingResponse:
+      type: object
+      required: [ok, booking_id, status]
+      properties:
+        ok:
+          type: boolean
+          example: true
+        booking_id:
+          type: integer
+          example: 8
+        status:
+          type: string
+          example: "pending"
+
+    ValidationError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          example: "validation_error"
+        message:
+          type: string
+          example: "salon not found"
+
+    InternalError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          example: "internal_error"
