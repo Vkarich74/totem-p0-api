@@ -1,5 +1,4 @@
 import cron from "node-cron";
-import fetch from "node-fetch";
 import { db } from "./db/index.js";
 
 /**
@@ -34,9 +33,9 @@ async function alert(payload) {
 async function runSettlement({ dryRun }) {
   const started = Date.now();
 
-  const payouts = db.prepare(`
-    SELECT id FROM payouts WHERE status = 'pending'
-  `).all();
+  const payouts = db
+    .prepare(`SELECT id FROM payouts WHERE status = 'pending'`)
+    .all();
 
   if (!dryRun) {
     const tx = db.transaction(() => {
