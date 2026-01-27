@@ -1,16 +1,10 @@
 // routes/public_booking.js
 import express from 'express'
+import { getDB } from '../lib/db.js'
 
 const router = express.Router()
 
-/**
- * STEP 1 — PUBLIC BOOKING SMOKE TEST
- * ❗ БЕЗ DB
- * ❗ БЕЗ marketplace
- * ❗ БЕЗ side-effects
- */
-
-// GET /booking/start
+// GET /booking/start (READ-ONLY DB)
 router.get('/start', (req, res) => {
   try {
     const { salon_slug, master_slug, source } = req.query
@@ -22,9 +16,18 @@ router.get('/start', (req, res) => {
       })
     }
 
+    const db = getDB()
+    const salon = db
+      .prepare('SELECT slug, name FROM salons WHERE slug = ?')
+      .get(salon_slug)
+
+    if (!salon) {
+      return res.status(404).json({ error: 'salon_not_found' })
+    }
+
     return res.json({
       ok: true,
-      salon_slug,
+      salon,
       master_slug,
       source: source || null
     })
@@ -34,49 +37,22 @@ router.get('/start', (req, res) => {
   }
 })
 
-// GET /booking/slots
+// slots — пока без DB
 router.get('/slots', (req, res) => {
-  try {
-    const { salon_slug, master_slug, date } = req.query
-
-    if (!salon_slug || !master_slug || !date) {
-      return res.status(400).json({ error: 'validation_error' })
-    }
-
-    return res.json({
-      ok: true,
-      slots: []
-    })
-  } catch (err) {
-    console.error('[PUBLIC_BOOKING_SLOTS]', err)
-    return res.status(500).json({ error: 'internal_error' })
+  const { salon_slug, master_slug, date } = req.query
+  if (!salon_slug || !master_slug || !date) {
+    return res.status(400).json({ error: 'validation_error' })
   }
+  return res.json({ ok: true, slots: [] })
 })
 
-// POST /booking/create
+// create — всё ещё smoke
 router.post('/create', (req, res) => {
-  try {
-    const {
-      salon_slug,
-      master_slug,
-      service_id,
-      date,
-      start_time,
-      source
-    } = req.body
-
-    if (!salon_slug || !master_slug || !service_id) {
-      return res.status(400).json({ error: 'validation_error' })
-    }
-
-    return res.json({
-      ok: true,
-      booking_id: 'smoke-test'
-    })
-  } catch (err) {
-    console.error('[PUBLIC_BOOKING_CREATE]', err)
-    return res.status(500).json({ error: 'internal_error' })
+  const { salon_slug, master_slug, service_id } = req.body
+  if (!salon_slug || !master_slug || !service_id) {
+    return res.status(400).json({ error: 'validation_error' })
   }
+  return res.json({ ok: true, booking_id: 'smoke-test' })
 })
 
 export default router
