@@ -5,14 +5,14 @@ import paymentsWebhookRoutes from "./routes/payments_webhook.js";
 import reconciliationRoutes from "./routes/reconciliation.js";
 import payoutPreviewRoutes from "./routes/payout_preview.js";
 import payoutExecutionRoutes from "./routes/payout_execution.js";
+import probePaymentsRoutes from "./routes/__probe_payments.js";
 
 const app = express();
 
 app.use(express.json());
 
-// Health
 app.get("/health", (req, res) => {
-  res.json({ ok: true, build: "p5.3-payout-preview-fixed" });
+  res.json({ ok: true, build: "p5.3-probe" });
 });
 
 // Payments
@@ -26,8 +26,10 @@ app.use("/reconciliation", reconciliationRoutes);
 app.use(payoutPreviewRoutes);
 app.use(payoutExecutionRoutes);
 
-const PORT = process.env.PORT || 3000;
+// PROBE (временно)
+app.use(probePaymentsRoutes);
 
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Server started on port", PORT);
 });
