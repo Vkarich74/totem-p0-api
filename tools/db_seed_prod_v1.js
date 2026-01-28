@@ -1,8 +1,17 @@
 // tools/db_seed_prod_v1.js
-import { getDB } from '../lib/db.js'
+// PROD SEED — must use same DB_PATH as bootstrap
 
-const db = getDB()
+import Database from 'better-sqlite3'
 
+if (!process.env.DB_PATH) {
+  console.error('❌ DB_PATH is required for PROD SEED')
+  process.exit(1)
+}
+
+const dbPath = process.env.DB_PATH
+const db = new Database(dbPath)
+
+console.log('PROD SEED DB PATH:', dbPath)
 console.log('== PROD SEED START ==')
 
 // ---- SALON ----
