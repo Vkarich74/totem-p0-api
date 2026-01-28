@@ -7,10 +7,11 @@ const router = express.Router();
  * POST /payouts/execute
  * Input: { booking_id }
  *
- * PROD FACTS:
- * - payouts.payment_id EXISTS and NOT NULL (UUID)
- * - payments.payment_id is UUID (provider / external)
- * - payments.id is INTEGER (internal) — НЕ используем
+ * Strategy:
+ * - verify succeeded payment
+ * - guard one payout per booking
+ * - detect payouts schema (payment_id column exists or not)
+ * - insert accordingly (NO GUESSES)
  */
 router.post("/payouts/execute", async (req, res) => {
   try {
@@ -20,15 +21,14 @@ router.post("/payouts/execute", async (req, res) => {
       return res.status(400).json({ error: "invalid_booking_id" });
     }
 
-    // PROD = Postgres only
     if (!db || db.mode !== "postgres") {
       return res.status(500).json({ error: "db_mode_error", mode: db && db.mode });
     }
 
-    // 1) Берём UUID payment_id + amount из payments
+    // 1) succeeded payment
     const payment = await db.oneOrNone(
       `
-      SELECT payment_id, amount
+      SELECT id, payment_id, amount
       FROM payments
       WHERE booking_id = $1
         AND status = 'succeeded'
@@ -38,18 +38,13 @@ router.post("/payouts/execute", async (req, res) => {
       [booking_id]
     );
 
-    if (!payment || !payment.payment_id) {
+    if (!payment) {
       return res.status(404).json({ error: "payment_not_succeeded" });
     }
 
-    // 2) Guard: один payout на booking
+    // 2) payout guard
     const existing = await db.oneOrNone(
-      `
-      SELECT id
-      FROM payouts
-      WHERE booking_id = $1
-      LIMIT 1
-      `,
+      `SELECT id FROM payouts WHERE booking_id = $1 LIMIT 1`,
       [booking_id]
     );
 
@@ -57,27 +52,57 @@ router.post("/payouts/execute", async (req, res) => {
       return res.status(409).json({ error: "already_paid" });
     }
 
-    // 3) INSERT с ОБЯЗАТЕЛЬНЫМ payment_id (UUID)
+    // 3) detect payouts schema
+    const col = await db.oneOrNone(
+      `
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_name = 'payouts'
+        AND column_name = 'payment_id'
+      `
+    );
+
+    // 4) insert payout (schema-aware)
     const payout = await db.runInTx(async (tx) => {
-      const row = await tx.oneOrNone(
+      if (col) {
+        // payouts.payment_id EXISTS
+        return tx.oneOrNone(
+          `
+          INSERT INTO payouts (
+            booking_id,
+            payment_id,
+            amount,
+            status,
+            created_at
+          )
+          VALUES ($1, $2, $3, 'executed', NOW())
+          RETURNING id
+          `,
+          [
+            booking_id,
+            payment.payment_id ?? payment.id,
+            payment.amount
+          ]
+        );
+      }
+
+      // payouts.payment_id DOES NOT EXIST
+      return tx.oneOrNone(
         `
         INSERT INTO payouts (
           booking_id,
-          payment_id,
           amount,
           status,
           created_at
         )
-        VALUES ($1, $2, $3, 'executed', NOW())
+        VALUES ($1, $2, 'executed', NOW())
         RETURNING id
         `,
         [
           booking_id,
-          payment.payment_id, // UUID — КЛЮЧЕВО
           payment.amount
         ]
       );
-      return row;
     });
 
     return res.json({ ok: true, payout_id: payout.id });
