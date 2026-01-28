@@ -24,50 +24,49 @@ router.post('/create', async (req, res) => {
 
     const db = getDB()
 
-    // salon
-    const salonRes = await db.query(
-      'SELECT id FROM salons WHERE slug = $1',
+    // --- verify salon exists ---
+    const salonCheck = await db.query(
+      'SELECT 1 FROM salons WHERE slug = $1',
       [salon_slug]
     )
-
-    if (salonRes.rowCount === 0) {
+    if (salonCheck.rowCount === 0) {
       return res.status(400).json({ error: 'salon not found' })
     }
 
-    // master
-    const masterRes = await db.query(
-      'SELECT id FROM masters WHERE slug = $1',
+    // --- verify master exists ---
+    const masterCheck = await db.query(
+      'SELECT 1 FROM masters WHERE slug = $1',
       [master_slug]
     )
-
-    if (masterRes.rowCount === 0) {
+    if (masterCheck.rowCount === 0) {
       return res.status(400).json({ error: 'master not found' })
     }
 
-    // service
+    // --- service ---
     const serviceRes = await db.query(
-      'SELECT id, duration_min FROM services WHERE service_id = $1',
+      'SELECT duration_min FROM services WHERE service_id = $1',
       [service_id]
     )
-
     if (serviceRes.rowCount === 0) {
       return res.status(400).json({ error: 'service not found' })
     }
 
-    const service = serviceRes.rows[0]
+    const duration_min = serviceRes.rows[0].duration_min
 
+    // --- compute end_time ---
     const [h, m] = start_time.split(':').map(Number)
     const startMinutes = h * 60 + m
-    const endMinutes = startMinutes + service.duration_min
+    const endMinutes = startMinutes + duration_min
     const endH = String(Math.floor(endMinutes / 60)).padStart(2, '0')
     const endM = String(endMinutes % 60).padStart(2, '0')
     const end_time = `${endH}:${endM}`
 
+    // --- insert booking (SLUG-BASED, MATCHES DB) ---
     const insertRes = await db.query(
       `
       INSERT INTO bookings (
-        salon_id,
-        master_id,
+        salon_slug,
+        master_slug,
         service_id,
         date,
         start_time,
@@ -79,9 +78,9 @@ router.post('/create', async (req, res) => {
       RETURNING id
       `,
       [
-        salonRes.rows[0].id,
-        masterRes.rows[0].id,
-        service.id,
+        salon_slug,
+        master_slug,
+        service_id,
         date,
         start_time,
         end_time,
@@ -95,7 +94,7 @@ router.post('/create', async (req, res) => {
       status: 'pending'
     })
   } catch (err) {
-    console.error('PUBLIC /create FULL ERROR:', err)
+    console.error('PUBLIC /create ERROR:', err)
     return res.status(500).json({
       error: 'internal_error',
       detail: err.message
