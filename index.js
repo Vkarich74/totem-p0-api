@@ -12,7 +12,7 @@ app.use(express.json());
 
 // Health (build marker)
 app.get("/health", (req, res) => {
-  res.json({ ok: true, build: "p5.2-flowfix-1" });
+  res.json({ ok: true, build: "p5.3-payout-preview-1" });
 });
 
 // Payments
@@ -23,8 +23,9 @@ app.use("/payments", paymentsWebhookRoutes);
 app.use("/reconciliation", reconciliationRoutes);
 
 // Payouts
-app.use("/payouts", payoutPreviewRoutes);
-app.use("/payouts", payoutExecutionRoutes);
+// ВАЖНО: роутеры САМИ содержат /payouts/...
+app.use(payoutPreviewRoutes);
+app.use(payoutExecutionRoutes);
 
 const PORT = process.env.PORT || 3000;
 
