@@ -11,12 +11,12 @@ router.post("/payouts/preview", async (req, res) => {
       return res.status(400).json({ error: "invalid_booking_id" });
     }
 
-    // PROD: Postgres only
+    // PROD = Postgres only
     if (!db || db.mode !== "postgres") {
       return res.status(500).json({ error: "db_mode_error", mode: db && db.mode });
     }
 
-    // 1) payment must exist and be succeeded
+    // 1. succeeded payment
     const payment = await db.oneOrNone(
       `
       SELECT id, amount
@@ -33,7 +33,7 @@ router.post("/payouts/preview", async (req, res) => {
       return res.status(404).json({ error: "payment_not_succeeded" });
     }
 
-    // 2) payout must NOT exist
+    // 2. payout must not exist
     const payout = await db.oneOrNone(
       `
       SELECT id
