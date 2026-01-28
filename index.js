@@ -11,8 +11,9 @@ const app = express();
 
 app.use(express.json());
 
+// Health
 app.get("/health", (req, res) => {
-  res.json({ ok: true, build: "p5.3-probe" });
+  res.json({ ok: true, build: "p5.3-payout-execute-1" });
 });
 
 // Payments
@@ -30,6 +31,7 @@ app.use(payoutExecutionRoutes);
 app.use(probePaymentsRoutes);
 
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
   console.log("Server started on port", PORT);
 });

@@ -1,37 +1,81 @@
-/**
- * Payout Execution HTTP Route (ESM)
- *
- * POST /payouts/create
- *
- * Body:
- * {
- *   "booking_id": 1,
- *   "service_price": 1000,
- *   "marketplace": { "enabled": true },
- *   "payment_id": "pay_xxx"
- * }
- */
-
 import express from "express";
-import { executePayout } from "../services/payout_execution.js";
+import db from "../db/index.js";
 
 const router = express.Router();
 
-router.post("/create", (req, res) => {
-  const { booking_id, service_price, marketplace, payment_id } = req.body || {};
+/**
+ * POST /payouts/execute
+ * Input: { booking_id }
+ * Guards:
+ *  - payment must be succeeded
+ *  - only one payout per booking
+ */
+router.post("/payouts/execute", async (req, res) => {
+  try {
+    const { booking_id } = req.body;
 
-  const result = executePayout({
-    booking_id,
-    service_price,
-    marketplace,
-    payment_id
-  });
+    if (typeof booking_id !== "number") {
+      return res.status(400).json({ error: "invalid_booking_id" });
+    }
 
-  if (!result.ok) {
-    return res.status(400).json(result);
+    // PROD: Postgres only
+    if (!db || db.mode !== "postgres") {
+      return res.status(500).json({ error: "db_mode_error", mode: db && db.mode });
+    }
+
+    // 1. succeeded payment
+    const payment = await db.oneOrNone(
+      `
+      SELECT id, amount
+      FROM payments
+      WHERE booking_id = $1
+        AND status = 'succeeded'
+      ORDER BY id DESC
+      LIMIT 1
+      `,
+      [booking_id]
+    );
+
+    if (!payment) {
+      return res.status(404).json({ error: "payment_not_succeeded" });
+    }
+
+    // 2. payout guard
+    const existing = await db.oneOrNone(
+      `
+      SELECT id
+      FROM payouts
+      WHERE booking_id = $1
+      LIMIT 1
+      `,
+      [booking_id]
+    );
+
+    if (existing) {
+      return res.status(409).json({ error: "already_paid" });
+    }
+
+    // 3. execute payout (atomic)
+    const payout = await db.runInTx(async (tx) => {
+      const inserted = await tx.oneOrNone(
+        `
+        INSERT INTO payouts (booking_id, amount, status, created_at)
+        VALUES ($1, $2, 'executed', NOW())
+        RETURNING id
+        `,
+        [booking_id, payment.amount]
+      );
+      return inserted;
+    });
+
+    return res.json({
+      ok: true,
+      payout_id: payout.id
+    });
+  } catch (e) {
+    console.error("PAYOUT_EXECUTE_FATAL", e);
+    return res.status(500).json({ error: "fatal", message: e.message });
   }
-
-  return res.json(result);
 });
 
 export default router;
