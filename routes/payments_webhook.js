@@ -11,11 +11,17 @@ function getClient() {
   });
 }
 
-// POST /payments/webhook
-router.post("/webhook", async (req, res) => {
-  const { payment_id, status } = req.body;
+function isUuid(v) {
+  return typeof v === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+}
 
-  if (!payment_id || !["succeeded", "failed"].includes(status)) {
+// POST /payments/webhook
+// body: { payment_id, status } status = succeeded | failed
+router.post("/webhook", async (req, res) => {
+  const { payment_id, status } = req.body || {};
+
+  if (!isUuid(payment_id) || !["succeeded", "failed"].includes(status)) {
     return res.status(400).json({ error: "invalid_request" });
   }
 
@@ -24,8 +30,7 @@ router.post("/webhook", async (req, res) => {
   try {
     await client.connect();
 
-    // финализируем ТОЛЬКО активный pending
-    const result = await client.query(
+    const r = await client.query(
       `
       UPDATE payments
       SET status = $2,
@@ -37,8 +42,7 @@ router.post("/webhook", async (req, res) => {
       [payment_id, status]
     );
 
-    // ничего не обновили → либо не существует, либо уже обработан
-    if (result.rowCount === 0) {
+    if (r.rowCount === 0) {
       return res.status(409).json({ error: "payment_not_active" });
     }
 
