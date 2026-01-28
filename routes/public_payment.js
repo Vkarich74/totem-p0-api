@@ -4,29 +4,51 @@ import { getDB } from '../lib/db.js'
 
 const router = express.Router()
 
-function validationError(res, message = 'validation_error') {
-  return res.status(400).json({ error: 'validation_error', message })
-}
-
 // POST /public/payment/intent
+// Creates a pending payment tied to an existing pending booking.
 router.post('/intent', (req, res) => {
-  const { booking_id, amount, currency, provider } = req.body
-
-  if (!booking_id || !amount || !currency || !provider) {
-    return validationError(res)
-  }
-
   try {
+    const { booking_id, amount, currency, provider } = req.body || {}
+
+    if (!booking_id || !amount || !provider) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: 'missing required fields'
+      })
+    }
+
+    const amountInt = Number(amount)
+    if (!Number.isFinite(amountInt) || amountInt <= 0) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: 'invalid amount'
+      })
+    }
+
     const db = getDB()
 
-    // booking must exist
+    // booking must exist and be pending
     const booking = db.prepare(`
-      SELECT id FROM bookings WHERE id = ?
+      SELECT id, status
+      FROM bookings
+      WHERE id = ?
     `).get(booking_id)
 
     if (!booking) {
-      return validationError(res, 'booking not found')
+      return res.status(400).json({
+        error: 'validation_error',
+        message: 'booking not found'
+      })
     }
+
+    if (booking.status !== 'pending') {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: 'booking not payable'
+      })
+    }
+
+    const cur = (currency || 'USD').toUpperCase()
 
     const result = db.prepare(`
       INSERT INTO payments (
@@ -34,14 +56,14 @@ router.post('/intent', (req, res) => {
         amount,
         currency,
         provider,
-        status,
-        created_at
-      ) VALUES (?, ?, ?, ?, 'pending', datetime('now'))
+        status
+      )
+      VALUES (?, ?, ?, ?, 'pending')
     `).run(
-      booking_id,
-      amount,
-      currency,
-      provider
+      booking.id,
+      amountInt,
+      cur,
+      String(provider)
     )
 
     return res.json({
@@ -49,8 +71,8 @@ router.post('/intent', (req, res) => {
       payment_id: result.lastInsertRowid,
       status: 'pending'
     })
-  } catch (e) {
-    console.error('PUBLIC /payment/intent error:', e)
+  } catch (err) {
+    console.error('PUBLIC /payment/intent error:', err)
     return res.status(500).json({ error: 'internal_error' })
   }
 })
