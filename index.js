@@ -1,7 +1,5 @@
 // index.js
 import express from 'express'
-import pkg from 'pg'
-const { Pool } = pkg
 
 // DB runtime
 import { getDB } from './lib/db.js'
@@ -59,7 +57,8 @@ app.post('/internal/bootstrap', async (req, res) => {
         id SERIAL PRIMARY KEY,
         service_id TEXT UNIQUE NOT NULL,
         name TEXT NOT NULL,
-        duration_min INTEGER NOT NULL
+        duration_min INTEGER NOT NULL,
+        price INTEGER NOT NULL
       );
     `)
 
@@ -91,8 +90,8 @@ app.post('/internal/bootstrap', async (req, res) => {
     `)
 
     await db.query(`
-      INSERT INTO services (service_id, name, duration_min)
-      VALUES ('srv1', 'Haircut', 60)
+      INSERT INTO services (service_id, name, duration_min, price)
+      VALUES ('srv1', 'Haircut', 60, 1000)
       ON CONFLICT DO NOTHING;
     `)
 
