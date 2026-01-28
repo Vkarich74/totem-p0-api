@@ -1,12 +1,11 @@
 // routes/public_booking.js
 import express from 'express'
 import { getDB } from '../lib/db.js'
-import { requirePublicToken } from '../middleware/requirePublicToken.js'
 
 const router = express.Router()
 
 // POST /public/booking/create
-router.post('/create', requirePublicToken, (req, res) => {
+router.post('/create', (req, res) => {
   try {
     const {
       salon_slug,
