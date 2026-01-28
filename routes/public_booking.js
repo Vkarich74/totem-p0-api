@@ -4,8 +4,7 @@ import { getDB } from '../lib/db.js'
 
 const router = express.Router()
 
-// POST /public/booking/create
-router.post('/create', (req, res) => {
+router.post('/create', async (req, res) => {
   try {
     const {
       salon_slug,
@@ -26,40 +25,33 @@ router.post('/create', (req, res) => {
     const db = getDB()
 
     // --- salon ---
-    const salon = db
-      .prepare(`SELECT id FROM salons WHERE slug = ?`)
-      .get(salon_slug)
-
-    if (!salon) {
-      return res.status(400).json({
-        error: 'validation_error',
-        message: 'salon not found'
-      })
+    const salonRes = await db.query(
+      'SELECT id FROM salons WHERE slug = $1',
+      [salon_slug]
+    )
+    if (salonRes.rowCount === 0) {
+      return res.status(400).json({ error: 'salon not found' })
     }
 
     // --- master ---
-    const master = db
-      .prepare(`SELECT id FROM masters WHERE slug = ?`)
-      .get(master_slug)
-
-    if (!master) {
-      return res.status(400).json({
-        error: 'validation_error',
-        message: 'master not found'
-      })
+    const masterRes = await db.query(
+      'SELECT id FROM masters WHERE slug = $1',
+      [master_slug]
+    )
+    if (masterRes.rowCount === 0) {
+      return res.status(400).json({ error: 'master not found' })
     }
 
     // --- service ---
-    const service = db
-      .prepare(`SELECT id, duration_min FROM services WHERE id = ?`)
-      .get(service_id)
-
-    if (!service) {
-      return res.status(400).json({
-        error: 'validation_error',
-        message: 'service not found'
-      })
+    const serviceRes = await db.query(
+      'SELECT id, duration_min FROM services WHERE service_id = $1',
+      [service_id]
+    )
+    if (serviceRes.rowCount === 0) {
+      return res.status(400).json({ error: 'service not found' })
     }
+
+    const service = serviceRes.rows[0]
 
     // --- compute end_time ---
     const [h, m] = start_time.split(':').map(Number)
@@ -69,7 +61,8 @@ router.post('/create', (req, res) => {
     const endM = String(endMinutes % 60).padStart(2, '0')
     const end_time = `${endH}:${endM}`
 
-    const result = db.prepare(`
+    const insertRes = await db.query(
+      `
       INSERT INTO bookings (
         salon_id,
         master_id,
@@ -80,20 +73,23 @@ router.post('/create', (req, res) => {
         status,
         source
       )
-      VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
-    `).run(
-      salon.id,
-      master.id,
-      service.id,
-      date,
-      start_time,
-      end_time,
-      source || null
+      VALUES ($1,$2,$3,$4,$5,$6,'pending',$7)
+      RETURNING id
+      `,
+      [
+        salonRes.rows[0].id,
+        masterRes.rows[0].id,
+        service.id,
+        date,
+        start_time,
+        end_time,
+        source || null
+      ]
     )
 
     return res.json({
       ok: true,
-      booking_id: result.lastInsertRowid,
+      booking_id: insertRes.rows[0].id,
       status: 'pending'
     })
   } catch (err) {
