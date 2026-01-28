@@ -1,8 +1,7 @@
 // index.js
 import express from 'express'
-import cors from 'cors'
 
-// DB (runtime)
+// DB runtime
 import { getDB } from './lib/db.js'
 
 // Public routes
@@ -12,27 +11,26 @@ import publicPaymentWebhook from './routes/public_payment_webhook.js'
 
 const app = express()
 
-// -------- MIDDLEWARE --------
-app.use(cors())
+// ---------- MIDDLEWARE ----------
 app.use(express.json())
 
-// -------- HEALTH --------
+// ---------- HEALTH ----------
 app.get('/health', (req, res) => {
   try {
-    // touch DB to ensure runtime uses correct DB_PATH
     getDB()
     res.json({ ok: true })
   } catch (e) {
+    console.error('HEALTH error:', e)
     res.status(500).json({ ok: false })
   }
 })
 
-// -------- PUBLIC API --------
+// ---------- PUBLIC API ----------
 app.use('/public/booking', publicBooking)
 app.use('/public/payment', publicPayment)
 app.use('/public/payment', publicPaymentWebhook)
 
-// -------- START --------
+// ---------- START ----------
 const PORT = process.env.PORT || 3000
 app.listen(PORT, () => {
   console.log(`BOOT OK on port ${PORT}`)
