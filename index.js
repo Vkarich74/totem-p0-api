@@ -1,37 +1,31 @@
-import express from "express";
+// index.js
+import express from 'express';
 
-import paymentsFlowRoutes from "./routes/payments_flow.js";
-import paymentsWebhookRoutes from "./routes/payments_webhook.js";
-import reconciliationRoutes from "./routes/reconciliation.js";
-import payoutPreviewRoutes from "./routes/payout_preview.js";
-import payoutExecutionRoutes from "./routes/payout_execution.js";
-import probePaymentsRoutes from "./routes/__probe_payments.js";
+// Routes
+import payoutExecutionRoutes from './routes/payout_execution.js';
 
+// App
 const app = express();
 
+// Middleware
 app.use(express.json());
 
-// Health
-app.get("/health", (req, res) => {
-  res.json({ ok: true, build: "p5.3-payout-execute-1" });
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ ok: true });
 });
 
-// Payments
-app.use("/payments", paymentsFlowRoutes);
-app.use("/payments", paymentsWebhookRoutes);
-
-// Reconciliation
-app.use("/reconciliation", reconciliationRoutes);
-
-// Payouts
-app.use(payoutPreviewRoutes);
+// Routes
+// payout_execution.js регистрирует POST /payouts/execute
 app.use(payoutExecutionRoutes);
 
-// PROBE (временно)
-app.use(probePaymentsRoutes);
+// Fallback
+app.use((req, res) => {
+  res.status(404).json({ error: 'not_found' });
+});
 
+// Server
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
-  console.log("Server started on port", PORT);
+  console.log(`Server listening on port ${PORT}`);
 });
