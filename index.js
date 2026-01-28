@@ -10,9 +10,9 @@ const app = express();
 
 app.use(express.json());
 
-// Health (add build marker)
+// Health (build marker)
 app.get("/health", (req, res) => {
-  res.json({ ok: true, build: "p5.2-uuid" });
+  res.json({ ok: true, build: "p5.2-flowfix-1" });
 });
 
 // Payments

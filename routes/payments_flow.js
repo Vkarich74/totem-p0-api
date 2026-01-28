@@ -26,7 +26,7 @@ router.post("/flow", async (req, res) => {
 
     const provider = marketplace?.enabled ? "marketplace" : "direct";
 
-    // TRY INSERT (may fail on unique guard)
+    // Insert active pending payment (NO currency column)
     const ins = await client.query(
       `
       INSERT INTO payments (booking_id, provider, amount, status, is_active)
@@ -40,6 +40,7 @@ router.post("/flow", async (req, res) => {
 
     return res.json({
       ok: true,
+      build: "p5.2-flowfix-1",
       flow: {
         booking_id: p.booking_id,
         intent: {
@@ -61,8 +62,8 @@ router.post("/flow", async (req, res) => {
       }
     });
   } catch (e) {
-    // UNIQUE VIOLATION: active payment exists
-    if (e.code === "23505") {
+    // Postgres unique violation -> active payment exists
+    if (e && e.code === "23505") {
       try {
         const r = await client.query(
           `
@@ -73,7 +74,6 @@ router.post("/flow", async (req, res) => {
           `,
           [booking_id]
         );
-
         if (r.rows.length > 0) {
           return res.status(409).json({
             error: "active_payment_exists",
@@ -83,7 +83,16 @@ router.post("/flow", async (req, res) => {
       } catch (_) {}
     }
 
-    return res.status(500).json({ error: "internal_error" });
+    // Minimal diagnostic (no secrets)
+    console.error("payments_flow_error", {
+      code: e?.code,
+      message: e?.message
+    });
+
+    return res.status(500).json({
+      error: "internal_error",
+      pg_code: e?.code || null
+    });
   } finally {
     await client.end();
   }
