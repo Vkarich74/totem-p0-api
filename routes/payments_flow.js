@@ -26,6 +26,7 @@ router.post("/flow", async (req, res) => {
 
     const provider = marketplace?.enabled ? "marketplace" : "direct";
 
+    // TRY INSERT (may fail on unique guard)
     const ins = await client.query(
       `
       INSERT INTO payments (booking_id, provider, amount, status, is_active)
@@ -60,6 +61,7 @@ router.post("/flow", async (req, res) => {
       }
     });
   } catch (e) {
+    // UNIQUE VIOLATION: active payment exists
     if (e.code === "23505") {
       try {
         const r = await client.query(
