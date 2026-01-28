@@ -8,7 +8,7 @@ const router = express.Router();
  * Input: { booking_id }
  * Guards:
  *  - payment must be succeeded
- *  - only one payout per booking
+ *  - one payout per booking
  */
 router.post("/payouts/execute", async (req, res) => {
   try {
@@ -18,12 +18,12 @@ router.post("/payouts/execute", async (req, res) => {
       return res.status(400).json({ error: "invalid_booking_id" });
     }
 
-    // PROD: Postgres only
+    // PROD = Postgres only
     if (!db || db.mode !== "postgres") {
       return res.status(500).json({ error: "db_mode_error", mode: db && db.mode });
     }
 
-    // 1. succeeded payment
+    // 1. succeeded payment (берём id и amount)
     const payment = await db.oneOrNone(
       `
       SELECT id, amount
@@ -55,15 +55,25 @@ router.post("/payouts/execute", async (req, res) => {
       return res.status(409).json({ error: "already_paid" });
     }
 
-    // 3. execute payout (atomic)
+    // 3. execute payout (ATOMIC)
     const payout = await db.runInTx(async (tx) => {
       const inserted = await tx.oneOrNone(
         `
-        INSERT INTO payouts (booking_id, amount, status, created_at)
-        VALUES ($1, $2, 'executed', NOW())
+        INSERT INTO payouts (
+          booking_id,
+          payment_id,
+          amount,
+          status,
+          created_at
+        )
+        VALUES ($1, $2, $3, 'executed', NOW())
         RETURNING id
         `,
-        [booking_id, payment.amount]
+        [
+          booking_id,
+          payment.id,      // <-- КРИТИЧНО
+          payment.amount
+        ]
       );
       return inserted;
     });
