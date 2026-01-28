@@ -23,10 +23,11 @@ router.post("/payouts/execute", async (req, res) => {
       return res.status(500).json({ error: "db_mode_error", mode: db && db.mode });
     }
 
-    // 1. succeeded payment (берём id и amount)
+    // 1. succeeded payment
+    // ВАЖНО: берём UUID payment_id, а не integer id
     const payment = await db.oneOrNone(
       `
-      SELECT id, amount
+      SELECT payment_id, amount
       FROM payments
       WHERE booking_id = $1
         AND status = 'succeeded'
@@ -71,7 +72,7 @@ router.post("/payouts/execute", async (req, res) => {
         `,
         [
           booking_id,
-          payment.id,      // <-- КРИТИЧНО
+          payment.payment_id, // <-- UUID, КРИТИЧНО
           payment.amount
         ]
       );
