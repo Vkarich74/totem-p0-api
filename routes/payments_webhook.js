@@ -23,55 +23,27 @@ router.post("/webhook", async (req, res) => {
 
   try {
     await client.connect();
-    await client.query("BEGIN");
 
-    const p = await client.query(
-      `
-      SELECT id, booking_id, status, is_active
-      FROM payments
-      WHERE id = $1
-      FOR UPDATE
-      `,
-      [payment_id]
-    );
-
-    if (p.rows.length === 0) {
-      await client.query("ROLLBACK");
-      return res.status(404).json({ error: "payment_not_found" });
-    }
-
-    const row = p.rows[0];
-
-    if (!row.is_active || row.status !== "pending") {
-      await client.query("ROLLBACK");
-      return res.status(409).json({ error: "payment_not_active" });
-    }
-
-    await client.query(
+    // финализируем ТОЛЬКО активный pending
+    const result = await client.query(
       `
       UPDATE payments
       SET status = $2,
-          is_active = false,
-          updated_at = now()
+          is_active = false
       WHERE id = $1
+        AND is_active = true
+        AND status = 'pending'
       `,
       [payment_id, status]
     );
 
-    await client.query(
-      `
-      INSERT INTO reconciliations
-        (payment_id, booking_id, expected_status, actual_status, result)
-      VALUES
-        ($1, $2, 'pending', $3, 'ok')
-      `,
-      [payment_id, row.booking_id, status]
-    );
+    // ничего не обновили → либо не существует, либо уже обработан
+    if (result.rowCount === 0) {
+      return res.status(409).json({ error: "payment_not_active" });
+    }
 
-    await client.query("COMMIT");
     return res.json({ ok: true });
   } catch (e) {
-    await client.query("ROLLBACK");
     return res.status(500).json({ error: "internal_error" });
   } finally {
     await client.end();
