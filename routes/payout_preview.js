@@ -1,37 +1,61 @@
-/**
- * Payout Preview HTTP Route (ESM)
- *
- * POST /payouts/preview
- *
- * Body:
- * {
- *   "booking_id": 1,
- *   "service_price": 1000,
- *   "marketplace": { "enabled": true },
- *   "payment_id": "pay_xxx"
- * }
- */
-
 import express from "express";
-import { getPayoutPreview } from "../services/payout_preview.js";
+import db from "../db/index.js";
 
 const router = express.Router();
 
-router.post("/preview", (req, res) => {
-  const { booking_id, service_price, marketplace, payment_id } = req.body || {};
+/**
+ * POST /payouts/preview
+ * Input: { booking_id }
+ */
+router.post("/payouts/preview", async (req, res) => {
+  try {
+    const { booking_id } = req.body;
 
-  const result = getPayoutPreview({
-    booking_id,
-    service_price,
-    marketplace,
-    payment_id
-  });
+    if (!booking_id || typeof booking_id !== "number") {
+      return res.status(400).json({ error: "invalid_booking_id" });
+    }
 
-  if (!result.ok) {
-    return res.status(400).json(result);
+    // payment must be succeeded
+    const payment = await db.oneOrNone(
+      `
+      SELECT id, amount
+      FROM payments
+      WHERE booking_id = $1
+        AND status = 'succeeded'
+      ORDER BY id DESC
+      LIMIT 1
+      `,
+      [booking_id]
+    );
+
+    if (!payment) {
+      return res.status(404).json({ error: "payment_not_succeeded" });
+    }
+
+    // payout must not exist
+    const payout = await db.oneOrNone(
+      `
+      SELECT id
+      FROM payouts
+      WHERE booking_id = $1
+      LIMIT 1
+      `,
+      [booking_id]
+    );
+
+    if (payout) {
+      return res.status(409).json({ error: "already_paid" });
+    }
+
+    return res.json({
+      ok: true,
+      booking_id,
+      amount: payment.amount
+    });
+  } catch (err) {
+    console.error("PAYOUT_PREVIEW_ERROR", err);
+    return res.status(500).json({ error: "internal_error" });
   }
-
-  return res.json(result);
 });
 
 export default router;
