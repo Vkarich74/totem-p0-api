@@ -5,14 +5,15 @@ import paymentsWebhookRoutes from "./routes/payments_webhook.js";
 import reconciliationRoutes from "./routes/reconciliation.js";
 import payoutPreviewRoutes from "./routes/payout_preview.js";
 import payoutExecutionRoutes from "./routes/payout_execution.js";
+import debugPaymentsRoutes from "./routes/__debug_db_payments.js";
 
 const app = express();
 
 app.use(express.json());
 
-// Health (build marker)
+// Health
 app.get("/health", (req, res) => {
-  res.json({ ok: true, build: "p5.3-payout-preview-1" });
+  res.json({ ok: true, build: "p5.3-debug-payments" });
 });
 
 // Payments
@@ -23,9 +24,11 @@ app.use("/payments", paymentsWebhookRoutes);
 app.use("/reconciliation", reconciliationRoutes);
 
 // Payouts
-// ВАЖНО: роутеры САМИ содержат /payouts/...
 app.use(payoutPreviewRoutes);
 app.use(payoutExecutionRoutes);
+
+// DEBUG (временно)
+app.use(debugPaymentsRoutes);
 
 const PORT = process.env.PORT || 3000;
 
