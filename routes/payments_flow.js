@@ -28,9 +28,9 @@ router.post("/flow", async (req, res) => {
 
     const ins = await client.query(
       `
-      INSERT INTO payments (booking_id, provider, amount, currency, status, is_active)
-      VALUES ($1, $2, $3, 'USD', 'pending', true)
-      RETURNING id, booking_id, amount, currency, status, provider
+      INSERT INTO payments (booking_id, provider, amount, status, is_active)
+      VALUES ($1, $2, $3, 'pending', true)
+      RETURNING id, booking_id, amount, status, provider
       `,
       [booking_id, provider, service_price]
     );
@@ -44,7 +44,6 @@ router.post("/flow", async (req, res) => {
         intent: {
           booking_id: p.booking_id,
           amount_total: p.amount,
-          currency: p.currency,
           type: p.provider,
           commission_amount: 0,
           provider_amount: p.amount,
@@ -55,14 +54,12 @@ router.post("/flow", async (req, res) => {
           payment_id: p.id,
           booking_id: p.booking_id,
           amount: p.amount,
-          currency: p.currency,
           type: p.provider,
           status: p.status
         }
       }
     });
   } catch (e) {
-    // UNIQUE VIOLATION -> active payment exists
     if (e.code === "23505") {
       try {
         const r = await client.query(
