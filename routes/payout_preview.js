@@ -18,7 +18,7 @@ router.post("/payouts/preview", async (req, res) => {
     // payment must be succeeded
     const payment = await db.oneOrNone(
       `
-      SELECT id, amount
+      SELECT id, amount_total
       FROM payments
       WHERE booking_id = $1
         AND status = 'succeeded'
@@ -50,7 +50,7 @@ router.post("/payouts/preview", async (req, res) => {
     return res.json({
       ok: true,
       booking_id,
-      amount: payment.amount
+      amount: payment.amount_total
     });
   } catch (err) {
     console.error("PAYOUT_PREVIEW_ERROR", err);
