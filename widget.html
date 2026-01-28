@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>TOTEM Booking Widget</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    button { padding: 8px 12px; margin-top: 10px; }
+    select, input { padding: 6px; margin-top: 6px; width: 200px; }
+    .block { margin-bottom: 20px; }
+    pre { background: #f5f5f5; padding: 10px; }
+  </style>
+</head>
+<body>
+
+<h2>TOTEM — Booking Widget (Demo)</h2>
+
+<div class="block">
+  <button onclick="start()">1️⃣ Start</button>
+  <pre id="startOut"></pre>
+</div>
+
+<div class="block">
+  <button onclick="loadSlots()">2️⃣ Load Slots</button>
+  <pre id="slotsOut"></pre>
+</div>
+
+<div class="block">
+  <button onclick="createBooking()">3️⃣ Create Booking</button>
+  <pre id="createOut"></pre>
+</div>
+
+<script>
+const API = 'http://localhost:3000/public/booking'
+
+const salon_slug = 'totem-demo-salon'
+const master_slug = 'test-master'
+const service_id = 'srv1'
+const date = '2026-01-26'
+const start_time = '10:00'
+
+function start() {
+  fetch(`${API}/start?salon_slug=${salon_slug}&master_slug=${master_slug}`)
+    .then(r => r.json())
+    .then(j => document.getElementById('startOut').textContent = JSON.stringify(j, null, 2))
+}
+
+function loadSlots() {
+  fetch(`${API}/slots?salon_slug=${salon_slug}&master_slug=${master_slug}&date=${date}`)
+    .then(r => r.json())
+    .then(j => document.getElementById('slotsOut').textContent = JSON.stringify(j, null, 2))
+}
+
+function createBooking() {
+  fetch(`${API}/create`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      salon_slug,
+      master_slug,
+      service_id,
+      date,
+      start_time,
+      source: 'widget'
+    })
+  })
+  .then(r => r.json())
+  .then(j => document.getElementById('createOut').textContent = JSON.stringify(j, null, 2))
+}
+</script>
+
+</body>
+</html>

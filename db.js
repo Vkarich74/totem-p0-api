@@ -1,57 +1,51 @@
 import Database from "better-sqlite3";
+import fs from "fs";
+import path from "path";
 
-const db = new Database("totem.db");
+// =======================================
+// 🔒 SINGLE SOURCE OF TRUTH — ONLY totem.db
+// =======================================
+const DB_FILENAME = "totem.db";
+const DB_PATH = path.resolve(DB_FILENAME);
 
-// ===== CONTEXT =====
-export function getBookingContextBySlugs(db, { master_slug, salon_slug }) {
-  return db.prepare(`
-    SELECT
-      m.id AS master_id, m.active AS master_active,
-      s.id AS salon_id,  s.active AS salon_active,
-      sm.active AS link_active
-    FROM masters m
-    JOIN salon_masters sm ON sm.master_id = m.id
-    JOIN salons s ON s.id = sm.salon_id
-    WHERE m.slug = ? AND s.slug = ?
-    LIMIT 1
-  `).get(master_slug, salon_slug);
+// ---------------------------------------
+// ❌ FORBIDDEN DATABASE FILES
+// ---------------------------------------
+const FORBIDDEN = [
+  "data.db",
+  "data.sqlite",
+  "database.sqlite",
+  "db.sqlite"
+];
+
+// ---------------------------------------
+// 🧨 FAIL FAST: forbidden db exists
+// ---------------------------------------
+for (const name of FORBIDDEN) {
+  const p = path.resolve(name);
+  if (fs.existsSync(p)) {
+    console.error("❌ FORBIDDEN DATABASE FILE DETECTED:", name);
+    console.error("Remove it from project root.");
+    process.exit(1);
+  }
 }
 
-// ===== SCHEDULE =====
-export function getActiveScheduleForWeekday(db, { master_id, salon_id, weekday }) {
-  return db.prepare(`
-    SELECT start_time, end_time
-    FROM master_schedule
-    WHERE master_id = ?
-      AND salon_id = ?
-      AND weekday = ?
-      AND active = 1
-    ORDER BY start_time
-  `).all(master_id, salon_id, weekday);
+// ---------------------------------------
+// 🧨 FAIL FAST: required db missing
+// ---------------------------------------
+if (!fs.existsSync(DB_PATH)) {
+  console.error("❌ REQUIRED DATABASE NOT FOUND:", DB_FILENAME);
+  process.exit(1);
 }
 
-// ===== BOOKINGS =====
-export function getBookingsForDate(db, { master_id, salon_id, date }) {
-  return db.prepare(`
-    SELECT start_time, end_time
-    FROM bookings
-    WHERE master_id = ?
-      AND salon_id = ?
-      AND date = ?
-      AND active = 1
-  `).all(master_id, salon_id, date);
-}
+// ---------------------------------------
+// ✅ OPEN DATABASE
+// ---------------------------------------
+const db = new Database(DB_PATH);
 
-// ===== BLOCKS =====
-export function getBlocksForDate(db, { master_id, salon_id, date }) {
-  return db.prepare(`
-    SELECT start_time, end_time
-    FROM booking_blocks
-    WHERE master_id = ?
-      AND salon_id = ?
-      AND date = ?
-      AND active = 1
-  `).all(master_id, salon_id, date);
-}
+// ---------------------------------------
+// 📢 EXPLICIT LOG
+// ---------------------------------------
+console.log("USING DATABASE:", DB_PATH);
 
 export default db;
