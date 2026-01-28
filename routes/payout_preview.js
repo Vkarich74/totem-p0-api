@@ -15,8 +15,8 @@ router.post("/payouts/preview", async (req, res) => {
       return res.status(400).json({ error: "invalid_booking_id" });
     }
 
-    // payment must be succeeded
-    const payment = await db.oneOrNone(
+    // 1. payment must be succeeded
+    const paymentResult = await db.query(
       `
       SELECT id, amount_total
       FROM payments
@@ -28,12 +28,14 @@ router.post("/payouts/preview", async (req, res) => {
       [booking_id]
     );
 
-    if (!payment) {
+    if (paymentResult.rows.length === 0) {
       return res.status(404).json({ error: "payment_not_succeeded" });
     }
 
-    // payout must not exist
-    const payout = await db.oneOrNone(
+    const payment = paymentResult.rows[0];
+
+    // 2. payout must not exist
+    const payoutResult = await db.query(
       `
       SELECT id
       FROM payouts
@@ -43,10 +45,11 @@ router.post("/payouts/preview", async (req, res) => {
       [booking_id]
     );
 
-    if (payout) {
+    if (payoutResult.rows.length > 0) {
       return res.status(409).json({ error: "already_paid" });
     }
 
+    // 3. preview OK
     return res.json({
       ok: true,
       booking_id,
