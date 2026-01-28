@@ -11,18 +11,15 @@ router.post("/payouts/preview", async (req, res) => {
       return res.status(400).json({ error: "invalid_booking_id" });
     }
 
-    // PROD MUST BE POSTGRES
+    // PROD: Postgres only
     if (!db || db.mode !== "postgres") {
-      return res.status(500).json({
-        error: "db_mode_error",
-        mode: db && db.mode
-      });
+      return res.status(500).json({ error: "db_mode_error", mode: db && db.mode });
     }
 
-    // 1. payment must exist and be succeeded
+    // 1) payment must exist and be succeeded
     const payment = await db.oneOrNone(
       `
-      SELECT id, amount_total
+      SELECT id, amount
       FROM payments
       WHERE booking_id = $1
         AND status = 'succeeded'
@@ -36,7 +33,7 @@ router.post("/payouts/preview", async (req, res) => {
       return res.status(404).json({ error: "payment_not_succeeded" });
     }
 
-    // 2. payout must NOT exist
+    // 2) payout must NOT exist
     const payout = await db.oneOrNone(
       `
       SELECT id
@@ -54,14 +51,11 @@ router.post("/payouts/preview", async (req, res) => {
     return res.json({
       ok: true,
       booking_id,
-      amount: payment.amount_total
+      amount: payment.amount
     });
   } catch (e) {
     console.error("PAYOUT_PREVIEW_FATAL", e);
-    return res.status(500).json({
-      error: "fatal",
-      message: e.message
-    });
+    return res.status(500).json({ error: "fatal", message: e.message });
   }
 });
 
