@@ -24,44 +24,32 @@ router.post('/create', async (req, res) => {
 
     const db = getDB()
 
-    // --- verify salon exists ---
-    const salonCheck = await db.query(
+    // Проверки существования (мягкие, без id)
+    const salonOk = await db.query(
       'SELECT 1 FROM salons WHERE slug = $1',
       [salon_slug]
     )
-    if (salonCheck.rowCount === 0) {
+    if (salonOk.rowCount === 0) {
       return res.status(400).json({ error: 'salon not found' })
     }
 
-    // --- verify master exists ---
-    const masterCheck = await db.query(
+    const masterOk = await db.query(
       'SELECT 1 FROM masters WHERE slug = $1',
       [master_slug]
     )
-    if (masterCheck.rowCount === 0) {
+    if (masterOk.rowCount === 0) {
       return res.status(400).json({ error: 'master not found' })
     }
 
-    // --- service ---
-    const serviceRes = await db.query(
-      'SELECT duration_min FROM services WHERE service_id = $1',
+    const serviceOk = await db.query(
+      'SELECT 1 FROM services WHERE service_id = $1',
       [service_id]
     )
-    if (serviceRes.rowCount === 0) {
+    if (serviceOk.rowCount === 0) {
       return res.status(400).json({ error: 'service not found' })
     }
 
-    const duration_min = serviceRes.rows[0].duration_min
-
-    // --- compute end_time ---
-    const [h, m] = start_time.split(':').map(Number)
-    const startMinutes = h * 60 + m
-    const endMinutes = startMinutes + duration_min
-    const endH = String(Math.floor(endMinutes / 60)).padStart(2, '0')
-    const endM = String(endMinutes % 60).padStart(2, '0')
-    const end_time = `${endH}:${endM}`
-
-    // --- insert booking (SLUG-BASED, MATCHES DB) ---
+    // ВСТАВЛЯЕМ ТОЛЬКО СУЩЕСТВУЮЩИЕ КОЛОНКИ
     const insertRes = await db.query(
       `
       INSERT INTO bookings (
@@ -70,11 +58,10 @@ router.post('/create', async (req, res) => {
         service_id,
         date,
         start_time,
-        end_time,
         status,
         source
       )
-      VALUES ($1,$2,$3,$4,$5,$6,'pending',$7)
+      VALUES ($1,$2,$3,$4,$5,'pending',$6)
       RETURNING id
       `,
       [
@@ -83,7 +70,6 @@ router.post('/create', async (req, res) => {
         service_id,
         date,
         start_time,
-        end_time,
         source || null
       ]
     )
