@@ -24,36 +24,38 @@ router.post('/create', async (req, res) => {
 
     const db = getDB()
 
-    // --- salon ---
+    // salon
     const salonRes = await db.query(
       'SELECT id FROM salons WHERE slug = $1',
       [salon_slug]
     )
+
     if (salonRes.rowCount === 0) {
       return res.status(400).json({ error: 'salon not found' })
     }
 
-    // --- master ---
+    // master
     const masterRes = await db.query(
       'SELECT id FROM masters WHERE slug = $1',
       [master_slug]
     )
+
     if (masterRes.rowCount === 0) {
       return res.status(400).json({ error: 'master not found' })
     }
 
-    // --- service ---
+    // service
     const serviceRes = await db.query(
       'SELECT id, duration_min FROM services WHERE service_id = $1',
       [service_id]
     )
+
     if (serviceRes.rowCount === 0) {
       return res.status(400).json({ error: 'service not found' })
     }
 
     const service = serviceRes.rows[0]
 
-    // --- compute end_time ---
     const [h, m] = start_time.split(':').map(Number)
     const startMinutes = h * 60 + m
     const endMinutes = startMinutes + service.duration_min
@@ -93,8 +95,11 @@ router.post('/create', async (req, res) => {
       status: 'pending'
     })
   } catch (err) {
-    console.error('PUBLIC /create error:', err)
-    return res.status(500).json({ error: 'internal_error' })
+    console.error('PUBLIC /create FULL ERROR:', err)
+    return res.status(500).json({
+      error: 'internal_error',
+      detail: err.message
+    })
   }
 })
 
