@@ -11,17 +11,12 @@ function getClient() {
   });
 }
 
-function isUuid(v) {
-  return typeof v === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
-}
-
 // POST /payments/webhook
-// body: { payment_id, status } status = succeeded | failed
+// body: { payment_id: number, status: "succeeded" | "failed" }
 router.post("/webhook", async (req, res) => {
   const { payment_id, status } = req.body || {};
 
-  if (!isUuid(payment_id) || !["succeeded", "failed"].includes(status)) {
+  if (!Number.isInteger(payment_id) || !["succeeded", "failed"].includes(status)) {
     return res.status(400).json({ error: "invalid_request" });
   }
 
@@ -48,6 +43,9 @@ router.post("/webhook", async (req, res) => {
 
     return res.json({ ok: true });
   } catch (e) {
+    console.error("payments_webhook_error", {
+      message: e.message
+    });
     return res.status(500).json({ error: "internal_error" });
   } finally {
     await client.end();
