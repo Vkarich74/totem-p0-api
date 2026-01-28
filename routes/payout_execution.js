@@ -6,9 +6,11 @@ const router = express.Router();
 /**
  * POST /payouts/execute
  * Input: { booking_id }
- * Guards:
+ *
+ * RULES:
  *  - payment must be succeeded
- *  - one payout per booking
+ *  - only one payout per booking
+ *  - payouts table HAS NO payment_id column (PROD FACT)
  */
 router.post("/payouts/execute", async (req, res) => {
   try {
@@ -23,11 +25,10 @@ router.post("/payouts/execute", async (req, res) => {
       return res.status(500).json({ error: "db_mode_error", mode: db && db.mode });
     }
 
-    // 1. succeeded payment
-    // ВАЖНО: берём UUID payment_id, а не integer id
+    // 1. succeeded payment EXISTS
     const payment = await db.oneOrNone(
       `
-      SELECT payment_id, amount
+      SELECT amount
       FROM payments
       WHERE booking_id = $1
         AND status = 'succeeded'
@@ -56,23 +57,21 @@ router.post("/payouts/execute", async (req, res) => {
       return res.status(409).json({ error: "already_paid" });
     }
 
-    // 3. execute payout (ATOMIC)
+    // 3. execute payout (ONLY REAL COLUMNS)
     const payout = await db.runInTx(async (tx) => {
       const inserted = await tx.oneOrNone(
         `
         INSERT INTO payouts (
           booking_id,
-          payment_id,
           amount,
           status,
           created_at
         )
-        VALUES ($1, $2, $3, 'executed', NOW())
+        VALUES ($1, $2, 'executed', NOW())
         RETURNING id
         `,
         [
           booking_id,
-          payment.payment_id, // <-- UUID, КРИТИЧНО
           payment.amount
         ]
       );
