@@ -11,8 +11,7 @@ router.post('/create', async (req, res) => {
       master_slug,
       service_id,
       date,
-      start_time,
-      source
+      start_time
     } = req.body || {}
 
     if (!salon_slug || !master_slug || !service_id || !date || !start_time) {
@@ -24,7 +23,7 @@ router.post('/create', async (req, res) => {
 
     const db = getDB()
 
-    // Проверки существования (мягкие, без id)
+    // Проверяем, что сущности существуют
     const salonOk = await db.query(
       'SELECT 1 FROM salons WHERE slug = $1',
       [salon_slug]
@@ -49,7 +48,7 @@ router.post('/create', async (req, res) => {
       return res.status(400).json({ error: 'service not found' })
     }
 
-    // ВСТАВЛЯЕМ ТОЛЬКО СУЩЕСТВУЮЩИЕ КОЛОНКИ
+    // ⬇⬇⬇ ВСТАВЛЯЕМ ТОЛЬКО ТО, ЧТО ТОЧНО ЕСТЬ В БД ⬇⬇⬇
     const insertRes = await db.query(
       `
       INSERT INTO bookings (
@@ -58,10 +57,9 @@ router.post('/create', async (req, res) => {
         service_id,
         date,
         start_time,
-        status,
-        source
+        status
       )
-      VALUES ($1,$2,$3,$4,$5,'pending',$6)
+      VALUES ($1,$2,$3,$4,$5,'pending')
       RETURNING id
       `,
       [
@@ -69,8 +67,7 @@ router.post('/create', async (req, res) => {
         master_slug,
         service_id,
         date,
-        start_time,
-        source || null
+        start_time
       ]
     )
 
