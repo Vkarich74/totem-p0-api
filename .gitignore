@@ -1,37 +1,34 @@
-# =========================
-# Node
-# =========================
+# env
+.env
+.env.*
+
+# node
 node_modules/
-
-# =========================
-# Databases / SQLite
-# =========================
-data.db
-data.db-*
-*.sqlite
-*.db
-*.bak
-
-# =========================
-# Logs
-# =========================
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
 
-# =========================
-# OS / IDE
-# =========================
+# OS / editor
 .DS_Store
 Thumbs.db
-.vscode/
-.idea/
 
-# =========================
-# Console / temp garbage
-# =========================
-(c)
-cd
-Microsoft
-notepad
-{error
+# sqlite leftovers (never commit)
+*.db
+*.db-shm
+*.db-wal
+
+# logs / runtime
+logs/
+tmp/
+temp/
+
+# misc accidental files
+ADD
+ALTER
+dir
+node
+npm
+taskkill
+curl
+{
