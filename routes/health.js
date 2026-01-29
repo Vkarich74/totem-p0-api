@@ -1,17 +1,15 @@
 // routes/health.js
-import express from 'express';
-import { db } from '../db/index.js';
+import express from "express";
 
 const router = express.Router();
 
-router.get('/health', async (req, res) => {
+router.get("/", async (_req, res) => {
   try {
-    await db.query('SELECT 1');
-    res.json({ ok: true });
+    // минимальный health, DB не трогаем
+    return res.json({ ok: true });
   } catch (err) {
-    console.error('HEALTH_DB_ERROR', err);
-    res.status(500).json({ ok: false });
+    return res.status(500).json({ ok: false });
   }
 });
 
-export default router;
+export const healthRouter = router;
