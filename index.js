@@ -1,7 +1,6 @@
 import express from 'express';
 import cors from 'cors';
 
-import healthRoutes from './routes/health.js';
 import payoutExecutionRoutes from './routes/payout_execution.js';
 import settlementBatchRoutes from './routes/settlement_batches.js';
 
@@ -11,8 +10,12 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// 🔴 INLINE HEALTH — БЕЗ IMPORT
+app.get('/health', (req, res) => {
+  res.json({ ok: true });
+});
+
 // routes
-app.use(healthRoutes);
 app.use(payoutExecutionRoutes);
 app.use(settlementBatchRoutes);
 
