@@ -1,4 +1,4 @@
-// index.js — CORE + SYSTEM + MARKETPLACE + PUBLIC (LIFECYCLE v2 + TRUST PROXY FIX)
+// index.js — CORE + LIFECYCLE v2 + AUDIT + EXPORT
 
 import express from "express";
 import bodyParser from "body-parser";
@@ -15,6 +15,7 @@ import paymentsIntentRouter from "./routes_public/paymentsIntent.js";
 import paymentsWebhookRouter from "./routes_system/paymentsWebhook.js";
 import bookingTimeoutRouter from "./routes_system/bookingTimeout.js";
 import bookingCompleteRouter from "./routes_system/bookingComplete.js";
+import exportBookingsRouter from "./routes_system/exportBookings.js";
 import opsExportRouter from "./routes_system/opsExport.js";
 
 // marketplace
@@ -27,44 +28,31 @@ import { publicRateLimit } from "./middlewares/rateLimitPublic.js";
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-/**
- * ✅ Railway / reverse proxy fix:
- * express-rate-limit throws ERR_ERL_UNEXPECTED_X_FORWARDED_FOR
- * when X-Forwarded-For exists but trust proxy is false.
- */
+// Railway proxy fix
 app.set("trust proxy", 1);
 
 app.use(bodyParser.json());
 
-/* =========================
-   HEALTH
-========================= */
+// health
 app.use("/health", healthRouter);
 
-/* =========================
-   PUBLIC (rate-limited)
-========================= */
+// public
 app.use("/public", publicRateLimit);
 app.use("/public/bookings", bookingCreateRouter);
 app.use("/public/bookings", bookingCancelRouter);
 app.use("/public/payments/intent", paymentsIntentRouter);
 
-/* =========================
-   SYSTEM (protected)
-========================= */
+// system
 app.use("/payments/webhook", systemAuth, paymentsWebhookRouter);
 app.use("/system/bookings", systemAuth, bookingTimeoutRouter);
 app.use("/system/bookings", systemAuth, bookingCompleteRouter);
+app.use("/system/export", systemAuth, exportBookingsRouter);
 app.use("/system/ops", systemAuth, opsExportRouter);
 
-/* =========================
-   MARKETPLACE (protected)
-========================= */
+// marketplace
 app.use("/marketplace/payouts", systemAuth, payoutsCreateRouter);
 
-/* =========================
-   FALLBACK
-========================= */
+// fallback
 app.use((req, res) => {
   res.status(404).json({ ok: false, error: "NOT_FOUND" });
 });
