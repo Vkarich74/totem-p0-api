@@ -1,19 +1,11 @@
-// db/index.js
+// db/index.js — Postgres pool (Railway)
+
 import pg from "pg";
 
 const { Pool } = pg;
 
-let pool;
-
-/**
- * Lazy init DB pool
- */
-export function openDb() {
-  if (!pool) {
-    pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-      ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
-    });
-  }
-  return pool;
-}
+export const pool = new Pool({
+  connectionString:
+    "postgresql://postgres:prZkCbCpYTlLPXPkSprHnliKsXCQjoSU@interchange.proxy.rlwy.net:55042/railway",
+  ssl: { rejectUnauthorized: false },
+});

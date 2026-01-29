@@ -1,34 +1,21 @@
-// routes_system/paymentsWebhook.js
-// SYSTEM: confirm payment intent
+// routes_system/paymentsWebhook.js — REAL DB CONFIRM
 
 import express from "express";
+import { pool } from "../db/index.js";
 
 const router = express.Router();
 
-/*
-  SYSTEM-ONLY endpoint.
-  Confirms payment intent and marks booking as paid.
-*/
-
-router.post("/", (req, res) => {
+router.post("/", async (req, res) => {
   const { payment_id, status } = req.body;
 
-  if (!payment_id || !status) {
-    return res.status(400).json({
-      ok: false,
-      error: "INVALID_PAYLOAD",
-    });
+  if (!payment_id || status !== "succeeded") {
+    return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
   }
 
-  if (status !== "succeeded") {
-    return res.status(400).json({
-      ok: false,
-      error: "UNSUPPORTED_STATUS",
-    });
-  }
-
-  // MOCK CONFIRMATION (v1)
-  // In real provider integration, this is where DB update happens
+  await pool.query(
+    "UPDATE payment_intents SET status='confirmed' WHERE intent_id=$1",
+    [payment_id]
+  );
 
   return res.json({
     ok: true,
