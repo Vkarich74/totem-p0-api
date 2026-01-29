@@ -5,38 +5,23 @@
   <title>TOTEM Booking</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    html, body {
-      margin: 0;
-      padding: 0;
-      height: 100%;
-      font-family: Arial, sans-serif;
-    }
-    #totem-booking {
-      min-height: 100vh;
-    }
+    html, body { margin:0; padding:0; height:100%; }
+    #totem-booking { min-height: 100vh; }
   </style>
 </head>
 <body>
 
   <div id="totem-booking"></div>
 
-  <!-- SDK -->
-  <script src="https://vkarich74.github.io/totem-p0-api/sdk/totem-sdk.js"></script>
+  <script src="https://vkarich74.github.io/totem-p0-api/sdk/totem-sdk.iife.js"></script>
+  <script src="https://vkarich74.github.io/totem-p0-api/widget/totem-widget.iife.js"></script>
 
-  <!-- Widget -->
-  <script src="https://vkarich74.github.io/totem-p0-api/widget/totem-widget.js"></script>
-
-  <!-- Init -->
   <script>
-    if (!window.TotemWidget) {
-      document.body.innerHTML = "<pre>TotemWidget not loaded</pre>";
-    } else {
-      window.TotemWidget.mount({
-        target: "#totem-booking",
-        apiBase: "https://totem-p0-api-production.up.railway.app",
-        salonId: "s1"
-      });
-    }
+    window.TotemWidget.mount({
+      target: "#totem-booking",
+      apiBase: "https://totem-p0-api-production.up.railway.app",
+      salonId: "s1"
+    });
   </script>
 
 </body>
