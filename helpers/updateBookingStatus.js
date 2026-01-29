@@ -1,22 +1,21 @@
-// helpers/updateBookingStatus.js — Postgres, Booking Lifecycle v2 (CLIENT-BASED)
+// helpers/updateBookingStatus.js — Booking lifecycle v2 + AUDIT (Postgres)
 
-import {
-  assertStatusTransition,
-  BOOKING_STATUSES,
-} from "../core/bookingStatus.js";
+import { assertStatusTransition } from "../core/bookingStatus.js";
 import { hasSucceededPayment } from "../core/payments.js";
 
 /**
- * @param {object} client - pg client (transaction owner)
+ * @param {object} client - pg client (same transaction)
  * @param {number} bookingId
  * @param {string} newStatus
  * @param {object} actor
+ * @param {string} source
  */
 export default async function updateBookingStatus(
   client,
   bookingId,
   newStatus,
-  actor = { type: "system" }
+  actor = { type: "system", id: null },
+  source = null
 ) {
   const { rows, rowCount } = await client.query(
     `
@@ -44,21 +43,8 @@ export default async function updateBookingStatus(
   // lifecycle guard
   assertStatusTransition(fromStatus, newStatus);
 
-  // actor guard
-  if (actor.type !== "system") {
-    if (
-      newStatus === BOOKING_STATUSES.PAID ||
-      newStatus === BOOKING_STATUSES.COMPLETED ||
-      newStatus === BOOKING_STATUSES.EXPIRED
-    ) {
-      const err = new Error("FORBIDDEN_STATUS_CHANGE");
-      err.code = "FORBIDDEN_STATUS_CHANGE";
-      throw err;
-    }
-  }
-
-  // payment gate
-  if (newStatus === BOOKING_STATUSES.PAID) {
+  // payment guard
+  if (newStatus === "paid") {
     const paid = await hasSucceededPayment(client, bookingId);
     if (!paid) {
       const err = new Error("PAYMENT_REQUIRED");
@@ -67,6 +53,7 @@ export default async function updateBookingStatus(
     }
   }
 
+  // apply status
   await client.query(
     `
     UPDATE bookings
@@ -74,6 +61,24 @@ export default async function updateBookingStatus(
     WHERE id = $2
     `,
     [newStatus, bookingId]
+  );
+
+  // AUDIT LOG (same transaction)
+  await client.query(
+    `
+    INSERT INTO booking_audit_log
+      (booking_id, from_status, to_status, actor_type, actor_id, source)
+    VALUES
+      ($1, $2, $3, $4, $5, $6)
+    `,
+    [
+      bookingId,
+      fromStatus,
+      newStatus,
+      actor.type,
+      actor.id,
+      source,
+    ]
   );
 
   return {
