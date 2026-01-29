@@ -1,96 +1,36 @@
+// index.js
 import express from 'express';
 import cors from 'cors';
-import { db } from './db/index.js';
 
+import healthRoutes from './routes/health.js';
+import payoutPreviewRoutes from './routes/payout_preview.js';
 import payoutExecutionRoutes from './routes/payout_execution.js';
+import settlementBatchRoutes from './routes/settlement_batches.js';
+import reportsRoutes from './routes/reports.js';
+import ownerDashboardRoutes from './routes/owner_dashboard.js';
 
 const app = express();
 
-// middlewares
 app.use(cors());
 app.use(express.json());
 
-// health
-app.get('/health', (req, res) => {
-  res.json({ ok: true });
-});
+// base
+app.use(healthRoutes);
 
 // payouts
+app.use(payoutPreviewRoutes);
 app.use(payoutExecutionRoutes);
 
-// settlements batch pay (inline)
-app.post('/settlements/batch/:id/pay', async (req, res) => {
-  const batchId = Number(req.params.id);
-  if (!Number.isInteger(batchId)) {
-    return res.status(400).json({ error: 'invalid_batch_id' });
-  }
+// settlements
+app.use(settlementBatchRoutes);
 
-  try {
-    const batch = await db.query(
-      `SELECT id, status FROM settlement_payout_batches WHERE id = $1`,
-      [batchId]
-    );
+// reports
+app.use(reportsRoutes);
 
-    if (batch.rows.length === 0) {
-      return res.status(404).json({ error: 'batch_not_found' });
-    }
+// owner dashboard
+app.use(ownerDashboardRoutes);
 
-    if (batch.rows[0].status === 'paid') {
-      return res.json({ ok: true, idempotent: true });
-    }
-
-    await db.query(
-      `UPDATE settlement_payout_batches
-       SET status = 'paid', paid_at = now()
-       WHERE id = $1`,
-      [batchId]
-    );
-
-    await db.query(
-      `UPDATE payouts
-       SET status = 'paid'
-       WHERE payout_batch_id = $1`,
-      [batchId]
-    );
-
-    return res.json({ ok: true });
-  } catch (err) {
-    console.error('SETTLEMENT_BATCH_PAY_ERROR', err);
-    return res.status(500).json({ error: 'internal_error' });
-  }
-});
-
-// reports (inline)
-app.get('/reports/periods', async (req, res) => {
-  try {
-    const r = await db.query(
-      `SELECT * FROM report_financials_by_period ORDER BY period_start`
-    );
-    res.json({ ok: true, periods: r.rows });
-  } catch (e) {
-    console.error('REPORT_PERIODS_ERROR', e);
-    res.status(500).json({ error: 'internal_error' });
-  }
-});
-
-app.get('/reports/batches', async (req, res) => {
-  try {
-    const r = await db.query(
-      `SELECT * FROM report_batches ORDER BY created_at DESC`
-    );
-    res.json({ ok: true, batches: r.rows });
-  } catch (e) {
-    console.error('REPORT_BATCHES_ERROR', e);
-    res.status(500).json({ error: 'internal_error' });
-  }
-});
-
-// fallback
-app.use((req, res) => {
-  res.status(404).json({ error: 'not_found' });
-});
-
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
 });
