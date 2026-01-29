@@ -1,4 +1,4 @@
-// index.js — CORE + SYSTEM + MARKETPLACE (SECURED + RATE LIMIT)
+// index.js — CORE + SYSTEM + MARKETPLACE + PUBLIC (LIFECYCLE v2)
 
 import express from "express";
 import bodyParser from "body-parser";
@@ -8,6 +8,7 @@ import { healthRouter } from "./routes/health.js";
 
 // public
 import bookingCreateRouter from "./routes_public/bookingCreate.js";
+import bookingCancelRouter from "./routes_public/bookingCancel.js";
 import paymentsIntentRouter from "./routes_public/paymentsIntent.js";
 
 // system / marketplace
@@ -24,22 +25,33 @@ const PORT = process.env.PORT || 8080;
 
 app.use(bodyParser.json());
 
-// health
+/* =========================
+   HEALTH
+========================= */
 app.use("/health", healthRouter);
 
-// public (rate-limited)
+/* =========================
+   PUBLIC (rate-limited)
+========================= */
 app.use("/public", publicRateLimit);
 app.use("/public/bookings", bookingCreateRouter);
+app.use("/public/bookings", bookingCancelRouter);
 app.use("/public/payments/intent", paymentsIntentRouter);
 
-// system (protected)
+/* =========================
+   SYSTEM (protected)
+========================= */
 app.use("/payments/webhook", systemAuth, paymentsWebhookRouter);
 app.use("/system/ops", systemAuth, opsExportRouter);
 
-// marketplace (protected)
+/* =========================
+   MARKETPLACE (protected)
+========================= */
 app.use("/marketplace/payouts", systemAuth, payoutsCreateRouter);
 
-// fallback
+/* =========================
+   FALLBACK
+========================= */
 app.use((req, res) => {
   res.status(404).json({ ok: false, error: "NOT_FOUND" });
 });
