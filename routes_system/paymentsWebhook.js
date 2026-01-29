@@ -1,4 +1,4 @@
-// routes_system/paymentsWebhook.js — REAL DB CONFIRM
+// routes_system/paymentsWebhook.js — REAL PROD SCHEMA
 
 import express from "express";
 import { pool } from "../db/index.js";
@@ -13,7 +13,12 @@ router.post("/", async (req, res) => {
   }
 
   await pool.query(
-    "UPDATE payment_intents SET status='confirmed' WHERE intent_id=$1",
+    `
+    UPDATE payments
+    SET status = 'confirmed',
+        updated_at = now()
+    WHERE id = $1
+    `,
     [payment_id]
   );
 
