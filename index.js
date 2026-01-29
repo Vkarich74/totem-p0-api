@@ -10,18 +10,17 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// HEALTH (inline, prod-safe)
+// health
 app.get('/health', (req, res) => {
   res.json({ ok: true });
 });
 
-// PAYOUT EXECUTION
+// payouts
 app.use(payoutExecutionRoutes);
 
-// 🔥 SETTLEMENT BATCH PAY (INLINE)
+// settlements batch pay (inline)
 app.post('/settlements/batch/:id/pay', async (req, res) => {
   const batchId = Number(req.params.id);
-
   if (!Number.isInteger(batchId)) {
     return res.status(400).json({ error: 'invalid_batch_id' });
   }
@@ -61,13 +60,37 @@ app.post('/settlements/batch/:id/pay', async (req, res) => {
   }
 });
 
+// reports (inline)
+app.get('/reports/periods', async (req, res) => {
+  try {
+    const r = await db.query(
+      `SELECT * FROM report_financials_by_period ORDER BY period_start`
+    );
+    res.json({ ok: true, periods: r.rows });
+  } catch (e) {
+    console.error('REPORT_PERIODS_ERROR', e);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+app.get('/reports/batches', async (req, res) => {
+  try {
+    const r = await db.query(
+      `SELECT * FROM report_batches ORDER BY created_at DESC`
+    );
+    res.json({ ok: true, batches: r.rows });
+  } catch (e) {
+    console.error('REPORT_BATCHES_ERROR', e);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
 // fallback
 app.use((req, res) => {
   res.status(404).json({ error: 'not_found' });
 });
 
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
 });
