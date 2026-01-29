@@ -1,14 +1,15 @@
 // index.js
 import express from 'express';
+
 import healthRoutes from './routes/health.js';
 import payoutExecutionRoutes from './routes/payout_execution.js';
 import payoutPreviewRoutes from './routes/payout_preview.js';
 import settlementBatchRoutes from './routes/settlement_batches.js';
 import reportRoutes from './routes/reports.js';
 import ownerActionRoutes from './routes/owner_actions.js';
+import systemMetricsRoutes from './routes/system_metrics.js';
 
 const app = express();
-
 app.use(express.json());
 
 app.use(healthRoutes);
@@ -17,6 +18,7 @@ app.use(payoutExecutionRoutes);
 app.use(settlementBatchRoutes);
 app.use(reportRoutes);
 app.use(ownerActionRoutes);
+app.use(systemMetricsRoutes);
 
 const port = process.env.PORT || 8080;
 app.listen(port, () => {
