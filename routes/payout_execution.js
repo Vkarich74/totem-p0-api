@@ -12,6 +12,7 @@ router.post('/payouts/execute', async (req, res) => {
   }
 
   try {
+    // 1. Найти активный succeeded payment
     const paymentResult = await db.query(
       `
       SELECT id, amount
@@ -31,15 +32,25 @@ router.post('/payouts/execute', async (req, res) => {
 
     const payment = paymentResult.rows[0];
 
+    // 2. Идемпотентность: payout уже существует?
     const existingResult = await db.query(
-      `SELECT id FROM payouts WHERE booking_id = $1`,
+      `
+      SELECT id
+      FROM payouts
+      WHERE booking_id = $1
+      `,
       [booking_id]
     );
 
     if (existingResult.rows.length > 0) {
-      return res.json({ ok: true, payout_id: existingResult.rows[0].id, idempotent: true });
+      return res.json({
+        ok: true,
+        payout_id: existingResult.rows[0].id,
+        idempotent: true
+      });
     }
 
+    // 3. Создание payout
     const insertResult = await db.query(
       `
       INSERT INTO payouts (booking_id, payment_id, amount, status)
@@ -49,15 +60,13 @@ router.post('/payouts/execute', async (req, res) => {
       [booking_id, payment.id, payment.amount]
     );
 
-    return res.json({ ok: true, payout_id: insertResult.rows[0].id });
-  } catch (err) {
-    // 🔥 ВРЕМЕННО ВОЗВРАЩАЕМ ДЕТАЛИ
-    console.error('PAYOUT_EXECUTION_ERROR', err);
-    return res.status(500).json({
-      error: 'internal_error',
-      detail: err?.message,
-      code: err?.code
+    return res.json({
+      ok: true,
+      payout_id: insertResult.rows[0].id
     });
+  } catch (err) {
+    console.error('PAYOUT_EXECUTION_ERROR', err);
+    return res.status(500).json({ error: 'internal_error' });
   }
 });
 
