@@ -1,129 +1,85 @@
+// helpers/updateBookingStatus.js — Postgres, Booking Lifecycle v2 (CLIENT-BASED)
+
+import {
+  assertStatusTransition,
+  BOOKING_STATUSES,
+} from "../core/bookingStatus.js";
 import { hasSucceededPayment } from "../core/payments.js";
 
-const ALLOWED_STATUSES = [
-  "pending",
-  "confirmed",
-  "completed",
-  "cancelled",
-];
-
-function resolveCurrentStatus(booking) {
-  if (booking.cancelled_at) return "cancelled";
-  if (booking.active === 1) return "confirmed";
-  return "pending";
-}
-
-function assertActorPermission(booking, actor, newStatus) {
-  if (actor.type === "system") return;
-
-  if (newStatus === "completed") {
-    const err = new Error("FORBIDDEN_COMPLETED");
-    err.code = "FORBIDDEN_COMPLETED";
-    throw err;
-  }
-
-  if (actor.type === "salon" && String(booking.salon_id) !== String(actor.id)) {
-    const err = new Error("FORBIDDEN_NOT_OWNER");
-    err.code = "FORBIDDEN_NOT_OWNER";
-    throw err;
-  }
-
-  if (actor.type === "master" && String(booking.master_id) !== String(actor.id)) {
-    const err = new Error("FORBIDDEN_NOT_OWNER");
-    err.code = "FORBIDDEN_NOT_OWNER";
-    throw err;
-  }
-}
-
-export default function updateBookingStatus(
-  db,
+/**
+ * @param {object} client - pg client (transaction owner)
+ * @param {number} bookingId
+ * @param {string} newStatus
+ * @param {object} actor
+ */
+export default async function updateBookingStatus(
+  client,
   bookingId,
   newStatus,
-  actor = { type: "system", id: null }
+  actor = { type: "system" }
 ) {
-  if (!ALLOWED_STATUSES.includes(newStatus)) {
-    const err = new Error("INVALID_STATUS");
-    err.code = "INVALID_STATUS";
+  const { rows, rowCount } = await client.query(
+    `
+    SELECT id, status
+    FROM bookings
+    WHERE id = $1
+    FOR UPDATE
+    `,
+    [bookingId]
+  );
+
+  if (rowCount === 0) {
+    const err = new Error("BOOKING_NOT_FOUND");
+    err.code = "BOOKING_NOT_FOUND";
     throw err;
   }
 
-  const tx = db.transaction(() => {
-    const booking = db
-      .prepare(
-        `SELECT
-           id,
-           salon_id,
-           master_id,
-           active,
-           cancelled_at,
-           source
-         FROM bookings
-         WHERE id = ?`
-      )
-      .get(bookingId);
+  const booking = rows[0];
+  const fromStatus = booking.status;
 
-    if (!booking) {
-      const err = new Error("BOOKING_NOT_FOUND");
-      err.code = "BOOKING_NOT_FOUND";
+  if (fromStatus === newStatus) {
+    return { ok: true, idempotent: true };
+  }
+
+  // lifecycle guard
+  assertStatusTransition(fromStatus, newStatus);
+
+  // actor guard
+  if (actor.type !== "system") {
+    if (
+      newStatus === BOOKING_STATUSES.PAID ||
+      newStatus === BOOKING_STATUSES.COMPLETED ||
+      newStatus === BOOKING_STATUSES.EXPIRED
+    ) {
+      const err = new Error("FORBIDDEN_STATUS_CHANGE");
+      err.code = "FORBIDDEN_STATUS_CHANGE";
       throw err;
     }
+  }
 
-    const fromStatus = resolveCurrentStatus(booking);
-
-    if (fromStatus === "cancelled") {
-      const err = new Error("BOOKING_ALREADY_CANCELLED");
-      err.code = "BOOKING_ALREADY_CANCELLED";
+  // payment gate
+  if (newStatus === BOOKING_STATUSES.PAID) {
+    const paid = await hasSucceededPayment(client, bookingId);
+    if (!paid) {
+      const err = new Error("PAYMENT_REQUIRED");
+      err.code = "PAYMENT_REQUIRED";
       throw err;
     }
+  }
 
-    if (fromStatus === newStatus) {
-      const err = new Error("STATUS_ALREADY_SET");
-      err.code = "STATUS_ALREADY_SET";
-      throw err;
-    }
+  await client.query(
+    `
+    UPDATE bookings
+    SET status = $1
+    WHERE id = $2
+    `,
+    [newStatus, bookingId]
+  );
 
-    assertActorPermission(booking, actor, newStatus);
-
-    // 🔐 PAYMENT GATE
-    if (newStatus === "completed") {
-      const paid = hasSucceededPayment(db, bookingId);
-      if (!paid) {
-        const err = new Error("PAYMENT_REQUIRED");
-        err.code = "PAYMENT_REQUIRED";
-        throw err;
-      }
-    }
-
-    // APPLY STATE
-    if (newStatus === "confirmed") {
-      db.prepare(`UPDATE bookings SET active = 1 WHERE id = ?`).run(bookingId);
-    }
-
-    if (newStatus === "pending") {
-      db.prepare(`UPDATE bookings SET active = 0 WHERE id = ?`).run(bookingId);
-    }
-
-    if (newStatus === "cancelled") {
-      db.prepare(
-        `UPDATE bookings SET cancelled_at = datetime('now') WHERE id = ?`
-      ).run(bookingId);
-    }
-
-    // LOG
-    db.prepare(
-      `INSERT INTO booking_status_log
-       (booking_id, from_status, to_status, changed_at, actor_type, actor_id)
-       VALUES (?, ?, ?, datetime('now'), ?, ?)`
-    ).run(
-      bookingId,
-      fromStatus,
-      newStatus,
-      actor.type,
-      actor.id
-    );
-
-    return { from: fromStatus, to: newStatus };
-  });
-
-  return tx();
+  return {
+    ok: true,
+    booking_id: bookingId,
+    from: fromStatus,
+    to: newStatus,
+  };
 }
