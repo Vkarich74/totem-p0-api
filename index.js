@@ -1,4 +1,4 @@
-// index.js — CORE + SYSTEM + MARKETPLACE + PUBLIC (LIFECYCLE v2)
+// index.js — CORE + SYSTEM + MARKETPLACE + PUBLIC (LIFECYCLE v2 + TRUST PROXY FIX)
 
 import express from "express";
 import bodyParser from "body-parser";
@@ -26,6 +26,13 @@ import { publicRateLimit } from "./middlewares/rateLimitPublic.js";
 
 const app = express();
 const PORT = process.env.PORT || 8080;
+
+/**
+ * ✅ Railway / reverse proxy fix:
+ * express-rate-limit throws ERR_ERL_UNEXPECTED_X_FORWARDED_FOR
+ * when X-Forwarded-For exists but trust proxy is false.
+ */
+app.set("trust proxy", 1);
 
 app.use(bodyParser.json());
 
