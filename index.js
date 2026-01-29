@@ -1,31 +1,28 @@
-// index.js
 import express from 'express';
+import cors from 'cors';
 
-// Routes
+import healthRoutes from './routes/health.js';
 import payoutExecutionRoutes from './routes/payout_execution.js';
+import settlementBatchRoutes from './routes/settlement_batches.js';
 
-// App
 const app = express();
 
-// Middleware
+// middlewares
+app.use(cors());
 app.use(express.json());
 
-// Health check
-app.get('/health', (req, res) => {
-  res.json({ ok: true });
-});
-
-// Routes
-// payout_execution.js регистрирует POST /payouts/execute
+// routes
+app.use(healthRoutes);
 app.use(payoutExecutionRoutes);
+app.use(settlementBatchRoutes);
 
-// Fallback
+// fallback
 app.use((req, res) => {
   res.status(404).json({ error: 'not_found' });
 });
 
-// Server
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
 });
