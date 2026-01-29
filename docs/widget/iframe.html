@@ -9,6 +9,7 @@
       margin: 0;
       padding: 0;
       height: 100%;
+      font-family: Arial, sans-serif;
     }
     #totem-booking {
       min-height: 100vh;
@@ -19,15 +20,23 @@
 
   <div id="totem-booking"></div>
 
-  <script type="module">
-    import "https://vkarich74.github.io/totem-p0-api/sdk/totem-sdk.js";
-    import "https://vkarich74.github.io/totem-p0-api/widget/totem-widget.js";
+  <!-- SDK -->
+  <script src="https://vkarich74.github.io/totem-p0-api/sdk/totem-sdk.js"></script>
 
-    window.TotemWidget.mount({
-      target: "#totem-booking",
-      apiBase: "https://totem-p0-api-production.up.railway.app",
-      salonId: "s1"
-    });
+  <!-- Widget -->
+  <script src="https://vkarich74.github.io/totem-p0-api/widget/totem-widget.js"></script>
+
+  <!-- Init -->
+  <script>
+    if (!window.TotemWidget) {
+      document.body.innerHTML = "<pre>TotemWidget not loaded</pre>";
+    } else {
+      window.TotemWidget.mount({
+        target: "#totem-booking",
+        apiBase: "https://totem-p0-api-production.up.railway.app",
+        salonId: "s1"
+      });
+    }
   </script>
 
 </body>
