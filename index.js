@@ -14,6 +14,7 @@ import paymentsIntentRouter from "./routes_public/paymentsIntent.js";
 // system
 import paymentsWebhookRouter from "./routes_system/paymentsWebhook.js";
 import bookingTimeoutRouter from "./routes_system/bookingTimeout.js";
+import bookingCompleteRouter from "./routes_system/bookingComplete.js";
 import opsExportRouter from "./routes_system/opsExport.js";
 
 // marketplace
@@ -46,6 +47,7 @@ app.use("/public/payments/intent", paymentsIntentRouter);
 ========================= */
 app.use("/payments/webhook", systemAuth, paymentsWebhookRouter);
 app.use("/system/bookings", systemAuth, bookingTimeoutRouter);
+app.use("/system/bookings", systemAuth, bookingCompleteRouter);
 app.use("/system/ops", systemAuth, opsExportRouter);
 
 /* =========================
