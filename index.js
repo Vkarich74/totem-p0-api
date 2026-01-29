@@ -1,26 +1,37 @@
 // index.js
-import express from 'express';
+import express from "express";
+import bodyParser from "body-parser";
 
-import healthRoutes from './routes/health.js';
-import payoutExecutionRoutes from './routes/payout_execution.js';
-import payoutPreviewRoutes from './routes/payout_preview.js';
-import settlementBatchRoutes from './routes/settlement_batches.js';
-import reportRoutes from './routes/reports.js';
-import ownerActionRoutes from './routes/owner_actions.js';
-import systemMetricsRoutes from './routes/system_metrics.js';
+// health
+import { healthRouter } from "./routes/health.js";
+
+// public routes (EXISTING)
+import bookingCreateRouter from "./routes_public/bookingCreate.js";
+import paymentsIntentRouter from "./routes_public/paymentsIntent.js";
+
+// system
+import { systemMetricsRouter } from "./routes/system_metrics.js";
 
 const app = express();
-app.use(express.json());
+const PORT = process.env.PORT || 8080;
 
-app.use(healthRoutes);
-app.use(payoutPreviewRoutes);
-app.use(payoutExecutionRoutes);
-app.use(settlementBatchRoutes);
-app.use(reportRoutes);
-app.use(ownerActionRoutes);
-app.use(systemMetricsRoutes);
+app.use(bodyParser.json());
 
-const port = process.env.PORT || 8080;
-app.listen(port, () => {
-  console.log('Server listening on port', port);
+// ---- HEALTH
+app.use("/health", healthRouter);
+
+// ---- PUBLIC API (FREEZE)
+app.use("/public/bookings", bookingCreateRouter);
+app.use("/public/payments/intent", paymentsIntentRouter);
+
+// ---- SYSTEM
+app.use("/system/metrics", systemMetricsRouter);
+
+// ---- FALLBACK
+app.use((req, res) => {
+  res.status(404).json({ ok: false, error: "NOT_FOUND" });
+});
+
+app.listen(PORT, () => {
+  console.log(`TOTEM API listening on port ${PORT}`);
 });
