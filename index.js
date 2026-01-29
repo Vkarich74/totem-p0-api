@@ -1,7 +1,9 @@
-// index.js — CORE + LIFECYCLE v2 + AUDIT + EXPORT
+// index.js — CORE + LIFECYCLE v2 + AUDIT + EXPORT + STATIC
 
 import express from "express";
 import bodyParser from "body-parser";
+import path from "path";
+import { fileURLToPath } from "url";
 
 // health
 import { healthRouter } from "./routes/health.js";
@@ -33,10 +35,15 @@ app.set("trust proxy", 1);
 
 app.use(bodyParser.json());
 
+// STATIC: serve files from ./public via /public/static/*
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+app.use("/public/static", express.static(path.join(__dirname, "public")));
+
 // health
 app.use("/health", healthRouter);
 
-// public
+// public API
 app.use("/public", publicRateLimit);
 app.use("/public/bookings", bookingCreateRouter);
 app.use("/public/bookings", bookingCancelRouter);
