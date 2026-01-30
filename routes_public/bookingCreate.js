@@ -1,5 +1,5 @@
-// routes_public/bookingCreate.js — PROD SAFE + TOKEN ENFORCED
-// Matches real DB schema (bookings)
+// routes_public/bookingCreate.js — FINAL TOKEN-SAFE
+// Self-defensive: does not trust middleware blindly
 
 import express from "express";
 import { pool } from "../db/index.js";
@@ -15,7 +15,17 @@ router.post("/", async (req, res) => {
     start_time
   } = req.body;
 
-  // token → salon binding (if token present)
+  const tokenHeader = req.header("X-Public-Token");
+
+  // ⛔ token header present, but middleware did NOT attach context
+  if (tokenHeader && !req.publicToken) {
+    return res.status(401).json({
+      ok: false,
+      error: "INVALID_PUBLIC_TOKEN"
+    });
+  }
+
+  // ⛔ token → salon binding
   if (req.publicToken && req.publicToken.salon_id !== salon_slug) {
     return res.status(403).json({
       ok: false,
@@ -37,7 +47,6 @@ router.post("/", async (req, res) => {
   }
 
   try {
-    // dedupe by slot (existing logic, adapted)
     const existing = await pool.query(
       `
       SELECT id FROM bookings
