@@ -19,6 +19,7 @@ import bookingTimeoutRouter from "./routes_system/bookingTimeout.js";
 import bookingCompleteRouter from "./routes_system/bookingComplete.js";
 import exportBookingsRouter from "./routes_system/exportBookings.js";
 import opsExportRouter from "./routes_system/opsExport.js";
+import publicTokensRouter from "./routes_system/publicTokens.js";
 
 // marketplace
 import payoutsCreateRouter from "./routes_marketplace/payoutsCreate.js";
@@ -54,6 +55,7 @@ app.use("/system/bookings", systemAuth, bookingTimeoutRouter);
 app.use("/system/bookings", systemAuth, bookingCompleteRouter);
 app.use("/system/export", systemAuth, exportBookingsRouter);
 app.use("/system/ops", systemAuth, opsExportRouter);
+app.use("/system/public-tokens", systemAuth, publicTokensRouter);
 
 // marketplace
 app.use("/marketplace/payouts", systemAuth, payoutsCreateRouter);
