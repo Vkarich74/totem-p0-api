@@ -1,22 +1,24 @@
-# TOTEM — PUBLIC API (v1) — Freeze Contract
+==================================================
+CANCEL BOOKING (PUBLIC)
+==================================================
 
-**Status:** stable (FREEZE)  
-**Audience:** SDK / Widget / Frontend  
-**Base URL (prod):** https://totem-p0-api-production.up.railway.app  
+POST /public/bookings/:id/cancel
 
-Принцип:
-- Виджет и SDK используют **только этот контракт**
-- Backend зафиксирован, изменения — только через v2
-- Никаких скрытых зависимостей от owner/system API
+Purpose:
+- Cancel a booking
+- Safe to call multiple times
 
----
+IMPORTANT:
+- Endpoint IS IDEMPOTENT
+- Repeating the same cancel request does NOT cause an error
+- Final state remains `cancelled`
 
-## 1) Health
+Headers:
+- Content-Type: application/json
+- X-Public-Token: <token> (optional)
 
-### GET `/health`
-
-**Purpose:** smoke-check, monitoring
-
-**Response 200**
+Request:
 ```json
-{ "ok": true }
+{
+  "reason": "client_request"
+}
