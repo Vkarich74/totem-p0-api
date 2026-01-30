@@ -1,7 +1,9 @@
 // middlewares/publicToken.js
-// Public token validation middleware
-// Canonical contract:
+// Public token validation middleware (PostgreSQL)
+// Contract:
 // public_tokens.salon_id === salon_slug (PUBLIC identifier)
+
+import { pool } from "../db/index.js";
 
 export async function publicToken(req, res, next) {
   const token = req.header("X-Public-Token");
@@ -12,31 +14,21 @@ export async function publicToken(req, res, next) {
   }
 
   try {
-    // db is initialized globally in the app bootstrap
-    const db = globalThis.db;
+    const { rows } = await pool.query(
+      `
+      SELECT
+        token,
+        salon_id,
+        enabled,
+        revoked_at
+      FROM public_tokens
+      WHERE token = $1
+      LIMIT 1
+      `,
+      [token]
+    );
 
-    if (!db) {
-      console.error("DB is not initialized");
-      return res.status(500).json({
-        ok: false,
-        error: "INTERNAL_ERROR",
-      });
-    }
-
-    const row = db
-      .prepare(
-        `
-        SELECT
-          token,
-          salon_id,
-          enabled,
-          revoked_at
-        FROM public_tokens
-        WHERE token = ?
-        LIMIT 1
-        `
-      )
-      .get(token);
+    const row = rows[0];
 
     // token not found or revoked
     if (!row || !row.enabled || row.revoked_at) {
