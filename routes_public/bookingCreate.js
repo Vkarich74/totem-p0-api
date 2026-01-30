@@ -1,4 +1,5 @@
-// routes_public/bookingCreate.js — TOKEN-AWARE
+// routes_public/bookingCreate.js — PROD SAFE + TOKEN ENFORCED
+// Matches real DB schema (bookings)
 
 import express from "express";
 import { pool } from "../db/index.js";
@@ -7,17 +8,15 @@ const router = express.Router();
 
 router.post("/", async (req, res) => {
   const {
-    salon_id,
+    salon_slug,
     master_slug,
     service_id,
     date,
-    start_time,
-    end_time,
-    client
+    start_time
   } = req.body;
 
-  // ENFORCE token → salon binding
-  if (req.publicToken && req.publicToken.salon_id !== salon_id) {
+  // token → salon binding (if token present)
+  if (req.publicToken && req.publicToken.salon_id !== salon_slug) {
     return res.status(403).json({
       ok: false,
       error: "SALON_TOKEN_MISMATCH"
@@ -25,12 +24,11 @@ router.post("/", async (req, res) => {
   }
 
   if (
-    !salon_id ||
+    !salon_slug ||
     !master_slug ||
     !service_id ||
     !date ||
-    !start_time ||
-    !end_time
+    !start_time
   ) {
     return res.status(400).json({
       ok: false,
@@ -39,19 +37,18 @@ router.post("/", async (req, res) => {
   }
 
   try {
-    // dedupe slot
+    // dedupe by slot (existing logic, adapted)
     const existing = await pool.query(
       `
       SELECT id FROM bookings
-      WHERE salon_id = $1
+      WHERE salon_slug = $1
         AND master_slug = $2
         AND service_id = $3
         AND date = $4
         AND start_time = $5
-        AND end_time = $6
         AND status NOT IN ('cancelled','expired')
       `,
-      [salon_id, master_slug, service_id, date, start_time, end_time]
+      [salon_slug, master_slug, service_id, date, start_time]
     );
 
     if (existing.rows.length) {
@@ -64,20 +61,12 @@ router.post("/", async (req, res) => {
     const { rows } = await pool.query(
       `
       INSERT INTO bookings
-        (salon_id, master_slug, service_id, date, start_time, end_time, client, status)
+        (salon_slug, master_slug, service_id, date, start_time)
       VALUES
-        ($1,$2,$3,$4,$5,$6,$7,'created')
+        ($1,$2,$3,$4,$5)
       RETURNING id
       `,
-      [
-        salon_id,
-        master_slug,
-        service_id,
-        date,
-        start_time,
-        end_time,
-        client || {}
-      ]
+      [salon_slug, master_slug, service_id, date, start_time]
     );
 
     return res.json({
