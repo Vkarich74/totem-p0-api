@@ -1,4 +1,4 @@
-// index.js — CORE + LIFECYCLE v2 + AUDIT + EXPORT + STATIC
+// index.js — HARDENED order (token → rate-limit)
 
 import express from "express";
 import bodyParser from "body-parser";
@@ -25,17 +25,16 @@ import payoutsCreateRouter from "./routes_marketplace/payoutsCreate.js";
 
 // middlewares
 import { systemAuth } from "./middlewares/systemAuth.js";
+import { publicToken } from "./middlewares/publicToken.js";
 import { publicRateLimit } from "./middlewares/rateLimitPublic.js";
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// Railway proxy fix
 app.set("trust proxy", 1);
-
 app.use(bodyParser.json());
 
-// STATIC: serve files from ./public via /public/static/*
+// static
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 app.use("/public/static", express.static(path.join(__dirname, "public")));
@@ -43,8 +42,8 @@ app.use("/public/static", express.static(path.join(__dirname, "public")));
 // health
 app.use("/health", healthRouter);
 
-// public API
-app.use("/public", publicRateLimit);
+// public: token FIRST, then rate-limit
+app.use("/public", publicToken, publicRateLimit);
 app.use("/public/bookings", bookingCreateRouter);
 app.use("/public/bookings", bookingCancelRouter);
 app.use("/public/payments/intent", paymentsIntentRouter);
