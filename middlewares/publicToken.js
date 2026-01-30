@@ -3,8 +3,6 @@
 // Canonical contract:
 // public_tokens.salon_id === salon_slug (PUBLIC identifier)
 
-import { db } from "../db/index.js";
-
 export async function publicToken(req, res, next) {
   const token = req.header("X-Public-Token");
 
@@ -14,6 +12,17 @@ export async function publicToken(req, res, next) {
   }
 
   try {
+    // db is initialized globally in the app bootstrap
+    const db = globalThis.db;
+
+    if (!db) {
+      console.error("DB is not initialized");
+      return res.status(500).json({
+        ok: false,
+        error: "INTERNAL_ERROR",
+      });
+    }
+
     const row = db
       .prepare(
         `
