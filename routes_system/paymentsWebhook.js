@@ -1,4 +1,4 @@
-// routes_system/paymentsWebhook.js — lifecycle v3 (idempotent, safe)
+// routes_system/paymentsWebhook.js — lifecycle v4 (created → confirmed)
 
 import express from "express";
 import { pool } from "../db/index.js";
@@ -18,7 +18,6 @@ router.post("/", async (req, res) => {
   try {
     await client.query("BEGIN");
 
-    // 1️⃣ load payment with lock
     const { rows, rowCount } = await client.query(
       `
       SELECT id, status, booking_id
@@ -35,7 +34,7 @@ router.post("/", async (req, res) => {
 
     const payment = rows[0];
 
-    // 2️⃣ idempotency: already confirmed
+    // idempotent
     if (payment.status === "confirmed") {
       await client.query("COMMIT");
       return res.json({
@@ -47,12 +46,12 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // 3️⃣ invalid transition
-    if (payment.status !== "pending") {
+    // ✅ РАЗРЕШЁННЫЕ СТАРТОВЫЕ СТАТУСЫ
+    if (!["created", "pending"].includes(payment.status)) {
       throw new Error("INVALID_STATUS_TRANSITION");
     }
 
-    // 4️⃣ confirm payment
+    // confirm payment
     await client.query(
       `
       UPDATE payments
@@ -63,7 +62,7 @@ router.post("/", async (req, res) => {
       [payment_id]
     );
 
-    // 5️⃣ move booking → paid
+    // booking → paid
     await updateBookingStatus(
       client,
       payment.booking_id,
@@ -82,7 +81,6 @@ router.post("/", async (req, res) => {
     });
   } catch (err) {
     await client.query("ROLLBACK");
-
     return res.status(500).json({
       ok: false,
       error: err.message || "INTERNAL_ERROR",
