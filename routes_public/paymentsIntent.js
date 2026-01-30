@@ -1,4 +1,4 @@
-// routes_public/paymentsIntent.js — CANONICAL (pending by default)
+// routes_public/paymentsIntent.js — CANONICAL (booking_id based)
 
 import express from "express";
 import { pool } from "../db/index.js";
@@ -6,29 +6,53 @@ import { pool } from "../db/index.js";
 const router = express.Router();
 
 router.post("/", async (req, res) => {
-  const { request_id, provider, amount } = req.body;
+  const { booking_id, provider, amount } = req.body;
 
-  if (!request_id || !provider || !amount) {
+  if (!booking_id || !provider || !amount) {
     return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
   }
 
   const client = await pool.connect();
 
   try {
+    await client.query("BEGIN");
+
+    // 1️⃣ deactivate previous active payment for this booking
+    await client.query(
+      `
+      UPDATE payments
+      SET is_active = false
+      WHERE booking_id = $1 AND is_active = true
+      `,
+      [booking_id]
+    );
+
+    // 2️⃣ create new payment (pending)
     const { rows } = await client.query(
       `
-      INSERT INTO payments (request_id, provider, amount, status, created_at)
-      VALUES ($1, $2, $3, 'pending', now())
-      RETURNING id, request_id, amount, currency, status
+      INSERT INTO payments (
+        booking_id,
+        provider,
+        amount,
+        status,
+        is_active,
+        created_at
+      )
+      VALUES ($1, $2, $3, 'pending', true, now())
+      RETURNING id, booking_id, amount, provider, status
       `,
-      [request_id, provider, amount]
+      [booking_id, provider, amount]
     );
+
+    await client.query("COMMIT");
 
     return res.json({
       ok: true,
       intent: rows[0],
     });
   } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("paymentsIntent error:", err);
     return res.status(500).json({
       ok: false,
       error: "PAYMENT_INTENT_FAILED",
