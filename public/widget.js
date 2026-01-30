@@ -1,9 +1,10 @@
-// TOTEM Booking Widget v1.1
-// Pure JS, no deps, sandbox-safe (Zoho / iframe compatible)
+// TOTEM Booking Widget v1.2
+// Pure JS, no deps, Zoho / iframe safe
 
 (function () {
   "use strict";
 
+  // prevent double init
   if (window.TotemWidget) return;
 
   function safeError(msg, err) {
@@ -18,17 +19,15 @@
         throw new Error("TotemWidget: baseUrl is required");
       }
 
-      this.baseUrl = config.baseUrl.replace(/\/$/, "");
-      this.salonSlug = config.salonSlug;
-      this.masterSlug = config.masterSlug;
-      this.serviceId = config.serviceId;
+      this.baseUrl = String(config.baseUrl).replace(/\/$/, "");
+      this.publicToken = config.publicToken ? String(config.publicToken) : null;
 
-      this.state = {
-        requestId: null,
-        status: null,
-        loading: false,
-        error: null,
-      };
+      this.salonSlug = config.salonSlug ? String(config.salonSlug) : null;
+      this.masterSlug = config.masterSlug ? String(config.masterSlug) : null;
+      this.serviceId = config.serviceId ? String(config.serviceId) : null;
+
+      this.date = config.date ? String(config.date) : null;
+      this.startTime = config.startTime ? String(config.startTime) : null;
 
       this.mount();
     }
@@ -43,47 +42,68 @@
       root.innerHTML = `
         <div style="font-family:Arial,sans-serif;max-width:320px">
           <button id="totem-create">Create booking</button>
-          <div id="totem-status" style="margin-top:8px"></div>
+          <div id="totem-status" style="margin-top:8px;font-size:12px;"></div>
         </div>
       `;
 
-      document
-        .getElementById("totem-create")
-        .addEventListener("click", () => this.createBooking());
+      const btn = document.getElementById("totem-create");
+      if (btn) btn.addEventListener("click", () => this.createBooking());
     }
 
     async createBooking() {
       this.setStatus("loading...");
 
+      const payload = {
+        salon_slug: this.salonSlug,
+        master_slug: this.masterSlug,
+        service_id: this.serviceId,
+        date: this.date,
+        start_time: this.startTime,
+      };
+
       try {
+        const headers = {
+          "Content-Type": "application/json",
+        };
+
+        if (this.publicToken) {
+          headers["X-Public-Token"] = this.publicToken;
+        }
+
         const res = await fetch(this.baseUrl + "/public/bookings", {
           method: "POST",
           mode: "cors",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            salon_slug: this.salonSlug,
-            master_slug: this.masterSlug,
-            service_id: this.serviceId,
-            date: "2026-01-27",
-            start_time: "14:00",
-          }),
+          headers,
+          body: JSON.stringify(payload),
         });
 
-        const json = await res.json();
+        const text = await res.text();
+        let json;
 
-        if (!json.ok) {
-          throw new Error(json.error || "BOOKING_FAILED");
+        try {
+          json = JSON.parse(text);
+        } catch (_) {
+          this.setStatus("ERROR: INVALID_JSON_RESPONSE");
+          return;
         }
 
-        this.state.requestId = json.request_id;
-        this.state.status = json.status;
-        this.setStatus("OK: " + json.status);
+        if (!res.ok || !json.ok) {
+          this.handleError(res.status, json && json.error ? json.error : "BOOKING_FAILED");
+          return;
+        }
+
+        this.setStatus("OK: " + String(json.status || "OK"));
       } catch (err) {
         this.setStatus("ERROR");
         safeError("createBooking failed", err);
       }
+    }
+
+    handleError(status, code) {
+      if (status === 401) return this.setStatus("ERROR: INVALID_PUBLIC_TOKEN");
+      if (status === 403) return this.setStatus("ERROR: SALON_TOKEN_MISMATCH");
+      if (status === 429) return this.setStatus("ERROR: RATE_LIMIT_EXCEEDED");
+      this.setStatus("ERROR: " + String(code || "UNKNOWN_ERROR"));
     }
 
     setStatus(text) {
@@ -92,6 +112,7 @@
     }
   }
 
+  // public init
   window.TotemWidget = {
     init: function (config) {
       try {
