@@ -1,74 +1,99 @@
-// middlewares/rateLimitPublic.js — token-aware rate limit (PROD)
-// Strategy:
-// - if X-Public-Token present → bucket by token
-// - else → bucket by IP
-// - window: 60s
-// - default limits are conservative
+// middlewares/rateLimitPublic.js
+// Public API rate limit (token-aware + IP fallback)
+// In-memory Map (per instance). Good enough for now; shared store later (Redis).
 
-import { pool } from "../db/index.js";
-
-const WINDOW_MS = 60 * 1000;
-const FALLBACK_LIMIT = 60; // per IP / minute
-
-// in-memory buckets (ok for single instance; Railway proxy-friendly)
 const buckets = new Map();
 
-function now() {
+// defaults
+const DEFAULT_LIMIT_PER_MIN = 60;
+const DEFAULT_BURST = 10; // extra requests allowed above limit within the minute
+const DEFAULT_PENALTY_SEC = 60; // block duration after exceed
+
+function nowMs() {
   return Date.now();
 }
 
-function keyFor(req) {
-  const token = req.header("X-Public-Token");
-  if (token) return `tok:${token}`;
-  const ip = req.ip || req.headers["x-forwarded-for"] || "unknown";
-  return `ip:${ip}`;
+function getClientIp(req) {
+  // trust proxy is enabled in index.js (app.set("trust proxy", 1))
+  // Express will set req.ip accordingly.
+  return (req.ip || "").toString() || "unknown";
 }
 
-export async function publicRateLimit(req, res, next) {
+function computeResetSec(windowStartMs) {
+  const windowMs = 60_000;
+  const elapsed = nowMs() - windowStartMs;
+  const remaining = Math.ceil((windowMs - elapsed) / 1000);
+  return remaining > 0 ? remaining : 0;
+}
+
+function getKey(req) {
+  // token-first, then IP fallback
+  const token = req.publicToken?.token || req.header("X-Public-Token");
+  if (token) return `t:${token}`;
+  return `ip:${getClientIp(req)}`;
+}
+
+function getLimitPerMin(req) {
+  // token-aware limit from DB (via publicToken middleware), fallback to default
+  const v = req.publicToken?.rate_limit_per_min;
+  const n = Number(v);
+  if (Number.isFinite(n) && n > 0) return n;
+  return DEFAULT_LIMIT_PER_MIN;
+}
+
+export function publicRateLimit(req, res, next) {
   try {
-    const key = keyFor(req);
-    const t = now();
+    const key = getKey(req);
+    const limitPerMin = getLimitPerMin(req);
+    const burst = DEFAULT_BURST;
+    const penaltySec = DEFAULT_PENALTY_SEC;
 
-    let limit = FALLBACK_LIMIT;
+    const t = nowMs();
+    const windowMs = 60_000;
 
-    // token-specific limit (if token validated by publicToken middleware)
-    if (req.publicToken && req.publicToken.rate_limit_per_min) {
-      limit = req.publicToken.rate_limit_per_min;
+    let b = buckets.get(key);
+    if (!b) {
+      b = { windowStart: t, count: 0, blockedUntil: 0 };
+      buckets.set(key, b);
     }
 
-    let bucket = buckets.get(key);
-    if (!bucket || t - bucket.start >= WINDOW_MS) {
-      bucket = { start: t, count: 0 };
-      buckets.set(key, bucket);
+    // blocked?
+    if (b.blockedUntil && t < b.blockedUntil) {
+      const retryAfter = Math.ceil((b.blockedUntil - t) / 1000);
+      res.setHeader("Retry-After", String(retryAfter));
+      res.setHeader("X-RateLimit-Limit", String(limitPerMin));
+      res.setHeader("X-RateLimit-Remaining", "0");
+      res.setHeader("X-RateLimit-Reset", String(computeResetSec(b.windowStart)));
+      return res.status(429).json({ ok: false, error: "TOO_MANY_REQUESTS" });
     }
 
-    bucket.count += 1;
+    // new window?
+    if (t - b.windowStart >= windowMs) {
+      b.windowStart = t;
+      b.count = 0;
+      b.blockedUntil = 0;
+    }
 
-    if (bucket.count > limit) {
-      // audit refusal (best-effort)
-      try {
-        await pool.query(
-          `
-          INSERT INTO audit_log (event, source, meta)
-          VALUES ($1,$2,$3)
-          `,
-          [
-            "RATE_LIMIT",
-            "public",
-            JSON.stringify({ key, limit })
-          ]
-        );
-      } catch (_) {}
+    b.count += 1;
 
-      return res.status(429).json({
-        ok: false,
-        error: "RATE_LIMIT_EXCEEDED"
-      });
+    const hardLimit = limitPerMin + burst;
+
+    // headers (best-effort)
+    const remaining = Math.max(0, hardLimit - b.count);
+    res.setHeader("X-RateLimit-Limit", String(limitPerMin));
+    res.setHeader("X-RateLimit-Remaining", String(remaining));
+    res.setHeader("X-RateLimit-Reset", String(computeResetSec(b.windowStart)));
+
+    if (b.count > hardLimit) {
+      b.blockedUntil = t + penaltySec * 1000;
+      res.setHeader("Retry-After", String(penaltySec));
+      return res.status(429).json({ ok: false, error: "TOO_MANY_REQUESTS" });
     }
 
     return next();
-  } catch (e) {
-    // fail-open (do not break traffic)
+  } catch (err) {
+    console.error("publicRateLimit error:", err);
+    // never block traffic due to limiter failure
     return next();
   }
 }

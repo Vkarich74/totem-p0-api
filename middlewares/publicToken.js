@@ -3,11 +3,6 @@
 //
 // Canonical contract:
 // public_tokens.salon_id === salon_slug (PUBLIC identifier)
-//
-// Accepts salon identifier from:
-// - body.salon_slug
-// - body.salonSlug
-// - body.salon_id
 
 import { pool } from "../db/index.js";
 
@@ -19,9 +14,7 @@ export async function publicToken(req, res, next) {
   const token = req.header("X-Public-Token");
 
   // Token is optional (current mode)
-  if (!token) {
-    return next();
-  }
+  if (!token) return next();
 
   try {
     const { rows } = await pool.query(
@@ -30,7 +23,8 @@ export async function publicToken(req, res, next) {
         token,
         salon_id,
         enabled,
-        revoked_at
+        revoked_at,
+        rate_limit_per_min
       FROM public_tokens
       WHERE token = $1
       LIMIT 1
@@ -40,43 +34,29 @@ export async function publicToken(req, res, next) {
 
     const row = rows[0];
 
-    // token not found or revoked
     if (!row || !row.enabled || row.revoked_at) {
-      return res.status(401).json({
-        ok: false,
-        error: "INVALID_PUBLIC_TOKEN",
-      });
+      return res.status(401).json({ ok: false, error: "INVALID_PUBLIC_TOKEN" });
     }
 
-    // read salon identifier from any supported field
     const requestedSalon =
-      req.body?.salon_slug ??
-      req.body?.salonSlug ??
-      req.body?.salon_id ??
-      null;
+      req.body?.salon_slug ?? req.body?.salonSlug ?? req.body?.salon_id ?? null;
 
     const tokenSalon = normalize(row.salon_id);
     const requestSalonNorm = normalize(requestedSalon);
 
     if (requestSalonNorm && tokenSalon !== requestSalonNorm) {
-      return res.status(403).json({
-        ok: false,
-        error: "SALON_TOKEN_MISMATCH",
-      });
+      return res.status(403).json({ ok: false, error: "SALON_TOKEN_MISMATCH" });
     }
 
-    // attach token context
     req.publicToken = {
       token: row.token,
       salon_slug: row.salon_id,
+      rate_limit_per_min: Number(row.rate_limit_per_min) || 60,
     };
 
-    next();
+    return next();
   } catch (err) {
     console.error("publicToken middleware error:", err);
-    return res.status(500).json({
-      ok: false,
-      error: "INTERNAL_ERROR",
-    });
+    return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
   }
 }
