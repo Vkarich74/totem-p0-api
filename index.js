@@ -1,4 +1,4 @@
-// index.js — with TIMEOUT cron enabled + public static fix
+// index.js — CANONICAL (public booking + result wired)
 
 import express from "express";
 import bodyParser from "body-parser";
@@ -12,6 +12,7 @@ import { healthRouter } from "./routes/health.js";
 // public
 import bookingCreateRouter from "./routes_public/bookingCreate.js";
 import bookingCancelRouter from "./routes_public/bookingCancel.js";
+import bookingResultRouter from "./routes_public/bookingResult.js";
 import paymentsIntentRouter from "./routes_public/paymentsIntent.js";
 
 // system
@@ -40,11 +41,8 @@ app.use(bodyParser.json());
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// 🔒 STATIC FILES (FIXED)
-// 1) canonical static for widget + assets
+// static
 app.use("/public/static", express.static(path.join(__dirname, "public")));
-
-// 2) direct access to public html (booking.html, etc.)
 app.use("/public", express.static(path.join(__dirname, "public")));
 
 // health
@@ -54,6 +52,7 @@ app.use("/health", healthRouter);
 app.use("/public", publicToken, publicRateLimit);
 app.use("/public/bookings", bookingCreateRouter);
 app.use("/public/bookings", bookingCancelRouter);
+app.use("/public/bookings", bookingResultRouter);
 app.use("/public/payments/intent", paymentsIntentRouter);
 
 // system
@@ -67,7 +66,7 @@ app.use("/system/public-tokens", systemAuth, publicTokensRouter);
 // marketplace
 app.use("/marketplace/payouts", systemAuth, payoutsCreateRouter);
 
-// ⏱ CRON — every 2 minutes
+// cron — timeout
 cron.schedule("*/2 * * * *", async () => {
   try {
     await fetch(`http://localhost:${PORT}/system/bookings/timeout`, {
@@ -85,7 +84,7 @@ cron.schedule("*/2 * * * *", async () => {
 
 // fallback
 app.use((req, res) => {
-  res.status(404).json({ ok: false, error: "NOT_FOUND" });
+  res.status(404).json({ error: "NOT_FOUND" });
 });
 
 app.listen(PORT, () => {
