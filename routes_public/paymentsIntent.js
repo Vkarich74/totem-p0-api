@@ -1,4 +1,4 @@
-// routes_public/paymentsIntent.js — REAL PROD SCHEMA
+// routes_public/paymentsIntent.js — CANONICAL (pending by default)
 
 import express from "express";
 import { pool } from "../db/index.js";
@@ -12,50 +12,30 @@ router.post("/", async (req, res) => {
     return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
   }
 
-  // request_id === booking_id
-  const existing = await pool.query(
-    `
-    SELECT id, amount, provider, status
-    FROM payments
-    WHERE booking_id = $1 AND is_active = true
-    `,
-    [request_id]
-  );
+  const client = await pool.connect();
 
-  if (existing.rows.length) {
+  try {
+    const { rows } = await client.query(
+      `
+      INSERT INTO payments (request_id, provider, amount, status, created_at)
+      VALUES ($1, $2, $3, 'pending', now())
+      RETURNING id, request_id, amount, currency, status
+      `,
+      [request_id, provider, amount]
+    );
+
     return res.json({
       ok: true,
-      intent: {
-        intent_id: existing.rows[0].id,
-        request_id,
-        amount: existing.rows[0].amount,
-        currency: "KGS",
-      },
-      idempotent: true,
+      intent: rows[0],
     });
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: "PAYMENT_INTENT_FAILED",
+    });
+  } finally {
+    client.release();
   }
-
-  const { rows } = await pool.query(
-    `
-    INSERT INTO payments
-      (booking_id, amount, provider, status, is_active)
-    VALUES
-      ($1, $2, $3, 'created', true)
-    RETURNING id
-    `,
-    [request_id, amount, provider]
-  );
-
-  return res.json({
-    ok: true,
-    intent: {
-      intent_id: rows[0].id,
-      request_id,
-      amount,
-      currency: "KGS",
-    },
-    idempotent: false,
-  });
 });
 
 export default router;
