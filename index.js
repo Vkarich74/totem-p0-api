@@ -13,6 +13,7 @@ import { healthRouter } from "./routes/health.js";
 import bookingCreateRouter from "./routes_public/bookingCreate.js";
 import bookingCancelRouter from "./routes_public/bookingCancel.js";
 import paymentsIntentRouter from "./routes_public/paymentsIntent.js";
+import bookingResultRouter from "./routes_public/bookingResult.js";
 
 // system
 import paymentsWebhookRouter from "./routes_system/paymentsWebhook.js";
@@ -48,6 +49,7 @@ app.use("/health", healthRouter);
 app.use("/public", publicToken, publicRateLimit);
 app.use("/public/bookings", bookingCreateRouter);
 app.use("/public/bookings", bookingCancelRouter);
+app.use("/public/bookings", bookingResultRouter);
 app.use("/public/payments/intent", paymentsIntentRouter);
 
 // system
@@ -61,7 +63,7 @@ app.use("/system/public-tokens", systemAuth, publicTokensRouter);
 // marketplace
 app.use("/marketplace/payouts", systemAuth, payoutsCreateRouter);
 
-// ⏱️ CRON — every 2 minutes
+// CRON — every 2 minutes
 cron.schedule("*/2 * * * *", async () => {
   try {
     await fetch(`http://localhost:${PORT}/system/bookings/timeout`, {

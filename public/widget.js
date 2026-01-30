@@ -1,125 +1,142 @@
-// TOTEM Booking Widget v1.2
-// Pure JS, no deps, Zoho / iframe safe
+// public/widget.js — TOTEM Widget v2 (FINAL RESULT AWARE)
+// - Pure JS
+// - No assumptions
+// - Source of truth: /public/bookings/:id/result
+// - Redirect / UX strictly by booking_status
 
 (function () {
-  "use strict";
+  const DEFAULT_POLL_INTERVAL = 2000; // 2 sec
+  const MAX_WAIT_MS = 30000; // 30 sec
 
-  // prevent double init
-  if (window.TotemWidget) return;
-
-  function safeError(msg, err) {
-    try {
-      console.error("[TOTEM WIDGET]", msg, err || "");
-    } catch (_) {}
+  function $(id) {
+    return document.getElementById(id);
   }
 
-  class TotemWidget {
-    constructor(config) {
-      if (!config || !config.baseUrl) {
-        throw new Error("TotemWidget: baseUrl is required");
+  function setStatus(text) {
+    const el = $("totem-status");
+    if (el) el.textContent = text;
+  }
+
+  function sleep(ms) {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+
+  async function fetchJSON(url, opts = {}) {
+    const res = await fetch(url, opts);
+    const data = await res.json();
+    if (!res.ok) {
+      const err = new Error(data?.error || "REQUEST_FAILED");
+      err.status = res.status;
+      throw err;
+    }
+    return data;
+  }
+
+  async function pollResult({ baseUrl, bookingId }) {
+    const startedAt = Date.now();
+
+    while (true) {
+      const result = await fetchJSON(
+        `${baseUrl}/public/bookings/${bookingId}/result`
+      );
+
+      if (result.final === true) {
+        return result;
       }
 
-      this.baseUrl = String(config.baseUrl).replace(/\/$/, "");
-      this.publicToken = config.publicToken ? String(config.publicToken) : null;
+      if (Date.now() - startedAt > MAX_WAIT_MS) {
+        throw new Error("WAIT_TIMEOUT");
+      }
 
-      this.salonSlug = config.salonSlug ? String(config.salonSlug) : null;
-      this.masterSlug = config.masterSlug ? String(config.masterSlug) : null;
-      this.serviceId = config.serviceId ? String(config.serviceId) : null;
-
-      this.date = config.date ? String(config.date) : null;
-      this.startTime = config.startTime ? String(config.startTime) : null;
-
-      this.mount();
+      await sleep(DEFAULT_POLL_INTERVAL);
     }
+  }
 
-    mount() {
-      const root = document.getElementById("totem-widget");
-      if (!root) {
-        safeError("Root element #totem-widget not found");
+  async function startFlow({ baseUrl }) {
+    try {
+      setStatus("Creating booking...");
+
+      // 1️⃣ create booking
+      const booking = await fetchJSON(`${baseUrl}/public/bookings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          salon_id: "s1",
+          master_slug: "test-master",
+          service_id: "srv1",
+          date: "2026-02-01",
+          start_time: "12:00",
+          end_time: "13:00",
+          client: { name: "Test" },
+        }),
+      });
+
+      const bookingId = booking.booking_id || booking.id;
+      if (!bookingId) throw new Error("NO_BOOKING_ID");
+
+      setStatus(`Booking created (#${bookingId}). Creating payment...`);
+
+      // 2️⃣ payment intent
+      const intent = await fetchJSON(`${baseUrl}/public/payments/intent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          booking_id: bookingId,
+          provider: "mock",
+          amount: booking.price || 1000,
+        }),
+      });
+
+      setStatus("Payment initiated. Waiting for result...");
+
+      // 3️⃣ wait for final result
+      const result = await pollResult({ baseUrl, bookingId });
+
+      // 4️⃣ final UX / redirect
+      if (result.booking_status === "paid") {
+        setStatus("✅ Payment successful. Booking confirmed.");
+        // window.location.href = "/success.html";
         return;
       }
 
-      root.innerHTML = `
-        <div style="font-family:Arial,sans-serif;max-width:320px">
-          <button id="totem-create">Create booking</button>
-          <div id="totem-status" style="margin-top:8px;font-size:12px;"></div>
-        </div>
-      `;
-
-      const btn = document.getElementById("totem-create");
-      if (btn) btn.addEventListener("click", () => this.createBooking());
-    }
-
-    async createBooking() {
-      this.setStatus("loading...");
-
-      const payload = {
-        salon_slug: this.salonSlug,
-        master_slug: this.masterSlug,
-        service_id: this.serviceId,
-        date: this.date,
-        start_time: this.startTime,
-      };
-
-      try {
-        const headers = {
-          "Content-Type": "application/json",
-        };
-
-        if (this.publicToken) {
-          headers["X-Public-Token"] = this.publicToken;
-        }
-
-        const res = await fetch(this.baseUrl + "/public/bookings", {
-          method: "POST",
-          mode: "cors",
-          headers,
-          body: JSON.stringify(payload),
-        });
-
-        const text = await res.text();
-        let json;
-
-        try {
-          json = JSON.parse(text);
-        } catch (_) {
-          this.setStatus("ERROR: INVALID_JSON_RESPONSE");
-          return;
-        }
-
-        if (!res.ok || !json.ok) {
-          this.handleError(res.status, json && json.error ? json.error : "BOOKING_FAILED");
-          return;
-        }
-
-        this.setStatus("OK: " + String(json.status || "OK"));
-      } catch (err) {
-        this.setStatus("ERROR");
-        safeError("createBooking failed", err);
+      if (result.booking_status === "expired") {
+        setStatus("⏰ Booking expired. Please try again.");
+        // window.location.href = "/expired.html";
+        return;
       }
-    }
 
-    handleError(status, code) {
-      if (status === 401) return this.setStatus("ERROR: INVALID_PUBLIC_TOKEN");
-      if (status === 403) return this.setStatus("ERROR: SALON_TOKEN_MISMATCH");
-      if (status === 429) return this.setStatus("ERROR: RATE_LIMIT_EXCEEDED");
-      this.setStatus("ERROR: " + String(code || "UNKNOWN_ERROR"));
-    }
+      if (result.booking_status === "cancelled") {
+        setStatus("❌ Booking cancelled.");
+        // window.location.href = "/cancelled.html";
+        return;
+      }
 
-    setStatus(text) {
-      const el = document.getElementById("totem-status");
-      if (el) el.textContent = text;
+      setStatus("Unknown final state.");
+    } catch (err) {
+      if (err.message === "WAIT_TIMEOUT") {
+        setStatus("Waiting for payment confirmation...");
+        return;
+      }
+      setStatus("Error: " + err.message);
     }
   }
 
-  // public init
   window.TotemWidget = {
-    init: function (config) {
-      try {
-        new TotemWidget(config);
-      } catch (e) {
-        safeError("Init failed", e);
-      }
+    init({ baseUrl }) {
+      if (!baseUrl) throw new Error("baseUrl required");
+
+      const root = document.createElement("div");
+      root.innerHTML = `
+        <div style="border:1px solid #ddd;padding:12px;font-family:sans-serif">
+          <button id="totem-start">Start booking</button>
+          <div id="totem-status" style="margin-top:8px"></div>
+        </div>
+      `;
+      document.body.appendChild(root);
+
+      $("totem-start").addEventListener("click", () => {
+        startFlow({ baseUrl });
+      });
     },
   };
 })();
