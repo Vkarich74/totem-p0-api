@@ -1,4 +1,4 @@
-// routes_public/bookingCreate.js — PROD + ABUSE GUARD v1
+// routes_public/bookingCreate.js — TOKEN-AWARE
 
 import express from "express";
 import { pool } from "../db/index.js";
@@ -13,59 +13,84 @@ router.post("/", async (req, res) => {
     date,
     start_time,
     end_time,
-    client,
+    client
   } = req.body;
 
-  if (!salon_id || !master_slug || !service_id || !date || !start_time) {
-    return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
-  }
-
-  // 1️⃣ ABUSE GUARD: duplicate booking check
-  const existing = await pool.query(
-    `
-    SELECT id
-    FROM bookings
-    WHERE salon_slug = $1
-      AND master_slug = $2
-      AND date = $3
-      AND start_time = $4
-      AND status IN ('created', 'pending_payment')
-    LIMIT 1
-    `,
-    [salon_id, master_slug, date, start_time]
-  );
-
-  if (existing.rows.length) {
-    return res.status(409).json({
+  // ENFORCE token → salon binding
+  if (req.publicToken && req.publicToken.salon_id !== salon_id) {
+    return res.status(403).json({
       ok: false,
-      error: "BOOKING_ALREADY_EXISTS",
+      error: "SALON_TOKEN_MISMATCH"
     });
   }
 
-  // v1 fixed price
-  const price = 1000;
-  const duration_min = 60;
+  if (
+    !salon_id ||
+    !master_slug ||
+    !service_id ||
+    !date ||
+    !start_time ||
+    !end_time
+  ) {
+    return res.status(400).json({
+      ok: false,
+      error: "INVALID_PAYLOAD"
+    });
+  }
 
-  const { rows } = await pool.query(
-    `
-    INSERT INTO bookings
-      (salon_slug, master_slug, service_id, date, start_time, status)
-    VALUES
-      ($1, $2, $3, $4, $5, 'created')
-    RETURNING id
-    `,
-    [salon_id, master_slug, service_id, date, start_time]
-  );
+  try {
+    // dedupe slot
+    const existing = await pool.query(
+      `
+      SELECT id FROM bookings
+      WHERE salon_id = $1
+        AND master_slug = $2
+        AND service_id = $3
+        AND date = $4
+        AND start_time = $5
+        AND end_time = $6
+        AND status NOT IN ('cancelled','expired')
+      `,
+      [salon_id, master_slug, service_id, date, start_time, end_time]
+    );
 
-  const booking_id = rows[0].id;
+    if (existing.rows.length) {
+      return res.json({
+        ok: false,
+        error: "BOOKING_ALREADY_EXISTS"
+      });
+    }
 
-  return res.json({
-    ok: true,
-    request_id: booking_id,
-    price,
-    duration_min,
-    status: "pending_payment",
-  });
+    const { rows } = await pool.query(
+      `
+      INSERT INTO bookings
+        (salon_id, master_slug, service_id, date, start_time, end_time, client, status)
+      VALUES
+        ($1,$2,$3,$4,$5,$6,$7,'created')
+      RETURNING id
+      `,
+      [
+        salon_id,
+        master_slug,
+        service_id,
+        date,
+        start_time,
+        end_time,
+        client || {}
+      ]
+    );
+
+    return res.json({
+      ok: true,
+      request_id: rows[0].id,
+      status: "pending_payment"
+    });
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: "BOOKING_CREATE_FAILED"
+    });
+  }
 });
 
 export default router;
