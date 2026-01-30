@@ -1,54 +1,62 @@
-// routes_system/bookingTimeout.js — lifecycle v2 + AUDIT (BATCH)
+// routes_system/bookingTimeout.js — CANONICAL TIMEOUT
+// Closes unpaid bookings and fails pending payments
 
 import express from "express";
 import { pool } from "../db/index.js";
-import updateBookingStatus from "../helpers/updateBookingStatus.js";
 
 const router = express.Router();
 
+/**
+ * POST /system/bookings/timeout
+ * Auth: systemAuth
+ * Params:
+ * - minutes (optional, default 15)
+ */
 router.post("/timeout", async (req, res) => {
-  const minutes = Number(req.body?.minutes || 15);
+  const minutes = Number(req.body?.minutes) || 15;
 
   const client = await pool.connect();
-  let expired = 0;
 
   try {
     await client.query("BEGIN");
 
-    const { rows } = await client.query(
+    // 1️⃣ expire bookings
+    const { rowCount: expiredBookings } = await client.query(
       `
-      SELECT id
-      FROM bookings
-      WHERE status = 'created'
-        AND created_at < now() - interval '${minutes} minutes'
-      FOR UPDATE
-      `
+      UPDATE bookings
+      SET status = 'expired'
+      WHERE status = 'pending_payment'
+        AND created_at < now() - ($1 || ' minutes')::interval
+      `,
+      [minutes]
     );
 
-    for (const row of rows) {
-      await updateBookingStatus(
-        client,
-        row.id,
-        "expired",
-        { type: "system", id: "timeout" },
-        "/system/bookings/timeout"
-      );
-      expired++;
-    }
+    // 2️⃣ fail pending payments linked to expired bookings
+    const { rowCount: failedPayments } = await client.query(
+      `
+      UPDATE payments
+      SET status = 'failed',
+          is_active = false,
+          updated_at = now()
+      WHERE status = 'pending'
+        AND booking_id IN (
+          SELECT id FROM bookings WHERE status = 'expired'
+        )
+      `
+    );
 
     await client.query("COMMIT");
 
     return res.json({
       ok: true,
-      expired,
-      minutes,
+      expired_bookings: expiredBookings,
+      failed_payments: failedPayments,
     });
   } catch (err) {
     await client.query("ROLLBACK");
-
     return res.status(500).json({
       ok: false,
-      error: "INTERNAL_ERROR",
+      error: "TIMEOUT_FAILED",
     });
   } finally {
     client.release();
