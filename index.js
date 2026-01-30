@@ -1,10 +1,10 @@
-// index.js — HARDENED order (CORS preflight → token → rate-limit)
+// index.js — with TIMEOUT cron enabled
 
 import express from "express";
 import bodyParser from "body-parser";
 import path from "path";
 import { fileURLToPath } from "url";
-import cors from "cors";
+import cron from "node-cron";
 
 // health
 import { healthRouter } from "./routes/health.js";
@@ -36,50 +36,6 @@ const PORT = process.env.PORT || 8080;
 app.set("trust proxy", 1);
 app.use(bodyParser.json());
 
-/**
- * CORS (Zoho Sites + localhost only)
- * - Fixes browser preflight (OPTIONS) for Zoho embed
- * - Does NOT open CORS to the world
- * - Keeps public order: token → rate-limit (for real requests)
- */
-const corsOptions = {
-  origin: (origin, cb) => {
-    // non-browser requests (curl, server-to-server) often have no Origin
-    if (!origin) return cb(null, false);
-
-    let o;
-    try {
-      o = new URL(origin);
-    } catch {
-      return cb(null, false);
-    }
-
-    const host = o.hostname.toLowerCase();
-    const isZohoSites =
-      host === "zohosites.com" || host.endsWith(".zohosites.com");
-
-    const isLocalhost = host === "localhost" || host === "127.0.0.1";
-
-    if (isZohoSites || isLocalhost) return cb(null, true);
-
-    return cb(null, false);
-  },
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: [
-    "Content-Type",
-    "X-Public-Token",
-    "Authorization",
-    "X-Request-Id",
-  ],
-  exposedHeaders: ["X-Request-Id"],
-  credentials: false,
-  maxAge: 86400,
-};
-
-// IMPORTANT: preflight must be handled BEFORE any auth / rate-limit
-app.options("*", cors(corsOptions));
-app.use(cors(corsOptions));
-
 // static
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -88,7 +44,7 @@ app.use("/public/static", express.static(path.join(__dirname, "public")));
 // health
 app.use("/health", healthRouter);
 
-// public: token FIRST, then rate-limit (for non-OPTIONS)
+// public
 app.use("/public", publicToken, publicRateLimit);
 app.use("/public/bookings", bookingCreateRouter);
 app.use("/public/bookings", bookingCancelRouter);
@@ -104,6 +60,22 @@ app.use("/system/public-tokens", systemAuth, publicTokensRouter);
 
 // marketplace
 app.use("/marketplace/payouts", systemAuth, payoutsCreateRouter);
+
+// ⏱️ CRON — every 2 minutes
+cron.schedule("*/2 * * * *", async () => {
+  try {
+    await fetch(`http://localhost:${PORT}/system/bookings/timeout`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-System-Token": process.env.SYSTEM_TOKEN,
+      },
+      body: JSON.stringify({ minutes: 15 }),
+    });
+  } catch (e) {
+    console.error("timeout cron error", e);
+  }
+});
 
 // fallback
 app.use((req, res) => {
