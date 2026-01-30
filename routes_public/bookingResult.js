@@ -1,10 +1,7 @@
-// routes_public/bookingResult.js — PUBLIC READ-ONLY RESULT
-// Contract:
+// routes_public/bookingResult.js
+// Public Booking Result — CANONICAL v1
 // GET /public/bookings/:id/result
-// - Auth: publicToken
-// - Read-only
-// - Source of truth: bookings.status
-// - final = true ONLY if booking.status IN ('paid','expired','cancelled')
+// Source of truth: bookings.status
 
 import express from "express";
 import { pool } from "../db/index.js";
@@ -14,18 +11,13 @@ const router = express.Router();
 router.get("/:id/result", async (req, res) => {
   const bookingId = Number(req.params.id);
 
-  if (!bookingId) {
-    return res.status(400).json({
-      ok: false,
-      error: "INVALID_BOOKING_ID",
-    });
+  if (!Number.isInteger(bookingId) || bookingId <= 0) {
+    return res.status(400).json({ error: "INVALID_INPUT" });
   }
 
   const client = await pool.connect();
-
   try {
-    // 1️⃣ load booking
-    const { rows: bookingRows, rowCount } = await client.query(
+    const { rows, rowCount } = await client.query(
       `
       SELECT id, status
       FROM bookings
@@ -35,47 +27,21 @@ router.get("/:id/result", async (req, res) => {
     );
 
     if (rowCount === 0) {
-      return res.status(404).json({
-        ok: false,
-        error: "BOOKING_NOT_FOUND",
-      });
+      return res.status(404).json({ error: "NOT_FOUND" });
     }
 
-    const booking = bookingRows[0];
+    const status =
+      rows[0].status === "created"
+        ? "pending_payment"
+        : rows[0].status;
 
-    // 2️⃣ load active payment (if any)
-    const { rows: paymentRows } = await client.query(
-      `
-      SELECT status
-      FROM payments
-      WHERE booking_id = $1
-        AND is_active = true
-      ORDER BY id DESC
-      LIMIT 1
-      `,
-      [bookingId]
-    );
-
-    const paymentStatus = paymentRows[0]?.status ?? null;
-
-    // 3️⃣ final logic (canonical)
-    const final =
-      booking.status === "paid" ||
-      booking.status === "expired" ||
-      booking.status === "cancelled";
-
-    return res.json({
-      ok: true,
-      booking_id: booking.id,
-      booking_status: booking.status,
-      payment_status: paymentStatus,
-      final,
+    return res.status(200).json({
+      booking_id: rows[0].id,
+      status,
     });
   } catch (err) {
-    return res.status(500).json({
-      ok: false,
-      error: "INTERNAL_ERROR",
-    });
+    console.error("bookingResult error:", err);
+    return res.status(500).json({ error: "INTERNAL_ERROR" });
   } finally {
     client.release();
   }
