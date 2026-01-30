@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>Totem Booking</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 0;
+      padding: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script>
+    const baseUrl = window.location.origin; // 🔑 КЛЮЧЕВО
+
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get("status");
+    const root = document.getElementById("root");
+
+    if (status) {
+      if (status === "paid") {
+        root.innerHTML = "<h2>✅ Оплата прошла успешно</h2><p>Бронирование подтверждено.</p>";
+      } else if (status === "expired") {
+        root.innerHTML = "<h2>⏰ Время оплаты истекло</h2><p>Начните бронирование заново.</p>";
+      } else if (status === "cancelled") {
+        root.innerHTML = "<h2>❌ Бронирование отменено.</h2>";
+      } else {
+        root.innerHTML = "<h2>⚠️ Неизвестный статус</h2>";
+      }
+    } else {
+      const slot = document.createElement("div");
+      slot.id = "totem-widget";
+      root.appendChild(slot);
+
+      const s = document.createElement("script");
+      s.src = baseUrl + "/public/static/widget.js";
+      s.onload = () => {
+        window.TotemWidget.init({
+          baseUrl: baseUrl, // 🔑 ТЕПЕРЬ ВСЕГДА СОВПАДАЕТ
+          salonSlug: "demo-salon",
+          masterSlug: "test-master",
+          serviceId: "srv1",
+          date: "2026-01-27",
+          startTime: "14:00"
+        });
+      };
+      document.body.appendChild(s);
+    }
+  </script>
+</body>
+</html>
