@@ -1,9 +1,19 @@
 // middlewares/publicToken.js
 // Public token validation middleware (PostgreSQL)
-// Contract:
+//
+// Canonical contract:
 // public_tokens.salon_id === salon_slug (PUBLIC identifier)
+//
+// Accepts salon identifier from:
+// - body.salon_slug
+// - body.salonSlug
+// - body.salon_id
 
 import { pool } from "../db/index.js";
+
+function normalize(v) {
+  return typeof v === "string" ? v.trim().toLowerCase() : null;
+}
 
 export async function publicToken(req, res, next) {
   const token = req.header("X-Public-Token");
@@ -38,10 +48,17 @@ export async function publicToken(req, res, next) {
       });
     }
 
-    // salon binding check (slug-to-slug)
-    const requestedSalon = req.body?.salon_slug;
+    // read salon identifier from any supported field
+    const requestedSalon =
+      req.body?.salon_slug ??
+      req.body?.salonSlug ??
+      req.body?.salon_id ??
+      null;
 
-    if (requestedSalon && row.salon_id !== requestedSalon) {
+    const tokenSalon = normalize(row.salon_id);
+    const requestSalonNorm = normalize(requestedSalon);
+
+    if (requestSalonNorm && tokenSalon !== requestSalonNorm) {
       return res.status(403).json({
         ok: false,
         error: "SALON_TOKEN_MISMATCH",
