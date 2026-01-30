@@ -1,4 +1,4 @@
-// routes_system/paymentsWebhook.js — lifecycle v2 + AUDIT (Postgres)
+// routes_system/paymentsWebhook.js — lifecycle v3 (idempotent, safe)
 
 import express from "express";
 import { pool } from "../db/index.js";
@@ -18,14 +18,13 @@ router.post("/", async (req, res) => {
   try {
     await client.query("BEGIN");
 
-    // 1️⃣ confirm payment
+    // 1️⃣ load payment with lock
     const { rows, rowCount } = await client.query(
       `
-      UPDATE payments
-      SET status = 'confirmed',
-          updated_at = now()
+      SELECT id, status, booking_id
+      FROM payments
       WHERE id = $1
-      RETURNING booking_id
+      FOR UPDATE
       `,
       [payment_id]
     );
@@ -34,12 +33,40 @@ router.post("/", async (req, res) => {
       throw new Error("PAYMENT_NOT_FOUND");
     }
 
-    const bookingId = rows[0].booking_id;
+    const payment = rows[0];
 
-    // 2️⃣ move booking → paid (WITH AUDIT)
+    // 2️⃣ idempotency: already confirmed
+    if (payment.status === "confirmed") {
+      await client.query("COMMIT");
+      return res.json({
+        ok: true,
+        idempotent: true,
+        payment_id,
+        booking_id: payment.booking_id,
+        booking_status: "paid",
+      });
+    }
+
+    // 3️⃣ invalid transition
+    if (payment.status !== "pending") {
+      throw new Error("INVALID_STATUS_TRANSITION");
+    }
+
+    // 4️⃣ confirm payment
+    await client.query(
+      `
+      UPDATE payments
+      SET status = 'confirmed',
+          updated_at = now()
+      WHERE id = $1
+      `,
+      [payment_id]
+    );
+
+    // 5️⃣ move booking → paid
     await updateBookingStatus(
       client,
-      bookingId,
+      payment.booking_id,
       "paid",
       { type: "system", id: "payments-webhook" },
       "/payments/webhook"
@@ -50,17 +77,15 @@ router.post("/", async (req, res) => {
     return res.json({
       ok: true,
       payment_id,
-      booking_id: bookingId,
+      booking_id: payment.booking_id,
       booking_status: "paid",
     });
   } catch (err) {
     await client.query("ROLLBACK");
 
-    console.error("PAYMENT WEBHOOK ERROR:", err);
-
     return res.status(500).json({
       ok: false,
-      error: err.code || "INTERNAL_ERROR",
+      error: err.message || "INTERNAL_ERROR",
     });
   } finally {
     client.release();
