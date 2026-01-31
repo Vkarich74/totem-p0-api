@@ -1,13 +1,14 @@
 import express from "express";
 import { pool } from "../db/index.js";
+import systemOwnerGuard from "../middleware/system_owner_guard.js";
 
 const router = express.Router();
 
 /**
+ * SYSTEM OPS
  * POST /owner/period/:id/close
- * Закрытие settlement-периода (API_GUARD already applied)
  */
-router.post("/owner/period/:id/close", async (req, res) => {
+router.post("/owner/period/:id/close", systemOwnerGuard, async (req, res) => {
   const { id } = req.params;
   const client = await pool.connect();
 
@@ -25,25 +26,23 @@ router.post("/owner/period/:id/close", async (req, res) => {
     );
 
     if (result.rowCount === 0) {
-      return res.status(400).json({
-        error: "period_not_open_or_not_found",
-      });
+      return res.status(404).json({ ok: false, error: "NOT_FOUND" });
     }
 
     res.json({ ok: true, period: result.rows[0] });
   } catch (err) {
     console.error("OWNER_CLOSE_PERIOD_ERROR", err);
-    res.status(500).json({ error: "internal_error" });
+    res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
   } finally {
     client.release();
   }
 });
 
 /**
+ * SYSTEM OPS
  * POST /owner/batch/:id/pay
- * Принудительная оплата batch (API_GUARD already applied)
  */
-router.post("/owner/batch/:id/pay", async (req, res) => {
+router.post("/owner/batch/:id/pay", systemOwnerGuard, async (req, res) => {
   const { id } = req.params;
   const client = await pool.connect();
 
@@ -58,7 +57,7 @@ router.post("/owner/batch/:id/pay", async (req, res) => {
     );
 
     if (batch.rowCount === 0) {
-      return res.status(404).json({ error: "batch_not_found" });
+      return res.status(404).json({ ok: false, error: "NOT_FOUND" });
     }
 
     if (batch.rows[0].status === "paid") {
@@ -78,7 +77,7 @@ router.post("/owner/batch/:id/pay", async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error("OWNER_PAY_BATCH_ERROR", err);
-    res.status(500).json({ error: "internal_error" });
+    res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
   } finally {
     client.release();
   }
