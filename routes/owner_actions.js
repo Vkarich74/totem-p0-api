@@ -1,6 +1,7 @@
 import express from "express";
 import { pool } from "../db/index.js";
 import systemOwnerGuard from "../middleware/system_owner_guard.js";
+import { auditOwnerAction } from "../utils/auditOwnerAction.js";
 
 const router = express.Router();
 
@@ -43,6 +44,18 @@ router.post("/owner/period/:id/close", systemOwnerGuard, async (req, res) => {
         error: "NOT_FOUND_OR_NOT_OWNED",
       });
     }
+
+    // AUDIT — successful period close
+    await auditOwnerAction({
+      req,
+      action_type: "PERIOD_CLOSE",
+      entity_type: "settlement_period",
+      entity_id: String(id),
+      metadata: {
+        status: result.rows[0].status,
+        closed_at: result.rows[0].closed_at,
+      },
+    });
 
     res.json({ ok: true, period: result.rows[0] });
   } catch (err) {
@@ -90,6 +103,7 @@ router.post("/owner/batch/:id/pay", systemOwnerGuard, async (req, res) => {
       });
     }
 
+    // idempotent — already paid → NO AUDIT
     if (batch.rows[0].status === "paid") {
       return res.json({ ok: true, idempotent: true });
     }
@@ -103,6 +117,18 @@ router.post("/owner/batch/:id/pay", systemOwnerGuard, async (req, res) => {
       `,
       [id]
     );
+
+    // AUDIT — successful batch payment
+    await auditOwnerAction({
+      req,
+      action_type: "BATCH_PAY",
+      entity_type: "settlement_payout_batch",
+      entity_id: String(id),
+      metadata: {
+        previous_status: batch.rows[0].status,
+        new_status: "paid",
+      },
+    });
 
     res.json({ ok: true });
   } catch (err) {
