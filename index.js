@@ -20,6 +20,13 @@ import sdkRoute from "./routes_public/sdk.js";
 import bookRoute from "./routes_public/book.js";
 import authRoute from "./routes_public/auth.js";
 
+// guard
+import apiGuard from "./middleware/api_guard.js";
+
+// owner / protected
+import ownerDashboardRoute from "./routes/owner_dashboard.js";
+import ownerActionsRoute from "./routes/owner_actions.js";
+
 const app = express();
 
 app.use(cors());
@@ -43,6 +50,10 @@ app.use("/public/sdk", sdkRoute);
 // public UI
 app.use(bookRoute);
 app.use(authRoute);
+
+// 🔒 PROTECTED OWNER AREA
+app.use("/owner", apiGuard, ownerDashboardRoute);
+app.use("/owner", apiGuard, ownerActionsRoute);
 
 // fallback
 app.use((req, res) => {

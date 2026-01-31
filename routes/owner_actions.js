@@ -1,19 +1,18 @@
-// routes/owner_actions.js
-import express from 'express';
-import { db } from '../db/index.js';
-import ownerOnly from '../middleware/owner_only.js';
+import express from "express";
+import { pool } from "../db/index.js";
 
 const router = express.Router();
 
 /**
  * POST /owner/period/:id/close
- * Закрытие settlement-периода
+ * Закрытие settlement-периода (API_GUARD already applied)
  */
-router.post('/owner/period/:id/close', ownerOnly, async (req, res) => {
+router.post("/owner/period/:id/close", async (req, res) => {
   const { id } = req.params;
+  const client = await pool.connect();
 
   try {
-    const result = await db.query(
+    const result = await client.query(
       `
       UPDATE settlement_periods
       SET status = 'closed',
@@ -25,28 +24,31 @@ router.post('/owner/period/:id/close', ownerOnly, async (req, res) => {
       [id]
     );
 
-    if (result.rows.length === 0) {
+    if (result.rowCount === 0) {
       return res.status(400).json({
-        error: 'period_not_open_or_not_found',
+        error: "period_not_open_or_not_found",
       });
     }
 
     res.json({ ok: true, period: result.rows[0] });
   } catch (err) {
-    console.error('OWNER_CLOSE_PERIOD_ERROR', err);
-    res.status(500).json({ error: 'internal_error' });
+    console.error("OWNER_CLOSE_PERIOD_ERROR", err);
+    res.status(500).json({ error: "internal_error" });
+  } finally {
+    client.release();
   }
 });
 
 /**
  * POST /owner/batch/:id/pay
- * Принудительная оплата batch
+ * Принудительная оплата batch (API_GUARD already applied)
  */
-router.post('/owner/batch/:id/pay', ownerOnly, async (req, res) => {
+router.post("/owner/batch/:id/pay", async (req, res) => {
   const { id } = req.params;
+  const client = await pool.connect();
 
   try {
-    const batch = await db.query(
+    const batch = await client.query(
       `
       SELECT id, status
       FROM settlement_payout_batches
@@ -55,15 +57,15 @@ router.post('/owner/batch/:id/pay', ownerOnly, async (req, res) => {
       [id]
     );
 
-    if (batch.rows.length === 0) {
-      return res.status(404).json({ error: 'batch_not_found' });
+    if (batch.rowCount === 0) {
+      return res.status(404).json({ error: "batch_not_found" });
     }
 
-    if (batch.rows[0].status === 'paid') {
+    if (batch.rows[0].status === "paid") {
       return res.json({ ok: true, idempotent: true });
     }
 
-    await db.query(
+    await client.query(
       `
       UPDATE settlement_payout_batches
       SET status = 'paid',
@@ -75,8 +77,10 @@ router.post('/owner/batch/:id/pay', ownerOnly, async (req, res) => {
 
     res.json({ ok: true });
   } catch (err) {
-    console.error('OWNER_PAY_BATCH_ERROR', err);
-    res.status(500).json({ error: 'internal_error' });
+    console.error("OWNER_PAY_BATCH_ERROR", err);
+    res.status(500).json({ error: "internal_error" });
+  } finally {
+    client.release();
   }
 });
 

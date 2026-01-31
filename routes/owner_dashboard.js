@@ -1,30 +1,28 @@
-// routes/owner_dashboard.js
-import express from 'express';
-import { db } from '../db/index.js';
+import express from "express";
+import { pool } from "../db/index.js";
 
 const router = express.Router();
 
 /**
- * GET /owner/dashboard/kpi
- * Owner-level financial KPIs
+ * GET /owner
+ * Protected owner dashboard (v1 stub)
  */
-router.get('/owner/dashboard/kpi', async (req, res) => {
+router.get("/owner", async (req, res) => {
+  const client = await pool.connect();
   try {
-    const result = await db.query(
-      `SELECT * FROM report_owner_kpi LIMIT 1`
-    );
+    // Minimal sanity check: DB reachable + user injected by guard
+    const result = await client.query("SELECT 1");
 
-    if (!result.rows || result.rows.length === 0) {
-      return res.status(404).json({ error: 'kpi_not_found' });
-    }
-
-    return res.json({
+    res.json({
       ok: true,
-      kpi: result.rows[0],
+      role: req.user.role,
+      binding:
+        req.user.role === "salon_admin"
+          ? { salon_slug: req.user.salon_slug }
+          : { master_slug: req.user.master_slug },
     });
-  } catch (err) {
-    console.error('OWNER_KPI_ERROR', err);
-    return res.status(500).json({ error: 'internal_error' });
+  } finally {
+    client.release();
   }
 });
 
