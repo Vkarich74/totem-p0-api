@@ -3,161 +3,114 @@ import crypto from "crypto";
 import { pool } from "../db/index.js";
 
 const router = express.Router();
-const MAGIC_LINK_TTL_MIN = 10;
-
-// v1 hard binding
-const DEFAULT_SALON_SLUG = "totem-demo-salon";
-
-/**
- * Helpers for AUTH_V2 session
- */
-function base64urlEncode(buf) {
-  return Buffer.from(buf).toString("base64url");
-}
-
-function signSession(payload, secret) {
-  const payloadB64 = base64urlEncode(JSON.stringify(payload));
-  const sig = crypto.createHmac("sha256", secret).update(payloadB64).digest("base64url");
-  return `${payloadB64}.${sig}`;
-}
-
-/**
- * GET /auth
- */
-router.get("/auth", (req, res) => {
-  const returnUrl = req.query.return || "/";
-
-  res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.send(`
-    <h2>Вход администратора салона</h2>
-    <form method="POST" action="/auth/request">
-      <input type="email" name="email" placeholder="email@example.com" required />
-      <input type="hidden" name="return" value="${returnUrl}" />
-      <button type="submit">Получить ссылку</button>
-    </form>
-  `);
-});
 
 /**
  * POST /auth/request
- * create salon_admin WITH binding
+ * Generates magic link with LONG TTL and HTTPS URL
  */
-router.post(
-  "/auth/request",
-  express.urlencoded({ extended: false }),
-  async (req, res) => {
-    const { email, return: returnUrl } = req.body;
-    if (!email) return res.status(400).send("Invalid request");
+router.post("/auth/request", async (req, res) => {
+  const { email, role, salon_slug, master_slug } = req.body;
 
-    const client = await pool.connect();
-    try {
-      // sanity: salon must exist
-      const salonRes = await client.query(
-        `SELECT slug FROM salons WHERE slug = $1 AND enabled = true`,
-        [DEFAULT_SALON_SLUG]
-      );
-
-      if (salonRes.rowCount === 0) {
-        return res.status(500).send("Salon not found");
-      }
-
-      const userRes = await client.query(
-        `
-        INSERT INTO auth_users (email, role, salon_slug, master_slug)
-        VALUES ($1, 'salon_admin', $2, NULL)
-        ON CONFLICT (email, role)
-        DO UPDATE SET email = EXCLUDED.email
-        RETURNING id
-        `,
-        [email.toLowerCase(), DEFAULT_SALON_SLUG]
-      );
-
-      const token = crypto.randomBytes(32).toString("hex");
-      const expiresAt = new Date(Date.now() + MAGIC_LINK_TTL_MIN * 60 * 1000);
-
-      await client.query(
-        `
-        INSERT INTO auth_magic_links (user_id, token, expires_at)
-        VALUES ($1, $2, $3)
-        `,
-        [userRes.rows[0].id, token, expiresAt]
-      );
-
-      const link =
-        `${req.protocol}://${req.get("host")}` +
-        `/auth/verify?token=${token}&return=${encodeURIComponent(returnUrl || "/")}`;
-
-      console.log("[AUTH MAGIC LINK]", email, link);
-      res.send("Magic link generated. Check logs.");
-    } catch (err) {
-      console.error("[AUTH DB ERROR]", err);
-      res.status(500).json({ error: "auth_failed" });
-    } finally {
-      client.release();
-    }
+  if (!email || !role) {
+    return res.status(400).json({ error: "INVALID_INPUT" });
   }
-);
-
-/**
- * GET /auth/verify
- * AUTH_V2 FINAL: set ONLY signed session cookie
- */
-router.get("/auth/verify", async (req, res) => {
-  const { token, return: returnUrl } = req.query;
-  if (!token) return res.status(400).send("Missing token");
 
   const client = await pool.connect();
   try {
-    const linkRes = await client.query(
+    await client.query("BEGIN");
+
+    const userResult = await client.query(
       `
-      SELECT aml.id, au.id AS user_id
-      FROM auth_magic_links aml
-      JOIN auth_users au ON au.id = aml.user_id
-      WHERE aml.token = $1
-        AND aml.used_at IS NULL
-        AND aml.expires_at > now()
-      LIMIT 1
+      INSERT INTO auth_users (email, role, salon_slug, master_slug, enabled)
+      VALUES ($1, $2, $3, $4, true)
+      ON CONFLICT (email, role)
+      DO UPDATE SET enabled = true
+      RETURNING id
+      `,
+      [email, role, salon_slug || null, master_slug || null]
+    );
+
+    const user_id = userResult.rows[0].id;
+
+    const token = crypto.randomBytes(32).toString("hex");
+    const expires_at = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 HOURS
+
+    // allow reusing token until TTL
+    await client.query(
+      `
+      INSERT INTO auth_magic_links (user_id, token, expires_at, used_at)
+      VALUES ($1, $2, $3, NULL)
+      `,
+      [user_id, token, expires_at]
+    );
+
+    const verifyUrl =
+      `https://totem-p0-api-production.up.railway.app/auth/verify` +
+      `?token=${token}&return=/`;
+
+    console.log("[AUTH MAGIC LINK]", email, verifyUrl);
+
+    await client.query("COMMIT");
+    res.json({ ok: true });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("AUTH_REQUEST_ERROR", err);
+    res.status(500).json({ error: "INTERNAL_ERROR" });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * GET /auth/verify
+ * Sets session cookie. Token reusable until expires_at.
+ */
+router.get("/auth/verify", async (req, res) => {
+  const { token, return: returnPath } = req.query;
+
+  if (!token) {
+    return res.status(400).send("Missing token");
+  }
+
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `
+      SELECT user_id
+      FROM auth_magic_links
+      WHERE token = $1
+        AND expires_at > now()
       `,
       [token]
     );
 
-    if (linkRes.rowCount === 0) {
+    if (result.rowCount === 0) {
       return res.status(400).send("Link invalid or expired");
     }
 
-    const { id: linkId, user_id } = linkRes.rows[0];
+    const { user_id } = result.rows[0];
 
-    await client.query(
-      `UPDATE auth_magic_links SET used_at = now() WHERE id = $1`,
-      [linkId]
-    );
+    const payload = Buffer.from(
+      JSON.stringify({ v: 1, uid: user_id, iat: Date.now() })
+    ).toString("base64");
 
-    const secret = process.env.AUTH_SESSION_SECRET;
-    if (!secret) {
-      console.error("[AUTH] AUTH_SESSION_SECRET missing");
-      return res.status(500).send("Auth misconfigured");
-    }
+    const secret = process.env.AUTH_SESSION_SECRET || "dev-secret";
+    const sig = crypto
+      .createHmac("sha256", secret)
+      .update(payload)
+      .digest("hex");
 
-    const now = Math.floor(Date.now() / 1000);
-    const ttlDays = Number(process.env.AUTH_SESSION_TTL_DAYS || 7);
-
-    const payload = {
-      v: 1,
-      uid: user_id,
-      iat: now,
-      exp: now + ttlDays * 24 * 60 * 60,
-    };
-
-    const sessionValue = signSession(payload, secret);
-
-    res.cookie("totem_sess", sessionValue, {
+    res.cookie("totem_sess", `${payload}.${sig}`, {
       httpOnly: true,
       sameSite: "lax",
-      secure: false,
+      secure: true, // HTTPS ONLY
       path: "/",
     });
 
-    res.redirect(returnUrl || "/");
+    res.redirect(returnPath || "/");
+  } catch (err) {
+    console.error("AUTH_VERIFY_ERROR", err);
+    res.status(500).send("INTERNAL_ERROR");
   } finally {
     client.release();
   }
