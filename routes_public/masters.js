@@ -1,6 +1,7 @@
 // routes_public/masters.js
-// Public read-only masters by salon — CANONICAL v1
+// Public read-only masters list — CANONICAL v1
 // GET /public/salons/:slug/masters
+// NOTE: v1 returns all active masters (no salon binding in DB yet)
 
 import express from "express";
 import { pool } from "../db/index.js";
@@ -18,17 +19,16 @@ router.get("/:slug/masters", async (req, res) => {
   try {
     const { rows } = await client.query(
       `
-      SELECT m.slug AS master_slug, m.name
-      FROM masters m
-      WHERE m.salon_slug = $1
-      ORDER BY m.name ASC
-      `,
-      [salonSlug]
+      SELECT slug, name
+      FROM masters
+      WHERE active = true
+      ORDER BY name ASC
+      `
     );
 
     return res.status(200).json(
       rows.map((r) => ({
-        master_slug: r.master_slug,
+        master_slug: r.slug,
         name: r.name,
       }))
     );
