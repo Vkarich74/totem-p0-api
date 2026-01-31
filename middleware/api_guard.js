@@ -2,16 +2,10 @@ import crypto from "crypto";
 import { pool } from "../db/index.js";
 
 /**
- * API_GUARD v2
+ * API_GUARD v2 FINAL
  *
- * Supports:
- * - AUTH_V2: signed session cookie `totem_sess`
- * - TEMP fallback: v1 cookie `totem_auth=ok`
- *
- * Enforces:
- * - user exists
- * - enabled = true
- * - role binding invariants
+ * Accepts ONLY:
+ * - signed session cookie `totem_sess`
  */
 
 function base64urlDecode(str) {
@@ -51,64 +45,39 @@ function verifySessionCookie(cookie, secret) {
 export default async function apiGuard(req, res, next) {
   try {
     const sessionCookie = req.cookies?.totem_sess;
-    const legacyCookie = req.cookies?.totem_auth;
+    if (!sessionCookie) {
+      return res.status(401).json({ error: "AUTH_REQUIRED" });
+    }
 
-    let user = null;
+    const secret = process.env.AUTH_SESSION_SECRET;
+    if (!secret) {
+      return res.status(500).json({ error: "AUTH_MISCONFIGURED" });
+    }
+
+    const payload = verifySessionCookie(sessionCookie, secret);
+    if (!payload) {
+      return res.status(401).json({ error: "AUTH_SESSION_INVALID" });
+    }
+
     const client = await pool.connect();
-
     try {
-      // === AUTH V2 ===
-      if (sessionCookie) {
-        const secret = process.env.AUTH_SESSION_SECRET;
-        if (!secret) {
-          return res.status(500).json({ error: "AUTH_SESSION_SECRET_MISSING" });
-        }
+      const userRes = await client.query(
+        `SELECT id, email, role, salon_slug, master_slug, enabled
+         FROM auth_users
+         WHERE id = $1`,
+        [payload.uid]
+      );
 
-        const payload = verifySessionCookie(sessionCookie, secret);
-        if (!payload) {
-          return res.status(401).json({ error: "AUTH_SESSION_INVALID" });
-        }
-
-        const userRes = await client.query(
-          `SELECT id, email, role, salon_slug, master_slug, enabled
-           FROM auth_users
-           WHERE id = $1`,
-          [payload.uid]
-        );
-
-        if (userRes.rowCount === 0) {
-          return res.status(401).json({ error: "AUTH_USER_NOT_FOUND" });
-        }
-
-        user = userRes.rows[0];
+      if (userRes.rowCount === 0) {
+        return res.status(401).json({ error: "AUTH_USER_NOT_FOUND" });
       }
 
-      // === TEMP AUTH V1 FALLBACK ===
-      if (!user && legacyCookie === "ok") {
-        const userRes = await client.query(
-          `SELECT id, email, role, salon_slug, master_slug, enabled
-           FROM auth_users
-           WHERE enabled = true
-           ORDER BY created_at DESC
-           LIMIT 1`
-        );
-
-        if (userRes.rowCount === 0) {
-          return res.status(401).json({ error: "AUTH_USER_NOT_FOUND" });
-        }
-
-        user = userRes.rows[0];
-      }
-
-      if (!user) {
-        return res.status(401).json({ error: "AUTH_REQUIRED" });
-      }
+      const user = userRes.rows[0];
 
       if (user.enabled !== true) {
         return res.status(403).json({ error: "USER_DISABLED" });
       }
 
-      // === ROLE BINDING ===
       if (user.role === "salon_admin") {
         if (!user.salon_slug || user.master_slug !== null) {
           return res.status(409).json({ error: "BINDING_REQUIRED" });

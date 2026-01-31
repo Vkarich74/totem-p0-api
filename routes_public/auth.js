@@ -40,7 +40,7 @@ router.get("/auth", (req, res) => {
 
 /**
  * POST /auth/request
- * v1: create salon_admin WITH binding
+ * create salon_admin WITH binding
  */
 router.post(
   "/auth/request",
@@ -100,7 +100,7 @@ router.post(
 
 /**
  * GET /auth/verify
- * AUTH_V2: set signed session cookie
+ * AUTH_V2 FINAL: set ONLY signed session cookie
  */
 router.get("/auth/verify", async (req, res) => {
   const { token, return: returnUrl } = req.query;
@@ -132,7 +132,6 @@ router.get("/auth/verify", async (req, res) => {
       [linkId]
     );
 
-    // === AUTH_V2 session cookie ===
     const secret = process.env.AUTH_SESSION_SECRET;
     if (!secret) {
       console.error("[AUTH] AUTH_SESSION_SECRET missing");
@@ -141,6 +140,7 @@ router.get("/auth/verify", async (req, res) => {
 
     const now = Math.floor(Date.now() / 1000);
     const ttlDays = Number(process.env.AUTH_SESSION_TTL_DAYS || 7);
+
     const payload = {
       v: 1,
       uid: user_id,
@@ -151,14 +151,6 @@ router.get("/auth/verify", async (req, res) => {
     const sessionValue = signSession(payload, secret);
 
     res.cookie("totem_sess", sessionValue, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: false,
-      path: "/",
-    });
-
-    // TEMP: legacy compatibility (to be removed later)
-    res.cookie("totem_auth", "ok", {
       httpOnly: true,
       sameSite: "lax",
       secure: false,

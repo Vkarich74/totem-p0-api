@@ -5,28 +5,43 @@ import systemOwnerGuard from "../middleware/system_owner_guard.js";
 const router = express.Router();
 
 /**
- * SYSTEM OPS
+ * OWNER OPS (SCOPED)
  * POST /owner/period/:id/close
+ *
+ * Закрыть settlement-период ТОЛЬКО если
+ * он реально относится к salon_slug владельца
+ * (через payouts → bookings)
  */
 router.post("/owner/period/:id/close", systemOwnerGuard, async (req, res) => {
   const { id } = req.params;
-  const client = await pool.connect();
+  const { salon_slug } = req.user;
 
+  const client = await pool.connect();
   try {
     const result = await client.query(
       `
-      UPDATE settlement_periods
+      UPDATE settlement_periods sp
       SET status = 'closed',
           closed_at = now()
-      WHERE id = $1
-        AND status = 'open'
-      RETURNING id, status, closed_at
+      WHERE sp.id = $1
+        AND sp.status = 'open'
+        AND EXISTS (
+          SELECT 1
+          FROM payouts p
+          JOIN bookings b ON b.id = p.booking_id
+          WHERE p.settlement_period_id = sp.id
+            AND b.salon_slug = $2
+        )
+      RETURNING sp.id, sp.status, sp.closed_at
       `,
-      [id]
+      [id, salon_slug]
     );
 
     if (result.rowCount === 0) {
-      return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+      return res.status(404).json({
+        ok: false,
+        error: "NOT_FOUND_OR_NOT_OWNED",
+      });
     }
 
     res.json({ ok: true, period: result.rows[0] });
@@ -39,25 +54,40 @@ router.post("/owner/period/:id/close", systemOwnerGuard, async (req, res) => {
 });
 
 /**
- * SYSTEM OPS
+ * OWNER OPS (SCOPED)
  * POST /owner/batch/:id/pay
+ *
+ * Оплатить payout-batch ТОЛЬКО если
+ * он принадлежит salon_slug владельца
+ * (через payouts → bookings)
  */
 router.post("/owner/batch/:id/pay", systemOwnerGuard, async (req, res) => {
   const { id } = req.params;
-  const client = await pool.connect();
+  const { salon_slug } = req.user;
 
+  const client = await pool.connect();
   try {
     const batch = await client.query(
       `
-      SELECT id, status
-      FROM settlement_payout_batches
-      WHERE id = $1
+      SELECT sb.id, sb.status
+      FROM settlement_payout_batches sb
+      WHERE sb.id = $1
+        AND EXISTS (
+          SELECT 1
+          FROM payouts p
+          JOIN bookings b ON b.id = p.booking_id
+          WHERE p.payout_batch_id = sb.id
+            AND b.salon_slug = $2
+        )
       `,
-      [id]
+      [id, salon_slug]
     );
 
     if (batch.rowCount === 0) {
-      return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+      return res.status(404).json({
+        ok: false,
+        error: "NOT_FOUND_OR_NOT_OWNED",
+      });
     }
 
     if (batch.rows[0].status === "paid") {
