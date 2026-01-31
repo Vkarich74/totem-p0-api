@@ -26,6 +26,7 @@ import apiGuard from "./middleware/api_guard.js";
 // owner / protected
 import ownerDashboardRoute from "./routes/owner_dashboard.js";
 import ownerActionsRoute from "./routes/owner_actions.js";
+import ownerAuditRoute from "./routes/owner_audit.js";
 
 // me
 import meRoute from "./routes/me.js";
@@ -60,6 +61,7 @@ app.use("/me", apiGuard, meRoute);
 // 🔒 PROTECTED OWNER AREA
 app.use("/owner", apiGuard, ownerDashboardRoute);
 app.use("/owner", apiGuard, ownerActionsRoute);
+app.use("/owner", apiGuard, ownerAuditRoute);
 
 // fallback
 app.use((req, res) => {
