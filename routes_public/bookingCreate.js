@@ -1,9 +1,10 @@
 // routes_public/bookingCreate.js
 // Create booking (PUBLIC) — CANONICAL v1
-// Contract-driven. Idempotent by request_id.
+// Idempotent by request_id + audit guaranteed
 
 import express from "express";
 import { pool } from "../db/index.js";
+import { writeBookingAudit } from "../utils/audit.js";
 
 const router = express.Router();
 
@@ -19,7 +20,6 @@ router.post("/", async (req, res) => {
       request_id,
     } = req.body || {};
 
-    // Validate input
     if (!salon_slug || !master_slug || !service_id || !date || !start_time) {
       return res.status(400).json({ error: "INVALID_INPUT" });
     }
@@ -29,7 +29,7 @@ router.post("/", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Idempotency: if request_id exists, return existing booking
+    // Idempotency
     if (request_id) {
       const existing = await client.query(
         `SELECT id, status FROM bookings WHERE request_id = $1 LIMIT 1`,
@@ -68,6 +68,16 @@ router.post("/", async (req, res) => {
     );
 
     await client.query("COMMIT");
+
+    // Audit (non-blocking)
+    writeBookingAudit({
+      booking_id: insert.rows[0].id,
+      from_status: null,
+      to_status: "pending_payment",
+      actor_type: "public",
+      actor_id: null,
+      source: "bookingCreate",
+    });
 
     return res.status(200).json({
       booking_id: insert.rows[0].id,
