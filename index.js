@@ -1,4 +1,4 @@
-// index.js — CANONICAL (public booking + result + salons + masters + services wired)
+// index.js — CANONICAL (public booking + result + vitrine endpoints wired)
 
 import express from "express";
 import bodyParser from "body-parser";
@@ -16,6 +16,7 @@ import bookingResultRouter from "./routes_public/bookingResult.js";
 import salonsRouter from "./routes_public/salons.js";
 import mastersRouter from "./routes_public/masters.js";
 import servicesRouter from "./routes_public/services.js";
+import availabilityRouter from "./routes_public/availability.js";
 import paymentsIntentRouter from "./routes_public/paymentsIntent.js";
 
 // system
@@ -59,6 +60,7 @@ app.use("/public/bookings", bookingResultRouter);
 app.use("/public/salons", salonsRouter);
 app.use("/public/salons", mastersRouter);
 app.use("/public/masters", servicesRouter);
+app.use("/public/availability", availabilityRouter);
 app.use("/public/payments/intent", paymentsIntentRouter);
 
 // system
