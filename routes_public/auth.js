@@ -7,54 +7,112 @@ const MAGIC_LINK_TTL_MIN = 10;
 
 /**
  * GET /auth
+ * UI only, role ignored in v1
  */
 router.get("/auth", (req, res) => {
-  res.status(200).send("AUTH OK (DB STEP)");
+  const returnUrl = req.query.return || "/";
+
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.send(`
+    <h2>Вход</h2>
+    <form method="POST" action="/auth/request">
+      <input type="email" name="email" placeholder="email@example.com" required />
+      <input type="hidden" name="return" value="${returnUrl}" />
+      <button type="submit">Получить ссылку</button>
+    </form>
+  `);
 });
 
 /**
  * POST /auth/request
+ * v1: always create CLIENT user
  */
-router.post("/auth/request", async (req, res) => {
-  const email = "test@example.com";
-  const role = "salon_admin";
+router.post(
+  "/auth/request",
+  express.urlencoded({ extended: false }),
+  async (req, res) => {
+    const { email, return: returnUrl } = req.body;
+    if (!email) return res.status(400).send("Invalid request");
 
-  let client;
-  try {
-    client = await pool.connect();
+    const client = await pool.connect();
+    try {
+      const userRes = await client.query(
+        `
+        INSERT INTO auth_users (email, role)
+        VALUES ($1, 'client')
+        ON CONFLICT (email, role)
+        DO UPDATE SET email = EXCLUDED.email
+        RETURNING id
+        `,
+        [email.toLowerCase()]
+      );
 
-    const userRes = await client.query(
-      `INSERT INTO auth_users (email, role)
-       VALUES ($1, $2)
-       ON CONFLICT (email, role)
-       DO UPDATE SET email = EXCLUDED.email
-       RETURNING id`,
-      [email, role]
-    );
+      const token = crypto.randomBytes(32).toString("hex");
+      const expiresAt = new Date(Date.now() + MAGIC_LINK_TTL_MIN * 60 * 1000);
 
-    const token = crypto.randomBytes(8).toString("hex");
-    const expiresAt = new Date(Date.now() + MAGIC_LINK_TTL_MIN * 60 * 1000);
+      await client.query(
+        `
+        INSERT INTO auth_magic_links (user_id, token, expires_at)
+        VALUES ($1, $2, $3)
+        `,
+        [userRes.rows[0].id, token, expiresAt]
+      );
 
-    await client.query(
-      `INSERT INTO auth_magic_links (user_id, token, expires_at)
-       VALUES ($1, $2, $3)`,
-      [userRes.rows[0].id, token, expiresAt]
-    );
+      const link =
+        `${req.protocol}://${req.get("host")}` +
+        `/auth/verify?token=${token}&return=${encodeURIComponent(returnUrl || "/")}`;
 
-    res.json({ ok: true, step: "db_write_ok" });
-  } catch (err) {
-    console.error("[AUTH DB ERROR]", err);
-    res.status(500).json({ error: "db_failed" });
-  } finally {
-    if (client) client.release();
+      console.log("[AUTH MAGIC LINK]", email, link);
+      res.send("Magic link generated. Check logs.");
+    } catch (err) {
+      console.error("[AUTH DB ERROR]", err);
+      res.status(500).json({ error: "auth_failed" });
+    } finally {
+      client.release();
+    }
   }
-});
+);
 
 /**
  * GET /auth/verify
  */
 router.get("/auth/verify", async (req, res) => {
-  res.status(200).send("AUTH VERIFY OK (DB STEP)");
+  const { token, return: returnUrl } = req.query;
+  if (!token) return res.status(400).send("Missing token");
+
+  const client = await pool.connect();
+  try {
+    const linkRes = await client.query(
+      `
+      SELECT id
+      FROM auth_magic_links
+      WHERE token = $1
+        AND used_at IS NULL
+        AND expires_at > now()
+      LIMIT 1
+      `,
+      [token]
+    );
+
+    if (linkRes.rowCount === 0) {
+      return res.status(400).send("Link invalid or expired");
+    }
+
+    await client.query(
+      `UPDATE auth_magic_links SET used_at = now() WHERE id = $1`,
+      [linkRes.rows[0].id]
+    );
+
+    res.cookie("totem_auth", "ok", {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: false,
+    });
+
+    res.redirect(returnUrl || "/");
+  } finally {
+    client.release();
+  }
 });
 
 export default router;
