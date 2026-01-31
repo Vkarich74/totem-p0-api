@@ -1,10 +1,16 @@
-// index.js — CANONICAL (public booking + result + vitrine endpoints wired)
+// index.js — CANONICAL (with CORS v1)
 
 import express from "express";
 import bodyParser from "body-parser";
 import path from "path";
 import { fileURLToPath } from "url";
 import cron from "node-cron";
+
+// middlewares
+import { corsMiddleware } from "./middleware/cors.js";
+import { systemAuth } from "./middlewares/systemAuth.js";
+import { publicToken } from "./middlewares/publicToken.js";
+import { publicRateLimit } from "./middlewares/rateLimitPublic.js";
 
 // health
 import { healthRouter } from "./routes/health.js";
@@ -30,11 +36,6 @@ import publicTokensRouter from "./routes_system/publicTokens.js";
 // marketplace
 import payoutsCreateRouter from "./routes_marketplace/payoutsCreate.js";
 
-// middlewares
-import { systemAuth } from "./middlewares/systemAuth.js";
-import { publicToken } from "./middlewares/publicToken.js";
-import { publicRateLimit } from "./middlewares/rateLimitPublic.js";
-
 const app = express();
 const PORT = process.env.PORT || 8080;
 
@@ -44,6 +45,9 @@ app.use(bodyParser.json());
 // resolve paths
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// CORS (before routes)
+app.use(corsMiddleware());
 
 // static
 app.use("/public/static", express.static(path.join(__dirname, "public")));
