@@ -1,104 +1,32 @@
-// index.js — CANONICAL (with CORS v1)
-
 import express from "express";
-import bodyParser from "body-parser";
-import path from "path";
-import { fileURLToPath } from "url";
-import cron from "node-cron";
+import cors from "cors";
 
-// middlewares
-import { corsMiddleware } from "./middleware/cors.js";
-import { systemAuth } from "./middlewares/systemAuth.js";
-import { publicToken } from "./middlewares/publicToken.js";
-import { publicRateLimit } from "./middlewares/rateLimitPublic.js";
-
-// health
-import { healthRouter } from "./routes/health.js";
-
-// public
-import bookingCreateRouter from "./routes_public/bookingCreate.js";
-import bookingCancelRouter from "./routes_public/bookingCancel.js";
-import bookingResultRouter from "./routes_public/bookingResult.js";
-import salonsRouter from "./routes_public/salons.js";
-import mastersRouter from "./routes_public/masters.js";
-import servicesRouter from "./routes_public/services.js";
-import availabilityRouter from "./routes_public/availability.js";
-import paymentsIntentRouter from "./routes_public/paymentsIntent.js";
-
-// system
-import paymentsWebhookRouter from "./routes_system/paymentsWebhook.js";
-import bookingTimeoutRouter from "./routes_system/bookingTimeout.js";
-import bookingCompleteRouter from "./routes_system/bookingComplete.js";
-import exportBookingsRouter from "./routes_system/exportBookings.js";
-import opsExportRouter from "./routes_system/opsExport.js";
-import publicTokensRouter from "./routes_system/publicTokens.js";
-
-// marketplace
-import payoutsCreateRouter from "./routes_marketplace/payoutsCreate.js";
+import healthRoute from "./routes_system/health.js";
+import bookingsPublic from "./routes_public/bookings.js";
+import salonsPublic from "./routes_public/salons.js";
+import bookRoute from "./routes_public/book.js";
 
 const app = express();
-const PORT = process.env.PORT || 8080;
 
-app.set("trust proxy", 1);
-app.use(bodyParser.json());
-
-// resolve paths
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// CORS (before routes)
-app.use(corsMiddleware());
-
-// static
-app.use("/public/static", express.static(path.join(__dirname, "public")));
-app.use("/public", express.static(path.join(__dirname, "public")));
-
-// health
-app.use("/health", healthRouter);
-
-// public API
-app.use("/public", publicToken, publicRateLimit);
-app.use("/public/bookings", bookingCreateRouter);
-app.use("/public/bookings", bookingCancelRouter);
-app.use("/public/bookings", bookingResultRouter);
-app.use("/public/salons", salonsRouter);
-app.use("/public/salons", mastersRouter);
-app.use("/public/masters", servicesRouter);
-app.use("/public/availability", availabilityRouter);
-app.use("/public/payments/intent", paymentsIntentRouter);
+app.use(cors());
+app.use(express.json());
 
 // system
-app.use("/payments/webhook", systemAuth, paymentsWebhookRouter);
-app.use("/system/bookings", systemAuth, bookingTimeoutRouter);
-app.use("/system/bookings", systemAuth, bookingCompleteRouter);
-app.use("/system/export", systemAuth, exportBookingsRouter);
-app.use("/system/ops", systemAuth, opsExportRouter);
-app.use("/system/public-tokens", systemAuth, publicTokensRouter);
+app.use(healthRoute);
 
-// marketplace
-app.use("/marketplace/payouts", systemAuth, payoutsCreateRouter);
+// public API
+app.use("/public/bookings", bookingsPublic);
+app.use("/public/salons", salonsPublic);
 
-// cron — timeout
-cron.schedule("*/2 * * * *", async () => {
-  try {
-    await fetch(`http://localhost:${PORT}/system/bookings/timeout`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-System-Token": process.env.SYSTEM_TOKEN,
-      },
-      body: JSON.stringify({ minutes: 15 }),
-    });
-  } catch (e) {
-    console.error("timeout cron error", e);
-  }
-});
+// public UI
+app.use(bookRoute);
 
 // fallback
 app.use((req, res) => {
   res.status(404).json({ error: "NOT_FOUND" });
 });
 
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log(`TOTEM API listening on port ${PORT}`);
+  console.log("BOOT OK on port", PORT);
 });
