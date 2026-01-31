@@ -5,16 +5,18 @@ import { pool } from "../db/index.js";
 const router = express.Router();
 const MAGIC_LINK_TTL_MIN = 10;
 
+// v1 hard binding
+const DEFAULT_SALON_SLUG = "totem-demo-salon";
+
 /**
  * GET /auth
- * UI only, role ignored in v1
  */
 router.get("/auth", (req, res) => {
   const returnUrl = req.query.return || "/";
 
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.send(`
-    <h2>Вход</h2>
+    <h2>Вход администратора салона</h2>
     <form method="POST" action="/auth/request">
       <input type="email" name="email" placeholder="email@example.com" required />
       <input type="hidden" name="return" value="${returnUrl}" />
@@ -25,7 +27,7 @@ router.get("/auth", (req, res) => {
 
 /**
  * POST /auth/request
- * v1: always create CLIENT user
+ * v1: create salon_admin WITH binding
  */
 router.post(
   "/auth/request",
@@ -36,15 +38,25 @@ router.post(
 
     const client = await pool.connect();
     try {
+      // sanity: salon must exist
+      const salonRes = await client.query(
+        `SELECT slug FROM salons WHERE slug = $1 AND enabled = true`,
+        [DEFAULT_SALON_SLUG]
+      );
+
+      if (salonRes.rowCount === 0) {
+        return res.status(500).send("Salon not found");
+      }
+
       const userRes = await client.query(
         `
-        INSERT INTO auth_users (email, role)
-        VALUES ($1, 'client')
+        INSERT INTO auth_users (email, role, salon_slug, master_slug)
+        VALUES ($1, 'salon_admin', $2, NULL)
         ON CONFLICT (email, role)
         DO UPDATE SET email = EXCLUDED.email
         RETURNING id
         `,
-        [email.toLowerCase()]
+        [email.toLowerCase(), DEFAULT_SALON_SLUG]
       );
 
       const token = crypto.randomBytes(32).toString("hex");
