@@ -27,6 +27,9 @@ import apiGuard from "./middleware/api_guard.js";
 import ownerDashboardRoute from "./routes/owner_dashboard.js";
 import ownerActionsRoute from "./routes/owner_actions.js";
 
+// me
+import meRoute from "./routes/me.js";
+
 const app = express();
 
 app.use(cors());
@@ -50,6 +53,9 @@ app.use("/public/sdk", sdkRoute);
 // public UI
 app.use(bookRoute);
 app.use(authRoute);
+
+// 🔒 ME (protected)
+app.use("/me", apiGuard, meRoute);
 
 // 🔒 PROTECTED OWNER AREA
 app.use("/owner", apiGuard, ownerDashboardRoute);
