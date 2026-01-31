@@ -1,9 +1,19 @@
 import express from "express";
 import cors from "cors";
 
+// system routes
 import healthRoute from "./routes_system/health.js";
-import bookingsPublic from "./routes_public/bookings.js";
-import salonsPublic from "./routes_public/salons.js";
+
+// public routes (реально существующие файлы)
+import availabilityRoute from "./routes_public/availability.js";
+import bookingCreateRoute from "./routes_public/bookingCreate.js";
+import bookingCancelRoute from "./routes_public/bookingCancel.js";
+import bookingResultRoute from "./routes_public/bookingResult.js";
+import mastersRoute from "./routes_public/masters.js";
+import salonsRoute from "./routes_public/salons.js";
+import servicesRoute from "./routes_public/services.js";
+import paymentsIntentRoute from "./routes_public/paymentsIntent.js";
+import sdkRoute from "./routes_public/sdk.js";
 import bookRoute from "./routes_public/book.js";
 
 const app = express();
@@ -15,8 +25,15 @@ app.use(express.json());
 app.use(healthRoute);
 
 // public API
-app.use("/public/bookings", bookingsPublic);
-app.use("/public/salons", salonsPublic);
+app.use("/public/availability", availabilityRoute);
+app.use("/public/booking/create", bookingCreateRoute);
+app.use("/public/booking/cancel", bookingCancelRoute);
+app.use("/public/booking/result", bookingResultRoute);
+app.use("/public/masters", mastersRoute);
+app.use("/public/salons", salonsRoute);
+app.use("/public/services", servicesRoute);
+app.use("/public/payments/intent", paymentsIntentRoute);
+app.use("/public/sdk", sdkRoute);
 
 // public UI
 app.use(bookRoute);
