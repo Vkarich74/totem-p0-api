@@ -4,8 +4,16 @@ import { pool } from "../db/index.js";
 
 const router = express.Router();
 
+function signSession(payloadObj) {
+  const payload = Buffer.from(JSON.stringify(payloadObj)).toString("base64");
+  const secret = process.env.AUTH_SESSION_SECRET || "dev";
+  const sig = crypto.createHmac("sha256", secret).update(payload).digest("hex");
+  return `${payload}.${sig}`;
+}
+
 /**
  * POST /auth/request
+ * Generate magic link token (JSON flow friendly)
  */
 router.post("/request", async (req, res) => {
   const { email, role, salon_slug, master_slug } = req.body;
@@ -36,13 +44,14 @@ router.post("/request", async (req, res) => {
     console.log(
       "[AUTH MAGIC LINK]",
       email,
-      `https://totem-p0-api-production.up.railway.app/auth/verify?token=${token}&return=/`
+      `https://totem-p0-api-production.up.railway.app/auth/verify-json?token=${token}`
     );
 
     await client.query("COMMIT");
-    res.json({ ok: true });
+    res.json({ ok: true, token });
   } catch (e) {
     await client.query("ROLLBACK");
+    console.error("AUTH_REQUEST_ERROR", e);
     res.status(500).json({ error: "INTERNAL_ERROR" });
   } finally {
     client.release();
@@ -50,37 +59,8 @@ router.post("/request", async (req, res) => {
 });
 
 /**
- * GET /auth/verify  (browser path, may redirect)
- */
-router.get("/verify", async (req, res) => {
-  const { token, return: ret } = req.query;
-  if (!token) return res.status(400).send("Missing token");
-
-  const r = await pool.query(
-    `SELECT user_id FROM auth_magic_links WHERE token=$1 AND expires_at>now()`,
-    [token]
-  );
-  if (r.rowCount === 0) return res.status(400).send("Link invalid or expired");
-
-  const payload = Buffer.from(
-    JSON.stringify({ v:1, uid:r.rows[0].user_id, iat:Date.now() })
-  ).toString("base64");
-  const sig = crypto
-    .createHmac("sha256", process.env.AUTH_SESSION_SECRET || "dev")
-    .update(payload).digest("hex");
-
-  res.cookie("totem_sess", `${payload}.${sig}`, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: true,
-    path: "/",
-  });
-  res.redirect(ret || "/");
-});
-
-/**
- * 🔎 DIAGNOSTIC: GET /auth/verify-json
- * NO redirect, NO cookie. CMD-safe.
+ * GET /auth/verify-json
+ * CMD-safe verification (NO cookies)
  */
 router.get("/verify-json", async (req, res) => {
   const { token } = req.query;
@@ -101,6 +81,32 @@ router.get("/verify-json", async (req, res) => {
   }
 
   res.json({ ok: true, user: r.rows[0] });
+});
+
+/**
+ * POST /auth/session
+ * Exchange magic token for signed session (Bearer)
+ */
+router.post("/session", async (req, res) => {
+  const { token } = req.body;
+  if (!token) return res.status(400).json({ error: "TOKEN_REQUIRED" });
+
+  const r = await pool.query(
+    `
+    SELECT u.id
+    FROM auth_magic_links aml
+    JOIN auth_users u ON u.id = aml.user_id
+    WHERE aml.token = $1 AND aml.expires_at > now()
+    `,
+    [token]
+  );
+
+  if (r.rowCount === 0) {
+    return res.status(400).json({ error: "TOKEN_INVALID_OR_EXPIRED" });
+  }
+
+  const session = signSession({ v: 1, uid: r.rows[0].id, iat: Date.now() });
+  res.json({ ok: true, session });
 });
 
 export default router;
