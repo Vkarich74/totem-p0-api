@@ -15,7 +15,7 @@ router.post("/request", async (req, res) => {
   try {
     await client.query("BEGIN");
 
-    const user = await client.query(
+    const u = await client.query(
       `
       INSERT INTO auth_users (email, role, salon_slug, master_slug, enabled)
       VALUES ($1,$2,$3,$4,true)
@@ -30,14 +30,15 @@ router.post("/request", async (req, res) => {
 
     await client.query(
       `INSERT INTO auth_magic_links (user_id, token, expires_at) VALUES ($1,$2,$3)`,
-      [user.rows[0].id, token, expires_at]
+      [u.rows[0].id, token, expires_at]
     );
 
-    const url =
-      `https://totem-p0-api-production.up.railway.app/auth/verify` +
-      `?token=${token}&return=/`;
+    console.log(
+      "[AUTH MAGIC LINK]",
+      email,
+      `https://totem-p0-api-production.up.railway.app/auth/verify?token=${token}&return=/`
+    );
 
-    console.log("[AUTH MAGIC LINK]", email, url);
     await client.query("COMMIT");
     res.json({ ok: true });
   } catch (e) {
@@ -49,7 +50,7 @@ router.post("/request", async (req, res) => {
 });
 
 /**
- * GET /auth/verify
+ * GET /auth/verify  (browser path, may redirect)
  */
 router.get("/verify", async (req, res) => {
   const { token, return: ret } = req.query;
@@ -61,8 +62,12 @@ router.get("/verify", async (req, res) => {
   );
   if (r.rowCount === 0) return res.status(400).send("Link invalid or expired");
 
-  const payload = Buffer.from(JSON.stringify({ v:1, uid:r.rows[0].user_id, iat:Date.now() })).toString("base64");
-  const sig = crypto.createHmac("sha256", process.env.AUTH_SESSION_SECRET || "dev").update(payload).digest("hex");
+  const payload = Buffer.from(
+    JSON.stringify({ v:1, uid:r.rows[0].user_id, iat:Date.now() })
+  ).toString("base64");
+  const sig = crypto
+    .createHmac("sha256", process.env.AUTH_SESSION_SECRET || "dev")
+    .update(payload).digest("hex");
 
   res.cookie("totem_sess", `${payload}.${sig}`, {
     httpOnly: true,
@@ -71,6 +76,31 @@ router.get("/verify", async (req, res) => {
     path: "/",
   });
   res.redirect(ret || "/");
+});
+
+/**
+ * 🔎 DIAGNOSTIC: GET /auth/verify-json
+ * NO redirect, NO cookie. CMD-safe.
+ */
+router.get("/verify-json", async (req, res) => {
+  const { token } = req.query;
+  if (!token) return res.status(400).json({ error: "TOKEN_REQUIRED" });
+
+  const r = await pool.query(
+    `
+    SELECT u.id, u.email, u.role, u.salon_slug, u.master_slug
+    FROM auth_magic_links aml
+    JOIN auth_users u ON u.id = aml.user_id
+    WHERE aml.token = $1 AND aml.expires_at > now()
+    `,
+    [token]
+  );
+
+  if (r.rowCount === 0) {
+    return res.status(400).json({ error: "TOKEN_INVALID_OR_EXPIRED" });
+  }
+
+  res.json({ ok: true, user: r.rows[0] });
 });
 
 export default router;
