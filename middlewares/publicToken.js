@@ -1,62 +1,50 @@
 // middlewares/publicToken.js
-// Public token validation middleware (PostgreSQL)
-//
-// Canonical contract:
-// public_tokens.salon_id === salon_slug (PUBLIC identifier)
+// Public Token middleware — CANONICAL v1
+// Token is OPTIONAL unless TOKEN_REQUIRED=true
 
 import { pool } from "../db/index.js";
 
-function normalize(v) {
-  return typeof v === "string" ? v.trim().toLowerCase() : null;
-}
+const TOKEN_REQUIRED = false; // v1: optional
 
 export async function publicToken(req, res, next) {
-  const token = req.header("X-Public-Token");
-
-  // Token is optional (current mode)
-  if (!token) return next();
-
   try {
-    const { rows } = await pool.query(
+    const token =
+      req.header("X-Public-Token") ||
+      req.query?.public_token ||
+      null;
+
+    if (!token) {
+      if (TOKEN_REQUIRED) {
+        return res.status(401).json({ error: "TOKEN_REQUIRED" });
+      }
+      return next();
+    }
+
+    const { rows, rowCount } = await pool.query(
       `
-      SELECT
-        token,
-        salon_id,
-        enabled,
-        revoked_at,
-        rate_limit_per_min
+      SELECT token, salon_id, rate_limit_per_min
       FROM public_tokens
       WHERE token = $1
+        AND enabled = true
+        AND revoked_at IS NULL
       LIMIT 1
       `,
       [token]
     );
 
-    const row = rows[0];
-
-    if (!row || !row.enabled || row.revoked_at) {
-      return res.status(401).json({ ok: false, error: "INVALID_PUBLIC_TOKEN" });
-    }
-
-    const requestedSalon =
-      req.body?.salon_slug ?? req.body?.salonSlug ?? req.body?.salon_id ?? null;
-
-    const tokenSalon = normalize(row.salon_id);
-    const requestSalonNorm = normalize(requestedSalon);
-
-    if (requestSalonNorm && tokenSalon !== requestSalonNorm) {
-      return res.status(403).json({ ok: false, error: "SALON_TOKEN_MISMATCH" });
+    if (rowCount === 0) {
+      return res.status(401).json({ error: "INVALID_TOKEN" });
     }
 
     req.publicToken = {
-      token: row.token,
-      salon_slug: row.salon_id,
-      rate_limit_per_min: Number(row.rate_limit_per_min) || 60,
+      token: rows[0].token,
+      salon_id: rows[0].salon_id,
+      rate_limit_per_min: rows[0].rate_limit_per_min,
     };
 
     return next();
   } catch (err) {
-    console.error("publicToken middleware error:", err);
-    return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
+    console.error("publicToken error:", err);
+    return res.status(500).json({ error: "INTERNAL_ERROR" });
   }
 }
