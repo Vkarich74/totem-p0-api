@@ -9,6 +9,19 @@ const MAGIC_LINK_TTL_MIN = 10;
 const DEFAULT_SALON_SLUG = "totem-demo-salon";
 
 /**
+ * Helpers for AUTH_V2 session
+ */
+function base64urlEncode(buf) {
+  return Buffer.from(buf).toString("base64url");
+}
+
+function signSession(payload, secret) {
+  const payloadB64 = base64urlEncode(JSON.stringify(payload));
+  const sig = crypto.createHmac("sha256", secret).update(payloadB64).digest("base64url");
+  return `${payloadB64}.${sig}`;
+}
+
+/**
  * GET /auth
  */
 router.get("/auth", (req, res) => {
@@ -87,6 +100,7 @@ router.post(
 
 /**
  * GET /auth/verify
+ * AUTH_V2: set signed session cookie
  */
 router.get("/auth/verify", async (req, res) => {
   const { token, return: returnUrl } = req.query;
@@ -96,11 +110,12 @@ router.get("/auth/verify", async (req, res) => {
   try {
     const linkRes = await client.query(
       `
-      SELECT id
-      FROM auth_magic_links
-      WHERE token = $1
-        AND used_at IS NULL
-        AND expires_at > now()
+      SELECT aml.id, au.id AS user_id
+      FROM auth_magic_links aml
+      JOIN auth_users au ON au.id = aml.user_id
+      WHERE aml.token = $1
+        AND aml.used_at IS NULL
+        AND aml.expires_at > now()
       LIMIT 1
       `,
       [token]
@@ -110,15 +125,44 @@ router.get("/auth/verify", async (req, res) => {
       return res.status(400).send("Link invalid or expired");
     }
 
+    const { id: linkId, user_id } = linkRes.rows[0];
+
     await client.query(
       `UPDATE auth_magic_links SET used_at = now() WHERE id = $1`,
-      [linkRes.rows[0].id]
+      [linkId]
     );
 
+    // === AUTH_V2 session cookie ===
+    const secret = process.env.AUTH_SESSION_SECRET;
+    if (!secret) {
+      console.error("[AUTH] AUTH_SESSION_SECRET missing");
+      return res.status(500).send("Auth misconfigured");
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const ttlDays = Number(process.env.AUTH_SESSION_TTL_DAYS || 7);
+    const payload = {
+      v: 1,
+      uid: user_id,
+      iat: now,
+      exp: now + ttlDays * 24 * 60 * 60,
+    };
+
+    const sessionValue = signSession(payload, secret);
+
+    res.cookie("totem_sess", sessionValue, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: false,
+      path: "/",
+    });
+
+    // TEMP: legacy compatibility (to be removed later)
     res.cookie("totem_auth", "ok", {
       httpOnly: true,
       sameSite: "lax",
       secure: false,
+      path: "/",
     });
 
     res.redirect(returnUrl || "/");
