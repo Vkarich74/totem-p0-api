@@ -1,12 +1,17 @@
-// public/widget.js — TOTEM Widget v2 (FINAL RESULT AWARE)
+// public/widget.js — TOTEM Widget (PROD HARDENED)
 // - Pure JS
-// - No assumptions
+// - Contract-driven
+// - No payments inside widget
 // - Source of truth: /public/bookings/:id/result
-// - Redirect / UX strictly by booking_status
+// - Statuses: pending_payment | paid | cancelled
 
 (function () {
-  const DEFAULT_POLL_INTERVAL = 2000; // 2 sec
-  const MAX_WAIT_MS = 30000; // 30 sec
+  const POLL_INTERVAL_MS = 2000;
+  const MAX_WAIT_MS = 30000;
+  const REQUEST_TIMEOUT_MS = 10000;
+  const MAX_RETRIES = 3;
+
+  let locked = false;
 
   function $(id) {
     return document.getElementById(id);
@@ -21,15 +26,47 @@
     return new Promise((r) => setTimeout(r, ms));
   }
 
-  async function fetchJSON(url, opts = {}) {
-    const res = await fetch(url, opts);
-    const data = await res.json();
-    if (!res.ok) {
-      const err = new Error(data?.error || "REQUEST_FAILED");
-      err.status = res.status;
+  function uuid() {
+    return (
+      crypto.randomUUID?.() ||
+      Math.random().toString(36).slice(2) + Date.now().toString(36)
+    );
+  }
+
+  async function fetchJSON(url, opts = {}, attempt = 1) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+    try {
+      const res = await fetch(url, {
+        ...opts,
+        signal: controller.signal,
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        const err = new Error(data.error || "REQUEST_FAILED");
+        err.status = res.status;
+        throw err;
+      }
+
+      return data;
+    } catch (err) {
+      if (
+        attempt < MAX_RETRIES &&
+        (err.name === "AbortError" ||
+          !err.status ||
+          err.status >= 500 ||
+          err.status === 429)
+      ) {
+        await sleep(300 * attempt);
+        return fetchJSON(url, opts, attempt + 1);
+      }
       throw err;
+    } finally {
+      clearTimeout(id);
     }
-    return data;
   }
 
   async function pollResult({ baseUrl, bookingId }) {
@@ -40,7 +77,7 @@
         `${baseUrl}/public/bookings/${bookingId}/result`
       );
 
-      if (result.final === true) {
+      if (result.status === "paid" || result.status === "cancelled") {
         return result;
       }
 
@@ -48,76 +85,67 @@
         throw new Error("WAIT_TIMEOUT");
       }
 
-      await sleep(DEFAULT_POLL_INTERVAL);
+      await sleep(POLL_INTERVAL_MS);
     }
   }
 
   async function startFlow({ baseUrl }) {
+    if (locked) return;
+    locked = true;
+
     try {
       setStatus("Creating booking...");
 
-      // 1️⃣ create booking
       const booking = await fetchJSON(`${baseUrl}/public/bookings`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          salon_id: "s1",
+          salon_slug: "totem-demo-salon",
           master_slug: "test-master",
           service_id: "srv1",
-          date: "2026-02-01",
+          date: "2026-02-10",
           start_time: "12:00",
-          end_time: "13:00",
-          client: { name: "Test" },
+          request_id: uuid(),
         }),
       });
 
-      const bookingId = booking.booking_id || booking.id;
+      const bookingId = booking.booking_id;
       if (!bookingId) throw new Error("NO_BOOKING_ID");
 
-      setStatus(`Booking created (#${bookingId}). Creating payment...`);
+      setStatus("Waiting for payment confirmation...");
 
-      // 2️⃣ payment intent
-      const intent = await fetchJSON(`${baseUrl}/public/payments/intent`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          booking_id: bookingId,
-          provider: "mock",
-          amount: booking.price || 1000,
-        }),
-      });
-
-      setStatus("Payment initiated. Waiting for result...");
-
-      // 3️⃣ wait for final result
       const result = await pollResult({ baseUrl, bookingId });
 
-      // 4️⃣ final UX / redirect
-      if (result.booking_status === "paid") {
-        setStatus("✅ Payment successful. Booking confirmed.");
-        // window.location.href = "/success.html";
+      if (result.status === "paid") {
+        setStatus("✅ Booking confirmed.");
         return;
       }
 
-      if (result.booking_status === "expired") {
-        setStatus("⏰ Booking expired. Please try again.");
-        // window.location.href = "/expired.html";
-        return;
-      }
-
-      if (result.booking_status === "cancelled") {
+      if (result.status === "cancelled") {
         setStatus("❌ Booking cancelled.");
-        // window.location.href = "/cancelled.html";
         return;
       }
 
       setStatus("Unknown final state.");
     } catch (err) {
       if (err.message === "WAIT_TIMEOUT") {
-        setStatus("Waiting for payment confirmation...");
+        setStatus("⏳ Payment is still processing. Please refresh later.");
         return;
       }
+
+      if (err.status === 409) {
+        setStatus("⚠️ Slot is no longer available.");
+        return;
+      }
+
+      if (err.status === 429) {
+        setStatus("⏳ Too many requests. Please wait and retry.");
+        return;
+      }
+
       setStatus("Error: " + err.message);
+    } finally {
+      locked = false;
     }
   }
 
