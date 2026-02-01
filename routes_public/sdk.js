@@ -1,18 +1,14 @@
-// routes_public/sdk.js
 import express from "express";
 
 /**
- * GO 27.4 — Public JS SDK
- * GET /public/sdk.js
- *
- * Отдаём ESM модуль (browser import).
- * Важно: этот роут должен быть ДО security middleware.
+ * TOTEM Public SDK — CANONICAL v1
+ * MATCHES REAL PUBLIC API (2026-02)
  */
 
 const SDK_JS = `
-// TOTEM Public SDK (ESM) — GO 27.4
+// TOTEM Public SDK (ESM) — CANONICAL v1
 // Usage:
-// import { createTotemClient } from "https://YOUR_API/public/sdk.js";
+// import { createTotemClient } from "https://totem-p0-api-production.up.railway.app/public/sdk.js";
 
 function normalizeError(status, data) {
   const err = new Error((data && (data.error || data.message)) || "REQUEST_FAILED");
@@ -22,16 +18,15 @@ function normalizeError(status, data) {
   return err;
 }
 
-async function request(baseUrl, path, { method = "GET", token, json, headers = {} } = {}) {
+async function request(baseUrl, path, { method = "GET", json } = {}) {
   const url = baseUrl.replace(/\\/$/, "") + path;
-  const h = { ...headers };
 
-  if (token) h["Authorization"] = "Bearer " + token;
-  if (json !== undefined) h["Content-Type"] = "application/json";
+  const headers = {};
+  if (json !== undefined) headers["Content-Type"] = "application/json";
 
   const res = await fetch(url, {
     method,
-    headers: h,
+    headers,
     body: json !== undefined ? JSON.stringify(json) : undefined,
   });
 
@@ -48,55 +43,71 @@ async function request(baseUrl, path, { method = "GET", token, json, headers = {
   return data;
 }
 
-export function createTotemClient({ baseUrl, publicToken }) {
+export function createTotemClient({ baseUrl }) {
   if (!baseUrl) throw new Error("baseUrl is required");
-  if (!publicToken) throw new Error("publicToken is required");
-
-  const token = publicToken;
 
   return {
-    // GET /public/salons/:salon_id/availability?date=YYYY-MM-DD&duration_min=60&master_slug=...
-    async getAvailability({ salonId, date, durationMin, masterSlug } = {}) {
-      if (!salonId) throw new Error("salonId is required");
-      if (!date) throw new Error("date is required (YYYY-MM-DD)");
+    // GET /public/availability
+    async getAvailability({ salon_slug, master_slug, service_id, date }) {
+      if (!salon_slug || !master_slug || !service_id || !date) {
+        throw new Error("salon_slug, master_slug, service_id, date are required");
+      }
 
-      const q = new URLSearchParams();
-      q.set("date", String(date));
-      if (durationMin !== undefined && durationMin !== null) q.set("duration_min", String(durationMin));
-      if (masterSlug) q.set("master_slug", String(masterSlug));
+      const q = new URLSearchParams({
+        salon_slug,
+        master_slug,
+        service_id,
+        date,
+      });
 
-      return request(baseUrl, "/public/salons/" + encodeURIComponent(String(salonId)) + "/availability?" + q.toString(), {
-        method: "GET",
-        token,
+      return request(baseUrl, "/public/availability?" + q.toString());
+    },
+
+    // POST /public/booking/create
+    async createBooking({ salon_slug, master_slug, service_id, date, start_time, request_id }) {
+      if (!salon_slug || !master_slug || !service_id || !date || !start_time) {
+        throw new Error("missing required booking fields");
+      }
+
+      return request(baseUrl, "/public/booking/create", {
+        method: "POST",
+        json: {
+          salon_slug,
+          master_slug,
+          service_id,
+          date,
+          start_time,
+          request_id,
+        },
       });
     },
 
-    // POST /public/bookings
-    async createBooking({ salonId, masterSlug, date, startTime, endTime, client, idempotencyKey } = {}) {
-      if (!salonId) throw new Error("salonId is required");
-      if (!masterSlug) throw new Error("masterSlug is required");
-      if (!date) throw new Error("date is required (YYYY-MM-DD)");
-      if (!startTime) throw new Error("startTime is required (HH:MM)");
-      if (!endTime) throw new Error("endTime is required (HH:MM)");
-      if (!client || !client.name) throw new Error("client.name is required");
+    // GET /public/booking/:id/result
+    async getBookingResult({ booking_id }) {
+      if (!booking_id) throw new Error("booking_id is required");
+      return request(baseUrl, "/public/booking/" + booking_id + "/result");
+    },
 
-      const headers = {};
-      if (idempotencyKey) headers["Idempotency-Key"] = String(idempotencyKey);
-
-      return request(baseUrl, "/public/bookings", {
+    // POST /public/booking/:id/cancel
+    async cancelBooking({ booking_id }) {
+      if (!booking_id) throw new Error("booking_id is required");
+      return request(baseUrl, "/public/booking/" + booking_id + "/cancel", {
         method: "POST",
-        token,
-        headers,
+      });
+    },
+
+    // POST /public/payments/intent
+    async createPaymentIntent({ booking_id, provider, amount }) {
+      if (!booking_id || !provider || !amount) {
+        throw new Error("booking_id, provider, amount are required");
+      }
+
+      return request(baseUrl, "/public/payments/intent", {
+        method: "POST",
         json: {
-          salon_id: String(salonId),
-          master_slug: String(masterSlug),
-          date: String(date),
-          start_time: String(startTime),
-          end_time: String(endTime),
-          client: {
-            name: String(client.name),
-            phone: client.phone ? String(client.phone) : undefined,
-          },
+          booking_id,
+          provider,
+          amount,
         },
       });
     },
@@ -110,7 +121,7 @@ export default function mountPublicSdk(app) {
   router.get("/sdk.js", (req, res) => {
     res.setHeader("Content-Type", "application/javascript; charset=utf-8");
     res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Cache-Control", "public, max-age=300"); // 5 min
+    res.setHeader("Cache-Control", "public, max-age=300");
     res.send(SDK_JS);
   });
 
