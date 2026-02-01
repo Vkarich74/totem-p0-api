@@ -2,11 +2,12 @@
 import express from 'express';
 import pool from '../db/index.js';
 import { idempotencyGuard } from '../middleware/idempotency.js';
+import { slotFloodGuard } from '../middleware/slot_flood.js';
 
 const router = express.Router();
 
 // POST /public/bookings
-router.post('/', idempotencyGuard, async (req, res) => {
+router.post('/', slotFloodGuard, idempotencyGuard, async (req, res) => {
   const {
     salon_slug,
     master_slug,
