@@ -9,6 +9,18 @@ import { alerts } from './middleware/alerts.js';
 import publicRoutes from './routes_public/index.js';
 import ownerRoutes from './routes_owner/index.js';
 
+// 🔹 EMBED SCHEDULER (SAFE)
+if (process.env.SCHEDULER_ENABLED === '1') {
+  console.log('[BOOT] scheduler enabled → embedding');
+  import('./scheduler.js')
+    .then(() => {
+      console.log('[BOOT] scheduler loaded');
+    })
+    .catch(err => {
+      console.error('[BOOT] scheduler failed to load', err);
+    });
+}
+
 const app = express();
 
 app.use(bodyParser.json());
@@ -16,10 +28,10 @@ app.use(requestContext);
 app.use(metrics);
 app.use(alerts);
 
-// PUBLIC API (no auth)
+// PUBLIC API
 app.use('/public', publicRoutes);
 
-// OWNER API (STRICT AUTH)
+// OWNER API
 app.use('/owner', ownerRoutes);
 
 // METRICS
@@ -27,12 +39,12 @@ app.get('/metrics', (_req, res) => {
   res.json(metricsSnapshot());
 });
 
-// ROOT HEALTH
+// HEALTH
 app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
 
-// ERROR HANDLER (FINAL)
+// ERROR HANDLER
 app.use((err, _req, res, _next) => {
   console.error('[UNHANDLED ERROR]', err);
   res.status(500).json({ ok: false, error: 'internal_error' });
