@@ -3,7 +3,8 @@
 // - Contract-driven
 // - No payments inside widget
 // - Source of truth: /public/bookings/:id/result
-// - Statuses: pending_payment | paid | cancelled
+// - Final statuses: paid | cancelled | expired
+// - Handles: 409/429/timeouts/network gracefully
 
 (function () {
   const POLL_INTERVAL_MS = 2000;
@@ -28,61 +29,76 @@
 
   function uuid() {
     return (
-      crypto.randomUUID?.() ||
+      (typeof crypto !== "undefined" && crypto.randomUUID && crypto.randomUUID()) ||
       Math.random().toString(36).slice(2) + Date.now().toString(36)
     );
   }
 
   async function fetchJSON(url, opts = {}, attempt = 1) {
     const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
     try {
-      const res = await fetch(url, {
-        ...opts,
-        signal: controller.signal,
-      });
-
+      const res = await fetch(url, { ...opts, signal: controller.signal });
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        const err = new Error(data.error || "REQUEST_FAILED");
+        const err = new Error(data?.error || "REQUEST_FAILED");
         err.status = res.status;
+        err.payload = data;
         throw err;
       }
 
       return data;
     } catch (err) {
-      if (
-        attempt < MAX_RETRIES &&
-        (err.name === "AbortError" ||
-          !err.status ||
-          err.status >= 500 ||
-          err.status === 429)
-      ) {
+      const retryable =
+        err.name === "AbortError" ||
+        !err.status ||
+        err.status >= 500 ||
+        err.status === 429;
+
+      if (attempt < MAX_RETRIES && retryable) {
         await sleep(300 * attempt);
         return fetchJSON(url, opts, attempt + 1);
       }
       throw err;
     } finally {
-      clearTimeout(id);
+      clearTimeout(timer);
     }
+  }
+
+  function normalizeResult(result) {
+    // Contract: final (boolean), booking_status (string)
+    // Backward-safe: if backend ever returns status instead, map it.
+    const booking_status = result.booking_status || result.status;
+    const final =
+      typeof result.final === "boolean"
+        ? result.final
+        : booking_status === "paid" ||
+          booking_status === "cancelled" ||
+          booking_status === "expired";
+
+    return { final, booking_status };
   }
 
   async function pollResult({ baseUrl, bookingId }) {
     const startedAt = Date.now();
 
     while (true) {
-      const result = await fetchJSON(
+      const raw = await fetchJSON(
         `${baseUrl}/public/bookings/${bookingId}/result`
       );
 
-      if (result.status === "paid" || result.status === "cancelled") {
-        return result;
+      const { final, booking_status } = normalizeResult(raw);
+
+      if (final === true) {
+        return { booking_status, raw };
       }
 
       if (Date.now() - startedAt > MAX_WAIT_MS) {
-        throw new Error("WAIT_TIMEOUT");
+        const e = new Error("WAIT_TIMEOUT");
+        e.code = "WAIT_TIMEOUT";
+        throw e;
       }
 
       await sleep(POLL_INTERVAL_MS);
@@ -109,27 +125,33 @@
         }),
       });
 
-      const bookingId = booking.booking_id;
+      const bookingId = booking.booking_id || booking.id;
       if (!bookingId) throw new Error("NO_BOOKING_ID");
 
       setStatus("Waiting for payment confirmation...");
 
       const result = await pollResult({ baseUrl, bookingId });
 
-      if (result.status === "paid") {
+      if (result.booking_status === "paid") {
         setStatus("✅ Booking confirmed.");
         return;
       }
 
-      if (result.status === "cancelled") {
+      if (result.booking_status === "expired") {
+        setStatus("⏰ Booking expired. Please try again.");
+        return;
+      }
+
+      if (result.booking_status === "cancelled") {
         setStatus("❌ Booking cancelled.");
         return;
       }
 
-      setStatus("Unknown final state.");
+      // Should not happen, but keep safe UX
+      setStatus("⚠️ Unexpected final state. Please contact support.");
     } catch (err) {
-      if (err.message === "WAIT_TIMEOUT") {
-        setStatus("⏳ Payment is still processing. Please refresh later.");
+      if (err.code === "WAIT_TIMEOUT" || err.message === "WAIT_TIMEOUT") {
+        setStatus("⌛ Still processing. Please refresh in a moment.");
         return;
       }
 
@@ -143,7 +165,12 @@
         return;
       }
 
-      setStatus("Error: " + err.message);
+      if (err.name === "AbortError") {
+        setStatus("⚠️ Network timeout. Please retry.");
+        return;
+      }
+
+      setStatus("Error: " + (err.message || String(err)));
     } finally {
       locked = false;
     }
