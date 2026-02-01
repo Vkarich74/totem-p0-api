@@ -14,13 +14,6 @@ app.use(requestContext);
 app.use(metrics);
 app.use(alerts);
 
-// TEST 500 (OBSERVABILITY ONLY)
-if (process.env.ALERT_TEST === '1') {
-  app.get('/__test/500', (_req, _res) => {
-    throw new Error('forced 500 for alert test');
-  });
-}
-
 // PUBLIC API
 app.use('/public', publicRoutes);
 
@@ -34,7 +27,7 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
 
-// ERROR HANDLER (ENSURE 5xx)
+// ERROR HANDLER (5xx)
 app.use((err, _req, res, _next) => {
   res.status(500).json({ ok: false, error: 'internal_error' });
 });
