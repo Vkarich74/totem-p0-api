@@ -10,7 +10,11 @@ const router = express.Router();
  */
 router.get('/jobs', async (req, res) => {
   const { status, job_type, from, to } = req.query;
-  const owner = req.actor;
+  const actor = {
+    id: req.actor.user_id,
+    email: req.actor.email,
+  };
+  const salon_slug = req.actor.salon_slug;
 
   const { rows } = await pool.query(
     `
@@ -29,7 +33,7 @@ router.get('/jobs', async (req, res) => {
       job_type || null,
       from || null,
       to || null,
-      owner.salon_slug
+      salon_slug
     ]
   );
 
@@ -41,13 +45,18 @@ router.get('/jobs', async (req, res) => {
  */
 router.post('/backfill', async (req, res) => {
   const { job_type, payload, idempotency_key } = req.body;
-  const owner = req.actor;
+
+  const actor = {
+    id: req.actor.user_id,
+    email: req.actor.email,
+  };
+  const salon_slug = req.actor.salon_slug;
 
   if (!job_type || !payload || !idempotency_key) {
     return res.status(400).json({ ok: false, error: 'invalid_request' });
   }
 
-  if (payload.salon_slug !== owner.salon_slug) {
+  if (payload.salon_slug !== salon_slug) {
     return res.status(403).json({ ok: false, error: 'forbidden' });
   }
 
@@ -56,8 +65,8 @@ router.post('/backfill', async (req, res) => {
     await client.query('BEGIN');
 
     await auditOwnerActionPg(client, {
-      salon_slug: owner.salon_slug,
-      actor: owner,
+      salon_slug,
+      actor,
       action_type: 'async_job_backfill',
       entity_type: 'async_job',
       entity_id: null,
