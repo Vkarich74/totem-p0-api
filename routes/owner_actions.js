@@ -8,18 +8,13 @@ const router = express.Router();
 /**
  * OWNER OPS (SCOPED)
  * POST /owner/period/:id/close
- *
- * Закрыть settlement-период ТОЛЬКО если
- * он реально относится к salon_slug владельца
- * (через payouts → bookings)
  */
 router.post("/owner/period/:id/close", systemOwnerGuard, async (req, res) => {
   const { id } = req.params;
   const { salon_slug } = req.user;
 
-  const client = await pool.connect();
   try {
-    const result = await client.query(
+    const result = await pool.query(
       `
       UPDATE settlement_periods sp
       SET status = 'closed',
@@ -45,7 +40,6 @@ router.post("/owner/period/:id/close", systemOwnerGuard, async (req, res) => {
       });
     }
 
-    // AUDIT — successful period close
     await auditOwnerAction({
       req,
       action_type: "PERIOD_CLOSE",
@@ -61,26 +55,19 @@ router.post("/owner/period/:id/close", systemOwnerGuard, async (req, res) => {
   } catch (err) {
     console.error("OWNER_CLOSE_PERIOD_ERROR", err);
     res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
-  } finally {
-    client.release();
   }
 });
 
 /**
  * OWNER OPS (SCOPED)
  * POST /owner/batch/:id/pay
- *
- * Оплатить payout-batch ТОЛЬКО если
- * он принадлежит salon_slug владельца
- * (через payouts → bookings)
  */
 router.post("/owner/batch/:id/pay", systemOwnerGuard, async (req, res) => {
   const { id } = req.params;
   const { salon_slug } = req.user;
 
-  const client = await pool.connect();
   try {
-    const batch = await client.query(
+    const batch = await pool.query(
       `
       SELECT sb.id, sb.status
       FROM settlement_payout_batches sb
@@ -103,12 +90,11 @@ router.post("/owner/batch/:id/pay", systemOwnerGuard, async (req, res) => {
       });
     }
 
-    // idempotent — already paid → NO AUDIT
     if (batch.rows[0].status === "paid") {
       return res.json({ ok: true, idempotent: true });
     }
 
-    await client.query(
+    await pool.query(
       `
       UPDATE settlement_payout_batches
       SET status = 'paid',
@@ -118,7 +104,6 @@ router.post("/owner/batch/:id/pay", systemOwnerGuard, async (req, res) => {
       [id]
     );
 
-    // AUDIT — successful batch payment
     await auditOwnerAction({
       req,
       action_type: "BATCH_PAY",
@@ -134,8 +119,6 @@ router.post("/owner/batch/:id/pay", systemOwnerGuard, async (req, res) => {
   } catch (err) {
     console.error("OWNER_PAY_BATCH_ERROR", err);
     res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
-  } finally {
-    client.release();
   }
 });
 
