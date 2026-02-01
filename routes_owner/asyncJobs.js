@@ -1,7 +1,7 @@
 // routes_owner/asyncJobs.js
 import express from 'express';
 import pool from '../db/index.js';
-import { auditOwnerAction } from '../utils/auditOwnerAction.js';
+import { auditOwnerActionPg } from '../utils/auditOwnerActionPg.js';
 
 const router = express.Router();
 
@@ -31,79 +31,6 @@ router.get('/async/jobs', async (req, res) => {
 });
 
 /**
- * POST /owner/async/jobs/:id/retry
- */
-router.post('/async/jobs/:id/retry', async (req, res) => {
-  const id = Number(req.params.id);
-  const owner = req.owner;
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-
-    const { rows } = await client.query(
-      `
-      SELECT *
-      FROM async_jobs
-      WHERE id = $1
-        AND payload->>'salon_slug' = $2
-      FOR UPDATE
-      `,
-      [id, owner.salon_slug]
-    );
-
-    if (!rows.length) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ ok: false, error: 'not_found' });
-    }
-
-    const job = rows[0];
-
-    if (job.status !== 'failed') {
-      await client.query('ROLLBACK');
-      return res.json({ ok: true, status: 'no_change' });
-    }
-
-    if (job.attempts >= job.max_attempts) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({ ok: false, error: 'max_attempts_reached' });
-    }
-
-    await auditOwnerAction(client, {
-      salon_slug: owner.salon_slug,
-      actor_user_id: owner.id,
-      actor_email: owner.email,
-      action_type: 'async_job_retry',
-      entity_type: 'async_job',
-      entity_id: String(id),
-      metadata: { previous_status: job.status }
-    });
-
-    await client.query(
-      `
-      UPDATE async_jobs
-      SET status = 'pending',
-          attempts = attempts + 1,
-          last_error = NULL,
-          run_at = now(),
-          updated_at = now()
-      WHERE id = $1
-      `,
-      [id]
-    );
-
-    await client.query('COMMIT');
-    res.json({ ok: true, status: 'requeued' });
-  } catch (err) {
-    await client.query('ROLLBACK');
-    console.error(err);
-    res.status(500).json({ ok: false, error: 'retry_failed' });
-  } finally {
-    client.release();
-  }
-});
-
-/**
  * POST /owner/async/backfill
  */
 router.post('/async/backfill', async (req, res) => {
@@ -122,10 +49,9 @@ router.post('/async/backfill', async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    await auditOwnerAction(client, {
+    await auditOwnerActionPg(client, {
       salon_slug: owner.salon_slug,
-      actor_user_id: owner.id,
-      actor_email: owner.email,
+      actor: owner,
       action_type: 'async_job_backfill',
       entity_type: 'async_job',
       entity_id: null,
@@ -135,7 +61,7 @@ router.post('/async/backfill', async (req, res) => {
     await client.query(
       `
       INSERT INTO async_jobs (job_type, payload, idempotency_key)
-      VALUES ($1, $2::jsonb, $3)
+      VALUES ($1,$2::jsonb,$3)
       `,
       [job_type, payload, idempotency_key]
     );
