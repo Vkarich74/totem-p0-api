@@ -8,9 +8,9 @@ const router = express.Router();
 /**
  * GET /owner/async/jobs
  */
-router.get('/async/jobs', async (req, res) => {
+router.get('/jobs', async (req, res) => {
   const { status, job_type, from, to } = req.query;
-  const { salon_slug } = req.owner;
+  const owner = req.actor;
 
   const { rows } = await pool.query(
     `
@@ -24,7 +24,13 @@ router.get('/async/jobs', async (req, res) => {
     ORDER BY created_at DESC
     LIMIT 200
     `,
-    [status || null, job_type || null, from || null, to || null, salon_slug]
+    [
+      status || null,
+      job_type || null,
+      from || null,
+      to || null,
+      owner.salon_slug
+    ]
   );
 
   res.json({ ok: true, jobs: rows });
@@ -33,9 +39,9 @@ router.get('/async/jobs', async (req, res) => {
 /**
  * POST /owner/async/backfill
  */
-router.post('/async/backfill', async (req, res) => {
+router.post('/backfill', async (req, res) => {
   const { job_type, payload, idempotency_key } = req.body;
-  const owner = req.owner;
+  const owner = req.actor;
 
   if (!job_type || !payload || !idempotency_key) {
     return res.status(400).json({ ok: false, error: 'invalid_request' });
@@ -61,7 +67,7 @@ router.post('/async/backfill', async (req, res) => {
     await client.query(
       `
       INSERT INTO async_jobs (job_type, payload, idempotency_key)
-      VALUES ($1,$2::jsonb,$3)
+      VALUES ($1, $2::jsonb, $3)
       `,
       [job_type, payload, idempotency_key]
     );
