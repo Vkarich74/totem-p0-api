@@ -1,26 +1,22 @@
-import express from "express";
-import cors from "cors";
+// index.js
+import express from 'express';
+import bodyParser from 'body-parser';
 
-import healthRouter from "./routes/health.js";
-import publicRouter from "./routes/public.js";
-import authRouter from "./routes/auth.js";
-import ownerRouter from "./routes/owner.js";
-import ownerOnboardingReadonlyRouter from "./routes/owner_onboarding_readonly.js";
-import ownerOnboardingWriteRouter from "./routes/owner_onboarding_write.js";
+import publicRoutes from './routes_public/index.js';
 
 const app = express();
 
-app.use(cors());
-app.use(express.json());
+app.use(bodyParser.json());
 
-app.use("/health", healthRouter);
-app.use("/public", publicRouter);
-app.use("/auth", authRouter);
-app.use("/owner", ownerRouter);
-app.use("/owner/onboarding", ownerOnboardingReadonlyRouter);
-app.use("/owner/onboarding", ownerOnboardingWriteRouter);
+// PUBLIC API
+app.use('/public', publicRoutes);
 
-const port = process.env.PORT || 8080;
-app.listen(port, () => {
-  console.log("API listening on port", port);
+// ROOT HEALTH (для Railway / smoke)
+app.get('/health', (_req, res) => {
+  res.json({ ok: true });
+});
+
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => {
+  console.log(`API listening on port ${PORT}`);
 });
