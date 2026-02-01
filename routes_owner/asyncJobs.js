@@ -6,12 +6,11 @@ const router = express.Router();
 
 /**
  * GET /owner/async/jobs
- * SAFE READ — no side effects
+ * OPS READ — no salon filter (ops jobs)
  */
 router.get('/jobs', async (req, res) => {
   try {
     const { status, job_type } = req.query;
-    const salon_slug = req.actor.salon_slug;
 
     const { rows } = await pool.query(
       `
@@ -19,11 +18,10 @@ router.get('/jobs', async (req, res) => {
       FROM async_jobs
       WHERE ($1::text IS NULL OR status = $1)
         AND ($2::text IS NULL OR job_type = $2)
-        AND payload->>'salon_slug' = $3
       ORDER BY created_at DESC
       LIMIT 200
       `,
-      [status || null, job_type || null, salon_slug]
+      [status || null, job_type || null]
     );
 
     res.json({ ok: true, jobs: rows });
@@ -35,19 +33,14 @@ router.get('/jobs', async (req, res) => {
 
 /**
  * POST /owner/async/backfill
- * SAFE INSERT — no audit yet
+ * OPS INSERT — no audit yet
  */
 router.post('/backfill', async (req, res) => {
   try {
     const { job_type, payload, idempotency_key } = req.body;
-    const salon_slug = req.actor.salon_slug;
 
     if (!job_type || !payload || !idempotency_key) {
       return res.status(400).json({ ok: false, error: 'invalid_request' });
-    }
-
-    if (payload.salon_slug !== salon_slug) {
-      return res.status(403).json({ ok: false, error: 'forbidden' });
     }
 
     await pool.query(
