@@ -1,6 +1,11 @@
 // db/index.js
-import Database from "better-sqlite3";
+import pg from "pg";
 
-const db = new Database("totem.db");
+const { Pool } = pg;
 
-export default db;
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+});
+
+export default pool;
