@@ -2,9 +2,13 @@
 import express from 'express';
 import pool from '../db/index.js';
 import { authOwner } from '../middleware/auth_owner.js';
+import asyncJobsRoutes from './asyncJobs.js';
 
 const router = express.Router();
 router.use(authOwner);
+
+// ASYNC OPS
+router.use(asyncJobsRoutes);
 
 // READ
 router.get('/salons', async (_req, res) => {
@@ -121,7 +125,7 @@ router.post('/bookings/:id/reschedule', async (req, res) => {
   }
 });
 
-// MARK COMPLETED (WRITE.3)
+// MARK COMPLETED
 router.post('/bookings/:id/complete', async (req, res) => {
   const id = Number(req.params.id);
 
