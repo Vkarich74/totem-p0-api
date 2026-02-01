@@ -1,21 +1,26 @@
 // middleware/publicTokenAuth.js
-import { readPublicTokenByRaw, hashToken } from "../core/publicTokens.js";
+import crypto from "crypto";
 
 /**
  * Public token auth (Bearer)
- * - tenant берём ТОЛЬКО из public token
- * - scopes enforced per-route
- * - обновляем last_used_at
+ * STRICTLY aligned with DB table: public_tokens
+ *
+ * Enforces:
+ * - token exists
+ * - enabled = true
+ * - revoked_at IS NULL
+ * - rate_limit_per_min (DB-driven)
+ *
+ * NO scopes
+ * NO tenant_id
+ * NO legacy fields
  */
 
-function hasScope(scopes, required) {
-  if (!required) return true;
-  const set = new Set(Array.isArray(scopes) ? scopes : []);
-  if (Array.isArray(required)) return required.every((s) => set.has(s));
-  return set.has(String(required));
+function hashToken(raw) {
+  return crypto.createHash("sha256").update(raw).digest("hex");
 }
 
-export function publicTokenAuth({ db, requiredScope = null }) {
+export function publicTokenAuth({ db }) {
   return (req, res, next) => {
     const auth = String(req.headers["authorization"] || "");
     const m = auth.match(/^Bearer\s+(.+)$/i);
@@ -24,44 +29,44 @@ export function publicTokenAuth({ db, requiredScope = null }) {
     const rawToken = m[1].trim();
     if (!rawToken) return res.status(401).json({ error: "PUBLIC_TOKEN_REQUIRED" });
 
-    const token = readPublicTokenByRaw(db, rawToken);
-    if (!token) return res.status(401).json({ error: "PUBLIC_TOKEN_INVALID" });
+    let token;
+    try {
+      token = db
+        .prepare(
+          `
+          SELECT
+            id,
+            salon_id,
+            enabled,
+            revoked_at,
+            rate_limit_per_min
+          FROM public_tokens
+          WHERE token = ?
+          LIMIT 1
+        `
+        )
+        .get(rawToken);
+    } catch {
+      return res.status(500).json({ error: "PUBLIC_TOKEN_LOOKUP_FAILED" });
+    }
 
+    if (!token) return res.status(401).json({ error: "PUBLIC_TOKEN_INVALID" });
+    if (!token.enabled) return res.status(401).json({ error: "PUBLIC_TOKEN_DISABLED" });
     if (token.revoked_at) return res.status(401).json({ error: "PUBLIC_TOKEN_REVOKED" });
 
-    const now = Date.now();
-    const exp = Date.parse(token.expires_at);
-    if (!Number.isFinite(exp) || exp <= now) {
-      return res.status(401).json({ error: "PUBLIC_TOKEN_EXPIRED" });
-    }
-
-    if (!hasScope(token.scopes, requiredScope)) {
-      return res.status(403).json({ error: "INSUFFICIENT_SCOPE" });
-    }
-
-    // attach public context
     req.public = {
       token_id: token.id,
-      tenant_id: String(token.tenant_id),
-      salon_id: token.salon_id === null || token.salon_id === undefined ? null : String(token.salon_id),
-      scopes: token.scopes,
+      salon_id: String(token.salon_id),
+      rate_limit_per_min: Number(token.rate_limit_per_min),
       token_hash: hashToken(rawToken),
     };
-
-    // best-effort last_used_at update (не должен валить запрос)
-    try {
-      db.prepare("UPDATE public_tokens SET last_used_at = ? WHERE id = ?").run(
-        new Date().toISOString(),
-        token.id
-      );
-    } catch {}
 
     return next();
   };
 }
 
 /**
- * CORS for public SDK/widget
+ * CORS for public SDK / widget
  */
 export function publicCors(req, res, next) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -73,26 +78,28 @@ export function publicCors(req, res, next) {
 }
 
 /**
- * Simple in-memory public rate limit (token_hash + ip)
- * windowSec default 60, limit default 120
+ * Rate limit per token (per minute, from DB)
  */
-export function publicRateLimit({ windowSec = 60, limit = 120 } = {}) {
+export function publicRateLimit() {
   const bucket = new Map(); // key -> { resetAt, count }
 
   return (req, res, next) => {
+    if (!req.public) return res.status(500).json({ error: "PUBLIC_CONTEXT_MISSING" });
+
+    const limit = req.public.rate_limit_per_min;
+    const windowMs = 60 * 1000;
+
     const ip =
       String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() ||
       req.socket?.remoteAddress ||
       "unknown";
-    const tok = req.public?.token_hash || "no-token";
-    const key = `${tok}|${ip}`;
 
+    const key = `${req.public.token_hash}|${ip}`;
     const now = Date.now();
-    const resetAt = now + windowSec * 1000;
 
     let rec = bucket.get(key);
     if (!rec || rec.resetAt <= now) {
-      rec = { resetAt, count: 0 };
+      rec = { resetAt: now + windowMs, count: 0 };
       bucket.set(key, rec);
     }
 
