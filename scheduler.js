@@ -1,68 +1,75 @@
 // scheduler.js
-import cron from "node-cron";
-import pool from "./db/index.js";
-import { runAutoSettlement } from "./jobs/scheduler.js";
-import { runQueueWorker } from "./jobs/queueWorker.js";
-
 /**
- * ENV:
- * SCHEDULER_ENABLED=1|0
- * SCHEDULER_CRON="0 * * * *"
+ * PROD SCHEDULER — SAFE MODE
+ *
+ * - Single-run guarded by system_locks
+ * - TTL-based lock to avoid deadlocks
+ * - Silent exit if lock is held
  */
 
-const ENABLED = process.env.SCHEDULER_ENABLED === "1";
-const CRON = process.env.SCHEDULER_CRON || "0 * * * *";
-const LOCK_KEY = "GLOBAL_SCHEDULER_LOCK";
+import pool from './db/index.js';
+import os from 'os';
+import { runQueueWorker } from './jobs/queueWorker.js';
 
-/**
- * Simple DB-backed process lock
- * prevents double execution on scale / restart
- */
+const LOCK_KEY = 'async_worker';
+const LOCK_TTL_SECONDS = 120;
+
 async function acquireLock(client) {
-  const res = await client.query(
+  const lockedBy = `${os.hostname()}:${process.pid}`;
+
+  const { rowCount } = await client.query(
     `
-    INSERT INTO system_locks (lock_key, acquired_at)
-    VALUES ($1, now())
-    ON CONFLICT (lock_key) DO NOTHING
-  `,
-    [LOCK_KEY]
+    INSERT INTO system_locks (lock_key, locked_by, expires_at)
+    VALUES ($1, $2, now() + ($3 || ' seconds')::interval)
+    ON CONFLICT (lock_key) DO UPDATE
+    SET locked_by = EXCLUDED.locked_by,
+        locked_at = now(),
+        expires_at = EXCLUDED.expires_at,
+        updated_at = now()
+    WHERE system_locks.expires_at < now()
+    `,
+    [LOCK_KEY, lockedBy, LOCK_TTL_SECONDS]
   );
-  return res.rowCount === 1;
+
+  return rowCount === 1;
 }
 
 async function releaseLock(client) {
-  await client.query(`DELETE FROM system_locks WHERE lock_key = $1`, [LOCK_KEY]);
+  await client.query(
+    `DELETE FROM system_locks WHERE lock_key = $1`,
+    [LOCK_KEY]
+  );
 }
 
-if (!ENABLED) {
-  console.log("[SCHEDULER] disabled");
-  process.exit(0);
-}
-
-console.log(`[SCHEDULER] enabled (${CRON})`);
-
-cron.schedule(CRON, async () => {
-  const client = await pool.connect();
+export async function runSchedulerOnce() {
+  let client;
   try {
-    const locked = await acquireLock(client);
-    if (!locked) {
-      console.log("[SCHEDULER] skip — lock already held");
+    client = await pool.connect();
+
+    const acquired = await acquireLock(client);
+    if (!acquired) {
+      // another instance is running
       return;
     }
 
-    const dryRun = process.env.NODE_ENV !== "production";
-
-    // 1) settlements
-    await runAutoSettlement({ db: client, dryRun });
-
-    // 2) async queue
-    await runQueueWorker({ limit: 10 });
+    await runQueueWorker();
   } catch (err) {
-    console.error("SCHEDULER_RUN_ERROR", err);
+    console.error('[SCHEDULER_ERROR]', err);
   } finally {
     try {
-      await releaseLock(client);
-    } catch {}
-    client.release();
+      if (client) await releaseLock(client);
+    } catch (_) {}
+    if (client) client.release();
   }
-});
+}
+
+// Auto-run only in prod
+if (process.env.NODE_ENV === 'production') {
+  runSchedulerOnce()
+    .then(() => {
+      // no-op
+    })
+    .catch((err) => {
+      console.error('[SCHEDULER_FATAL]', err);
+    });
+}
