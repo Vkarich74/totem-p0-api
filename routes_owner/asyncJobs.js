@@ -1,13 +1,12 @@
 // routes_owner/asyncJobs.js
 import express from 'express';
 import pool from '../db/index.js';
-import auditOwnerAction from '../utils/auditOwnerAction.js';
+import { auditOwnerAction } from '../utils/auditOwnerAction.js';
 
 const router = express.Router();
 
 /**
  * GET /owner/async/jobs
- * filters: status, job_type, from, to
  */
 router.get('/async/jobs', async (req, res) => {
   const { status, job_type, from, to } = req.query;
