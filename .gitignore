@@ -1,44 +1,29 @@
-# node
+# Node
 node_modules/
 npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# env
+# Env
 .env
+.env.*
 
-# local databases / artifacts
-*.db
-*.db-shm
-*.db-wal
-*.bak
-*.DEBUG.bak
+# Logs
+logs/
+*.log
 
-# sql dumps / local migrations
-db_schema_v1.sql
-migrations/*.sql
-
-# local temp / cli artifacts
-cd
-dir
-mkdir
-node
-npm
-psql
-taskkill
-curl
-notepad
-
-# local test / widget / sdk
-test-widget.html
-widget.html
-sdk/
-widget/
-front/
-_public
-
-# draft docs (canonical kept in repo)
-docs/RATE_LIMIT_RULES.md
-docs/TOKEN_RULES_AND_ERRORS.md
+# Runtime
+dist/
+build/
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Backups (never commit)
+backups/
+*.bak
+
+# Allow DB migrations (IMPORTANT)
+!migrations/
+!migrations/*.sql
