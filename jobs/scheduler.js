@@ -1,33 +1,34 @@
 // jobs/scheduler.js
-import cron from 'node-cron';
-import { runSettlementsJob } from './settlements.js';
-import { runAutoClosePeriodsJob } from './autoClosePeriods.js';
+/**
+ * Canonical scheduler jobs
+ * NO cron
+ * NO intervals
+ */
 
-export function startScheduler() {
-  if (process.env.SCHEDULER_ENABLED !== '1') {
-    console.log('Scheduler disabled');
-    return;
+export async function runAutoSettlement({ db, dryRun }) {
+  const started = Date.now();
+
+  const payouts = db
+    .prepare(`SELECT id FROM payouts WHERE status = 'pending'`)
+    .all();
+
+  if (!dryRun) {
+    const tx = db.transaction(() => {
+      for (const p of payouts) {
+        db.prepare(`
+          UPDATE payouts
+          SET status='paid', paid_at=datetime('now')
+          WHERE id=?
+        `).run(p.id);
+      }
+    });
+    tx();
   }
 
-  console.log('Scheduler started');
+  const duration = Date.now() - started;
+  console.log(
+    `[JOB] auto-settlement ${dryRun ? "DRY" : "RUN"} affected=${payouts.length} ${duration}ms`
+  );
 
-  // every day at 00:10 UTC — auto-close periods
-  cron.schedule('10 0 * * *', () => {
-    try {
-      const res = runAutoClosePeriodsJob();
-      console.log('[cron] auto-close periods', res);
-    } catch (err) {
-      console.error('[cron] auto-close ERROR', err);
-    }
-  });
-
-  // every day at 00:30 UTC — settlements
-  cron.schedule('30 0 * * *', () => {
-    try {
-      const res = runSettlementsJob();
-      console.log('[cron] settlements', res);
-    } catch (err) {
-      console.error('[cron] settlements ERROR', err);
-    }
-  });
+  return { affected: payouts.length, duration };
 }
