@@ -1,4 +1,6 @@
 import express from "express";
+import path from "path";
+import { fileURLToPath } from "url";
 
 import availability from "./availability.js";
 import bookings from "./bookings.js";
@@ -11,7 +13,8 @@ import sdk from "./sdk.js";
 import auth from "./auth.js";
 import book from "./book.js";
 
-import registerWidgetRoute from "./widget.js";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const router = express.Router();
 
@@ -20,8 +23,11 @@ router.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-// widget (public js)
-registerWidgetRoute(router);
+// 🔴 WIDGET — MUST BE FIRST (no middleware, no guards)
+router.get("/widget.js", (req, res) => {
+  res.type("application/javascript");
+  res.sendFile(path.join(__dirname, "../public/widget.js"));
+});
 
 // core public APIs
 router.use("/availability", availability);
