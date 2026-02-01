@@ -1,4 +1,4 @@
-console.log("OWNER_ACTIONS_MARKER_2026_02_01");
+console.log("OWNER_ACTIONS_MARKER_2026_02_01_FIXED");
 
 import express from "express";
 import { pool } from "../db/index.js";
@@ -11,7 +11,7 @@ const router = express.Router();
  * OWNER OPS (SCOPED)
  * POST /owner/period/:id/close
  */
-router.post("/owner/period/:id/close", systemOwnerGuard, async (req, res) => {
+router.post("/period/:id/close", systemOwnerGuard, async (req, res) => {
   const { id } = req.params;
   const { salon_slug } = req.user;
 
@@ -64,7 +64,7 @@ router.post("/owner/period/:id/close", systemOwnerGuard, async (req, res) => {
  * OWNER OPS (SCOPED)
  * POST /owner/batch/:id/pay
  */
-router.post("/owner/batch/:id/pay", systemOwnerGuard, async (req, res) => {
+router.post("/batch/:id/pay", systemOwnerGuard, async (req, res) => {
   const { id } = req.params;
   const { salon_slug } = req.user;
 
