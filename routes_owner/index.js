@@ -113,12 +113,33 @@ router.post('/bookings/:id/reschedule', async (req, res) => {
 
     await client.query('COMMIT');
     res.json({ ok:true, booking: upd.rows[0] });
-  } catch (e) {
+  } catch {
     await client.query('ROLLBACK');
     res.status(500).json({ ok:false, error:'reschedule_failed' });
   } finally {
     client.release();
   }
+});
+
+// MARK COMPLETED (WRITE.3)
+router.post('/bookings/:id/complete', async (req, res) => {
+  const id = Number(req.params.id);
+
+  const { rowCount } = await pool.query(
+    `
+    UPDATE bookings
+    SET status = 'completed'
+    WHERE id = $1
+      AND status = 'paid'
+    `,
+    [id]
+  );
+
+  if (rowCount === 0) {
+    return res.json({ ok:true, status:'no_change' });
+  }
+
+  res.json({ ok:true, status:'completed' });
 });
 
 export default router;
