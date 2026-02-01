@@ -3,11 +3,14 @@ import express from 'express';
 import pool from '../db/index.js';
 import { authOwner } from '../middleware/auth_owner.js';
 import { runQueueWorker } from '../jobs/queueWorker.js';
+import asyncJobsRouter from './asyncJobs.js';
 
 const router = express.Router();
 router.use(authOwner);
 
-// READ SALONS
+/**
+ * READ: salons
+ */
 router.get('/salons', async (_req, res) => {
   const { rows } = await pool.query(
     `SELECT slug, name FROM salons ORDER BY name`
@@ -15,7 +18,9 @@ router.get('/salons', async (_req, res) => {
   res.json({ ok: true, salons: rows });
 });
 
-// 🔥 OPS: MANUAL WORKER RUN (PROD SAFE)
+/**
+ * OPS: manual async worker run
+ */
 router.post('/ops/run-worker', async (_req, res) => {
   try {
     await runQueueWorker({ limit: 10 });
@@ -25,5 +30,10 @@ router.post('/ops/run-worker', async (_req, res) => {
     res.status(500).json({ ok: false, error: 'worker_failed' });
   }
 });
+
+/**
+ * ASYNC JOBS (READ / RETRY / BACKFILL)
+ */
+router.use('/async', asyncJobsRouter);
 
 export default router;
