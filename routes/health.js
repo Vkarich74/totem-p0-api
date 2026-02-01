@@ -3,13 +3,8 @@ import express from "express";
 
 const router = express.Router();
 
-router.get("/", async (_req, res) => {
-  try {
-    // минимальный health, DB не трогаем
-    return res.json({ ok: true });
-  } catch (err) {
-    return res.status(500).json({ ok: false });
-  }
+router.get("/", (req, res) => {
+  res.json({ ok: true });
 });
 
-export const healthRouter = router;
+export default router;
