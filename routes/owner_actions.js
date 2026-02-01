@@ -1,3 +1,5 @@
+console.log("OWNER_ACTIONS_MARKER_2026_02_01");
+
 import express from "express";
 import { pool } from "../db/index.js";
 import systemOwnerGuard from "../middleware/system_owner_guard.js";
