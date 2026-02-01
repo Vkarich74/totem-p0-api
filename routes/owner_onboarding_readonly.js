@@ -1,42 +1,26 @@
 // routes/owner_onboarding_readonly.js
-// READ-ONLY onboarding API for owners
-// SAFE: no writes, no side-effects
-
 import express from "express";
-import db from "../db/index.js";
+import * as db from "../db/index.js";
 import { requireOwner } from "../middleware/auth_owner.js";
 
 const router = express.Router();
 
-/**
- * GET /owner/onboarding/salons
- * List all salons
- */
 router.get("/salons", requireOwner, (req, res) => {
-  const rows = db
-    .prepare(
-      `
-      SELECT id, slug, name, enabled
-      FROM salons
-      ORDER BY id
-      `
-    )
-    .all();
+  const rows = db.default
+    ? db.default.prepare(
+        "SELECT id, slug, name, enabled FROM salons ORDER BY id"
+      ).all()
+    : db.prepare(
+        "SELECT id, slug, name, enabled FROM salons ORDER BY id"
+      ).all();
 
   res.json(rows);
 });
 
-/**
- * GET /owner/onboarding/salons/:salonId/masters
- * List masters for a salon (through salon_master_services)
- */
 router.get("/salons/:salonId/masters", requireOwner, (req, res) => {
   const salonId = Number(req.params.salonId);
-  if (!salonId) {
-    return res.status(400).json({ error: "invalid salonId" });
-  }
 
-  const rows = db
+  const rows = (db.default || db)
     .prepare(
       `
       SELECT DISTINCT
@@ -55,10 +39,6 @@ router.get("/salons/:salonId/masters", requireOwner, (req, res) => {
   res.json(rows);
 });
 
-/**
- * GET /owner/onboarding/salons/:salonId/masters/:masterId/services
- * List services for salon + master
- */
 router.get(
   "/salons/:salonId/masters/:masterId/services",
   requireOwner,
@@ -66,11 +46,7 @@ router.get(
     const salonId = Number(req.params.salonId);
     const masterId = Number(req.params.masterId);
 
-    if (!salonId || !masterId) {
-      return res.status(400).json({ error: "invalid salonId or masterId" });
-    }
-
-    const rows = db
+    const rows = (db.default || db)
       .prepare(
         `
         SELECT
