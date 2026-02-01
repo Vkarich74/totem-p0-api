@@ -1,14 +1,8 @@
 /**
  * CRON: Booking payment timeout
  *
- * Purpose:
- * - Expire bookings stuck in `pending_payment`
- * - Timeout defined by SCALE_CONTRACT.md
- *
- * Rules:
- * - DRY RUN by default
- * - Write only with --confirm=1
- * - Idempotent
+ * Locking:
+ * - Uses pg advisory lock to prevent parallel runs
  *
  * Usage:
  *   node tools/cron_booking_timeout.js
@@ -19,10 +13,22 @@ import pool from '../db/index.js';
 
 const TIMEOUT_MINUTES = 15;
 const CONFIRM = process.argv.includes('--confirm=1');
+const LOCK_KEY = 424242; // constant advisory lock key
 
 async function run() {
   const client = await pool.connect();
   try {
+    // acquire lock
+    const lockRes = await client.query(
+      'SELECT pg_try_advisory_lock($1) AS locked',
+      [LOCK_KEY]
+    );
+
+    if (!lockRes.rows[0].locked) {
+      console.log('[LOCK] another instance is running, exit');
+      return;
+    }
+
     await client.query('BEGIN');
 
     const scanSql = `
@@ -34,7 +40,6 @@ async function run() {
     `;
 
     const { rows } = await client.query(scanSql);
-
     console.log(`[SCAN] found ${rows.length} expired candidates`);
 
     if (!CONFIRM) {
@@ -59,7 +64,6 @@ async function run() {
     `;
 
     const res = await client.query(updateSql, [ids]);
-
     console.log(`[CONFIRM] expired bookings: ${res.rowCount}`);
 
     await client.query('COMMIT');
@@ -68,6 +72,9 @@ async function run() {
     console.error('[ERROR]', err);
     process.exitCode = 1;
   } finally {
+    try {
+      await client.query('SELECT pg_advisory_unlock($1)', [LOCK_KEY]);
+    } catch {}
     client.release();
     await pool.end();
   }
