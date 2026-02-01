@@ -1,6 +1,8 @@
 // index.js
 import express from 'express';
 import bodyParser from 'body-parser';
+import path from "path";
+import { fileURLToPath } from "url";
 
 import { requestContext } from './middleware/request_context.js';
 import { metrics, metricsSnapshot } from './middleware/metrics.js';
@@ -21,12 +23,24 @@ if (process.env.SCHEDULER_ENABLED === '1') {
     });
 }
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const app = express();
 
 app.use(bodyParser.json());
 app.use(requestContext);
 app.use(metrics);
 app.use(alerts);
+
+// ✅ STATIC PUBLIC ASSETS (WIDGET)
+app.use(
+  '/public',
+  express.static(path.join(__dirname, 'public_static'), {
+    immutable: true,
+    maxAge: '1y',
+  })
+);
 
 // PUBLIC API
 app.use('/public', publicRoutes);
