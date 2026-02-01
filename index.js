@@ -11,7 +11,7 @@ import mastersRoute from "./routes_public/masters.js";
 import salonsRoute from "./routes_public/salons.js";
 import servicesRoute from "./routes_public/services.js";
 import paymentsIntentRoute from "./routes_public/paymentsIntent.js";
-import sdkRoute from "./routes_public/sdk.js";
+import sdkMount from "./routes_public/sdk.js";
 import bookRoute from "./routes_public/book.js";
 
 import authRoute from "./routes_public/auth.js";
@@ -23,12 +23,13 @@ import ownerAuditRoute from "./routes/owner_audit.js";
 import meRoute from "./routes/me.js";
 
 const app = express();
-app.use(cors({ credentials:true, origin:true }));
+app.use(cors({ credentials: true, origin: true }));
 app.use(express.json());
 app.use(cookieParser());
 
 app.use(healthRoute);
 
+// ===== PUBLIC API =====
 app.use("/public/availability", availabilityRoute);
 app.use("/public/booking/create", bookingCreateRoute);
 app.use("/public/booking/cancel", bookingCancelRoute);
@@ -37,19 +38,23 @@ app.use("/public/masters", mastersRoute);
 app.use("/public/salons", salonsRoute);
 app.use("/public/services", servicesRoute);
 app.use("/public/payments/intent", paymentsIntentRoute);
-app.use("/public/sdk", sdkRoute);
 
+// ✅ MOUNT SDK (FIX)
+sdkMount(app);
+
+// READ-ONLY BOOK UI
 app.use(bookRoute);
 
-/** 🔒 AUTH — ЖЁСТКО ПОД /auth */
+// ===== AUTH =====
 app.use("/auth", authRoute);
 
+// ===== PROTECTED =====
 app.use("/me", apiGuard, meRoute);
 app.use("/owner", apiGuard, ownerDashboardRoute);
 app.use("/owner", apiGuard, ownerActionsRoute);
 app.use("/owner", apiGuard, ownerAuditRoute);
 
-app.use((req,res)=>res.status(404).json({error:"NOT_FOUND"}));
+app.use((req, res) => res.status(404).json({ error: "NOT_FOUND" }));
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, ()=>console.log("BOOT OK", PORT));
+app.listen(PORT, () => console.log("BOOT OK", PORT));
