@@ -2,16 +2,18 @@
 import express from 'express';
 import bodyParser from 'body-parser';
 
+import { requestContext } from './middleware/request_context.js';
 import publicRoutes from './routes_public/index.js';
 
 const app = express();
 
 app.use(bodyParser.json());
+app.use(requestContext);
 
 // PUBLIC API
 app.use('/public', publicRoutes);
 
-// ROOT HEALTH (для Railway / smoke)
+// ROOT HEALTH
 app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
