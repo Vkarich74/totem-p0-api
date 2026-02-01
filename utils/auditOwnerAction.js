@@ -1,46 +1,35 @@
 // utils/auditOwnerAction.js
-// CONTRACT:
-// - Must be called AFTER successful owner action
-// - Never throws (audit must not break prod flows)
-// - Requires api_guard to have populated req.user
-// - Uses Postgres pool directly
-
-import { pool } from "../db/index.js";
+/**
+ * AUDIT GUARANTEE — OWNER ACTIONS
+ *
+ * RULE:
+ * - MUST be called inside an existing DB transaction
+ * - MUST throw on failure
+ * - Any owner WRITE without audit = FORBIDDEN
+ */
 
 export async function auditOwnerAction({
-  req,
+  db,
+  tx, // REQUIRED: transaction handle
+  salon_slug,
+  actor,
   action_type,
   entity_type,
   entity_id = null,
+  request_id = null,
   metadata = null,
 }) {
+  if (!db) throw new Error("AUDIT_DB_REQUIRED");
+  if (!tx) throw new Error("AUDIT_TX_REQUIRED");
+  if (!actor?.user_id || !actor?.email) throw new Error("AUDIT_ACTOR_REQUIRED");
+  if (!salon_slug) throw new Error("AUDIT_SALON_REQUIRED");
+  if (!action_type) throw new Error("AUDIT_ACTION_REQUIRED");
+  if (!entity_type) throw new Error("AUDIT_ENTITY_REQUIRED");
+
   try {
-    if (!req || !req.user) {
-      return; // silent fail — misuse protection
-    }
-
-    const user = req.user;
-
-    const salon_slug = user.salon_slug;
-    const actor_user_id = user.id;
-    const actor_email = user.email;
-    const request_id = req.request_id || null;
-
-    await pool.query(
+    tx.prepare(
       `
-      INSERT INTO owner_actions_audit_log
-        (salon_slug,
-         actor_user_id,
-         actor_email,
-         action_type,
-         entity_type,
-         entity_id,
-         request_id,
-         metadata)
-      VALUES
-        ($1,$2,$3,$4,$5,$6,$7,$8)
-      `,
-      [
+      INSERT INTO owner_actions_audit_log (
         salon_slug,
         actor_user_id,
         actor_email,
@@ -49,10 +38,20 @@ export async function auditOwnerAction({
         entity_id,
         request_id,
         metadata,
-      ]
+        created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, now())
+    `
+    ).run(
+      salon_slug,
+      actor.user_id,
+      actor.email,
+      action_type,
+      entity_type,
+      entity_id,
+      request_id,
+      metadata ? JSON.stringify(metadata) : null
     );
   } catch (err) {
-    // AUDIT MUST NEVER BREAK PROD
-    console.error("[AUDIT_OWNER_ACTION_FAILED]", err.message);
+    throw new Error("OWNER_AUDIT_WRITE_FAILED");
   }
 }
