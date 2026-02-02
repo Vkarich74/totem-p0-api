@@ -1,18 +1,20 @@
-// core/bookingStatus.js — canonical booking lifecycle
+// core/bookingStatus.js — canonical booking lifecycle (FINAL)
 
 const ALLOWED_STATUSES = [
   "pending_payment",
   "paid",
   "expired",
   "cancelled",
+  "completed",
 ];
 
 // Allowed transitions matrix
 const TRANSITIONS = {
   pending_payment: ["paid", "cancelled", "expired"],
-  paid: ["cancelled"], // refund / admin only
+  paid: ["completed", "cancelled"],
   expired: [],
   cancelled: [],
+  completed: [],
 };
 
 /**
@@ -20,9 +22,8 @@ const TRANSITIONS = {
  * @param {string} to
  */
 export function assertStatusTransition(from, to) {
-  // normalize
+  // normalize creation
   if (from === null) {
-    // creation is implicit -> pending_payment only
     if (to !== "pending_payment") {
       const err = new Error("INVALID_STATUS_TRANSITION");
       err.code = "INVALID_STATUS_TRANSITION";
