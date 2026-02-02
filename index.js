@@ -10,6 +10,7 @@ import { alerts } from './middleware/alerts.js';
 
 import publicRoutes from './routes_public/index.js';
 import ownerRoutes from './routes_owner/index.js';
+import systemRoutes from './routes_system/index.js';
 
 // 🔹 EMBED SCHEDULER (SAFE)
 if (process.env.SCHEDULER_ENABLED === '1') {
@@ -41,6 +42,9 @@ app.use(
     maxAge: '1y',
   })
 );
+
+// SYSTEM API (INTERNAL JOBS)
+app.use('/system', systemRoutes);
 
 // PUBLIC API
 app.use('/public', publicRoutes);
