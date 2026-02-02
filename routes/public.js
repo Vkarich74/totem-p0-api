@@ -3,7 +3,7 @@
 // SAFE: no mutations, DB_CONTRACT enforced
 
 import express from "express";
-import pool from "../db/pool.js";
+import { pool } from "../db/index.js";
 
 const router = express.Router();
 
