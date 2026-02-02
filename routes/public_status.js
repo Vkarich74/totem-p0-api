@@ -22,18 +22,17 @@ router.get("/booking", async (req, res) => {
     const { rows } = await pool.query(
       `
       SELECT
-        b.id AS booking_id,
-        b.status,
-        b.date,
-        b.start_time,
-        b.end_time,
-        b.source,
-        b.created_at,
-        b.salon_slug,
-        b.master_slug,
-        b.service_id
-      FROM bookings b
-      WHERE b.id = $1
+        id AS booking_id,
+        salon_slug,
+        master_slug,
+        service_id,
+        date,
+        start_time,
+        status,
+        created_at,
+        request_id
+      FROM bookings
+      WHERE id = $1
       `,
       [booking_id]
     );
