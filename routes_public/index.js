@@ -4,6 +4,7 @@ import { fileURLToPath } from "url";
 
 import availability from "./availability.js";
 import bookings from "./bookings.js";
+import bookingCreate from "./bookingCreate.js";
 import bookingResult from "./bookingResult.js";
 import bookingCancel from "./bookingCancel.js";
 import salons from "./salons.js";
@@ -31,9 +32,13 @@ router.get("/widget.js", (req, res) => {
 
 // core public APIs
 router.use("/availability", availability);
-router.use("/bookings", bookings);
-router.use("/bookings", bookingResult);
-router.use("/bookings", bookingCancel);
+
+// 🔑 BOOKINGS FLOW (ORDER MATTERS)
+router.use("/bookings", bookingCreate);   // POST /
+router.use("/bookings", bookingResult);   // GET /:id/result
+router.use("/bookings", bookingCancel);   // POST /:id/cancel
+router.use("/bookings", bookings);        // legacy / list (if any)
+
 router.use("/salons", salons);
 router.use("/masters", masters);
 router.use("/services", services);
