@@ -1,5 +1,5 @@
 // routes/public.js
-// Public API: catalog, bookings, payments
+// Public API: salons, catalog, bookings, payments
 // SAFE: limited write, DB_CONTRACT enforced
 
 import express from "express";
@@ -13,7 +13,39 @@ router.get("/ping", (req, res) => {
 });
 
 /**
- * GET /public/catalog
+ * GET /public/salons/:salon_slug
+ * Used by Odoo demo block to show salon name
+ */
+router.get("/salons/:salon_slug", async (req, res) => {
+  const { salon_slug } = req.params;
+  if (!salon_slug) {
+    return res.status(400).json({ error: "salon_slug is required" });
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT slug, name, enabled FROM salons WHERE slug = $1 LIMIT 1`,
+      [salon_slug]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ error: "salon_not_found" });
+    }
+
+    res.json({
+      ok: true,
+      slug: rows[0].slug,
+      name: rows[0].name,
+      enabled: rows[0].enabled,
+    });
+  } catch (e) {
+    console.error("[PUBLIC SALON]", e);
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
+/**
+ * GET /public/catalog?salon_slug=
  */
 router.get("/catalog", async (req, res) => {
   const { salon_slug } = req.query;
