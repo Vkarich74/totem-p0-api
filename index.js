@@ -8,6 +8,7 @@ import publicRouter from "./routes/public.js";
 import systemRouter from "./routes/system.js";
 import systemPayoutsRouter from "./routes/system_payouts.js";
 import systemSettlementRouter from "./routes/system_settlement.js";
+import systemClosePeriodRouter from "./routes/system_close_period.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,12 +28,13 @@ app.use(
 app.use("/system", systemRouter);
 app.use("/system/payouts", systemPayoutsRouter);
 app.use("/system/settlement", systemSettlementRouter);
+app.use("/system/settlement", systemClosePeriodRouter);
 
 // PUBLIC
 app.use("/public", publicRouter);
 
 // HEALTH
-app.get("/health", (req, res) => res.json({ ok: true }));
+app.get("/health", (_req, res) => res.json({ ok: true }));
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log("API listening on port", PORT));
