@@ -1,12 +1,13 @@
 // routes/public.js
-// Public API: catalog + payments (read/write limited)
+// Public API: catalog, bookings, payments
+// SAFE: limited write, DB_CONTRACT enforced
 
 import express from "express";
 import { pool } from "../db/index.js";
 
 const router = express.Router();
 
-// health-like ping
+// ping
 router.get("/ping", (req, res) => {
   res.json({ ok: true, scope: "public" });
 });
@@ -47,8 +48,58 @@ router.get("/catalog", async (req, res) => {
 });
 
 /**
+ * POST /public/bookings
+ * Create booking (pending_payment)
+ */
+router.post("/bookings", async (req, res) => {
+  const {
+    salon_slug,
+    master_slug,
+    service_id,
+    date,
+    start_time,
+    request_id,
+  } = req.body;
+
+  if (
+    !salon_slug ||
+    !master_slug ||
+    !service_id ||
+    !date ||
+    !start_time
+  ) {
+    return res.status(400).json({ error: "missing_fields" });
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `
+      INSERT INTO bookings
+        (salon_slug, master_slug, service_id, date, start_time, status, request_id)
+      VALUES
+        ($1, $2, $3, $4, $5, 'pending_payment', $6)
+      RETURNING id, status
+      `,
+      [salon_slug, master_slug, service_id, date, start_time, request_id || null]
+    );
+
+    res.json({
+      ok: true,
+      booking_id: rows[0].id,
+      status: rows[0].status,
+    });
+  } catch (e) {
+    console.error("[BOOKINGS]", e);
+    if (e.code === "23505") {
+      return res.status(409).json({ error: "duplicate_request" });
+    }
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
+/**
  * POST /public/payments/start
- * STUB implementation (provider later)
+ * Stub payment start
  */
 router.post("/payments/start", async (req, res) => {
   const { booking_id, return_url } = req.body;
@@ -58,7 +109,6 @@ router.post("/payments/start", async (req, res) => {
   }
 
   try {
-    // ensure booking exists and is pending_payment
     const { rows } = await pool.query(
       `SELECT id, status FROM bookings WHERE id = $1`,
       [booking_id]
@@ -72,17 +122,13 @@ router.post("/payments/start", async (req, res) => {
       return res.status(409).json({ error: "invalid_booking_status" });
     }
 
-    // STUB payment url (provider integration later)
     const paymentUrl =
       return_url +
       (return_url.includes("?") ? "&" : "?") +
       "payment=stub&booking_id=" +
       booking_id;
 
-    res.json({
-      ok: true,
-      payment_url: paymentUrl,
-    });
+    res.json({ ok: true, payment_url: paymentUrl });
   } catch (e) {
     console.error("[PAYMENTS START]", e);
     res.status(500).json({ error: "internal_error" });
