@@ -9,6 +9,7 @@ import systemRouter from "./routes/system.js";
 import systemPayoutsRouter from "./routes/system_payouts.js";
 import systemSettlementRouter from "./routes/system_settlement.js";
 import systemClosePeriodRouter from "./routes/system_close_period.js";
+import systemReconciliationRouter from "./routes/system_reconciliation.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,6 +30,7 @@ app.use("/system", systemRouter);
 app.use("/system/payouts", systemPayoutsRouter);
 app.use("/system/settlement", systemSettlementRouter);
 app.use("/system/settlement", systemClosePeriodRouter);
+app.use("/system/reconciliation", systemReconciliationRouter);
 
 // PUBLIC
 app.use("/public", publicRouter);
