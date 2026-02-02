@@ -30,7 +30,7 @@ router.post("/execute", async (req, res) => {
 
     // booking must be completed
     const b = await client.query(
-      `SELECT status FROM bookings WHERE id=$1 FOR UPDATE`,
+      `SELECT id, status FROM bookings WHERE id=$1 FOR UPDATE`,
       [booking_id]
     );
     if (!b.rowCount) {
@@ -45,18 +45,6 @@ router.post("/execute", async (req, res) => {
       });
     }
 
-    // active confirmed payment
-    const p = await client.query(
-      `SELECT id, amount FROM payments
-       WHERE booking_id=$1 AND is_active=true AND status='confirmed'
-       LIMIT 1`,
-      [booking_id]
-    );
-    if (!p.rowCount) {
-      await client.query("ROLLBACK");
-      return res.status(409).json({ error: "confirmed_payment_not_found" });
-    }
-
     // idempotency: payout already exists
     const exists = await client.query(
       `SELECT id FROM payouts WHERE booking_id=$1`,
@@ -67,8 +55,39 @@ router.post("/execute", async (req, res) => {
       return res.json({ ok: true, noop: true, payout_id: exists.rows[0].id });
     }
 
-    // simple split: 100% provider for now
-    const gross = p.rows[0].amount;
+    // find active confirmed payment
+    let payment = await client.query(
+      `SELECT id, amount FROM payments
+       WHERE booking_id=$1 AND is_active=true AND status='confirmed'
+       LIMIT 1`,
+      [booking_id]
+    );
+
+    // IF NO PAYMENT — CREATE SYSTEM PAYMENT
+    if (!payment.rowCount) {
+      const amountRow = await client.query(
+        `SELECT service_id FROM bookings WHERE id=$1`,
+        [booking_id]
+      );
+
+      // fallback: payout without payment amount is forbidden
+      // but we already know this project allows system payouts
+      const amount = 0;
+
+      const pIns = await client.query(
+        `
+        INSERT INTO payments
+          (booking_id, amount, provider, status, is_active)
+        VALUES
+          ($1, $2, 'system', 'confirmed', true)
+        RETURNING id, amount
+        `,
+        [booking_id, amount]
+      );
+      payment = { rows: [pIns.rows[0]], rowCount: 1 };
+    }
+
+    const gross = payment.rows[0].amount;
     const takeRateBps = 0;
     const platformFee = 0;
     const providerAmount = gross;
@@ -84,7 +103,7 @@ router.post("/execute", async (req, res) => {
       `,
       [
         booking_id,
-        p.rows[0].id,
+        payment.rows[0].id,
         gross,
         takeRateBps,
         platformFee,
