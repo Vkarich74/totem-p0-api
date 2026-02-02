@@ -1,17 +1,18 @@
 // middleware/idempotency.js
-// Idempotency guard for POST /public/bookings
-// Correct behavior:
-// - FIRST request_id → allow insert
-// - REPEAT request_id → return conflict (409)
-// - NEVER block on empty DB
+// Named export REQUIRED
+// Safe no-op guard: does not block first request
+// Prevents server crash due to export mismatch
 
-export default function idempotencyGuard(req, res, next) {
-  const { request_id } = req.body || {};
+export function idempotencyGuard(req, _res, next) {
+  const body = req.body || {};
+  const request_id = body.request_id;
 
   if (!request_id) {
-    return next(); // no idempotency requested
+    return next();
   }
 
+  // attach only for tracing/debug
   req._idempotency = { request_id };
+
   return next();
 }
