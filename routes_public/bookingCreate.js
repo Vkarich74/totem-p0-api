@@ -1,6 +1,5 @@
 // routes_public/bookingCreate.js
-// Create booking (PUBLIC) — CANONICAL v1
-// Idempotent by request_id + audit guaranteed
+// Create booking (PUBLIC) — CANONICAL v1 (DIAGNOSTIC)
 
 import express from "express";
 import { pool } from "../db/index.js";
@@ -29,7 +28,6 @@ router.post("/", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Idempotency
     if (request_id) {
       const existing = await client.query(
         `SELECT id, status FROM bookings WHERE request_id = $1 LIMIT 1`,
@@ -39,16 +37,12 @@ router.post("/", async (req, res) => {
         await client.query("COMMIT");
         return res.status(200).json({
           booking_id: existing.rows[0].id,
-          status:
-            existing.rows[0].status === "created"
-              ? "pending_payment"
-              : existing.rows[0].status,
+          status: existing.rows[0].status,
           request_id,
         });
       }
     }
 
-    // Create booking
     const insert = await client.query(
       `
       INSERT INTO bookings (
@@ -69,7 +63,6 @@ router.post("/", async (req, res) => {
 
     await client.query("COMMIT");
 
-    // Audit (non-blocking)
     writeBookingAudit({
       booking_id: insert.rows[0].id,
       from_status: null,
@@ -86,8 +79,17 @@ router.post("/", async (req, res) => {
     });
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("bookingCreate error:", err);
-    return res.status(500).json({ error: "INTERNAL_ERROR" });
+
+    return res.status(500).json({
+      ok: false,
+      error: "create_booking_failed",
+      pg: {
+        message: err.message,
+        code: err.code,
+        detail: err.detail,
+        constraint: err.constraint,
+      },
+    });
   } finally {
     client.release();
   }
