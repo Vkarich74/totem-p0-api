@@ -1,10 +1,9 @@
-// routes_system/paymentsWebhook.js — CANONICAL FINAL
+// routes_system/paymentsWebhook.js — CANONICAL FINAL (SECURED)
 // Contract:
 // - Auth: X-System-Token
 // - Input: payment_id, status = 'succeeded' | 'failed'
-// - Allowed transition: pending -> confirmed | failed
-// - Idempotent for confirmed / failed
-// - Booking moves to 'paid' ONLY on confirmed
+// - Idempotent
+// - Booking moves to 'paid' ONLY via updateBookingStatus
 
 import express from "express";
 import { pool } from "../db/index.js";
@@ -12,7 +11,30 @@ import updateBookingStatus from "../helpers/updateBookingStatus.js";
 
 const router = express.Router();
 
-router.post("/", async (req, res) => {
+// 🔐 simple system auth
+function requireSystemToken(req, res, next) {
+  const token =
+    req.headers["x-system-token"] ||
+    req.headers["X-System-Token"];
+
+  if (!process.env.SYSTEM_TOKEN) {
+    return res.status(500).json({
+      ok: false,
+      error: "SYSTEM_TOKEN_NOT_CONFIGURED",
+    });
+  }
+
+  if (token !== process.env.SYSTEM_TOKEN) {
+    return res.status(401).json({
+      ok: false,
+      error: "UNAUTHORIZED",
+    });
+  }
+
+  next();
+}
+
+router.post("/", requireSystemToken, async (req, res) => {
   const { payment_id, status } = req.body || {};
 
   if (!payment_id || !["succeeded", "failed"].includes(status)) {
@@ -27,7 +49,6 @@ router.post("/", async (req, res) => {
   try {
     await client.query("BEGIN");
 
-    // 1️⃣ lock payment row
     const { rows, rowCount } = await client.query(
       `
       SELECT id, booking_id, status
@@ -39,12 +60,16 @@ router.post("/", async (req, res) => {
     );
 
     if (rowCount === 0) {
-      throw new Error("PAYMENT_NOT_FOUND");
+      await client.query("ROLLBACK");
+      return res.status(404).json({
+        ok: false,
+        error: "PAYMENT_NOT_FOUND",
+      });
     }
 
     const payment = rows[0];
 
-    // 2️⃣ idempotency
+    // idempotency
     if (payment.status === "confirmed" || payment.status === "failed") {
       await client.query("COMMIT");
       return res.json({
@@ -56,12 +81,14 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // 3️⃣ only pending allowed
     if (payment.status !== "pending") {
-      throw new Error("INVALID_STATUS_TRANSITION");
+      await client.query("ROLLBACK");
+      return res.status(409).json({
+        ok: false,
+        error: "INVALID_STATUS_TRANSITION",
+      });
     }
 
-    // 4️⃣ resolve payment
     const nextStatus = status === "succeeded" ? "confirmed" : "failed";
 
     await client.query(
@@ -74,7 +101,6 @@ router.post("/", async (req, res) => {
       [payment_id, nextStatus]
     );
 
-    // 5️⃣ booking update ONLY on confirmed
     if (nextStatus === "confirmed") {
       await updateBookingStatus(
         client,
@@ -95,9 +121,10 @@ router.post("/", async (req, res) => {
     });
   } catch (err) {
     await client.query("ROLLBACK");
+    console.error("paymentsWebhook error:", err);
     return res.status(500).json({
       ok: false,
-      error: err.message || "INTERNAL_ERROR",
+      error: "PAYMENTS_WEBHOOK_FAILED",
     });
   } finally {
     client.release();
