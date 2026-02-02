@@ -1,9 +1,10 @@
 // routes/public.js
-// Public API: salons, catalog, bookings, payments
+// Public API: salons, catalog, bookings, payments, status
 // SAFE: limited write, DB_CONTRACT enforced
 
 import express from "express";
 import { pool } from "../db/index.js";
+import publicStatusRouter from "./public_status.js";
 
 const router = express.Router();
 
@@ -11,6 +12,11 @@ const router = express.Router();
 router.get("/ping", (req, res) => {
   res.json({ ok: true, scope: "public" });
 });
+
+// --------------------
+// STATUS ROUTES
+// --------------------
+router.use("/status", publicStatusRouter);
 
 /**
  * GET /public/salons/:salon_slug
