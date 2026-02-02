@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 
 import publicRouter from "./routes/public.js";
 import systemRouter from "./routes/system.js";
+import systemPayoutsRouter from "./routes/system_payouts.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,10 +22,11 @@ app.use(
   express.static(path.join(__dirname, "widget"))
 );
 
-// SYSTEM API (internal, secured)
+// SYSTEM
 app.use("/system", systemRouter);
+app.use("/system/payouts", systemPayoutsRouter);
 
-// PUBLIC API
+// PUBLIC
 app.use("/public", publicRouter);
 
 // HEALTH
