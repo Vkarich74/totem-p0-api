@@ -49,7 +49,6 @@ router.get("/catalog", async (req, res) => {
 
 /**
  * POST /public/bookings
- * Create booking (pending_payment)
  */
 router.post("/bookings", async (req, res) => {
   const {
@@ -61,13 +60,7 @@ router.post("/bookings", async (req, res) => {
     request_id,
   } = req.body;
 
-  if (
-    !salon_slug ||
-    !master_slug ||
-    !service_id ||
-    !date ||
-    !start_time
-  ) {
+  if (!salon_slug || !master_slug || !service_id || !date || !start_time) {
     return res.status(400).json({ error: "missing_fields" });
   }
 
@@ -83,11 +76,7 @@ router.post("/bookings", async (req, res) => {
       [salon_slug, master_slug, service_id, date, start_time, request_id || null]
     );
 
-    res.json({
-      ok: true,
-      booking_id: rows[0].id,
-      status: rows[0].status,
-    });
+    res.json({ ok: true, booking_id: rows[0].id, status: rows[0].status });
   } catch (e) {
     console.error("[BOOKINGS]", e);
     if (e.code === "23505") {
@@ -98,8 +87,7 @@ router.post("/bookings", async (req, res) => {
 });
 
 /**
- * POST /public/payments/start
- * Stub payment start
+ * POST /public/payments/start (STUB)
  */
 router.post("/payments/start", async (req, res) => {
   const { booking_id, return_url } = req.body;
@@ -131,6 +119,33 @@ router.post("/payments/start", async (req, res) => {
     res.json({ ok: true, payment_url: paymentUrl });
   } catch (e) {
     console.error("[PAYMENTS START]", e);
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
+/**
+ * GET /public/payments/status?booking_id=
+ */
+router.get("/payments/status", async (req, res) => {
+  const { booking_id } = req.query;
+
+  if (!booking_id) {
+    return res.status(400).json({ error: "booking_id is required" });
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT status FROM bookings WHERE id = $1`,
+      [booking_id]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ error: "booking_not_found" });
+    }
+
+    res.json({ booking_id: Number(booking_id), status: rows[0].status });
+  } catch (e) {
+    console.error("[PAYMENTS STATUS]", e);
     res.status(500).json({ error: "internal_error" });
   }
 });
