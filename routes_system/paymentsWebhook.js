@@ -1,9 +1,5 @@
 // routes_system/paymentsWebhook.js — CANONICAL FINAL (SECURED)
-// Contract:
-// - Auth: X-System-Token
-// - Input: payment_id, status = 'succeeded' | 'failed'
-// - Idempotent
-// - Booking moves to 'paid' ONLY via updateBookingStatus
+// Endpoint: POST /system/payments/webhook
 
 import express from "express";
 import { pool } from "../db/index.js";
@@ -11,7 +7,7 @@ import updateBookingStatus from "../helpers/updateBookingStatus.js";
 
 const router = express.Router();
 
-// 🔐 simple system auth
+// 🔐 system auth
 function requireSystemToken(req, res, next) {
   const token =
     req.headers["x-system-token"] ||
@@ -34,7 +30,8 @@ function requireSystemToken(req, res, next) {
   next();
 }
 
-router.post("/", requireSystemToken, async (req, res) => {
+// POST /payments/webhook
+router.post("/webhook", requireSystemToken, async (req, res) => {
   const { payment_id, status } = req.body || {};
 
   if (!payment_id || !["succeeded", "failed"].includes(status)) {
