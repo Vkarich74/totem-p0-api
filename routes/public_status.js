@@ -1,24 +1,28 @@
 // routes/public_status.js
-import express from 'express'
-import { getDB } from '../lib/db.js'
-import { requirePublicToken } from '../middleware/anti_bypass_public.js'
+// Public booking & payment status
+// NO AUTH — public read-only endpoint
 
-const router = express.Router()
+import express from "express";
+import { getDB } from "../lib/db.js";
 
-function validationError(res, message = 'validation_error') {
-  return res.status(400).json({ error: 'validation_error', message })
+const router = express.Router();
+
+function validationError(res, message = "validation_error") {
+  return res.status(400).json({ ok: false, error: message });
 }
 
 // --------------------
 // GET /public/status/booking
 // --------------------
-router.get('/booking', requirePublicToken, (req, res) => {
-  const { booking_id } = req.query
-  if (!booking_id) return validationError(res, 'booking_id required')
+router.get("/booking", (req, res) => {
+  const { booking_id } = req.query;
+  if (!booking_id) return validationError(res, "booking_id_required");
 
   try {
-    const db = getDB()
-    const row = db.prepare(`
+    const db = getDB();
+    const row = db
+      .prepare(
+        `
       SELECT
         b.id AS booking_id,
         b.status,
@@ -34,27 +38,31 @@ router.get('/booking', requirePublicToken, (req, res) => {
       JOIN salons s ON s.id = b.salon_id
       JOIN masters m ON m.id = b.master_id
       WHERE b.id = ?
-    `).get(booking_id)
+    `
+      )
+      .get(booking_id);
 
-    if (!row) return validationError(res, 'booking not found')
+    if (!row) return validationError(res, "booking_not_found");
 
-    return res.json({ ok: true, booking: row })
+    return res.json({ ok: true, booking: row });
   } catch (e) {
-    console.error('STATUS /booking error:', e)
-    return res.status(500).json({ error: 'internal_error' })
+    console.error("STATUS /booking error:", e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
   }
-})
+});
 
 // --------------------
 // GET /public/status/payment
 // --------------------
-router.get('/payment', requirePublicToken, (req, res) => {
-  const { payment_id } = req.query
-  if (!payment_id) return validationError(res, 'payment_id required')
+router.get("/payment", (req, res) => {
+  const { payment_id } = req.query;
+  if (!payment_id) return validationError(res, "payment_id_required");
 
   try {
-    const db = getDB()
-    const row = db.prepare(`
+    const db = getDB();
+    const row = db
+      .prepare(
+        `
       SELECT
         p.id AS payment_id,
         p.booking_id,
@@ -65,15 +73,17 @@ router.get('/payment', requirePublicToken, (req, res) => {
         p.created_at
       FROM payments p
       WHERE p.id = ?
-    `).get(payment_id)
+    `
+      )
+      .get(payment_id);
 
-    if (!row) return validationError(res, 'payment not found')
+    if (!row) return validationError(res, "payment_not_found");
 
-    return res.json({ ok: true, payment: row })
+    return res.json({ ok: true, payment: row });
   } catch (e) {
-    console.error('STATUS /payment error:', e)
-    return res.status(500).json({ error: 'internal_error' })
+    console.error("STATUS /payment error:", e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
   }
-})
+});
 
-export default router
+export default router;
