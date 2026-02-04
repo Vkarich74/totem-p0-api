@@ -1,44 +1,40 @@
-// index.js
-import express from "express";
-import cors from "cors";
-import path from "path";
-import { fileURLToPath } from "url";
+import express from "express"
 
-import publicRouter from "./routes/public.js";
-import systemRouter from "./routes/system.js";
-import systemPayoutsRouter from "./routes/system_payouts.js";
-import systemSettlementRouter from "./routes/system_settlement.js";
-import systemClosePeriodRouter from "./routes/system_close_period.js";
-import systemReconciliationRouter from "./routes/system_reconciliation.js";
-import systemReconciliationPeriodRouter from "./routes/system_reconciliation_period.js";
+const app = express()
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// ===== GLOBAL MIDDLEWARE =====
+app.use(express.json())
 
-const app = express();
+// ===== HEALTH CHECK =====
+app.get("/health", (req, res) => {
+  res.json({ ok: true })
+})
 
-app.use(cors());
-app.use(express.json());
+// ===== CRM WEBHOOK (ODOO) =====
+app.post("/system/webhook/crm", (req, res) => {
+  console.log("[CRM WEBHOOK] HEADERS:", req.headers)
+  console.log("[CRM WEBHOOK] BODY:", req.body)
 
-// STATIC
-app.use(
-  "/public/static",
-  express.static(path.join(__dirname, "widget"))
-);
+  const token = req.headers["x-system-token"]
 
-// SYSTEM
-app.use("/system", systemRouter);
-app.use("/system/payouts", systemPayoutsRouter);
-app.use("/system/settlement", systemSettlementRouter);
-app.use("/system/settlement", systemClosePeriodRouter);
-app.use("/system/reconciliation", systemReconciliationRouter);
-app.use("/system/reconciliation", systemReconciliationPeriodRouter);
+  if (!token || token !== process.env.SYSTEM_TOKEN) {
+    console.error("[CRM WEBHOOK] UNAUTHORIZED")
+    return res.status(401).json({ error: "unauthorized" })
+  }
 
-// PUBLIC
-app.use("/public", publicRouter);
+  // TODO: здесь позже будет реальная обработка лида
+  // сейчас просто подтверждаем приём
 
-// HEALTH
-app.get("/health", (_req, res) => res.json({ ok: true }));
+  return res.status(200).json({ ok: true })
+})
 
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log("API listening on port", PORT));
+// ===== 404 FALLBACK =====
+app.use((req, res) => {
+  res.status(404).json({ error: "not_found" })
+})
+
+// ===== START SERVER =====
+const PORT = process.env.PORT || 3000
+app.listen(PORT, () => {
+  console.log(`TOTEM API listening on port ${PORT}`)
+})
