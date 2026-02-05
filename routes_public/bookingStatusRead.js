@@ -21,7 +21,7 @@ router.get("/", async (req, res) => {
       })
     }
 
-    let booking = null
+    let booking
 
     if (request_id) {
       booking = await db.get(
@@ -62,17 +62,10 @@ router.get("/", async (req, res) => {
       })
     }
 
-    return res.json({
-      ok: true,
-      booking
-    })
-
+    res.json({ ok: true, booking })
   } catch (err) {
     console.error("[BOOKING_STATUS_READ_ERROR]", err)
-    return res.status(500).json({
-      ok: false,
-      error: "INTERNAL_ERROR"
-    })
+    res.status(500).json({ ok: false, error: "INTERNAL_ERROR" })
   }
 })
 
