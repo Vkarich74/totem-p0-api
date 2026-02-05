@@ -1,51 +1,82 @@
+// db.js — SINGLE SOURCE OF TRUTH
+// PROD: Postgres (Railway)
+// LOCAL: SQLite (totem.db)
+
 import Database from "better-sqlite3";
+import pg from "pg";
 import fs from "fs";
-import path from "path";
 
-// =======================================
-// 🔒 SINGLE SOURCE OF TRUTH — ONLY totem.db
-// =======================================
-const DB_FILENAME = "totem.db";
-const DB_PATH = path.resolve(DB_FILENAME);
+const { Pool } = pg;
 
-// ---------------------------------------
-// ❌ FORBIDDEN DATABASE FILES
-// ---------------------------------------
-const FORBIDDEN = [
-  "data.db",
-  "data.sqlite",
-  "database.sqlite",
-  "db.sqlite"
-];
+let db = null;
 
-// ---------------------------------------
-// 🧨 FAIL FAST: forbidden db exists
-// ---------------------------------------
-for (const name of FORBIDDEN) {
-  const p = path.resolve(name);
-  if (fs.existsSync(p)) {
-    console.error("❌ FORBIDDEN DATABASE FILE DETECTED:", name);
-    console.error("Remove it from project root.");
+// Detect mode
+const HAS_PG = Boolean(process.env.DATABASE_URL);
+
+if (HAS_PG) {
+  // =========================
+  // POSTGRES MODE (PROD)
+  // =========================
+  const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.PGSSLMODE === "disable"
+      ? false
+      : { rejectUnauthorized: false }
+  });
+
+  db = {
+    mode: "POSTGRES",
+
+    async get(sql, params = []) {
+      const res = await pool.query(sql, params);
+      return res.rows[0] || null;
+    },
+
+    async all(sql, params = []) {
+      const res = await pool.query(sql, params);
+      return res.rows;
+    },
+
+    async run(sql, params = []) {
+      await pool.query(sql, params);
+      return { ok: true };
+    }
+  };
+
+  console.log("[DB] MODE: POSTGRES");
+
+} else {
+  // =========================
+  // SQLITE MODE (LOCAL)
+  // =========================
+  const DB_FILENAME = "totem.db";
+
+  if (!fs.existsSync(DB_FILENAME)) {
+    console.error(`❌ REQUIRED DATABASE NOT FOUND: ${DB_FILENAME}`);
     process.exit(1);
   }
+
+  const sqlite = new Database(DB_FILENAME);
+  sqlite.pragma("journal_mode = WAL");
+
+  db = {
+    mode: "SQLITE",
+
+    get(sql, params = []) {
+      return sqlite.prepare(sql).get(params) || null;
+    },
+
+    all(sql, params = []) {
+      return sqlite.prepare(sql).all(params);
+    },
+
+    run(sql, params = []) {
+      sqlite.prepare(sql).run(params);
+      return { ok: true };
+    }
+  };
+
+  console.log("[DB] MODE: SQLITE");
 }
-
-// ---------------------------------------
-// 🧨 FAIL FAST: required db missing
-// ---------------------------------------
-if (!fs.existsSync(DB_PATH)) {
-  console.error("❌ REQUIRED DATABASE NOT FOUND:", DB_FILENAME);
-  process.exit(1);
-}
-
-// ---------------------------------------
-// ✅ OPEN DATABASE
-// ---------------------------------------
-const db = new Database(DB_PATH);
-
-// ---------------------------------------
-// 📢 EXPLICIT LOG
-// ---------------------------------------
-console.log("USING DATABASE:", DB_PATH);
 
 export default db;
