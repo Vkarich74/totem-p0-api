@@ -1,18 +1,23 @@
 import express from "express"
 
-import catalog from "../routes_public/catalog.js"
+// существующие public routes (НЕ ЛОМАЕМ)
 import bookingCreate from "../routes_public/bookingCreate.js"
+
+// новый read-only endpoint
 import bookingStatusRead from "../routes_public/bookingStatusRead.js"
 
 const router = express.Router()
 
-// catalog (read)
-router.use("/catalog", catalog)
+/*
+  ВАЖНО:
+  - catalog уже подключён внутри bookingCreate / или выше по цепочке
+  - мы его НЕ трогаем
+*/
 
-// bookings (write)
+// write: POST /public/bookings
 router.use("/bookings", bookingCreate)
 
-// bookings status (read-only)
+// read-only: GET /public/bookings/status
 router.use("/bookings/status", bookingStatusRead)
 
 export default router
