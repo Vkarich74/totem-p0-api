@@ -17,9 +17,7 @@ function verifySignature(rawBody, signature, secret) {
   );
 }
 
-// ВАЖНО:
 // путь ТОЛЬКО "/"
-// итоговый URL = /system/payment/webhook
 router.post(
   "/",
   express.json({
@@ -58,19 +56,13 @@ router.post(
       const tips = Number(amount.tips || 0);
       const total = Number(amount.total);
 
-      if (
-        !Number.isInteger(base) ||
-        !Number.isInteger(tips) ||
-        !Number.isInteger(total)
-      ) {
+      if (!Number.isInteger(base) || !Number.isInteger(tips) || !Number.isInteger(total)) {
         return res.status(400).json({ error: "AMOUNT_NOT_INTEGER" });
       }
-
       if (base < 0 || tips < 0 || total < 0 || base + tips !== total) {
         return res.status(400).json({ error: "INVALID_AMOUNT" });
       }
 
-      // idempotency: payment_id + event
       try {
         await db.run(
           `INSERT INTO payment_events (payment_id, event, occurred_at)
@@ -94,25 +86,14 @@ router.post(
         return res.status(200).json({ ok: true });
       }
 
-      const paymentStatus =
-        event === "payment.succeeded" ? "succeeded" : "failed";
-      const bookingStatus =
-        paymentStatus === "succeeded" ? "paid" : "payment_failed";
+      const paymentStatus = event === "payment.succeeded" ? "succeeded" : "failed";
+      const bookingStatus = paymentStatus === "succeeded" ? "paid" : "payment_failed";
 
       await db.run(
         `INSERT INTO payments
          (payment_id, booking_id, amount_total, amount_base, amount_tips, currency, status, provider)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        [
-          payment_id,
-          booking_id,
-          total,
-          base,
-          tips,
-          currency,
-          paymentStatus,
-          provider || null
-        ]
+        [payment_id, booking_id, total, base, tips, currency, paymentStatus, provider || null]
       );
 
       await db.run(
