@@ -1,12 +1,15 @@
 // routes_public/bookingCreate.js
 // Create booking (PUBLIC) — CANONICAL v1
-// Idempotent by request_id + audit guaranteed
+// Idempotent by request_id + DB-backed + TTL hardened
 
 import express from "express";
 import { pool } from "../db/index.js";
 import { writeBookingAudit } from "../utils/audit.js";
 
 const router = express.Router();
+
+// TTL for idempotency (24 hours)
+const IDEMPOTENCY_TTL_HOURS = 24;
 
 router.post("/", async (req, res) => {
   const client = await pool.connect();
@@ -29,23 +32,36 @@ router.post("/", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Idempotency
+    /**
+     * =========================
+     * IDEMPOTENCY (HARDENED)
+     * =========================
+     * - DB-backed
+     * - TTL applied
+     * - Atomic via transaction
+     */
+
     if (request_id) {
       const existing = await client.query(
-        `SELECT id, status FROM bookings WHERE request_id = $1 LIMIT 1`,
+        `
+        SELECT id, status
+        FROM bookings
+        WHERE request_id = $1
+          AND created_at >= NOW() - INTERVAL '${IDEMPOTENCY_TTL_HOURS} hours'
+        LIMIT 1
+        `,
         [request_id]
       );
+
       if (existing.rowCount > 0) {
         await client.query("COMMIT");
-        return res.status(200).json({
-          booking_id: existing.rows[0].id,
-          status: existing.rows[0].status,
-          request_id,
+        return res.status(409).json({
+          error: "duplicate_request",
         });
       }
     }
 
-    // Create booking
+    // Create booking (single atomic insert)
     const insert = await client.query(
       `
       INSERT INTO bookings (
@@ -79,7 +95,6 @@ router.post("/", async (req, res) => {
     return res.status(200).json({
       booking_id: insert.rows[0].id,
       status: "pending_payment",
-      request_id: request_id || null,
     });
   } catch (err) {
     await client.query("ROLLBACK");
