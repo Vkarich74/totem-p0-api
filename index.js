@@ -1,5 +1,10 @@
 import express from "express"
 
+// routes
+import publicRoutes from "./routes/public.js"
+import ownerRoutes from "./routes/owner.js"
+import systemRoutes from "./routes/system.js"
+
 const app = express()
 
 /**
@@ -39,22 +44,10 @@ app.get("/health", (req, res) => {
   res.json({ ok: true })
 })
 
-// ===== CRM WEBHOOK (ODOO SAAS SAFE) =====
-app.post("/system/webhook/crm", (req, res) => {
-  console.log("[CRM WEBHOOK] QUERY:", req.query)
-  console.log("[CRM WEBHOOK] BODY:", req.body)
-
-  const token =
-    req.query.token ||
-    req.headers["x-system-token"]
-
-  if (!token || token !== process.env.SYSTEM_TOKEN) {
-    console.error("[CRM WEBHOOK] UNAUTHORIZED")
-    return res.status(401).json({ error: "unauthorized" })
-  }
-
-  return res.status(200).json({ ok: true })
-})
+// ===== ROUTES =====
+app.use("/public", publicRoutes)
+app.use("/owner", ownerRoutes)
+app.use("/system", systemRoutes)
 
 // ===== 404 =====
 app.use((req, res) => {
