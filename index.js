@@ -54,6 +54,22 @@ app.use("/owner", ownerRoutes);
 
 /**
  * ==================================================
+ * BOOKING STATUS TRANSITION (CANON)
+ * ==================================================
+ */
+const BOOKING_TRANSITIONS = {
+  pending_payment: new Set(["paid", "payment_failed", "expired"]),
+  paid: new Set(),
+  payment_failed: new Set(),
+  expired: new Set()
+};
+
+function canTransition(from, to) {
+  return BOOKING_TRANSITIONS[from]?.has(to) || false;
+}
+
+/**
+ * ==================================================
  * SYSTEM: SIGNATURE VERIFY
  * ==================================================
  */
@@ -138,14 +154,20 @@ async function paymentWebhookHandler(req, res) {
       return res.status(404).json({ error: "BOOKING_NOT_FOUND" });
     }
 
-    if (["paid", "payment_failed", "expired"].includes(booking.status)) {
+    const targetStatus =
+      event === "payment.succeeded" ? "paid" : "payment_failed";
+
+    if (booking.status === targetStatus) {
       return res.json({ ok: true });
     }
 
-    const paymentStatus =
-      event === "payment.succeeded" ? "succeeded" : "failed";
-    const bookingStatus =
-      paymentStatus === "succeeded" ? "paid" : "payment_failed";
+    if (!canTransition(booking.status, targetStatus)) {
+      return res.status(409).json({
+        error: "INVALID_STATUS_TRANSITION",
+        from: booking.status,
+        to: targetStatus
+      });
+    }
 
     await db.run(
       `INSERT INTO payments
@@ -158,14 +180,14 @@ async function paymentWebhookHandler(req, res) {
         base,
         tips,
         currency,
-        paymentStatus,
+        targetStatus === "paid" ? "succeeded" : "failed",
         provider || null
       ]
     );
 
     await db.run(
       `UPDATE bookings SET status = $1 WHERE id = $2`,
-      [bookingStatus, booking_id]
+      [targetStatus, booking_id]
     );
 
     return res.json({ ok: true });
