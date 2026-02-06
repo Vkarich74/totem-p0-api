@@ -5,40 +5,37 @@ import db from "../db.js";
 const router = express.Router();
 
 /**
- * GET /public/payments?booking_id=1
- * Read-only payments by booking
+ * GET /public/payments?booking_id=123
+ * Read-only. No side effects.
  */
-router.get("/", async (req, res) => {
+router.get("/", (req, res) => {
   try {
     const bookingId = Number(req.query.booking_id);
 
-    if (!Number.isInteger(bookingId) || bookingId <= 0) {
-      return res.status(400).json({ error: "INVALID_INPUT" });
+    if (!Number.isInteger(bookingId)) {
+      return res.status(400).json({ error: "INVALID_BOOKING_ID" });
     }
 
-    const payments = await db.all(
-      `SELECT
-         payment_id,
-         booking_id,
-         amount_total,
-         amount_base,
-         amount_tips,
-         currency,
-         status,
-         provider,
-         created_at
-       FROM payments
-       WHERE booking_id = $1
-       ORDER BY created_at ASC`,
+    const payments = db.all(
+      `
+      SELECT
+        id,
+        booking_id,
+        provider,
+        status,
+        amount,
+        currency,
+        created_at
+      FROM payments
+      WHERE booking_id = ?
+      ORDER BY created_at ASC
+      `,
       [bookingId]
     );
 
-    if (!payments || payments.length === 0) {
-      return res.status(404).json({ error: "NOT_FOUND" });
-    }
-
     return res.json({
       ok: true,
+      booking_id: bookingId,
       payments
     });
   } catch (err) {
