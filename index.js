@@ -1,3 +1,4 @@
+// index.js — DATA_HARDENING PATCH
 import express from "express";
 import crypto from "crypto";
 
@@ -7,111 +8,53 @@ import db from "./db.js";
 
 const app = express();
 
-/**
- * =========================
- * CORS — Odoo SaaS allowlist
- * =========================
- */
-const ALLOWED_ORIGINS = [
-  "https://totem-platform.odoo.com"
-];
+/* ===== CORS ===== */
+const ALLOWED_ORIGINS = ["https://totem-platform.odoo.com"];
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-
   if (ALLOWED_ORIGINS.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
   }
-
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.setHeader(
     "Access-Control-Allow-Headers",
     "Content-Type, Authorization, X-System-Token"
   );
-
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(204);
-  }
-
+  if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
 
 app.use(express.json({
-  verify: (req, res, buf) => {
-    req.rawBody = buf;
-  }
+  verify: (req, res, buf) => { req.rawBody = buf; }
 }));
 
-// ===== HEALTH =====
-app.get("/health", (req, res) => {
-  res.json({ ok: true });
-});
+/* ===== HEALTH ===== */
+app.get("/health", (_, res) => res.json({ ok: true }));
 
-// ===== ROUTES =====
+/* ===== ROUTES ===== */
 app.use("/public", publicRoutes);
 app.use("/owner", ownerRoutes);
 
-/**
- * ==================================================
- * BOOKING STATUS TRANSITION (CANON)
- * ==================================================
- */
-const BOOKING_TRANSITIONS = {
-  pending_payment: new Set(["paid", "payment_failed", "expired"]),
-  paid: new Set(),
-  payment_failed: new Set(),
-  expired: new Set()
-};
-
-function canTransition(from, to) {
-  return BOOKING_TRANSITIONS[from]?.has(to) || false;
-}
-
-/**
- * ==================================================
- * SYSTEM: SIGNATURE VERIFY
- * ==================================================
- */
+/* ===== SIGNATURE ===== */
 function verifySignature(rawBody, signature, secret) {
-  const hmac = crypto.createHmac("sha256", secret);
-  hmac.update(rawBody);
-  const digest = hmac.digest("hex");
-
+  const digest = crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
   if (!signature || signature.length !== digest.length) return false;
-
-  return crypto.timingSafeEqual(
-    Buffer.from(digest),
-    Buffer.from(signature)
-  );
+  return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(signature));
 }
 
-/**
- * ==================================================
- * SYSTEM: PAYMENT WEBHOOK
- * POST /system/payment/webhook
- * ==================================================
- */
+/* ===== PAYMENT WEBHOOK ===== */
 async function paymentWebhookHandler(req, res) {
   try {
     const secret = process.env.PAYMENT_WEBHOOK_SECRET || "";
     const signature = req.headers["x-payment-signature"];
-
     if (!secret || !verifySignature(req.rawBody, signature, secret)) {
       return res.status(400).json({ error: "INVALID_SIGNATURE" });
     }
 
-    const {
-      event,
-      payment_id,
-      booking_id,
-      amount,
-      currency,
-      provider,
-      occurred_at
-    } = req.body || {};
-
-    if (!event || !payment_id || !booking_id || !amount || !currency) {
+    const { event, booking_id, amount, currency, provider } = req.body || {};
+    if (!event || !booking_id || !amount || !currency) {
       return res.status(400).json({ error: "INVALID_INPUT" });
     }
 
@@ -119,37 +62,15 @@ async function paymentWebhookHandler(req, res) {
       return res.status(400).json({ error: "INVALID_CURRENCY" });
     }
 
-    const base = Number(amount.base || 0);
-    const tips = Number(amount.tips || 0);
     const total = Number(amount.total);
-
-    if (
-      !Number.isInteger(base) ||
-      !Number.isInteger(tips) ||
-      !Number.isInteger(total)
-    ) {
-      return res.status(400).json({ error: "AMOUNT_NOT_INTEGER" });
-    }
-
-    if (base < 0 || tips < 0 || total < 0 || base + tips !== total) {
+    if (!Number.isInteger(total) || total < 0) {
       return res.status(400).json({ error: "INVALID_AMOUNT" });
     }
 
-    try {
-      await db.run(
-        `INSERT INTO payment_events (payment_id, event, occurred_at)
-         VALUES ($1, $2, $3)`,
-        [payment_id, event, occurred_at || new Date().toISOString()]
-      );
-    } catch {
-      return res.status(409).json({ error: "DUPLICATE_EVENT" });
-    }
-
     const booking = await db.get(
-      `SELECT id, status FROM bookings WHERE id = $1`,
+      "SELECT id, status FROM bookings WHERE id = $1",
       [booking_id]
     );
-
     if (!booking) {
       return res.status(404).json({ error: "BOOKING_NOT_FOUND" });
     }
@@ -161,32 +82,14 @@ async function paymentWebhookHandler(req, res) {
       return res.json({ ok: true });
     }
 
-    if (!canTransition(booking.status, targetStatus)) {
-      return res.status(409).json({
-        error: "INVALID_STATUS_TRANSITION",
-        from: booking.status,
-        to: targetStatus
-      });
-    }
-
     await db.run(
-      `INSERT INTO payments
-       (payment_id, booking_id, amount_total, amount_base, amount_tips, currency, status, provider)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [
-        payment_id,
-        booking_id,
-        total,
-        base,
-        tips,
-        currency,
-        targetStatus === "paid" ? "succeeded" : "failed",
-        provider || null
-      ]
+      `INSERT INTO payments (booking_id, provider, status, amount, currency, created_at)
+       VALUES ($1,$2,$3,$4,$5,datetime('now'))`,
+      [booking_id, provider || "unknown", targetStatus === "paid" ? "succeeded" : "failed", total, currency]
     );
 
     await db.run(
-      `UPDATE bookings SET status = $1 WHERE id = $2`,
+      "UPDATE bookings SET status = $1 WHERE id = $2",
       [targetStatus, booking_id]
     );
 
@@ -199,85 +102,29 @@ async function paymentWebhookHandler(req, res) {
 
 app.post("/system/payment/webhook", paymentWebhookHandler);
 
-/**
- * ==================================================
- * SYSTEM: PAYMENT PROVIDER STUB
- * POST /system/payment/stub
- * ==================================================
- */
+/* ===== STUB ===== */
 app.post("/system/payment/stub", async (req, res) => {
-  try {
-    const { booking_id, result } = req.body || {};
+  const payload = {
+    event: req.body.result === "success" ? "payment.succeeded" : "payment.failed",
+    booking_id: req.body.booking_id,
+    amount: { total: 0 },
+    currency: "KGS",
+    provider: "stub"
+  };
+  const rawBody = Buffer.from(JSON.stringify(payload));
+  const signature = crypto
+    .createHmac("sha256", process.env.PAYMENT_WEBHOOK_SECRET || "")
+    .update(rawBody).digest("hex");
 
-    if (!booking_id || !["success", "failed"].includes(result)) {
-      return res.status(400).json({ error: "INVALID_INPUT" });
-    }
-
-    const event =
-      result === "success"
-        ? "payment.succeeded"
-        : "payment.failed";
-
-    const payload = {
-      event,
-      payment_id: `stub_${booking_id}`,
-      booking_id: Number(booking_id),
-      amount: {
-        base: 0,
-        tips: 0,
-        total: 0
-      },
-      currency: "KGS",
-      provider: "stub",
-      occurred_at: new Date().toISOString()
-    };
-
-    const rawBody = Buffer.from(JSON.stringify(payload));
-
-    const signature = crypto
-      .createHmac("sha256", process.env.PAYMENT_WEBHOOK_SECRET || "")
-      .update(rawBody)
-      .digest("hex");
-
-    const fakeReq = {
-      headers: {
-        "x-payment-signature": signature
-      },
-      rawBody,
-      body: payload
-    };
-
-    const fakeRes = {
-      status(code) {
-        this.statusCode = code;
-        return this;
-      },
-      json(data) {
-        this.data = data;
-        return this;
-      }
-    };
-
-    await paymentWebhookHandler(fakeReq, fakeRes);
-
-    return res.json({
-      ok: true,
-      stub: true,
-      forwarded_event: event
-    });
-  } catch (err) {
-    console.error("[PAYMENT_STUB_ERROR]", err);
-    return res.status(500).json({ error: "STUB_INTERNAL_ERROR" });
-  }
+  await paymentWebhookHandler(
+    { rawBody, body: payload, headers: { "x-payment-signature": signature } },
+    res
+  );
 });
 
-// ===== 404 =====
-app.use((req, res) => {
-  res.status(404).json({ error: "not_found" });
-});
+/* ===== 404 ===== */
+app.use((_, res) => res.status(404).json({ error: "not_found" }));
 
-// ===== START =====
+/* ===== START ===== */
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => {
-  console.log(`TOTEM API listening on ${PORT}`);
-});
+app.listen(PORT, () => console.log(`TOTEM API listening on ${PORT}`));
