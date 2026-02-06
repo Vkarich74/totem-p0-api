@@ -1,0 +1,6 @@
+{
+  "payments_enabled": false,
+  "payments_provider": "stripe",
+  "payments_sandbox": true,
+  "payments_webhooks_active": true
+}

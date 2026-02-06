@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>Totem Booking</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+</head>
+<body>
+  <div id="root"></div>
+
+  <script>
+    console.log("BOOKING.HTML LOADED");
+
+    const baseUrl = window.location.origin;
+    const root = document.getElementById("root");
+
+    const slot = document.createElement("div");
+    slot.id = "totem-widget";
+    root.appendChild(slot);
+
+    const s = document.createElement("script");
+    s.src = baseUrl + "/public/static/widget.js";
+
+    s.onload = function () {
+      console.log("WIDGET.JS LOADED");
+
+      if (!window.TotemWidget) {
+        console.error("TotemWidget NOT FOUND");
+        return;
+      }
+
+      console.log("CALLING TotemWidget.init");
+
+      window.TotemWidget.init({
+        baseUrl: baseUrl,
+        salonSlug: "demo-salon",
+        masterSlug: "test-master",
+        serviceId: "srv1",
+        date: "2026-01-27",
+        startTime: "14:00",
+        endTime: "15:00",
+        client: { name: "Test Client" }
+      });
+
+      console.log("TotemWidget.init CALLED");
+    };
+
+    document.body.appendChild(s);
+  </script>
+</body>
+</html>

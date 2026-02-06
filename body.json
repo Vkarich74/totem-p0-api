@@ -1,0 +1,12 @@
+{
+  "event": "payment.succeeded",
+  "payment_id": "test_payment_001",
+  "booking_id": 1,
+  "amount": {
+    "base": 7500,
+    "tips": 0,
+    "total": 7500
+  },
+  "currency": "KGS",
+  "provider": "test"
+}

@@ -1,0 +1,24 @@
+                                                 List of tables
+ Schema |           Name            | Type  |  Owner   | Persistence | Access method |    Size    | Description 
+--------+---------------------------+-------+----------+-------------+---------------+------------+-------------
+ public | async_jobs                | table | postgres | permanent   | heap          | 16 kB      | 
+ public | auth_magic_links          | table | postgres | permanent   | heap          | 16 kB      | 
+ public | auth_users                | table | postgres | permanent   | heap          | 16 kB      | 
+ public | booking_audit_log         | table | postgres | permanent   | heap          | 16 kB      | 
+ public | bookings                  | table | postgres | permanent   | heap          | 48 kB      | 
+ public | masters                   | table | postgres | permanent   | heap          | 16 kB      | 
+ public | owner_actions_audit_log   | table | postgres | permanent   | heap          | 16 kB      | 
+ public | payment_intents           | table | postgres | permanent   | heap          | 16 kB      | 
+ public | payments                  | table | postgres | permanent   | heap          | 16 kB      | 
+ public | payouts                   | table | postgres | permanent   | heap          | 16 kB      | 
+ public | platform_config           | table | postgres | permanent   | heap          | 16 kB      | 
+ public | public_tokens             | table | postgres | permanent   | heap          | 16 kB      | 
+ public | reconciliations           | table | postgres | permanent   | heap          | 8192 bytes | 
+ public | salon_master_services     | table | postgres | permanent   | heap          | 8192 bytes | 
+ public | salons                    | table | postgres | permanent   | heap          | 16 kB      | 
+ public | services                  | table | postgres | permanent   | heap          | 16 kB      | 
+ public | settlement_payout_batches | table | postgres | permanent   | heap          | 16 kB      | 
+ public | settlement_periods        | table | postgres | permanent   | heap          | 16 kB      | 
+ public | system_locks              | table | postgres | permanent   | heap          | 16 kB      | 
+(19 rows)
+

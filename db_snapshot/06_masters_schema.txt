@@ -1,0 +1,15 @@
+                                                                   Table "public.masters"
+   Column   |            Type             | Collation | Nullable |               Default               | Storage  | Compression | Stats target | Description 
+------------+-----------------------------+-----------+----------+-------------------------------------+----------+-------------+--------------+-------------
+ id         | integer                     |           | not null | nextval('masters_id_seq'::regclass) | plain    |             |              | 
+ slug       | text                        |           | not null |                                     | extended |             |              | 
+ name       | text                        |           | not null |                                     | extended |             |              | 
+ active     | boolean                     |           |          | true                                | plain    |             |              | 
+ created_at | timestamp without time zone |           |          | now()                               | plain    |             |              | 
+Indexes:
+    "masters_pkey" PRIMARY KEY, btree (id)
+    "masters_slug_key" UNIQUE CONSTRAINT, btree (slug)
+Referenced by:
+    TABLE "salon_master_services" CONSTRAINT "fk_sms_master" FOREIGN KEY (master_id) REFERENCES masters(id) ON DELETE CASCADE
+Access method: heap
+

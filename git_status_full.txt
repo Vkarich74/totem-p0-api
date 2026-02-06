@@ -1,0 +1,406 @@
+
+No commits yet
+
+Changes to be committed:
+  (use "git rm --cached <file>..." to unstage)
+	new file:   .gitignore
+	new file:   2026_01_25_add_booking_status.sql
+	new file:   ARCHITECTURE.md
+	new file:   CORE_CONTRACTS.md
+	new file:   CORE_FLOW_v1.md
+	new file:   DB_CONTRACT.md
+	new file:   FREEZE.md
+	new file:   OPS_RUNBOOK.md
+	new file:   OPS_RUNBOOK_MINIMAL.md
+	new file:   PAYMENTS_BACKEND_READY.md
+	new file:   PAYMENTS_CONTRACT.md
+	new file:   PAYMENTS_DOMAIN.md
+	new file:   PAYMENTS_STATUSES.md
+	new file:   PAYMENT_PROVIDER_CONTRACT_v1.md
+	new file:   PAYMENT_UX_FLOW.md
+	new file:   PAYOUT_CONTRACT_v1.md
+	new file:   RELEASE_CHECKLIST.md
+	new file:   RELEASE_PACK.md
+	new file:   SCALE_CONTRACT.md
+	new file:   alerts/alert.js
+	new file:   bi/adapters/booking.adapter.js
+	new file:   bi/adapters/payment.adapter.js
+	new file:   bi/adapters/payout.adapter.js
+	new file:   bi/index.js
+	new file:   config/payments.flags.json
+	new file:   contracts/dataContracts.v1.js
+	new file:   contracts/registry/index.js
+	new file:   core/bookingStatus.js
+	new file:   core/idempotency.js
+	new file:   core/metrics.js
+	new file:   core/payments.js
+	new file:   core/payouts.js
+	new file:   core/publicTokens.js
+	new file:   core/refunds.js
+	new file:   core/reports.js
+	new file:   core/retention.js
+	new file:   core/settlement.js
+	new file:   core/settlementAdmin.js
+	new file:   core/tenantMetrics.js
+	new file:   db.js
+	new file:   db/index.js
+	new file:   db/migrations/2026_01_28_p5_1_fix_payments_is_active.sql
+	new file:   db/migrations/2026_01_28_p5_1_full_fix.sql
+	new file:   db/migrations/2026_01_28_p5_1_payments_payouts.sql
+	new file:   db/migrations/2026_01_28_p5_2_add_updated_at.sql
+	new file:   db/migrations/2026_01_28_p5_2_fix_updated_at_default.sql
+	new file:   db_bootstrap_public_v1.sql
+	new file:   docs/ERROR_CODES.md
+	new file:   docs/ONBOARDING_v1.md
+	new file:   docs/PUBLIC_API_V1_CANONICAL.md
+	new file:   docs/PUBLIC_API_v1.md
+	new file:   docs/PUBLIC_WIDGET_CONTRACT.md
+	new file:   docs/README.md
+	new file:   docs/RELEASE_CHECKLIST.md
+	new file:   docs/TOKENS_AND_SECURITY.md
+	new file:   docs/WIDGET_INTEGRATION.md
+	new file:   docs/async/ASYNC_JOBS_OVERVIEW.md
+	new file:   docs/async/ASYNC_JOB_STATES.md
+	new file:   docs/async/ASYNC_RETRY_POLICY.md
+	new file:   docs/async/CRON_POLICY.md
+	new file:   docs/booking/BOOKING_CHECKLIST.md
+	new file:   docs/booking/BOOKING_ERROR_CODES.md
+	new file:   docs/booking/BOOKING_RACE_CONDITIONS.md
+	new file:   docs/booking/BOOKING_STATES.md
+	new file:   docs/booking/BOOKING_TRANSITIONS.md
+	new file:   docs/booking/BOOKING_TTL_POLICY.md
+	new file:   docs/crm/CRM_AUDIT_LOG.md
+	new file:   docs/crm/CRM_LEAD_STATES.md
+	new file:   docs/crm/CRM_LEAD_TRANSITIONS.md
+	new file:   docs/crm/CRM_SOURCES.md
+	new file:   docs/crm/CRM_WEBHOOKS.md
+	new file:   docs/index.html
+	new file:   docs/owner/OWNER_AUDIT_LOG.md
+	new file:   docs/owner/OWNER_PERMISSIONS.md
+	new file:   docs/owner/OWNER_ROLES.md
+	new file:   docs/owner/OWNER_UX_FLOW.md
+	new file:   docs/payments/PAYMENTS_BOOKING_MAPPING.md
+	new file:   docs/payments/PAYMENTS_INTEGRATION_GUIDE.md
+	new file:   docs/payments/PAYMENTS_RACE_CONDITIONS.md
+	new file:   docs/payments/PAYMENTS_RETRY_POLICY.md
+	new file:   docs/payments_automation/FEATURE_FLAGS.md
+	new file:   docs/payments_automation/MIGRATION_PLAN.md
+	new file:   docs/payments_automation/PROVIDER_EVAL_TABLE.md
+	new file:   docs/payments_provider/PROVIDER_DECISION_LOG.md
+	new file:   docs/payments_provider/REAL_PAYMENTS_ENABLED.md
+	new file:   docs/payments_provider/SANDBOX_MODE.md
+	new file:   docs/payments_provider/SELECTED_PROVIDER.md
+	new file:   docs/payments_unfreeze/PAYMENT_FAILURE_MATRIX.md
+	new file:   docs/payments_unfreeze/PAYMENT_FLOW_SEQUENCE.md
+	new file:   docs/payments_unfreeze/PAYMENT_SECURITY_MODEL.md
+	new file:   docs/payments_unfreeze/PROVIDER_EVALUATION.md
+	new file:   docs/payments_unfreeze/PROVIDER_REQUIREMENTS.md
+	new file:   docs/payments_unfreeze/REFUNDS_POLICY.md
+	new file:   docs/payments_unfreeze/UNFREEZE_CHECKLIST.md
+	new file:   docs/prod/PAYMENTS_PROD_CHECKLIST.md
+	new file:   docs/release/RELEASE_SUMMARY_v1.md
+	new file:   docs/sdk/totem-sdk.iife.js
+	new file:   docs/sdk/totem-sdk.js
+	new file:   docs/system/NOTIFICATIONS.md
+	new file:   docs/system/OPS_INCIDENTS.md
+	new file:   docs/system/PERFORMANCE_SCALE.md
+	new file:   docs/system/REPORTING_ANALYTICS.md
+	new file:   docs/system/SECURITY_ACCESS.md
+	new file:   docs/system/SYSTEM_CHECKLIST.md
+	new file:   docs/webhooks/WEBHOOKS_AUDIT_LOG.md
+	new file:   docs/webhooks/WEBHOOKS_CONTRACT.md
+	new file:   docs/webhooks/WEBHOOKS_RETRY_POLICY.md
+	new file:   docs/webhooks/WEBHOOKS_SECURITY.md
+	new file:   docs/widget/iframe.html
+	new file:   docs/widget/totem-widget.iife.js
+	new file:   docs/widget/totem-widget.js
+	new file:   exports/payoutsCsv.js
+	new file:   front/index.html
+	new file:   helpers/updateBookingStatus.js
+	new file:   index.js
+	new file:   inspect_bookings_schema.js
+	new file:   jobs/autoClosePeriods.js
+	new file:   jobs/autoHealingHints.js
+	new file:   jobs/autoSettlement.js
+	new file:   jobs/backfillPayouts.js
+	new file:   jobs/dataDisciplineCheck.js
+	new file:   jobs/detectLockedPayouts.js
+	new file:   jobs/detectReconcileMismatch.js
+	new file:   jobs/detectWebhookFailures.js
+	new file:   jobs/metrics.js
+	new file:   jobs/payoutConsistencyCheck.js
+	new file:   jobs/queueWorker.js
+	new file:   jobs/retention.js
+	new file:   jobs/scheduler.js
+	new file:   jobs/settlements.js
+	new file:   lib/db.js
+	new file:   lib/overlap.js
+	new file:   logs/logger.js
+	new file:   middleware/abuseGuard.js
+	new file:   middleware/acl.js
+	new file:   middleware/alerts.js
+	new file:   middleware/anti_bypass.js
+	new file:   middleware/anti_bypass_public.js
+	new file:   middleware/api_guard.js
+	new file:   middleware/auth_owner.js
+	new file:   middleware/contractAssert.js
+	new file:   middleware/contractLifecycle.js
+	new file:   middleware/cors.js
+	new file:   middleware/guard.js
+	new file:   middleware/idempotency.js
+	new file:   middleware/ipGuard.js
+	new file:   middleware/logger.js
+	new file:   middleware/metrics.js
+	new file:   middleware/monetizationGuard.js
+	new file:   middleware/owner_only.js
+	new file:   middleware/publicTokenAuth.js
+	new file:   middleware/rateLimit.js
+	new file:   middleware/rate_limit.js
+	new file:   middleware/requestId.js
+	new file:   middleware/request_context.js
+	new file:   middleware/slot_flood.js
+	new file:   middleware/system_owner_guard.js
+	new file:   middleware/tenant.js
+	new file:   middleware/tenantRateLimit.js
+	new file:   middlewares/publicToken.js
+	new file:   middlewares/rateLimitPublic.js
+	new file:   middlewares/systemAuth.js
+	new file:   migrate.js
+	new file:   migrate_add_service_to_bookings.js
+	new file:   migrate_alerts.js
+	new file:   migrate_blocks.js
+	new file:   migrate_blocks_slug_fix.js
+	new file:   migrate_blocks_v1.js
+	new file:   migrate_bookings.js
+	new file:   migrate_cancel.js
+	new file:   migrate_marketplace_bookings.js
+	new file:   migrate_schedule.js
+	new file:   migrate_services.js
+	new file:   migrate_step14_status_log.js
+	new file:   migrate_step16_commissions.js
+	new file:   migrate_step17_source.js
+	new file:   migrate_step17b_payments.js
+	new file:   migrations/019_create_payouts.js
+	new file:   migrations/020_create_settlement_rules.js
+	new file:   migrations/022_create_refunds.js
+	new file:   migrations/2026-02-01__create_salon_master_services.sql
+	new file:   migrations/2026_01_25_add_booking_status.sql
+	new file:   migrations/2026_01_29_booking_audit.sql
+	new file:   migrations/2026_02_02_sms_single_active.sql
+	new file:   migrations/2026_02_06_create_payment_events.sql
+	new file:   migrations/2026_02_06_create_payments.sql
+	new file:   migrations/create_async_queue_v1.sql
+	new file:   migrations/migrate_marketplace_bookings.js
+	new file:   migrations/migrate_marketplace_salons.js
+	new file:   migrations/reset_marketplace_core.js
+	new file:   mkdir
+	new file:   openapi.yaml
+	new file:   package-lock.json
+	new file:   package.json
+	new file:   public/booking.html
+	new file:   public/index.html
+	new file:   public/sdk/test_sdk.mjs
+	new file:   public/sdk/totem-sdk.js
+	new file:   public/widget.js
+	new file:   public/widget/demo.html
+	new file:   public/widget/totem-widget.js
+	new file:   public_static/widget.js
+	new file:   reset_marketplace_core.js
+	new file:   routes/__debug_db_payments.js
+	new file:   routes/__probe_payments.js
+	new file:   routes/auth.js
+	new file:   routes/health.js
+	new file:   routes/me.js
+	new file:   routes/owner.js
+	new file:   routes/owner_actions.js
+	new file:   routes/owner_audit.js
+	new file:   routes/owner_dashboard.js
+	new file:   routes/owner_onboarding_readonly.js
+	new file:   routes/owner_onboarding_write.js
+	new file:   routes/payments_flow.js
+	new file:   routes/payments_webhook.js
+	new file:   routes/payout_execution.js
+	new file:   routes/payout_preview.js
+	new file:   routes/public.js
+	new file:   routes/public_booking.js
+	new file:   routes/public_payment.js
+	new file:   routes/public_payment_webhook.js
+	new file:   routes/public_status.js
+	new file:   routes/reconciliation.js
+	new file:   routes/reports.js
+	new file:   routes/settlement_batches.js
+	new file:   routes/system.js
+	new file:   routes/system_close_period.js
+	new file:   routes/system_metrics.js
+	new file:   routes/system_payouts.js
+	new file:   routes/system_reconciliation.js
+	new file:   routes/system_reconciliation_period.js
+	new file:   routes/system_settlement.js
+	new file:   routes_analytics/analytics.js
+	new file:   routes_analytics/cohorts.js
+	new file:   routes_analytics/export.js
+	new file:   routes_analytics/pricing.js
+	new file:   routes_bi/preview.js
+	new file:   routes_marketplace/audit.js
+	new file:   routes_marketplace/autoSettlement.js
+	new file:   routes_marketplace/bookingStatus.js
+	new file:   routes_marketplace/maintenance.js
+	new file:   routes_marketplace/marketplace_booking_create.js
+	new file:   routes_marketplace/metricsTenants.js
+	new file:   routes_marketplace/payments.js
+	new file:   routes_marketplace/payouts.js
+	new file:   routes_marketplace/payoutsCreate.js
+	new file:   routes_marketplace/publicPaymentsWebhook.js
+	new file:   routes_marketplace/publicRequestProcess.js
+	new file:   routes_marketplace/publicRequests.js
+	new file:   routes_marketplace/publicTokens.js
+	new file:   routes_marketplace/refunds.js
+	new file:   routes_marketplace/reports.js
+	new file:   routes_marketplace/salon.js
+	new file:   routes_marketplace/settlement.js
+	new file:   routes_marketplace/system_payment_confirm.js
+	new file:   routes_marketplace/system_reports.js
+	new file:   routes_marketplace/system_settlement.js
+	new file:   routes_owner/asyncJobs.js
+	new file:   routes_owner/index.js
+	new file:   routes_public/auth.js
+	new file:   routes_public/availability.js
+	new file:   routes_public/book.js
+	new file:   routes_public/bookingCancel.js
+	new file:   routes_public/bookingCreate.js
+	new file:   routes_public/bookingResult.js
+	new file:   routes_public/bookingStatusRead.js
+	new file:   routes_public/bookings.js
+	new file:   routes_public/index.js
+	new file:   routes_public/masters.js
+	new file:   routes_public/paymentsIntent.js
+	new file:   routes_public/paymentsRead.js
+	new file:   routes_public/salons.js
+	new file:   routes_public/sdk.js
+	new file:   routes_public/services.js
+	new file:   routes_public/widget.js
+	new file:   routes_system/alerts.js
+	new file:   routes_system/bookingComplete.js
+	new file:   routes_system/bookingTimeout.js
+	new file:   routes_system/dataContracts.js
+	new file:   routes_system/exportBookings.js
+	new file:   routes_system/health.js
+	new file:   routes_system/index.js
+	new file:   routes_system/jobs.js
+	new file:   routes_system/monetization.js
+	new file:   routes_system/opsAlerts.js
+	new file:   routes_system/opsDashboard.js
+	new file:   routes_system/opsExport.js
+	new file:   routes_system/paymentWebhook.js
+	new file:   routes_system/paymentsWebhook.js
+	new file:   routes_system/payoutConsistency.js
+	new file:   routes_system/payoutFixes.js
+	new file:   routes_system/payoutSettlement.js
+	new file:   routes_system/payoutsSettle.js
+	new file:   routes_system/publicTokens.js
+	new file:   scheduler.js
+	new file:   scripts/dry_run_payouts.js
+	new file:   scripts/migrate_step23_idempotency.js
+	new file:   scripts/ops_check.js
+	new file:   sdk/totem-sdk.js
+	new file:   seed_blocks.js
+	new file:   services/alerts.js
+	new file:   services/alertsDedup.js
+	new file:   services/commission.js
+	new file:   services/payment_flow.js
+	new file:   services/payment_intent.js
+	new file:   services/payment_provider_mock.js
+	new file:   services/payout.js
+	new file:   services/payout_execution.js
+	new file:   services/payout_preview.js
+	new file:   services/reconciliation.js
+	new file:   services_analytics/cohorts.js
+	new file:   services_analytics/core.js
+	new file:   services_analytics/export.js
+	new file:   services_analytics/pricing.js
+	new file:   src/payments/PaymentService.ts
+	new file:   src/payments/PaymentTypes.ts
+	new file:   src/payments/index.ts
+	new file:   src/payments/payments.README.md
+	new file:   src/payments/payments.flags.ts
+	new file:   src/payments/providers/ProviderAdapter.ts
+	new file:   src/payments/providers/ProviderRegistry.ts
+	new file:   src/payments/providers/providers.README.md
+	new file:   src/payments/providers/stripe.adapter.ts
+	new file:   src/payments/webhooks/payments.webhook.ts
+	new file:   src/payments/wire.runtime.ts
+	new file:   tests/payments/payment.flow.test.ts
+	new file:   tests/payments/payment.refund.test.ts
+	new file:   tests/payments/payment.webhook.test.ts
+	new file:   tests/payments/sandbox.run.ts
+	new file:   tests/payments/sandbox.smoke.test.ts
+	new file:   tools/check_is_active.js
+	new file:   tools/check_p5_1_tables.js
+	new file:   tools/cron_booking_timeout.js
+	new file:   tools/db_bootstrap_payments_v1.js
+	new file:   tools/db_bootstrap_pg_v1.js
+	new file:   tools/db_bootstrap_prod_v1.js
+	new file:   tools/db_bootstrap_public_v1.js
+	new file:   tools/db_inspect.js
+	new file:   tools/db_seed_prod_v1.js
+	new file:   tools/inspect_masters.js
+	new file:   tools/inspect_salons.js
+	new file:   tools/run_migration_p5_1.js
+	new file:   utils/audit.js
+	new file:   utils/auditOwnerAction.js
+	new file:   utils/auditOwnerActionPg.js
+	new file:   utils/contractHash.js
+	new file:   utils/enqueueJob.js
+	new file:   webhooks/sender.js
+	new file:   widget.html
+	new file:   widget/demo.html
+	new file:   widget/totem-widget.js
+	new file:   widget/widget.js
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	-files --others --exclude-standard
+	TOTEM_release_2026-02-06.zip
+	_public
+	backups/
+	body.json
+	cd
+	curl
+	db_schema_freeze.sql
+	db_schema_v1.sql
+	db_snapshot/
+	dir
+	docs/crm/(final)
+	docs/crm/anything
+	docs/crm/contacted
+	docs/crm/converted
+	docs/crm/lost
+	docs/crm/new
+	docs/crm/qualified
+	git
+	git_status_compact.txt
+	git_status_full.txt
+	git_untracked.txt
+	how -1 --name-only
+	node
+	notepad
+	npm
+	psql
+	sdk/test_sdk.mjs
+	services/catalog.js
+	set
+	taskkill
+	test-widget.html
+	test_owner_async_backfill.cmd
+	test_owner_async_backfill_example.cmd
+	test_owner_async_read.cmd
+	test_owner_run_worker.cmd
+	tools_make_payments_full_automation.py
+	tools_make_payments_provider_skeleton.py
+	tools_make_payments_unfreeze_multipack.py
+	tools_payments_final_automation.py
+	tools_payments_wire_and_check.py
+	tools_select_provider_and_enable_sandbox.py
+	type
+	{
+

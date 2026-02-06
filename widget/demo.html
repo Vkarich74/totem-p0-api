@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>TOTEM Widget Demo</title>
+  </head>
+  <body>
+    <h2>Widget Demo</h2>
+
+    <div id="totem"></div>
+
+    <script type="module">
+      import "../widget/totem-widget.js";
+
+      TotemWidget.mount("#totem", {
+        baseUrl: "https://totem-p0-api-production.up.railway.app",
+        salon_id: "s1",
+        master_slug: "test-master",
+        service_id: "srv1"
+      });
+    </script>
+  </body>
+</html>

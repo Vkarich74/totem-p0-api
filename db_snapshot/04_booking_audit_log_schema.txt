@@ -1,0 +1,17 @@
+                                                                    Table "public.booking_audit_log"
+   Column    |            Type             | Collation | Nullable |                    Default                    | Storage  | Compression | Stats target | Description 
+-------------+-----------------------------+-----------+----------+-----------------------------------------------+----------+-------------+--------------+-------------
+ id          | integer                     |           | not null | nextval('booking_audit_log_id_seq'::regclass) | plain    |             |              | 
+ booking_id  | integer                     |           | not null |                                               | plain    |             |              | 
+ from_status | text                        |           |          |                                               | extended |             |              | 
+ to_status   | text                        |           | not null |                                               | extended |             |              | 
+ actor_type  | text                        |           | not null |                                               | extended |             |              | 
+ actor_id    | text                        |           |          |                                               | extended |             |              | 
+ source      | text                        |           |          |                                               | extended |             |              | 
+ created_at  | timestamp without time zone |           |          | now()                                         | plain    |             |              | 
+Indexes:
+    "booking_audit_log_pkey" PRIMARY KEY, btree (id)
+    "idx_booking_audit_booking" btree (booking_id)
+    "idx_booking_audit_created" btree (created_at)
+Access method: heap
+

@@ -1,0 +1,19 @@
+                                                                    Table "public.bookings"
+   Column    |            Type             | Collation | Nullable |               Default                | Storage  | Compression | Stats target | Description 
+-------------+-----------------------------+-----------+----------+--------------------------------------+----------+-------------+--------------+-------------
+ id          | integer                     |           | not null | nextval('bookings_id_seq'::regclass) | plain    |             |              | 
+ salon_slug  | text                        |           | not null |                                      | extended |             |              | 
+ master_slug | text                        |           | not null |                                      | extended |             |              | 
+ service_id  | text                        |           | not null |                                      | extended |             |              | 
+ date        | date                        |           | not null |                                      | plain    |             |              | 
+ start_time  | time without time zone      |           | not null |                                      | plain    |             |              | 
+ status      | text                        |           |          | 'pending_payment'::text              | extended |             |              | 
+ created_at  | timestamp without time zone |           |          | now()                                | plain    |             |              | 
+ request_id  | text                        |           |          |                                      | extended |             |              | 
+Indexes:
+    "bookings_pkey" PRIMARY KEY, btree (id)
+    "ux_bookings_request_id" UNIQUE, btree (request_id) WHERE request_id IS NOT NULL
+Check constraints:
+    "bookings_status_check" CHECK (status = ANY (ARRAY['pending_payment'::text, 'paid'::text, 'expired'::text, 'cancelled'::text]))
+Access method: heap
+

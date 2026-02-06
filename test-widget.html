@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>TOTEM Widget Test</title>
+</head>
+<body>
+
+<h2>Totem Widget Test</h2>
+
+<div id="totem-widget"></div>
+
+<script>
+  window.TotemWidgetConfig = {
+    baseUrl: "https://totem-p0-api-production.up.railway.app",
+    salonSlug: "totem-demo-salon",
+    masterSlug: "test-master",
+    serviceId: "srv1"
+  };
+</script>
+
+<script src="https://totem-p0-api-production.up.railway.app/public/static/widget.js"></script>
+
+<script>
+  // init after load
+  window.addEventListener("load", function () {
+    if (!window.TotemWidget) {
+      console.error("TotemWidget not loaded");
+      return;
+    }
+    window.TotemWidget.init(window.TotemWidgetConfig);
+  });
+</script>
+
+</body>
+</html>

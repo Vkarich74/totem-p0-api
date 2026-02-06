@@ -1,0 +1,38 @@
+# === Node.js ===
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# === Environment ===
+.env
+.env.*
+!.env.example
+
+# === OS / Editor ===
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# === Logs ===
+logs/
+*.log
+
+# === Build / Cache ===
+dist/
+build/
+.cache/
+.tmp/
+
+# === SQLite / Local DB ===
+*.db
+*.db-shm
+*.db-wal
+
+# === Work in progress ===
+wip/
+
+# === Misc ===
+*.bak
+*.swp

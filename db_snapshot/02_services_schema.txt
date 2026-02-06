@@ -1,0 +1,16 @@
+                                                                    Table "public.services"
+    Column    |            Type             | Collation | Nullable |               Default                | Storage  | Compression | Stats target | Description 
+--------------+-----------------------------+-----------+----------+--------------------------------------+----------+-------------+--------------+-------------
+ id           | integer                     |           | not null | nextval('services_id_seq'::regclass) | plain    |             |              | 
+ service_id   | text                        |           | not null |                                      | extended |             |              | 
+ name         | text                        |           | not null |                                      | extended |             |              | 
+ duration_min | integer                     |           | not null |                                      | plain    |             |              | 
+ price        | integer                     |           | not null |                                      | plain    |             |              | 
+ created_at   | timestamp without time zone |           |          | now()                                | plain    |             |              | 
+Indexes:
+    "services_pkey" PRIMARY KEY, btree (id)
+    "services_service_id_key" UNIQUE CONSTRAINT, btree (service_id)
+Referenced by:
+    TABLE "salon_master_services" CONSTRAINT "fk_sms_service" FOREIGN KEY (service_pk) REFERENCES services(id) ON DELETE CASCADE
+Access method: heap
+

@@ -1,0 +1,292 @@
+core\bookingStatus.js:1:// core/bookingStatus.js — Booking Lifecycle v2 (SOURCE OF TRUTH)
+core\idempotency.js:113:      INSERT INTO idempotency_keys
+core\payouts.js:64:    LEFT JOIN bookings b ON b.id = p.booking_id
+core\payouts.js:130:      INSERT INTO payouts (
+core\payouts.js:152:    const payoutId = res.lastInsertRowid;
+core\payouts.js:155:      INSERT INTO payout_items (
+core\publicTokens.js:80:    INSERT INTO public_tokens (token_hash, tenant_id, salon_id, scopes, expires_at, created_at)
+core\refunds.js:27:function insertRefund(db, { booking_id, payment_id, amount, currency, reason, type }) {
+core\refunds.js:29:    INSERT INTO refunds (booking_id, payment_id, amount, currency, reason, type)
+core\refunds.js:40:  return result.lastInsertRowid;
+core\refunds.js:54:    INSERT INTO payout_items (payout_id, booking_id, amount, commission, net)
+core\refunds.js:100:  // Insert refund ledger
+core\refunds.js:101:  insertRefund(db, {
+core\reports.js:78:    JOIN bookings b ON b.id = p.booking_id
+core\reports.js:119:    JOIN bookings b ON b.id = p.booking_id
+core\settlementAdmin.js:95: * UPSERT (implemented as delete+insert for SQLite simplicity)
+core\settlementAdmin.js:116:    // insert new
+core\settlementAdmin.js:118:      INSERT INTO settlement_rules (entity_type, entity_id, lock_days, allow_refunds)
+core\settlementAdmin.js:122:    const id = result.lastInsertRowid;
+docs\sdk\totem-sdk.iife.js:51:        return jsonFetch(joinUrl(apiBase, "/public/bookings"), {
+docs\sdk\totem-sdk.js:31:    return this._request("POST", "/public/bookings", payload);
+helpers\updateBookingStatus.js:1:// helpers/updateBookingStatus.js — Booking lifecycle v2 + AUDIT (Postgres)
+helpers\updateBookingStatus.js:3:import { assertStatusTransition } from "../core/bookingStatus.js";
+helpers\updateBookingStatus.js:13:export default async function updateBookingStatus(
+helpers\updateBookingStatus.js:23:    FROM bookings
+helpers\updateBookingStatus.js:59:    UPDATE bookings
+helpers\updateBookingStatus.js:69:    INSERT INTO booking_audit_log
+inspect_bookings_schema.js:6:  .prepare(`PRAGMA table_info(bookings)`)
+inspect_bookings_schema.js:9:console.log("BOOKINGS TABLE SCHEMA:");
+jobs\autoHealingHints.js:6:  // BOOKINGS
+jobs\autoHealingHints.js:8:    const rows = db.prepare('SELECT * FROM bookings').all();
+jobs\autoSettlement.js:27: * - Group bookings by entity (salon/master) and calendar month
+jobs\autoSettlement.js:37:    FROM bookings b
+jobs\dataDisciplineCheck.js:11:  // BOOKINGS
+jobs\dataDisciplineCheck.js:13:    const rows = db.prepare('SELECT * FROM bookings').all();
+middleware\acl.js:50: * master can act only on his own bookings
+middleware\anti_bypass.js:5: *  - Guarantee marketplace bookings cannot bypass commission logic
+middleware\idempotency.js:2:// Idempotency guard for POST /public/bookings
+middleware\idempotency.js:26:      'SELECT 1 FROM bookings WHERE request_id = $1 LIMIT 1',
+middleware\tenantRateLimit.js:11:  // We piggyback on actor-based limiter; tenant is injected into actor header via skip+custom key.
+middleware\tenantRateLimit.js:12:  // Simpler: use ip+actor but we add tenant into actor id by requiring x-tenant-id.
+migrate.js:35:  "INSERT OR IGNORE INTO migrations (filename) VALUES (?)"
+migrate_add_service_to_bookings.js:5:    ALTER TABLE bookings
+migrate_add_service_to_bookings.js:9:  console.log("OK: service_id added to bookings");
+migrate_bookings.js:5:console.log("== BOOKINGS MIGRATION START ==");
+migrate_bookings.js:8:CREATE TABLE IF NOT EXISTS bookings (
+migrate_bookings.js:19:console.log("== BOOKINGS MIGRATION DONE ==");
+migrate_cancel.js:8:ALTER TABLE bookings ADD COLUMN cancelled_at TEXT;
+migrate_cancel.js:9:ALTER TABLE bookings ADD COLUMN cancel_reason TEXT;
+migrate_marketplace_bookings.js:5:console.log("== MARKETPLACE BOOKINGS MIGRATION START ==");
+migrate_marketplace_bookings.js:8:  CREATE TABLE IF NOT EXISTS marketplace_bookings (
+migrate_marketplace_bookings.js:19:console.log("== MARKETPLACE BOOKINGS MIGRATION DONE ==");
+migrate_step17_source.js:8:ALTER TABLE bookings ADD COLUMN source TEXT DEFAULT 'marketplace';
+migrate_step17_source.js:11:console.log("OK: bookings.source added");
+migrations\020_create_settlement_rules.js:48:        INSERT INTO settlement_rules (entity_type, entity_id, lock_days, allow_refunds)
+migrations\migrate_marketplace_bookings.js:1:// migrations/migrate_marketplace_bookings.js
+migrations\migrate_marketplace_bookings.js:7:DROP TABLE IF EXISTS marketplace_bookings;
+migrations\migrate_marketplace_bookings.js:9:CREATE TABLE marketplace_bookings (
+migrations\migrate_marketplace_bookings.js:23:console.log("OK: marketplace_bookings recreated WITH master_slug");
+migrations\reset_marketplace_core.js:8:  db.exec("DROP TABLE IF EXISTS marketplace_bookings");
+migrations\reset_marketplace_core.js:30:    CREATE TABLE marketplace_bookings (
+migrations\reset_marketplace_core.js:43:    "INSERT INTO marketplace_salons VALUES (?, ?, 1, ?)",
+migrations\reset_marketplace_core.js:48:    "INSERT INTO services VALUES (?, ?, ?)",
+migrations\reset_marketplace_core.js:53:    "INSERT INTO marketplace_bookings VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+node_modules\bl\BufferList.js:238:    // unwrap argument into individual BufferLists
+node_modules\body-parser\lib\read.js:29: * Read a request into a buffer and parse.
+node_modules\buffer\index.js:700:// - byteOffset - an index into `buffer`; will be clamped to an int32
+node_modules\buffer\index.js:920:        // Warning: maxLength not taken into account in base64Write
+node_modules\buffer\index.js:1010:      // we did not generate a valid codePoint so insert a
+node_modules\buffer\index.js:1610:        // Fast path: If `val` fits into a single byte, use that numeric value.
+node_modules\bytes\index.js:40: * Convert the given value in bytes into a string or parse to string to an integer in bytes.
+node_modules\bytes\index.js:67: * Format the given value in bytes into a string.
+node_modules\bytes\index.js:131: * Parse the string value into an integer in bytes.
+node_modules\call-bound\test\index.js:34:	t.equal(x(true), Object.prototype.toString.call(true), 'call-bound Object.prototype.toString calls into the original');
+node_modules\call-bound\test\index.js:35:	t.equal(y(true), Object.prototype.toString.call(true), 'call-bound %Object.prototype.toString% calls into the original');
+node_modules\content-disposition\index.js:153:  // format into string
+node_modules\cookie\index.js:91: * Parse the given cookie header string into an object
+node_modules\cookie\index.js:170: * Serialize data into a cookie header.
+node_modules\cookie\index.js:172: * Serialize a name value pair into a cookie string suitable for
+node_modules\cors\lib\index.js:76:      methods = options.methods.join(','); // .methods is an array, so turn it into a string
+node_modules\cors\lib\index.js:105:      allowedHeaders = allowedHeaders.join(','); // .headers is an array, so turn it into a string
+node_modules\cors\lib\index.js:122:      headers = headers.join(','); // .headers is an array, so turn it into a string
+node_modules\debug\src\browser.js:95:  // figure out the correct index to insert the CSS into
+node_modules\debug\src\debug.js:79:    // turn the `arguments` into a proper Array
+node_modules\debug\src\node.js:43:  // coerce string value into JS value
+node_modules\depd\index.js:133: * so this consolidates them into a minimal set using instance methods.
+node_modules\escape-html\index.js:28: * @param  {string} string The string to escape for inserting into HTML
+node_modules\express\lib\application.js:157: * Dispatch a req, res pair into the application. Starts pipeline processing.
+node_modules\express\lib\request.js:200: * will be combined into a single range.
+node_modules\express\lib\router\index.js:132: * Dispatch a req, res into the router.
+node_modules\express\lib\router\route.js:97: * dispatch req, res into this route
+node_modules\file-uri-to-path\index.js:45:  // Drive letters are mapped into the top of a file URI in various ways,
+node_modules\fresh\index.js:88: * Parse an HTTP Date into a number.
+node_modules\iconv-lite\encodings\dbcs-codec.js:133:    for (var i = bytes.length-1; i > 0; i--) { // Traverse nodes deeper into the trie.
+node_modules\iconv-lite\encodings\sbcs-data-generated.js:439:  "macintosh": {
+node_modules\iconv-lite\encodings\sbcs-data.js:171:    "mac": "macintosh",
+node_modules\iconv-lite\encodings\sbcs-data.js:172:    "csmacintosh": "macintosh",
+node_modules\ip-address\dist\ipv4.js:119:     * Converts an integer into a IPv4 address object
+node_modules\ip-address\dist\ipv6.js:268:            const insertIndex = i * 4;
+node_modules\ip-address\dist\ipv6.js:269:            parts.splice(insertIndex, 0, ':');
+node_modules\media-typer\index.js:238: * Simply "type/subtype+siffx" into parts.
+node_modules\merge-descriptors\index.js:25: * Merge the property descriptors of `src` into `dest`
+node_modules\mime\mime.js:50:  // Read file and split into lines
+node_modules\mime\mime.js:56:    // Clean up whitespace/comments, and split into fields
+node_modules\mime\src\build.js:44:// Segregate into standard and non-standard types based on facet per
+node_modules\minimist\test\dash.js:28:test('move arguments after the -- into their own `--` array', function (t) {
+node_modules\negotiator\lib\mediaType.js:249: * Split an Accept header into media types.
+node_modules\parseurl\index.js:106:  // And unrolls it into a for loop
+node_modules\path-to-regexp\index.js:58:    // Map array parts into regexps and return their source. We also pass
+node_modules\path-to-regexp\index.js:59:    // the same keys and options instance into every generation to get
+node_modules\pg\lib\connection-parameters.js:54:    // if a string is passed, it is a raw connection string so we parse it into a config
+node_modules\pg\lib\connection-parameters.js:57:    // if the config has a connectionString defined, parse IT into the config we use
+node_modules\pg\lib\native\query.js:22:  // reads all rows into memory before returning any
+node_modules\pg\lib\native\query.js:50:  // copy pq error fields into the error object
+node_modules\pg\lib\query.js:63:    // turn our results into an array of results
+node_modules\pg\lib\utils.js:210:    // this ensures that extra arguments do not get passed into prepareValue
+node_modules\pg-connection-string\index.js:189:        // when port is not specified, it is converted into an empty string
+node_modules\pg-connection-string\index.js:210:// parses a connection string into ClientConfig
+node_modules\pg-connection-string\index.js:211:function parseIntoClientConfig(str) {
+node_modules\pg-connection-string\index.js:233:parse.parseIntoClientConfig = parseIntoClientConfig
+node_modules\pg-types\index.js:22://oid) into a result javascript type
+node_modules\proxy-addr\index.js:78: * Compile argument into trust function.
+node_modules\proxy-addr\index.js:116: * Compile `arr` elements into range subnets.
+node_modules\proxy-addr\index.js:133: * Compile range subnet array into trust function.
+node_modules\proxy-addr\index.js:150: * Parse IP notation string into range subnet.
+node_modules\proxy-addr\index.js:199: * Parse netmask string into CIDR range.
+node_modules\qs\dist\qs.js:8:"use strict";var utils=require(5),has=Object.prototype.hasOwnProperty,isArray=Array.isArray,defaults={allowDots:!1,allowEmptyArrays:!1,allowPrototypes:!1,allowSparse:!1,arrayLimit:20,charset:"utf-8",charsetSentinel:!1,comma:!1,decodeDotInKeys:!1,decoder:utils.decode,delimiter:"&",depth:5,duplicates:"combine",ignoreQueryPrefix:!1,interpretNumericEntities:!1,parameterLimit:1e3,parseArrays:!0,plainObjects:!1,strictDepth:!1,strictNullHandling:!1,throwOnLimitExceeded:!1},interpretNumericEntities=function(e){return e.replace(/&#(\d+);/g,function(e,t){return String.fromCharCode(parseInt(t,10))})},parseArrayValue=function(e,t,r){if(e&&"string"==typeof e&&t.comma&&e.indexOf(",")>-1)return e.split(",");if(t.throwOnLimitExceeded&&r>=t.arrayLimit)throw new RangeError("Array limit exceeded. Only "+t.arrayLimit+" element"+(1===t.arrayLimit?"":"s")+" allowed in an array.");return e},isoSentinel="utf8=%26%2310003%3B",charsetSentinel="utf8=%E2%9C%93",parseValues=function parseQueryStringValues(e,t){var r={__proto__:null},i=t.ignoreQueryPrefix?e.replace(/^\?/,""):e;i=i.replace(/%5B/gi,"[").replace(/%5D/gi,"]");var a=t.parameterLimit===1/0?void 0:t.parameterLimit,o=i.split(t.delimiter,t.throwOnLimitExceeded?a+1:a);if(t.throwOnLimitExceeded&&o.length>a)throw new RangeError("Parameter limit exceeded. Only "+a+" parameter"+(1===a?"":"s")+" allowed.");var l,n=-1,s=t.charset;if(t.charsetSentinel)for(l=0;l<o.length;++l)0===o[l].indexOf("utf8=")&&(o[l]===charsetSentinel?s="utf-8":o[l]===isoSentinel&&(s="iso-8859-1"),n=l,l=o.length);for(l=0;l<o.length;++l)if(l!==n){var p,d,c=o[l],u=c.indexOf("]="),y=-1===u?c.indexOf("="):u+1;if(-1===y?(p=t.decoder(c,defaults.decoder,s,"key"),d=t.strictNullHandling?null:""):null!==(p=t.decoder(c.slice(0,y),defaults.decoder,s,"key"))&&(d=utils.maybeMap(parseArrayValue(c.slice(y+1),t,isArray(r[p])?r[p].length:0),function(e){return t.decoder(e,defaults.decoder,s,"value")})),d&&t.interpretNumericEntities&&"iso-8859-1"===s&&(d=interpretNumericEntities(String(d))),c.indexOf("[]=")>-1&&(d=isArray(d)?[d]:d),null!==p){var f=has.call(r,p);f&&"combine"===t.duplicates?r[p]=utils.combine(r[p],d,t.arrayLimit,t.plainObjects):f&&"last"!==t.duplicates||(r[p]=d)}}return r},parseObject=function(e,t,r,i){var a=0;if(e.length>0&&"[]"===e[e.length-1]){var o=e.slice(0,-1).join("");a=Array.isArray(t)&&t[o]?t[o].length:0}for(var l=i?t:parseArrayValue(t,r,a),n=e.length-1;n>=0;--n){var s,p=e[n];if("[]"===p&&r.parseArrays)s=utils.isOverflow(l)?l:r.allowEmptyArrays&&(""===l||r.strictNullHandling&&null===l)?[]:utils.combine([],l,r.arrayLimit,r.plainObjects);else{s=r.plainObjects?{__proto__:null}:{};var d="["===p.charAt(0)&&"]"===p.charAt(p.length-1)?p.slice(1,-1):p,c=r.decodeDotInKeys?d.replace(/%2E/g,"."):d,u=parseInt(c,10);r.parseArrays||""!==c?!isNaN(u)&&p!==c&&String(u)===c&&u>=0&&r.parseArrays&&u<=r.arrayLimit?(s=[])[u]=l:"__proto__"!==c&&(s[c]=l):s={0:l}}l=s}return l},splitKeyIntoSegments=function splitKeyIntoSegments(e,t){var r=t.allowDots?e.replace(/\.([^.[]+)/g,"[$1]"):e;if(t.depth<=0){if(!t.plainObjects&&has.call(Object.prototype,r)&&!t.allowPrototypes)return;return[r]}var i=/(\[[^[\]]*])/g,a=/(\[[^[\]]*])/.exec(r),o=a?r.slice(0,a.index):r,l=[];if(o){if(!t.plainObjects&&has.call(Object.prototype,o)&&!t.allowPrototypes)return;l.push(o)}for(var n=0;null!==(a=i.exec(r))&&n<t.depth;){n+=1;var s=a[1].slice(1,-1);if(!t.plainObjects&&has.call(Object.prototype,s)&&!t.allowPrototypes)return;l.push(a[1])}if(a){if(!0===t.strictDepth)throw new RangeError("Input depth exceeded depth option of "+t.depth+" and strictDepth is true");l.push("["+r.slice(a.index)+"]")}return l},parseKeys=function parseQueryStringKeys(e,t,r,i){if(e){var a=splitKeyIntoSegments(e,r);if(a)return parseObject(a,t,r,i)}},normalizeParseOptions=function normalizeParseOptions(e){if(!e)return defaults;if(void 0!==e.allowEmptyArrays&&"boolean"!=typeof e.allowEmptyArrays)throw new TypeError("`allowEmptyArrays` option can only be `true` or `false`, when provided");if(void 0!==e.decodeDotInKeys&&"boolean"!=typeof e.decodeDotInKeys)throw new TypeError("`decodeDotInKeys` option can only be `true` or `false`, when provided");if(null!==e.decoder&&void 0!==e.decoder&&"function"!=typeof e.decoder)throw new TypeError("Decoder has to be a function.");if(void 0!==e.charset&&"utf-8"!==e.charset&&"iso-8859-1"!==e.charset)throw new TypeError("The charset option must be either utf-8, iso-8859-1, or undefined");if(void 0!==e.throwOnLimitExceeded&&"boolean"!=typeof e.throwOnLimitExceeded)throw new TypeError("`throwOnLimitExceeded` option must be a boolean");var t=void 0===e.charset?defaults.charset:e.charset,r=void 0===e.duplicates?defaults.duplicates:e.duplicates;if("combine"!==r&&"first"!==r&&"last"!==r)throw new TypeError("The duplicates option must be either combine, first, or last");return{allowDots:void 0===e.allowDots?!0===e.decodeDotInKeys||defaults.allowDots:!!e.allowDots,allowEmptyArrays:"boolean"==typeof e.allowEmptyArrays?!!e.allowEmptyArrays:defaults.allowEmptyArrays,allowPrototypes:"boolean"==typeof e.allowPrototypes?e.allowPrototypes:defaults.allowPrototypes,allowSparse:"boolean"==typeof e.allowSparse?e.allowSparse:defaults.allowSparse,arrayLimit:"number"==typeof e.arrayLimit?e.arrayLimit:defaults.arrayLimit,charset:t,charsetSentinel:"boolean"==typeof e.charsetSentinel?e.charsetSentinel:defaults.charsetSentinel,comma:"boolean"==typeof e.comma?e.comma:defaults.comma,decodeDotInKeys:"boolean"==typeof e.decodeDotInKeys?e.decodeDotInKeys:defaults.decodeDotInKeys,decoder:"function"==typeof e.decoder?e.decoder:defaults.decoder,delimiter:"string"==typeof e.delimiter||utils.isRegExp(e.delimiter)?e.delimiter:defaults.delimiter,depth:"number"==typeof e.depth||!1===e.depth?+e.depth:defaults.depth,duplicates:r,ignoreQueryPrefix:!0===e.ignoreQueryPrefix,interpretNumericEntities:"boolean"==typeof e.interpretNumericEntities?e.interpretNumericEntities:defaults.interpretNumericEntities,parameterLimit:"number"==typeof e.parameterLimit?e.parameterLimit:defaults.parameterLimit,parseArrays:!1!==e.parseArrays,plainObjects:"boolean"==typeof e.plainObjects?e.plainObjects:defaults.plainObjects,strictDepth:"boolean"==typeof e.strictDepth?!!e.strictDepth:defaults.strictDepth,strictNullHandling:"boolean"==typeof e.strictNullHandling?e.strictNullHandling:defaults.strictNullHandling,throwOnLimitExceeded:"boolean"==typeof e.throwOnLimitExceeded&&e.throwOnLimitExceeded}};module.exports=function(e,t){var r=normalizeParseOptions(t);if(""===e||null==e)return r.plainObjects?{__proto__:null}:{};for(var i="string"==typeof e?parseValues(e,r):e,a=r.plainObjects?{__proto__:null}:{},o=Object.keys(i),l=0;l<o.length;++l){var n=o[l],s=parseKeys(n,i[n],r,"string"==typeof e);a=utils.merge(a,s,r)}return!0===r.allowSparse?a:utils.compact(a)};
+node_modules\qs\lib\parse.js:205:var splitKeyIntoSegments = function splitKeyIntoSegments(givenKey, options) {
+node_modules\qs\lib\parse.js:266:    var keys = splitKeyIntoSegments(givenKey, options);
+node_modules\qs\test\parse.js:1134:            sst.deepEqual(result, { a: { 1: '1', 2: '2', 3: '3', 4: '4', 5: '5', 6: '6' } }, 'parses into object if array length is greater than limit');
+node_modules\qs\test\parse.js:1381:            'duplicate plain keys combine into array'
+node_modules\qs\test\utils.js:12:    t.deepEqual(utils.merge(null, true), [null, true], 'merges true into null');
+node_modules\qs\test\utils.js:14:    t.deepEqual(utils.merge(null, [42]), [null, 42], 'merges null into an array');
+node_modules\qs\test\utils.js:19:    t.deepEqual(oneMerged, { foo: ['bar', { first: '123' }] }, 'merges a standalone and an object into an array');
+node_modules\qs\test\utils.js:22:    t.deepEqual(twoMerged, { foo: { 0: 'bar', 1: { first: '123' }, second: '456' } }, 'merges a standalone and two objects into an array');
+node_modules\qs\test\utils.js:25:    t.deepEqual(sandwiched, { foo: ['bar', { first: '123', second: '456' }, 'baz'] }, 'merges an object sandwiched by two standalones into an array');
+node_modules\qs\test\utils.js:37:        'functions can not be merged into'
+node_modules\qs\test\utils.js:72:        st.test('merges primitive into overflow object at next index', function (s2t) {
+node_modules\qs\test\utils.js:81:        st.test('merges primitive into regular object with numeric keys normally', function (s2t) {
+node_modules\qs\test\utils.js:89:        st.test('merges primitive into object with non-numeric keys normally', function (s2t) {
+node_modules\qs\test\utils.js:96:        st.test('merges overflow object into primitive', function (s2t) {
+node_modules\qs\test\utils.js:106:        st.test('merges overflow object with multiple values into primitive', function (s2t) {
+node_modules\qs\test\utils.js:115:        st.test('merges regular object into primitive as array', function (s2t) {
+node_modules\rc\browser.js:2:// when this is loaded into the browser, 
+node_modules\readable-stream\lib\internal\streams\end-of-stream.js:1:// Ported from https://github.com/mafintosh/end-of-stream with
+node_modules\readable-stream\lib\internal\streams\end-of-stream.js:2:// permission from the author, Mathias Buus (@mafintosh).
+node_modules\readable-stream\lib\internal\streams\pipeline.js:1:// Ported from https://github.com/mafintosh/pump with
+node_modules\readable-stream\lib\internal\streams\pipeline.js:2:// permission from the author, Mathias Buus (@mafintosh).
+node_modules\readable-stream\lib\_stream_readable.js:209:// Manually shove something into the read() buffer.
+node_modules\readable-stream\lib\_stream_readable.js:445:    // as soon as we *do* get something into the buffer.
+node_modules\readable-stream\lib\_stream_readable.js:644:  // if the dest has an error, then stop piping into it.
+node_modules\readable-stream\lib\_stream_readable.js:815:// If the user uses them, then switch into old mode.
+node_modules\readable-stream\lib\_stream_transform.js:45:// outputted bit calls the readcb, and subsequent chunks just go into
+node_modules\readable-stream\lib\_stream_writable.js:125:  // should we decode strings into buffers before passing to _write?
+node_modules\semver\bin\semver.js:169:        Coerce a string into SemVer if possible
+node_modules\semver\classes\range.js:131:    // ready to be split into comparators.
+node_modules\semver\classes\range.js:256:// turn into a set of JUST comparators.
+node_modules\semver\classes\semver.js:34:    // don't run into trouble passing this.options around.
+node_modules\send\index.js:901: * Collapse all leading slashes into a single slash
+node_modules\send\index.js:1022: * so this consolidates them into a minimal set using instance methods.
+node_modules\send\index.js:1053: * Normalize the index option into an array.
+node_modules\send\index.js:1073: * Parse an HTTP Date into a number.
+node_modules\serve-static\index.js:130: * Collapse all leading slashes into a single slash
+node_modules\string_decoder\lib\string_decoder.js:76:// buffers into a series of JS strings without breaking apart multi-byte
+node_modules\toidentifier\index.js:17: * Trasform the given string into a JavaScript identifier
+node_modules\vary\index.js:89: * Parse a vary header into an array.
+public\sdk\totem-sdk.js:31:    return this._request("POST", "/public/bookings", payload);
+public\widget.js:4:// - Source of truth: /public/bookings/:id/result
+public\widget.js:40:        `${baseUrl}/public/bookings/${bookingId}/result`
+public\widget.js:60:      const booking = await fetchJSON(`${baseUrl}/public/bookings`, {
+reset_marketplace_core.js:47:// marketplace_bookings
+reset_marketplace_core.js:50:  CREATE TABLE marketplace_bookings (
+reset_marketplace_core.js:78:  CREATE INDEX idx_bookings_time
+reset_marketplace_core.js:79:  ON marketplace_bookings (start_time, end_time);
+routes\owner_actions.js:29:          JOIN bookings b ON b.id = p.booking_id
+routes\owner_actions.js:80:          JOIN bookings b ON b.id = p.booking_id
+routes\owner_onboarding_write.js:17:      INSERT INTO salon_master_services
+routes\payments_flow.js:29:    // Insert active pending payment (NO currency column)
+routes\payments_flow.js:32:      INSERT INTO payments (booking_id, provider, amount, status, is_active)
+routes\payout_execution.js:106:    const insertResult = await db.query(
+routes\payout_execution.js:108:      INSERT INTO payouts (
+routes\payout_execution.js:135:      payout_id: insertResult.rows[0].id,
+routes\public_booking.js:52:    const insertRes = await db.query(
+routes\public_booking.js:54:      INSERT INTO bookings (
+routes\public_booking.js:76:      booking_id: insertRes.rows[0].id,
+routes\public_payment.js:33:      FROM bookings
+routes\public_payment.js:54:      INSERT INTO payments (
+routes\public_payment.js:71:      payment_id: result.lastInsertRowid,
+routes\public_payment_webhook.js:46:        UPDATE bookings
+routes\public_status.js:33:      FROM bookings b
+routes_analytics\export.js:4:  exportBookings,
+routes_analytics\export.js:24: * GET /analytics/export/bookings?format=csv|json
+routes_analytics\export.js:26:router.get('/export/bookings', (req,res)=>{
+routes_analytics\export.js:28:  const data = exportBookings({ format });
+routes_bi\preview.js:28:    FROM marketplace_bookings mb
+routes_bi\preview.js:29:    JOIN bookings b ON b.id = mb.booking_id
+routes_marketplace\bookingStatus.js:1:// routes_marketplace/bookingStatus.js (ESM)
+routes_marketplace\bookingStatus.js:4:import updateBookingStatus from "../helpers/updateBookingStatus.js";
+routes_marketplace\bookingStatus.js:30:       FROM bookings
+routes_marketplace\bookingStatus.js:45:export function registerBookingStatusRoutes(app, db) {
+routes_marketplace\bookingStatus.js:93:        const result = updateBookingStatus(
+routes_marketplace\marketplace_booking_create.js:19:       FROM marketplace_bookings
+routes_marketplace\marketplace_booking_create.js:36:      `INSERT INTO marketplace_bookings
+routes_marketplace\payouts.js:53:      INSERT INTO marketplace_webhook_deliveries
+routes_marketplace\publicRequestProcess.js:101:      INSERT INTO bookings
+routes_marketplace\publicRequestProcess.js:114:    const bookingId = bookingRes.lastInsertRowid;
+routes_marketplace\publicRequestProcess.js:123:      INSERT OR IGNORE INTO marketplace_commissions
+routes_marketplace\publicRequestProcess.js:139:      INSERT OR REPLACE INTO public_idempotency
+routes_marketplace\publicRequests.js:25:        SELECT 1 FROM bookings
+routes_marketplace\publicRequests.js:56:        INSERT INTO bookings (
+routes_marketplace\publicRequests.js:85:    ).run(new Date().toISOString(), r.lastInsertRowid, id);
+routes_marketplace\publicRequests.js:89:      booking_id: r.lastInsertRowid,
+routes_marketplace\system_payment_confirm.js:56:      FROM bookings
+routes_marketplace\system_payment_confirm.js:93:        INSERT INTO payouts
+routes_owner\asyncJobs.js:37: * OPS INSERT — audited (best-effort)
+routes_owner\asyncJobs.js:51:      INSERT INTO async_jobs (job_type, payload, idempotency_key)
+routes_public\auth.js:28:      INSERT INTO auth_users (email, role, salon_slug, master_slug, enabled)
+routes_public\auth.js:40:      `INSERT INTO auth_magic_links (user_id, token, expires_at) VALUES ($1,$2,$3)`,
+routes_public\availability.js:61:      FROM bookings
+routes_public\bookingCancel.js:5:import updateBookingStatus from "../helpers/updateBookingStatus.js";
+routes_public\bookingCancel.js:20:    await updateBookingStatus(
+routes_public\bookingCancel.js:25:      `/public/bookings/${bookingId}/cancel`
+routes_public\bookingCreate.js:35:        `SELECT id, status FROM bookings WHERE request_id = $1 LIMIT 1`,
+routes_public\bookingCreate.js:52:    const insert = await client.query(
+routes_public\bookingCreate.js:54:      INSERT INTO bookings (
+routes_public\bookingCreate.js:74:      booking_id: insert.rows[0].id,
+routes_public\bookingCreate.js:83:      booking_id: insert.rows[0].id,
+routes_public\bookingResult.js:3:// GET /public/bookings/:id/result
+routes_public\bookingResult.js:4:// Source of truth: bookings.status
+routes_public\bookingResult.js:23:      FROM bookings
+routes_public\bookings.js:1:// routes_public/bookings.js
+routes_public\bookings.js:9:// POST /public/bookings
+routes_public\bookings.js:23:      INSERT INTO bookings
+routes_public\index.js:4:import bookings from './bookings.js';
+routes_public\index.js:16:// bookings
+routes_public\index.js:17:router.use('/bookings', bookings);
+routes_public\paymentsIntent.js:44:      INSERT INTO payments (
+routes_system\bookingComplete.js:5:import updateBookingStatus from "../helpers/updateBookingStatus.js";
+routes_system\bookingComplete.js:20:    await updateBookingStatus(
+routes_system\bookingComplete.js:25:      `/system/bookings/${bookingId}/complete`
+routes_system\bookingTimeout.js:2:// Closes unpaid bookings and fails pending payments
+routes_system\bookingTimeout.js:10: * POST /system/bookings/timeout
+routes_system\bookingTimeout.js:23:    // 1️⃣ expire bookings
+routes_system\bookingTimeout.js:24:    const { rowCount: expiredBookings } = await client.query(
+routes_system\bookingTimeout.js:26:      UPDATE bookings
+routes_system\bookingTimeout.js:34:    // 2️⃣ fail pending payments linked to expired bookings
+routes_system\bookingTimeout.js:43:          SELECT id FROM bookings WHERE status = 'expired'
+routes_system\bookingTimeout.js:52:      expired_bookings: expiredBookings,
+routes_system\exportBookings.js:1:// routes_system/exportBookings.js — BOOKINGS + AUDIT EXPORT (READ-ONLY)
+routes_system\exportBookings.js:9: * POST /system/export/bookings
+routes_system\exportBookings.js:16:router.post("/bookings", async (req, res) => {
+routes_system\exportBookings.js:48:      FROM bookings b
+routes_system\paymentsWebhook.js:11:import updateBookingStatus from "../helpers/updateBookingStatus.js";
+routes_system\paymentsWebhook.js:79:      await updateBookingStatus(
+routes_system\publicTokens.js:48:      INSERT INTO public_tokens (
+scheduler.js:22:    INSERT INTO system_locks (lock_key, locked_by, expires_at)
+sdk\totem-sdk.js:31:    return this._request("POST", "/public/bookings", payload);
+seed_blocks.js:8:INSERT INTO booking_blocks
+services\alerts.js:27:    INSERT INTO marketplace_alerts (
+services_analytics\cohorts.js:17:  const rows = db.prepare('SELECT * FROM bookings').all();
+services_analytics\core.js:72:  const rows = db.prepare('SELECT * FROM bookings').all();
+services_analytics\core.js:90:      .map(m => ({ month: m, bookings: map[m] }))
+services_analytics\export.js:21:export function exportBookings({ format='json' }){
+services_analytics\export.js:22:  const rows = db.prepare('SELECT * FROM bookings').all();
+services_analytics\pricing.js:23: * - bookings.price / total / amount
+services_analytics\pricing.js:40:  // fallback: bookings
+services_analytics\pricing.js:42:    const books = db.prepare('SELECT * FROM bookings').all();
+tools\cron_booking_timeout.js:36:      FROM bookings
+tools\cron_booking_timeout.js:60:      UPDATE bookings
+tools\cron_booking_timeout.js:67:    console.log(`[CONFIRM] expired bookings: ${res.rowCount}`);
+tools\db_bootstrap_pg_v1.js:55:    CREATE TABLE IF NOT EXISTS bookings (
+tools\db_bootstrap_prod_v1.js:19:  INSERT OR IGNORE INTO salons (id, slug, name, active)
+tools\db_bootstrap_prod_v1.js:25:  INSERT OR IGNORE INTO salons (id, slug, name, active)
+tools\db_bootstrap_prod_v1.js:31:  INSERT OR IGNORE INTO masters (id, slug, name, active)
+tools\db_bootstrap_prod_v1.js:37:  INSERT OR IGNORE INTO services (id, name, duration_min, price)
+tools\db_bootstrap_public_v1.js:35:// bookings — SAFE EXTEND
+tools\db_bootstrap_public_v1.js:36:tryExec(`ALTER TABLE bookings ADD COLUMN salon_slug TEXT;`)
+tools\db_bootstrap_public_v1.js:37:tryExec(`ALTER TABLE bookings ADD COLUMN master_slug TEXT;`)
+tools\db_bootstrap_public_v1.js:38:tryExec(`ALTER TABLE bookings ADD COLUMN service_id TEXT;`)
+tools\db_bootstrap_public_v1.js:39:tryExec(`ALTER TABLE bookings ADD COLUMN source TEXT;`)
+tools\db_bootstrap_public_v1.js:40:tryExec(`ALTER TABLE bookings ADD COLUMN status TEXT DEFAULT 'pending';`)
+tools\db_bootstrap_public_v1.js:41:tryExec(`ALTER TABLE bookings ADD COLUMN created_at TEXT;`)
+tools\db_inspect.js:35:printTableSchema("bookings");
+tools\db_inspect.js:38:printSample("bookings");
+tools\db_seed_prod_v1.js:19:  INSERT OR IGNORE INTO salons (id, slug, name, active)
+tools\db_seed_prod_v1.js:25:  INSERT OR IGNORE INTO masters (id, slug, name, active)
+tools\db_seed_prod_v1.js:31:  INSERT OR IGNORE INTO services (id, name, duration_min, price)
+utils\audit.js:18:      INSERT INTO booking_audit_log (
+utils\auditOwnerAction.js:32:      INSERT INTO owner_actions_audit_log (
+utils\auditOwnerActionPg.js:33:      INSERT INTO owner_actions_audit_log (
+utils\enqueueJob.js:15:    INSERT INTO async_jobs (job_type, payload, run_at, idempotency_key, max_attempts)
+widget\widget.js:60:        const res = await fetch(this.baseUrl + "/public/bookings", {

@@ -1,0 +1,15 @@
+                                                                   Table "public.salons"
+   Column   |            Type             | Collation | Nullable |              Default               | Storage  | Compression | Stats target | Description 
+------------+-----------------------------+-----------+----------+------------------------------------+----------+-------------+--------------+-------------
+ id         | integer                     |           | not null | nextval('salons_id_seq'::regclass) | plain    |             |              | 
+ slug       | text                        |           | not null |                                    | extended |             |              | 
+ name       | text                        |           | not null |                                    | extended |             |              | 
+ enabled    | boolean                     |           |          | true                               | plain    |             |              | 
+ created_at | timestamp without time zone |           |          | now()                              | plain    |             |              | 
+Indexes:
+    "salons_pkey" PRIMARY KEY, btree (id)
+    "salons_slug_key" UNIQUE CONSTRAINT, btree (slug)
+Referenced by:
+    TABLE "salon_master_services" CONSTRAINT "fk_sms_salon" FOREIGN KEY (salon_id) REFERENCES salons(id) ON DELETE CASCADE
+Access method: heap
+
