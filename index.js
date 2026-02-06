@@ -54,11 +54,9 @@ app.use("/owner", ownerRoutes);
 
 /**
  * ==================================================
- * SYSTEM: PAYMENT WEBHOOK (INLINE, NO ROUTERS)
- * URL: POST /system/payment/webhook
+ * SYSTEM: SIGNATURE VERIFY
  * ==================================================
  */
-
 function verifySignature(rawBody, signature, secret) {
   const hmac = crypto.createHmac("sha256", secret);
   hmac.update(rawBody);
@@ -72,7 +70,13 @@ function verifySignature(rawBody, signature, secret) {
   );
 }
 
-app.post("/system/payment/webhook", async (req, res) => {
+/**
+ * ==================================================
+ * SYSTEM: PAYMENT WEBHOOK
+ * POST /system/payment/webhook
+ * ==================================================
+ */
+async function paymentWebhookHandler(req, res) {
   try {
     const secret = process.env.PAYMENT_WEBHOOK_SECRET || "";
     const signature = req.headers["x-payment-signature"];
@@ -135,7 +139,7 @@ app.post("/system/payment/webhook", async (req, res) => {
     }
 
     if (["paid", "payment_failed", "expired"].includes(booking.status)) {
-      return res.status(200).json({ ok: true });
+      return res.json({ ok: true });
     }
 
     const paymentStatus =
@@ -168,6 +172,80 @@ app.post("/system/payment/webhook", async (req, res) => {
   } catch (err) {
     console.error("[PAYMENT_WEBHOOK_ERROR]", err);
     return res.status(500).json({ error: "INTERNAL_ERROR" });
+  }
+}
+
+app.post("/system/payment/webhook", paymentWebhookHandler);
+
+/**
+ * ==================================================
+ * SYSTEM: PAYMENT PROVIDER STUB
+ * POST /system/payment/stub
+ * ==================================================
+ */
+app.post("/system/payment/stub", async (req, res) => {
+  try {
+    const { booking_id, result } = req.body || {};
+
+    if (!booking_id || !["success", "failed"].includes(result)) {
+      return res.status(400).json({ error: "INVALID_INPUT" });
+    }
+
+    const event =
+      result === "success"
+        ? "payment.succeeded"
+        : "payment.failed";
+
+    const payload = {
+      event,
+      payment_id: `stub_${booking_id}`,
+      booking_id: Number(booking_id),
+      amount: {
+        base: 0,
+        tips: 0,
+        total: 0
+      },
+      currency: "KGS",
+      provider: "stub",
+      occurred_at: new Date().toISOString()
+    };
+
+    const rawBody = Buffer.from(JSON.stringify(payload));
+
+    const signature = crypto
+      .createHmac("sha256", process.env.PAYMENT_WEBHOOK_SECRET || "")
+      .update(rawBody)
+      .digest("hex");
+
+    const fakeReq = {
+      headers: {
+        "x-payment-signature": signature
+      },
+      rawBody,
+      body: payload
+    };
+
+    const fakeRes = {
+      status(code) {
+        this.statusCode = code;
+        return this;
+      },
+      json(data) {
+        this.data = data;
+        return this;
+      }
+    };
+
+    await paymentWebhookHandler(fakeReq, fakeRes);
+
+    return res.json({
+      ok: true,
+      stub: true,
+      forwarded_event: event
+    });
+  } catch (err) {
+    console.error("[PAYMENT_STUB_ERROR]", err);
+    return res.status(500).json({ error: "STUB_INTERNAL_ERROR" });
   }
 });
 
