@@ -1,42 +1,88 @@
-# === Node / Runtime ===
-node_modules/
+# ===== Node / Runtime =====
+node_modules
+node_modules/**
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
 
-# === Environment ===
+# ===== Environment =====
 .env
 .env.*
 !.env.example
 
-# === Logs ===
-logs/
+# ===== Logs =====
+logs
+logs/**
 *.log
 
-# === Build artifacts ===
-dist/
-build/
+# ===== Build artifacts =====
+dist
+dist/**
+build
+build/**
 
-# === OS / Editor ===
+# ===== OS / Editor =====
 .DS_Store
 Thumbs.db
+*.swp
+*.tmp
 
-# === Database / Dumps / Snapshots ===
+# ===== Database / Dumps / Snapshots =====
 *.sqlite
 *.sqlite3
 *.db
+*.db-shm
+*.db-wal
 *.bak
-db_snapshot/
-db_schema_freeze.sql
+db_snapshot
+db_snapshot/**
+export
+export/**
+backups
+backups/**
+db_schema_*.sql
 
-# === Local tools / temp ===
-notepad/
-psql/
-cd/
-tmp/
-temp/
-.cache/
+# ===== Archives =====
+*.zip
+*.tar
+*.tar.gz
 
-# === Migrations (ALLOWED) ===
-!migrations/
-!migrations/*.sql
+# ===== Local helper command shims (Windows) =====
+cd
+curl
+dir
+node
+notepad
+npm
+psql
+set
+taskkill
+type
+
+# ===== Local scratch / generated =====
+tmp
+tmp/**
+temp
+temp/**
+.cache
+.cache/**
+_public
+_public/**
+body.json
+git
+how*
+{
+
+# ===== OPS block: ignore local working JS =====
+services
+services/**
+
+# ===== Test artifacts =====
+test-widget.html
+test_owner_*.cmd
+sdk/test_sdk.mjs
+
+# ===== Migrations (ALLOWED) =====
+!migrations
+!migrations/**
