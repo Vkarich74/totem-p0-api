@@ -10,6 +10,7 @@ export async function ensureBookingsTable() {
         start_at TIMESTAMPTZ NOT NULL,
         end_at TIMESTAMPTZ NOT NULL,
         status TEXT NOT NULL DEFAULT 'reserved',
+        request_id TEXT UNIQUE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
@@ -22,6 +23,7 @@ export async function ensureBookingsTable() {
         start_at TEXT NOT NULL,
         end_at TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'reserved',
+        request_id TEXT UNIQUE,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
     `);
