@@ -14,21 +14,30 @@ export async function createBooking({
     throw err;
   }
 
-  // 1) IDEMPOTENCY FIRST — ДО КАЛЕНДАРЯ
-  const findSql =
+  const existing =
     db.mode === 'POSTGRES'
-      ? `SELECT id FROM bookings WHERE request_id = $1`
-      : `SELECT id FROM bookings WHERE request_id = ?`;
+      ? await db.get(
+          `SELECT id FROM bookings WHERE request_id=$1`,
+          [request_id]
+        )
+      : await db.get(
+          `SELECT id FROM bookings WHERE request_id=?`,
+          [request_id]
+        );
 
-  const existing = await db.get(findSql, [request_id]);
   if (existing) {
     return existing.id;
   }
 
-  // 2) CALENDAR — SOURCE OF TRUTH (ТОЛЬКО ЕСЛИ НОВАЯ БРОНЬ)
-  await reserveSlot({ salon_id, master_id, start_at, end_at });
+  // ⬅️ calendar теперь ИДЕМПОТЕНТЕН
+  await reserveSlot({
+    salon_id,
+    master_id,
+    start_at,
+    end_at,
+    request_id
+  });
 
-  // 3) CREATE BOOKING
   const insertSql =
     db.mode === 'POSTGRES'
       ? `
