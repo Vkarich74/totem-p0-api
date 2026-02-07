@@ -1,16 +1,9 @@
 // middleware/auth_owner.js
-/**
- * Strict Owner Auth (Bearer) — POSTGRES
- * - Verifies OWNER_API_TOKEN (ENV)
- * - Resolves auth_users from PostgreSQL
- * - Enforces auth_users.enabled = true
- * - Attaches actor context for audit
- */
-
 import pool from '../db/index.js';
 
 export async function authOwner(req, res, next) {
   const expected = process.env.OWNER_API_TOKEN;
+
   if (!expected) {
     return res.status(500).json({ error: 'OWNER_API_TOKEN_NOT_CONFIGURED' });
   }
@@ -20,7 +13,30 @@ export async function authOwner(req, res, next) {
   if (!m) return res.status(401).json({ error: 'OWNER_TOKEN_REQUIRED' });
 
   const provided = m[1].trim();
-  if (!provided || provided !== expected) {
+
+  // =========================
+  // DEV MODE (CANON)
+  // =========================
+  if (expected === 'DEV_OWNER_TOKEN') {
+    if (provided !== 'DEV_OWNER_TOKEN') {
+      return res.status(401).json({ error: 'OWNER_TOKEN_INVALID' });
+    }
+
+    // minimal owner context (NO DB)
+    req.owner = {
+      id: 'dev-owner',
+      email: 'dev@local',
+      role: 'salon_admin',
+      salon_slug: null
+    };
+
+    return next();
+  }
+
+  // =========================
+  // PROD MODE (STRICT)
+  // =========================
+  if (provided !== expected) {
     return res.status(401).json({ error: 'OWNER_TOKEN_INVALID' });
   }
 
@@ -52,7 +68,6 @@ export async function authOwner(req, res, next) {
       return res.status(403).json({ error: 'OWNER_DISABLED' });
     }
 
-    // Attach canonical actor context (used by audit)
     req.owner = {
       id: user.id,
       email: user.email,
@@ -67,11 +82,4 @@ export async function authOwner(req, res, next) {
   } finally {
     if (client) client.release();
   }
-}
-
-export function requireOwner(req, res, next) {
-  if (!req.owner) {
-    return res.status(403).json({ error: 'OWNER_ONLY' });
-  }
-  return next();
 }
