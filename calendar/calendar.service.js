@@ -1,5 +1,8 @@
 import db from '../db.js';
 
+/**
+ * RESERVE SLOT (IDEMPOTENT)
+ */
 export async function reserveSlot({
   master_id,
   salon_id,
@@ -7,6 +10,7 @@ export async function reserveSlot({
   end_at,
   request_id
 }) {
+  // 1) IDEMPOTENCY FIRST
   if (request_id) {
     const existing =
       db.mode === 'POSTGRES'
@@ -24,6 +28,7 @@ export async function reserveSlot({
     }
   }
 
+  // 2) CONFLICT CHECK
   const conflictSql =
     db.mode === 'POSTGRES'
       ? `
@@ -55,17 +60,18 @@ export async function reserveSlot({
     throw err;
   }
 
+  // 3) INSERT SLOT
   const insertSql =
     db.mode === 'POSTGRES'
       ? `
         INSERT INTO calendar_slots
-        (master_id, salon_id, start_at, end_at, status, request_id)
+          (master_id, salon_id, start_at, end_at, status, request_id)
         VALUES ($1,$2,$3,$4,'reserved',$5)
         RETURNING id
       `
       : `
         INSERT INTO calendar_slots
-        (master_id, salon_id, start_at, end_at, status, request_id)
+          (master_id, salon_id, start_at, end_at, status, request_id)
         VALUES (?,?,?,?, 'reserved', ?)
       `;
 
@@ -89,4 +95,27 @@ export async function reserveSlot({
     const row = await db.get(`SELECT last_insert_rowid() as id`);
     return row.id;
   }
+}
+
+/**
+ * READ MASTER CALENDAR
+ * используется calendar.routes.js
+ */
+export async function getMasterCalendar(master_id) {
+  const sql =
+    db.mode === 'POSTGRES'
+      ? `
+        SELECT id, salon_id, start_at, end_at, status
+        FROM calendar_slots
+        WHERE master_id = $1
+        ORDER BY start_at
+      `
+      : `
+        SELECT id, salon_id, start_at, end_at, status
+        FROM calendar_slots
+        WHERE master_id = ?
+        ORDER BY start_at
+      `;
+
+  return db.all(sql, [Number(master_id)]);
 }
