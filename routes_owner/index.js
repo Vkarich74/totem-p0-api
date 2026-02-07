@@ -1,9 +1,14 @@
-// routes_owner/index.js
 import express from 'express';
 import pool from '../db/index.js';
 import { authOwner } from '../middleware/auth_owner.js';
 import { runQueueWorker } from '../jobs/queueWorker.js';
 import asyncJobsRouter from './asyncJobs.js';
+
+import {
+  inviteMaster,
+  activateMaster,
+  fireMaster
+} from './master_salon.js';
 
 const router = express.Router();
 router.use(authOwner);
@@ -17,6 +22,13 @@ router.get('/salons', async (_req, res) => {
   );
   res.json({ ok: true, salons: rows });
 });
+
+/**
+ * MASTER ↔ SALON
+ */
+router.post('/master/invite', inviteMaster);
+router.post('/master/activate', activateMaster);
+router.post('/master/fire', fireMaster);
 
 /**
  * OPS: manual async worker run
