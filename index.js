@@ -43,6 +43,30 @@ async function ensureSalonsTable() {
   }
 }
 
+// ===== ENSURE MASTER_SALON TABLE (POSTGRES ONLY) =====
+async function ensureMasterSalonTable() {
+  if (db.mode !== "POSTGRES") return;
+
+  await db.run(`
+    CREATE TABLE IF NOT EXISTS master_salon (
+      id BIGSERIAL PRIMARY KEY,
+      salon_id TEXT NOT NULL,
+      master_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'invited',
+      invited_at TIMESTAMPTZ,
+      activated_at TIMESTAMPTZ,
+      fired_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await db.run(`
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_master_salon_pair
+    ON master_salon (salon_id, master_id);
+  `);
+}
+
 // ===== SALON CONTEXT RESOLVER (AUTO-CREATE) =====
 app.use("/s/:slug", async (req, res, next) => {
   try {
@@ -102,8 +126,16 @@ app.get("/s/:slug/resolve", (req, res) => {
 });
 
 // ===== START =====
-ensureSalonsTable().then(() => {
+async function bootstrap() {
+  await ensureSalonsTable();
+  await ensureMasterSalonTable();
+
   app.listen(PORT, () => {
     console.log(`TOTEM API running on port ${PORT}`);
   });
+}
+
+bootstrap().catch((e) => {
+  console.error("[BOOTSTRAP_FAILED]", e);
+  process.exit(1);
 });
