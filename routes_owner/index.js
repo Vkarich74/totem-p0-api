@@ -1,6 +1,7 @@
 import express from 'express';
 import db from '../db.js';
 import { authOwner } from '../middleware/auth_owner.js';
+import ownerReportsRoutes from './owner_reports.routes.js';
 
 import {
   inviteMaster,
@@ -51,6 +52,7 @@ router.post('/link', async (req, res) => {
 
 // ВСЕ ОПЕРАЦИИ НИЖЕ — ТОЛЬКО ПОСЛЕ authOwner
 router.use(authOwner);
+router.use('/reports', ownerReportsRoutes);
 
 /**
  * READ: salons (owner scope)
