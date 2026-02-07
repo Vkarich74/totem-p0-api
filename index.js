@@ -39,18 +39,57 @@ async function ensureSalonsTable() {
   }
 }
 
-// ===== ENSURE OWNER_SALON =====
+// ===== ENSURE OWNER_SALON + MIGRATION =====
 async function ensureOwnerSalonTable() {
   if (db.mode === "POSTGRES") {
+    // detect column type
+    const col = await db.get(`
+      SELECT data_type
+      FROM information_schema.columns
+      WHERE table_name = 'owner_salon'
+        AND column_name = 'salon_id'
+    `);
+
+    if (col && col.data_type === "text") {
+      console.log("[MIGRATION] owner_salon.salon_id TEXT -> BIGINT");
+
+      await db.run(`
+        CREATE TABLE owner_salon_new (
+          id BIGSERIAL PRIMARY KEY,
+          owner_id TEXT NOT NULL,
+          salon_id BIGINT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active',
+          created_at TIMESTAMPTZ DEFAULT now()
+        );
+      `);
+
+      await db.run(`
+        INSERT INTO owner_salon_new (owner_id, salon_id, status, created_at)
+        SELECT owner_id, salon_id::BIGINT, status, created_at
+        FROM owner_salon;
+      `);
+
+      await db.run(`DROP TABLE owner_salon;`);
+      await db.run(`ALTER TABLE owner_salon_new RENAME TO owner_salon;`);
+
+      await db.run(`
+        CREATE UNIQUE INDEX ux_owner_salon
+        ON owner_salon (owner_id, salon_id);
+      `);
+
+      console.log("[MIGRATION] owner_salon FIXED");
+    }
+
     await db.run(`
       CREATE TABLE IF NOT EXISTS owner_salon (
         id BIGSERIAL PRIMARY KEY,
         owner_id TEXT NOT NULL,
-        salon_id TEXT NOT NULL,
+        salon_id BIGINT NOT NULL,
         status TEXT NOT NULL DEFAULT 'active',
         created_at TIMESTAMPTZ DEFAULT now()
       );
     `);
+
     await db.run(`
       CREATE UNIQUE INDEX IF NOT EXISTS ux_owner_salon
       ON owner_salon (owner_id, salon_id);
@@ -60,11 +99,12 @@ async function ensureOwnerSalonTable() {
       CREATE TABLE IF NOT EXISTS owner_salon (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         owner_id TEXT NOT NULL,
-        salon_id TEXT NOT NULL,
+        salon_id INTEGER NOT NULL,
         status TEXT NOT NULL DEFAULT 'active',
         created_at TEXT DEFAULT (datetime('now'))
       );
     `);
+
     await db.run(`
       CREATE UNIQUE INDEX IF NOT EXISTS ux_owner_salon
       ON owner_salon (owner_id, salon_id);
@@ -78,7 +118,7 @@ async function ensureFinanceTable() {
     await db.run(`
       CREATE TABLE IF NOT EXISTS finance_events (
         id BIGSERIAL PRIMARY KEY,
-        salon_id TEXT NOT NULL,
+        salon_id BIGINT NOT NULL,
         master_id TEXT,
         type TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'pending',
@@ -91,7 +131,7 @@ async function ensureFinanceTable() {
     await db.run(`
       CREATE TABLE IF NOT EXISTS finance_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        salon_id TEXT NOT NULL,
+        salon_id INTEGER NOT NULL,
         master_id TEXT,
         type TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'pending',
@@ -108,14 +148,14 @@ async function ensureSubscriptionsTable() {
   if (db.mode === "POSTGRES") {
     await db.run(`
       CREATE TABLE IF NOT EXISTS salon_subscriptions (
-        salon_id TEXT PRIMARY KEY,
+        salon_id BIGINT PRIMARY KEY,
         active_until TIMESTAMPTZ NOT NULL
       );
     `);
   } else {
     await db.run(`
       CREATE TABLE IF NOT EXISTS salon_subscriptions (
-        salon_id TEXT PRIMARY KEY,
+        salon_id INTEGER PRIMARY KEY,
         active_until TEXT NOT NULL
       );
     `);
@@ -138,7 +178,7 @@ async function requireActiveSalon(req, res, next) {
       : `SELECT 1 FROM salon_subscriptions
          WHERE salon_id=? AND active_until >= datetime('now')`;
 
-  const row = await db.get(sql, [salon_id]);
+  const row = await db.get(sql, [Number(salon_id)]);
   if (!row) return res.status(403).json({ error: "SALON_NOT_ACTIVE" });
 
   next();
@@ -195,35 +235,34 @@ app.get("/finance/salon/:salon_id", requireActiveSalon, async (req, res) => {
       ? `SELECT * FROM finance_events WHERE salon_id=$1 ORDER BY created_at DESC`
       : `SELECT * FROM finance_events WHERE salon_id=? ORDER BY created_at DESC`;
 
-  const rows = await db.all(sql, [req.params.salon_id]);
+  const rows = await db.all(sql, [Number(req.params.salon_id)]);
   res.json({ ok: true, items: rows });
 });
 
-// ===== PAYMENT -> EXTEND SUBSCRIPTION =====
+// ===== PAYMENT =====
 app.post("/finance/event", async (req, res) => {
   const { salon_id, type, amount } = req.body;
   if (!salon_id || !type || !amount)
     return res.status(400).json({ error: "INVALID_INPUT" });
 
-  const insertPay =
+  await db.run(
     db.mode === "POSTGRES"
       ? `INSERT INTO finance_events (salon_id,type,amount,status)
          VALUES ($1,$2,$3,'confirmed')`
       : `INSERT INTO finance_events (salon_id,type,amount,status)
-         VALUES (?,?,?,'confirmed')`;
+         VALUES (?,?,?,'confirmed')`,
+    [Number(salon_id), type, amount]
+  );
 
-  await db.run(insertPay, [salon_id, type, amount]);
-
-  const extend =
+  await db.run(
     db.mode === "POSTGRES"
       ? `
         INSERT INTO salon_subscriptions (salon_id, active_until)
         VALUES ($1, NOW() + INTERVAL '30 days')
         ON CONFLICT (salon_id)
-        DO UPDATE SET active_until = GREATEST(
-          salon_subscriptions.active_until,
-          NOW()
-        ) + INTERVAL '30 days'
+        DO UPDATE SET active_until =
+          GREATEST(salon_subscriptions.active_until, NOW())
+          + INTERVAL '30 days'
       `
       : `
         INSERT INTO salon_subscriptions (salon_id, active_until)
@@ -231,16 +270,17 @@ app.post("/finance/event", async (req, res) => {
         ON CONFLICT(salon_id)
         DO UPDATE SET active_until =
           datetime(MAX(active_until, datetime('now')), '+30 days')
-      `;
+      `,
+    [Number(salon_id)]
+  );
 
-  await db.run(extend, [salon_id]);
   res.json({ ok: true });
 });
 
 // ===== START =====
 async function bootstrap() {
   await ensureSalonsTable();
-  await ensureOwnerSalonTable(); // ← КЛЮЧЕВОЙ ФИКС
+  await ensureOwnerSalonTable(); // ← миграция тут
   await ensureFinanceTable();
   await ensureSubscriptionsTable();
 
