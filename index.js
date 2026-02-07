@@ -43,7 +43,7 @@ async function ensureSalonsTable() {
   }
 }
 
-// ===== ENSURE MASTER_SALON TABLE (POSTGRES ONLY) =====
+// ===== ENSURE MASTER_SALON TABLE =====
 async function ensureMasterSalonTable() {
   if (db.mode !== "POSTGRES") return;
 
@@ -67,36 +67,137 @@ async function ensureMasterSalonTable() {
   `);
 }
 
-// ===== SALON CONTEXT RESOLVER (AUTO-CREATE) =====
+// ===== ENSURE MASTER CALENDAR TABLE =====
+async function ensureMasterCalendarTable() {
+  if (db.mode === "POSTGRES") {
+    await db.run(`
+      CREATE TABLE IF NOT EXISTS master_calendar (
+        id BIGSERIAL PRIMARY KEY,
+        master_id TEXT NOT NULL,
+        salon_id TEXT NOT NULL,
+        start_at TIMESTAMPTZ NOT NULL,
+        end_at TIMESTAMPTZ NOT NULL,
+        status TEXT NOT NULL DEFAULT 'reserved',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await db.run(`
+      CREATE INDEX IF NOT EXISTS ix_master_calendar_master_time
+      ON master_calendar (master_id, start_at, end_at);
+    `);
+  } else {
+    await db.run(`
+      CREATE TABLE IF NOT EXISTS master_calendar (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        master_id TEXT NOT NULL,
+        salon_id TEXT NOT NULL,
+        start_at TEXT NOT NULL,
+        end_at TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'reserved',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+
+    await db.run(`
+      CREATE INDEX IF NOT EXISTS ix_master_calendar_master_time
+      ON master_calendar (master_id, start_at, end_at);
+    `);
+  }
+}
+
+// ===== CALENDAR RESERVE =====
+app.post("/calendar/reserve", async (req, res) => {
+  try {
+    const { master_id, salon_id, start_at, end_at } = req.body;
+
+    if (!master_id || !salon_id || !start_at || !end_at) {
+      return res.status(400).json({ error: "INVALID_INPUT" });
+    }
+
+    const conflictSql =
+      db.mode === "POSTGRES"
+        ? `SELECT id FROM master_calendar
+           WHERE master_id=$1
+           AND status='reserved'
+           AND NOT ($3 <= start_at OR $2 >= end_at)
+           LIMIT 1`
+        : `SELECT id FROM master_calendar
+           WHERE master_id=?
+           AND status='reserved'
+           AND NOT (? <= start_at OR ? >= end_at)
+           LIMIT 1`;
+
+    const conflict = await db.get(conflictSql, [
+      master_id,
+      start_at,
+      end_at,
+    ]);
+
+    if (conflict) return res.status(409).json({ error: "TIME_CONFLICT" });
+
+    const insertSql =
+      db.mode === "POSTGRES"
+        ? `INSERT INTO master_calendar
+           (master_id, salon_id, start_at, end_at)
+           VALUES ($1,$2,$3,$4)`
+        : `INSERT INTO master_calendar
+           (master_id, salon_id, start_at, end_at)
+           VALUES (?,?,?,?)`;
+
+    await db.run(insertSql, [master_id, salon_id, start_at, end_at]);
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "CALENDAR_RESERVE_FAILED" });
+  }
+});
+
+// ===== CALENDAR MASTER VIEW =====
+app.get("/calendar/master/:master_id", async (req, res) => {
+  try {
+    const master_id = req.params.master_id;
+
+    const sql =
+      db.mode === "POSTGRES"
+        ? `SELECT * FROM master_calendar WHERE master_id=$1 ORDER BY start_at`
+        : `SELECT * FROM master_calendar WHERE master_id=? ORDER BY start_at`;
+
+    const rows = await db.all(sql, [master_id]);
+
+    res.json({ ok: true, items: rows });
+  } catch (e) {
+    res.status(500).json({ error: "CALENDAR_LIST_FAILED" });
+  }
+});
+
+// ===== SALON AUTO RESOLVE =====
 app.use("/s/:slug", async (req, res, next) => {
   try {
     const slug = req.params.slug;
 
     const selectSql =
       db.mode === "POSTGRES"
-        ? "SELECT id, slug, status FROM salons WHERE slug = $1"
-        : "SELECT id, slug, status FROM salons WHERE slug = ?";
+        ? "SELECT id,slug,status FROM salons WHERE slug=$1"
+        : "SELECT id,slug,status FROM salons WHERE slug=?";
 
     let salon = await db.get(selectSql, [slug]);
 
-    // AUTO-CREATE IF NOT EXISTS
     if (!salon) {
       const insertSql =
         db.mode === "POSTGRES"
-          ? `
-            INSERT INTO salons (slug, name, status)
-            VALUES ($1, $2, 'active')
-            ON CONFLICT (slug) DO NOTHING
-            RETURNING id, slug, status;
-          `
-          : `
-            INSERT OR IGNORE INTO salons (slug, name, status)
-            VALUES (?, ?, 'active');
-          `;
+          ? `INSERT INTO salons (slug,name,status)
+             VALUES ($1,$2,'active')
+             ON CONFLICT (slug) DO NOTHING
+             RETURNING id,slug,status`
+          : `INSERT OR IGNORE INTO salons (slug,name,status)
+             VALUES (?,?, 'active')`;
 
       if (db.mode === "POSTGRES") {
-        const row = await db.get(insertSql, [slug, slug]);
-        salon = row;
+        salon = await db.get(insertSql, [slug, slug]);
       } else {
         await db.run(insertSql, [slug, slug]);
         salon = await db.get(selectSql, [slug]);
@@ -104,19 +205,17 @@ app.use("/s/:slug", async (req, res, next) => {
     }
 
     if (!salon) return res.status(500).json({ error: "SALON_CREATE_FAILED" });
-    if (salon.status !== "active")
-      return res.status(403).json({ error: "SALON_INACTIVE" });
 
     req.salon = salon;
     req.salon_id = salon.id;
+
     next();
   } catch (e) {
-    console.error("[SALON RESOLVER]", e);
     res.status(500).json({ error: "SALON_RESOLVE_FAILED" });
   }
 });
 
-// ===== RESOLVE API =====
+// ===== RESOLVE =====
 app.get("/s/:slug/resolve", (req, res) => {
   res.json({
     ok: true,
@@ -129,13 +228,14 @@ app.get("/s/:slug/resolve", (req, res) => {
 async function bootstrap() {
   await ensureSalonsTable();
   await ensureMasterSalonTable();
+  await ensureMasterCalendarTable();
 
   app.listen(PORT, () => {
-    console.log(`TOTEM API running on port ${PORT}`);
+    console.log("TOTEM API STARTED", PORT);
   });
 }
 
 bootstrap().catch((e) => {
-  console.error("[BOOTSTRAP_FAILED]", e);
+  console.error(e);
   process.exit(1);
 });
