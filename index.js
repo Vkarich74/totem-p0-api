@@ -71,53 +71,85 @@ async function ensureFinanceTable() {
 }
 
 // ===== ACTIVATION GUARD =====
-// Требует активированный салон (есть confirmed payment)
-// salon_id берётся из:
-// 1) req.headers["x-salon-id"]
-// 2) req.body.salon_id
-// 3) req.params.salon_id
 async function requireActiveSalon(req, res, next) {
-  try {
-    const salon_id =
-      req.headers["x-salon-id"] ||
-      req.body?.salon_id ||
-      req.params?.salon_id;
+  const salon_id =
+    req.headers["x-salon-id"] ||
+    req.body?.salon_id ||
+    req.params?.salon_id;
 
-    if (!salon_id) {
-      return res.status(400).json({ error: "SALON_ID_REQUIRED" });
-    }
-
-    const sql =
-      db.mode === "POSTGRES"
-        ? `
-          SELECT 1 FROM finance_events
-          WHERE salon_id = $1
-            AND type = 'payment'
-            AND status = 'confirmed'
-          LIMIT 1
-        `
-        : `
-          SELECT 1 FROM finance_events
-          WHERE salon_id = ?
-            AND type = 'payment'
-            AND status = 'confirmed'
-          LIMIT 1
-        `;
-
-    const row = await db.get(sql, [salon_id]);
-    if (!row) {
-      return res.status(403).json({ error: "SALON_NOT_ACTIVE" });
-    }
-
-    next();
-  } catch (e) {
-    console.error("[ACTIVATION_GUARD]", e);
-    res.status(500).json({ error: "ACTIVATION_CHECK_FAILED" });
+  if (!salon_id) {
+    return res.status(400).json({ error: "SALON_ID_REQUIRED" });
   }
+
+  const sql =
+    db.mode === "POSTGRES"
+      ? `
+        SELECT 1 FROM finance_events
+        WHERE salon_id = $1
+          AND type = 'payment'
+          AND status = 'confirmed'
+        LIMIT 1
+      `
+      : `
+        SELECT 1 FROM finance_events
+        WHERE salon_id = ?
+          AND type = 'payment'
+          AND status = 'confirmed'
+        LIMIT 1
+      `;
+
+  const row = await db.get(sql, [salon_id]);
+  if (!row) {
+    return res.status(403).json({ error: "SALON_NOT_ACTIVE" });
+  }
+
+  next();
 }
 
+// ===== PUBLIC SALON RESOLVER (AUTO-CREATE) =====
+app.use("/s/:slug", async (req, _res, next) => {
+  const slug = req.params.slug;
+
+  const select =
+    db.mode === "POSTGRES"
+      ? "SELECT * FROM salons WHERE slug=$1"
+      : "SELECT * FROM salons WHERE slug=?";
+
+  let salon = await db.get(select, [slug]);
+
+  if (!salon) {
+    const insert =
+      db.mode === "POSTGRES"
+        ? `INSERT INTO salons (slug,name,status)
+           VALUES ($1,$2,'created')
+           ON CONFLICT (slug) DO NOTHING
+           RETURNING *`
+        : `INSERT OR IGNORE INTO salons (slug,name,status)
+           VALUES (?,?, 'created')`;
+
+    if (db.mode === "POSTGRES") salon = await db.get(insert, [slug, slug]);
+    else {
+      await db.run(insert, [slug, slug]);
+      salon = await db.get(select, [slug]);
+    }
+  }
+
+  req.salon = salon;
+  req.salon_id = salon.id;
+  next();
+});
+
+// ===== RESOLVE (PUBLIC, NO GUARD) =====
+app.get("/s/:slug/resolve", (req, res) => {
+  res.json({
+    ok: true,
+    salon_id: String(req.salon_id),
+    slug: req.salon.slug,
+    status: req.salon.status
+  });
+});
+
 // ===== OWNER API (GUARDED) =====
-// Любые owner-операции требуют активный салон
 app.use("/owner", requireActiveSalon, ownerRoutes);
 
 // ===== FINANCE CREATE (GUARDED) =====
@@ -149,39 +181,6 @@ app.get("/finance/salon/:salon_id", requireActiveSalon, async (req, res) => {
 
   const rows = await db.all(sql, [req.params.salon_id]);
   res.json({ ok: true, items: rows });
-});
-
-// ===== SALON AUTO-RESOLVE (VITRINA, БЕЗ ГЕЙТА) =====
-app.use("/s/:slug", async (req, _res, next) => {
-  const slug = req.params.slug;
-
-  const select =
-    db.mode === "POSTGRES"
-      ? "SELECT * FROM salons WHERE slug=$1"
-      : "SELECT * FROM salons WHERE slug=?";
-
-  let salon = await db.get(select, [slug]);
-
-  if (!salon) {
-    const insert =
-      db.mode === "POSTGRES"
-        ? `INSERT INTO salons (slug,name,status)
-           VALUES ($1,$2,'created')
-           ON CONFLICT (slug) DO NOTHING
-           RETURNING *`
-        : `INSERT OR IGNORE INTO salons (slug,name,status)
-           VALUES (?,?, 'created')`;
-
-    if (db.mode === "POSTGRES") salon = await db.get(insert, [slug, slug]);
-    else {
-      await db.run(insert, [slug, slug]);
-      salon = await db.get(select, [slug]);
-    }
-  }
-
-  req.salon = salon;
-  req.salon_id = salon.id;
-  next();
 });
 
 // ===== START =====
