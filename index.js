@@ -39,62 +39,9 @@ async function ensureSalonsTable() {
   }
 }
 
-// ===== ENSURE OWNER_SALON + MIGRATION =====
+// ===== ENSURE OWNER_SALON (IDEMPOTENT MIGRATION) =====
 async function ensureOwnerSalonTable() {
-  if (db.mode === "POSTGRES") {
-    // detect column type
-    const col = await db.get(`
-      SELECT data_type
-      FROM information_schema.columns
-      WHERE table_name = 'owner_salon'
-        AND column_name = 'salon_id'
-    `);
-
-    if (col && col.data_type === "text") {
-      console.log("[MIGRATION] owner_salon.salon_id TEXT -> BIGINT");
-
-      await db.run(`
-        CREATE TABLE owner_salon_new (
-          id BIGSERIAL PRIMARY KEY,
-          owner_id TEXT NOT NULL,
-          salon_id BIGINT NOT NULL,
-          status TEXT NOT NULL DEFAULT 'active',
-          created_at TIMESTAMPTZ DEFAULT now()
-        );
-      `);
-
-      await db.run(`
-        INSERT INTO owner_salon_new (owner_id, salon_id, status, created_at)
-        SELECT owner_id, salon_id::BIGINT, status, created_at
-        FROM owner_salon;
-      `);
-
-      await db.run(`DROP TABLE owner_salon;`);
-      await db.run(`ALTER TABLE owner_salon_new RENAME TO owner_salon;`);
-
-      await db.run(`
-        CREATE UNIQUE INDEX ux_owner_salon
-        ON owner_salon (owner_id, salon_id);
-      `);
-
-      console.log("[MIGRATION] owner_salon FIXED");
-    }
-
-    await db.run(`
-      CREATE TABLE IF NOT EXISTS owner_salon (
-        id BIGSERIAL PRIMARY KEY,
-        owner_id TEXT NOT NULL,
-        salon_id BIGINT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'active',
-        created_at TIMESTAMPTZ DEFAULT now()
-      );
-    `);
-
-    await db.run(`
-      CREATE UNIQUE INDEX IF NOT EXISTS ux_owner_salon
-      ON owner_salon (owner_id, salon_id);
-    `);
-  } else {
+  if (db.mode !== "POSTGRES") {
     await db.run(`
       CREATE TABLE IF NOT EXISTS owner_salon (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,12 +51,74 @@ async function ensureOwnerSalonTable() {
         created_at TEXT DEFAULT (datetime('now'))
       );
     `);
-
     await db.run(`
       CREATE UNIQUE INDEX IF NOT EXISTS ux_owner_salon
       ON owner_salon (owner_id, salon_id);
     `);
+    return;
   }
+
+  // Проверяем, существует ли колонка salon_id
+  const col = await db.get(`
+    SELECT data_type
+    FROM information_schema.columns
+    WHERE table_name = 'owner_salon'
+      AND column_name = 'salon_id'
+  `);
+
+  // Таблицы нет — создаём сразу корректную
+  if (!col) {
+    await db.run(`
+      CREATE TABLE owner_salon (
+        id BIGSERIAL PRIMARY KEY,
+        owner_id TEXT NOT NULL,
+        salon_id BIGINT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TIMESTAMPTZ DEFAULT now()
+      );
+    `);
+    await db.run(`
+      CREATE UNIQUE INDEX ux_owner_salon
+      ON owner_salon (owner_id, salon_id);
+    `);
+    return;
+  }
+
+  // Тип уже правильный — выходим
+  if (col.data_type === "bigint") {
+    return;
+  }
+
+  // === МИГРАЦИЯ TEXT -> BIGINT ===
+  console.log("[MIGRATION] owner_salon.salon_id TEXT -> BIGINT");
+
+  await db.run(`DROP TABLE IF EXISTS owner_salon_new;`);
+
+  await db.run(`
+    CREATE TABLE owner_salon_new (
+      id BIGSERIAL PRIMARY KEY,
+      owner_id TEXT NOT NULL,
+      salon_id BIGINT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+  `);
+
+  await db.run(`
+    INSERT INTO owner_salon_new (owner_id, salon_id, status, created_at)
+    SELECT owner_id, salon_id::BIGINT, status, created_at
+    FROM owner_salon;
+  `);
+
+  await db.run(`DROP TABLE owner_salon;`);
+  await db.run(`ALTER TABLE owner_salon_new RENAME TO owner_salon;`);
+
+  await db.run(`
+    CREATE UNIQUE INDEX ux_owner_salon
+    ON owner_salon (owner_id, salon_id);
+  `);
+
+  console.log("[MIGRATION] owner_salon FIXED");
 }
 
 // ===== ENSURE FINANCE =====
@@ -169,7 +178,9 @@ async function requireActiveSalon(req, res, next) {
     req.body?.salon_id ||
     req.params?.salon_id;
 
-  if (!salon_id) return res.status(400).json({ error: "SALON_ID_REQUIRED" });
+  if (!salon_id) {
+    return res.status(400).json({ error: "SALON_ID_REQUIRED" });
+  }
 
   const sql =
     db.mode === "POSTGRES"
@@ -179,7 +190,9 @@ async function requireActiveSalon(req, res, next) {
          WHERE salon_id=? AND active_until >= datetime('now')`;
 
   const row = await db.get(sql, [Number(salon_id)]);
-  if (!row) return res.status(403).json({ error: "SALON_NOT_ACTIVE" });
+  if (!row) {
+    return res.status(403).json({ error: "SALON_NOT_ACTIVE" });
+  }
 
   next();
 }
@@ -187,6 +200,7 @@ async function requireActiveSalon(req, res, next) {
 // ===== PUBLIC SALON RESOLVE =====
 app.use("/s/:slug", async (req, _res, next) => {
   const slug = req.params.slug;
+
   const select =
     db.mode === "POSTGRES"
       ? "SELECT * FROM salons WHERE slug=$1"
@@ -225,7 +239,7 @@ app.get("/s/:slug/resolve", (req, res) => {
   });
 });
 
-// ===== OWNER (GUARDED) =====
+// ===== OWNER API =====
 app.use("/owner", requireActiveSalon, ownerRoutes);
 
 // ===== FINANCE READ =====
@@ -242,8 +256,9 @@ app.get("/finance/salon/:salon_id", requireActiveSalon, async (req, res) => {
 // ===== PAYMENT =====
 app.post("/finance/event", async (req, res) => {
   const { salon_id, type, amount } = req.body;
-  if (!salon_id || !type || !amount)
+  if (!salon_id || !type || !amount) {
     return res.status(400).json({ error: "INVALID_INPUT" });
+  }
 
   await db.run(
     db.mode === "POSTGRES"
@@ -280,11 +295,13 @@ app.post("/finance/event", async (req, res) => {
 // ===== START =====
 async function bootstrap() {
   await ensureSalonsTable();
-  await ensureOwnerSalonTable(); // ← миграция тут
+  await ensureOwnerSalonTable();
   await ensureFinanceTable();
   await ensureSubscriptionsTable();
 
-  app.listen(PORT, () => console.log("TOTEM API STARTED", PORT));
+  app.listen(PORT, () => {
+    console.log("TOTEM API STARTED", PORT);
+  });
 }
 
 bootstrap().catch((e) => {
