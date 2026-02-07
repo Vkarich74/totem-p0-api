@@ -39,6 +39,39 @@ async function ensureSalonsTable() {
   }
 }
 
+// ===== ENSURE OWNER_SALON =====
+async function ensureOwnerSalonTable() {
+  if (db.mode === "POSTGRES") {
+    await db.run(`
+      CREATE TABLE IF NOT EXISTS owner_salon (
+        id BIGSERIAL PRIMARY KEY,
+        owner_id TEXT NOT NULL,
+        salon_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TIMESTAMPTZ DEFAULT now()
+      );
+    `);
+    await db.run(`
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_owner_salon
+      ON owner_salon (owner_id, salon_id);
+    `);
+  } else {
+    await db.run(`
+      CREATE TABLE IF NOT EXISTS owner_salon (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        owner_id TEXT NOT NULL,
+        salon_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TEXT DEFAULT (datetime('now'))
+      );
+    `);
+    await db.run(`
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_owner_salon
+      ON owner_salon (owner_id, salon_id);
+    `);
+  }
+}
+
 // ===== ENSURE FINANCE =====
 async function ensureFinanceTable() {
   if (db.mode === "POSTGRES") {
@@ -155,7 +188,7 @@ app.get("/s/:slug/resolve", (req, res) => {
 // ===== OWNER (GUARDED) =====
 app.use("/owner", requireActiveSalon, ownerRoutes);
 
-// ===== FINANCE READ (GUARDED) =====
+// ===== FINANCE READ =====
 app.get("/finance/salon/:salon_id", requireActiveSalon, async (req, res) => {
   const sql =
     db.mode === "POSTGRES"
@@ -207,8 +240,10 @@ app.post("/finance/event", async (req, res) => {
 // ===== START =====
 async function bootstrap() {
   await ensureSalonsTable();
+  await ensureOwnerSalonTable(); // ← КЛЮЧЕВОЙ ФИКС
   await ensureFinanceTable();
   await ensureSubscriptionsTable();
+
   app.listen(PORT, () => console.log("TOTEM API STARTED", PORT));
 }
 
