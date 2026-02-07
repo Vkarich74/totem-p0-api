@@ -20,10 +20,12 @@ app.use("/s/:slug", async (req, res, next) => {
   try {
     const { slug } = req.params;
 
-    const salon = await db.get(
-      "SELECT id, slug, status FROM salons WHERE slug = ?",
-      [slug]
-    );
+    const sql =
+      db.mode === "POSTGRES"
+        ? "SELECT id, slug, status FROM salons WHERE slug = $1"
+        : "SELECT id, slug, status FROM salons WHERE slug = ?";
+
+    const salon = await db.get(sql, [slug]);
 
     if (!salon) {
       return res.status(404).json({ error: "SALON_NOT_FOUND" });
@@ -35,7 +37,6 @@ app.use("/s/:slug", async (req, res, next) => {
 
     req.salon = salon;
     req.salon_id = salon.id;
-
     next();
   } catch (err) {
     console.error("[SALON RESOLVER ERROR]", err);
@@ -48,7 +49,7 @@ app.use("/s/:slug", async (req, res, next) => {
 app.get("/s/:slug/resolve", (req, res) => {
   res.json({
     ok: true,
-    salon_id: req.salon_id,
+    salon_id: String(req.salon_id),
     slug: req.salon.slug,
   });
 });
