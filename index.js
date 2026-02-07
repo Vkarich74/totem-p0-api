@@ -2,6 +2,8 @@ import express from "express";
 import cors from "cors";
 import db from "./db.js";
 
+import ownerRoutes from "./routes_owner/index.js";
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -10,6 +12,9 @@ app.use(express.json());
 
 // ===== HEALTH =====
 app.get("/health", (req, res) => res.json({ ok: true }));
+
+// ===== OWNER API =====
+app.use("/owner", ownerRoutes);
 
 // ===== ENSURE SALONS TABLE =====
 async function ensureSalonsTable() {
