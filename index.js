@@ -9,9 +9,14 @@ import { ensureCalendarTable } from './calendar/calendar.sql.js';
 import { ensureBookingsTable } from './booking/booking.sql.js';
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 
 app.use(express.json());
+
+// ===== HEALTH =====
+app.get('/health', (req, res) => {
+  res.json({ ok: true });
+});
 
 // ===== SALONS =====
 async function ensureSalonsTable() {
@@ -115,7 +120,9 @@ app.use('/s/:slug', async (req, res, next) => {
       salon = await db.get(selectSql, [slug]);
     }
 
-    if (!salon) return res.status(500).json({ error: 'SALON_CREATE_FAILED' });
+    if (!salon) {
+      return res.status(500).json({ error: 'SALON_CREATE_FAILED' });
+    }
 
     req.salon = salon;
     req.salon_id = salon.id;
