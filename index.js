@@ -12,30 +12,56 @@ app.use(express.json());
 
 // ===== SALONS =====
 async function ensureSalonsTable() {
-  await db.run(`
-    CREATE TABLE IF NOT EXISTS salons (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      slug TEXT UNIQUE,
-      name TEXT,
-      status TEXT
-    );
-  `);
+  if (db.mode === 'POSTGRES') {
+    await db.run(`
+      CREATE TABLE IF NOT EXISTS salons (
+        id SERIAL PRIMARY KEY,
+        slug TEXT UNIQUE,
+        name TEXT,
+        status TEXT
+      );
+    `);
+  } else {
+    await db.run(`
+      CREATE TABLE IF NOT EXISTS salons (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        slug TEXT UNIQUE,
+        name TEXT,
+        status TEXT
+      );
+    `);
+  }
 }
 
 // ===== FINANCE =====
 async function ensureFinanceTable() {
-  await db.run(`
-    CREATE TABLE IF NOT EXISTS finance_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      salon_id TEXT NOT NULL,
-      master_id TEXT,
-      type TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending',
-      amount INTEGER NOT NULL,
-      currency TEXT NOT NULL DEFAULT 'KGS',
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-  `);
+  if (db.mode === 'POSTGRES') {
+    await db.run(`
+      CREATE TABLE IF NOT EXISTS finance_events (
+        id SERIAL PRIMARY KEY,
+        salon_id TEXT NOT NULL,
+        master_id TEXT,
+        type TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        amount INTEGER NOT NULL,
+        currency TEXT NOT NULL DEFAULT 'KGS',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+  } else {
+    await db.run(`
+      CREATE TABLE IF NOT EXISTS finance_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        salon_id TEXT NOT NULL,
+        master_id TEXT,
+        type TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        amount INTEGER NOT NULL,
+        currency TEXT NOT NULL DEFAULT 'KGS',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+  }
 }
 
 // ===== SUBSCRIPTIONS =====

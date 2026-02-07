@@ -11,14 +11,9 @@ import {
 const router = express.Router();
 
 /**
- * OWNER LINK (NO authOwner)
- * Owner сам привязывает себя к салону
- *
- * Headers:
- *  Authorization: Bearer <owner_id>
- *
- * Body:
- *  { "salon_id": "s1" }
+ * OWNER LINK
+ * Authorization: Bearer <owner_id>
+ * Body: { "salon_id": <NUMBER> }
  */
 router.post('/link', async (req, res) => {
   try {
@@ -46,7 +41,7 @@ router.post('/link', async (req, res) => {
           VALUES (?, ?, 'active')
         `;
 
-    await db.run(sql, [owner_id, salon_id]);
+    await db.run(sql, [owner_id, Number(salon_id)]);
     res.json({ ok: true });
   } catch (e) {
     console.error('[OWNER_LINK]', e);
@@ -54,11 +49,7 @@ router.post('/link', async (req, res) => {
   }
 });
 
-/**
- * Все остальные owner-операции — ТОЛЬКО после:
- * - активного салона (requireActiveSalon)
- * - ownership (authOwner)
- */
+// ВСЕ ОПЕРАЦИИ НИЖЕ — ТОЛЬКО ПОСЛЕ authOwner
 router.use(authOwner);
 
 /**
