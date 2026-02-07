@@ -39,7 +39,7 @@ async function ensureSalonsTable() {
   }
 }
 
-// ===== ENSURE OWNER_SALON (IDEMPOTENT MIGRATION) =====
+// ===== ENSURE OWNER_SALON (SLUG → ID MIGRATION) =====
 async function ensureOwnerSalonTable() {
   if (db.mode !== "POSTGRES") {
     await db.run(`
@@ -58,15 +58,13 @@ async function ensureOwnerSalonTable() {
     return;
   }
 
-  // Проверяем, существует ли колонка salon_id
   const col = await db.get(`
     SELECT data_type
     FROM information_schema.columns
-    WHERE table_name = 'owner_salon'
-      AND column_name = 'salon_id'
+    WHERE table_name='owner_salon'
+      AND column_name='salon_id'
   `);
 
-  // Таблицы нет — создаём сразу корректную
   if (!col) {
     await db.run(`
       CREATE TABLE owner_salon (
@@ -84,13 +82,9 @@ async function ensureOwnerSalonTable() {
     return;
   }
 
-  // Тип уже правильный — выходим
-  if (col.data_type === "bigint") {
-    return;
-  }
+  if (col.data_type === "bigint") return;
 
-  // === МИГРАЦИЯ TEXT -> BIGINT ===
-  console.log("[MIGRATION] owner_salon.salon_id TEXT -> BIGINT");
+  console.log("[MIGRATION] owner_salon.salon_id SLUG -> salons.id");
 
   await db.run(`DROP TABLE IF EXISTS owner_salon_new;`);
 
@@ -104,10 +98,12 @@ async function ensureOwnerSalonTable() {
     );
   `);
 
+  // КЛЮЧЕВОЙ ФИКС: JOIN ПО SLUG
   await db.run(`
     INSERT INTO owner_salon_new (owner_id, salon_id, status, created_at)
-    SELECT owner_id, salon_id::BIGINT, status, created_at
-    FROM owner_salon;
+    SELECT os.owner_id, s.id, os.status, os.created_at
+    FROM owner_salon os
+    JOIN salons s ON s.slug = os.salon_id
   `);
 
   await db.run(`DROP TABLE owner_salon;`);
@@ -118,7 +114,7 @@ async function ensureOwnerSalonTable() {
     ON owner_salon (owner_id, salon_id);
   `);
 
-  console.log("[MIGRATION] owner_salon FIXED");
+  console.log("[MIGRATION] owner_salon FIXED VIA SLUG");
 }
 
 // ===== ENSURE FINANCE =====
@@ -171,133 +167,14 @@ async function ensureSubscriptionsTable() {
   }
 }
 
-// ===== ACTIVATION GUARD =====
-async function requireActiveSalon(req, res, next) {
-  const salon_id =
-    req.headers["x-salon-id"] ||
-    req.body?.salon_id ||
-    req.params?.salon_id;
-
-  if (!salon_id) {
-    return res.status(400).json({ error: "SALON_ID_REQUIRED" });
-  }
-
-  const sql =
-    db.mode === "POSTGRES"
-      ? `SELECT 1 FROM salon_subscriptions
-         WHERE salon_id=$1 AND active_until >= NOW()`
-      : `SELECT 1 FROM salon_subscriptions
-         WHERE salon_id=? AND active_until >= datetime('now')`;
-
-  const row = await db.get(sql, [Number(salon_id)]);
-  if (!row) {
-    return res.status(403).json({ error: "SALON_NOT_ACTIVE" });
-  }
-
-  next();
-}
-
-// ===== PUBLIC SALON RESOLVE =====
-app.use("/s/:slug", async (req, _res, next) => {
-  const slug = req.params.slug;
-
-  const select =
-    db.mode === "POSTGRES"
-      ? "SELECT * FROM salons WHERE slug=$1"
-      : "SELECT * FROM salons WHERE slug=?";
-
-  let salon = await db.get(select, [slug]);
-
-  if (!salon) {
-    const insert =
-      db.mode === "POSTGRES"
-        ? `INSERT INTO salons (slug,name,status)
-           VALUES ($1,$2,'created')
-           ON CONFLICT (slug) DO NOTHING
-           RETURNING *`
-        : `INSERT OR IGNORE INTO salons (slug,name,status)
-           VALUES (?,?, 'created')`;
-
-    if (db.mode === "POSTGRES") salon = await db.get(insert, [slug, slug]);
-    else {
-      await db.run(insert, [slug, slug]);
-      salon = await db.get(select, [slug]);
-    }
-  }
-
-  req.salon = salon;
-  req.salon_id = salon.id;
-  next();
-});
-
-app.get("/s/:slug/resolve", (req, res) => {
-  res.json({
-    ok: true,
-    salon_id: String(req.salon_id),
-    slug: req.salon.slug,
-    status: req.salon.status
-  });
-});
-
-// ===== OWNER API =====
-app.use("/owner", requireActiveSalon, ownerRoutes);
-
-// ===== FINANCE READ =====
-app.get("/finance/salon/:salon_id", requireActiveSalon, async (req, res) => {
-  const sql =
-    db.mode === "POSTGRES"
-      ? `SELECT * FROM finance_events WHERE salon_id=$1 ORDER BY created_at DESC`
-      : `SELECT * FROM finance_events WHERE salon_id=? ORDER BY created_at DESC`;
-
-  const rows = await db.all(sql, [Number(req.params.salon_id)]);
-  res.json({ ok: true, items: rows });
-});
-
-// ===== PAYMENT =====
-app.post("/finance/event", async (req, res) => {
-  const { salon_id, type, amount } = req.body;
-  if (!salon_id || !type || !amount) {
-    return res.status(400).json({ error: "INVALID_INPUT" });
-  }
-
-  await db.run(
-    db.mode === "POSTGRES"
-      ? `INSERT INTO finance_events (salon_id,type,amount,status)
-         VALUES ($1,$2,$3,'confirmed')`
-      : `INSERT INTO finance_events (salon_id,type,amount,status)
-         VALUES (?,?,?,'confirmed')`,
-    [Number(salon_id), type, amount]
-  );
-
-  await db.run(
-    db.mode === "POSTGRES"
-      ? `
-        INSERT INTO salon_subscriptions (salon_id, active_until)
-        VALUES ($1, NOW() + INTERVAL '30 days')
-        ON CONFLICT (salon_id)
-        DO UPDATE SET active_until =
-          GREATEST(salon_subscriptions.active_until, NOW())
-          + INTERVAL '30 days'
-      `
-      : `
-        INSERT INTO salon_subscriptions (salon_id, active_until)
-        VALUES (?, datetime('now','+30 days'))
-        ON CONFLICT(salon_id)
-        DO UPDATE SET active_until =
-          datetime(MAX(active_until, datetime('now')), '+30 days')
-      `,
-    [Number(salon_id)]
-  );
-
-  res.json({ ok: true });
-});
-
 // ===== START =====
 async function bootstrap() {
   await ensureSalonsTable();
   await ensureOwnerSalonTable();
   await ensureFinanceTable();
   await ensureSubscriptionsTable();
+
+  app.use("/owner", ownerRoutes);
 
   app.listen(PORT, () => {
     console.log("TOTEM API STARTED", PORT);
