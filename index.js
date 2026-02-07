@@ -1,4 +1,3 @@
-// FULL FILE — index.js (SUBSCRIPTION ENABLED)
 import express from "express";
 import cors from "cors";
 import db from "./db.js";
@@ -90,7 +89,7 @@ async function ensureSubscriptionsTable() {
   }
 }
 
-// ===== ACTIVATION GUARD (PERIOD) =====
+// ===== ACTIVATION GUARD =====
 async function requireActiveSalon(req, res, next) {
   const salon_id =
     req.headers["x-salon-id"] ||
@@ -156,7 +155,18 @@ app.get("/s/:slug/resolve", (req, res) => {
 // ===== OWNER (GUARDED) =====
 app.use("/owner", requireActiveSalon, ownerRoutes);
 
-// ===== PAYMENT -> SUBSCRIPTION EXTEND =====
+// ===== FINANCE READ (GUARDED) =====
+app.get("/finance/salon/:salon_id", requireActiveSalon, async (req, res) => {
+  const sql =
+    db.mode === "POSTGRES"
+      ? `SELECT * FROM finance_events WHERE salon_id=$1 ORDER BY created_at DESC`
+      : `SELECT * FROM finance_events WHERE salon_id=? ORDER BY created_at DESC`;
+
+  const rows = await db.all(sql, [req.params.salon_id]);
+  res.json({ ok: true, items: rows });
+});
+
+// ===== PAYMENT -> EXTEND SUBSCRIPTION =====
 app.post("/finance/event", async (req, res) => {
   const { salon_id, type, amount } = req.body;
   if (!salon_id || !type || !amount)
@@ -171,7 +181,6 @@ app.post("/finance/event", async (req, res) => {
 
   await db.run(insertPay, [salon_id, type, amount]);
 
-  // extend subscription by 30 days
   const extend =
     db.mode === "POSTGRES"
       ? `
