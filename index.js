@@ -3,7 +3,10 @@ import db from './db.js';
 
 import ownerRoutes from './routes_owner/index.js';
 import calendarRoutes from './calendar/calendar.routes.js';
+import bookingRoutes from './booking/booking.routes.js';
+
 import { ensureCalendarTable } from './calendar/calendar.sql.js';
+import { ensureBookingsTable } from './booking/booking.sql.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -123,7 +126,6 @@ app.use('/s/:slug', async (req, res, next) => {
   }
 });
 
-// ===== RESOLVE API (PUBLIC) =====
 app.get('/s/:slug/resolve', (req, res) => {
   res.json({
     ok: true,
@@ -136,6 +138,7 @@ app.get('/s/:slug/resolve', (req, res) => {
 // ===== ROUTES =====
 app.use('/owner', ownerRoutes);
 app.use('/calendar', calendarRoutes);
+app.use('/booking', bookingRoutes);
 
 // ===== START =====
 async function bootstrap() {
@@ -143,6 +146,7 @@ async function bootstrap() {
   await ensureFinanceTable();
   await ensureSubscriptionsTable();
   await ensureCalendarTable();
+  await ensureBookingsTable();
 
   app.listen(PORT, () => {
     console.log('TOTEM API STARTED', PORT);
