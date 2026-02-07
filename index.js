@@ -1,3 +1,4 @@
+// FULL FILE — index.js (SUBSCRIPTION ENABLED)
 import express from "express";
 import cors from "cors";
 import db from "./db.js";
@@ -70,46 +71,50 @@ async function ensureFinanceTable() {
   }
 }
 
-// ===== ACTIVATION GUARD =====
+// ===== ENSURE SUBSCRIPTIONS =====
+async function ensureSubscriptionsTable() {
+  if (db.mode === "POSTGRES") {
+    await db.run(`
+      CREATE TABLE IF NOT EXISTS salon_subscriptions (
+        salon_id TEXT PRIMARY KEY,
+        active_until TIMESTAMPTZ NOT NULL
+      );
+    `);
+  } else {
+    await db.run(`
+      CREATE TABLE IF NOT EXISTS salon_subscriptions (
+        salon_id TEXT PRIMARY KEY,
+        active_until TEXT NOT NULL
+      );
+    `);
+  }
+}
+
+// ===== ACTIVATION GUARD (PERIOD) =====
 async function requireActiveSalon(req, res, next) {
   const salon_id =
     req.headers["x-salon-id"] ||
     req.body?.salon_id ||
     req.params?.salon_id;
 
-  if (!salon_id) {
-    return res.status(400).json({ error: "SALON_ID_REQUIRED" });
-  }
+  if (!salon_id) return res.status(400).json({ error: "SALON_ID_REQUIRED" });
 
   const sql =
     db.mode === "POSTGRES"
-      ? `
-        SELECT 1 FROM finance_events
-        WHERE salon_id = $1
-          AND type = 'payment'
-          AND status = 'confirmed'
-        LIMIT 1
-      `
-      : `
-        SELECT 1 FROM finance_events
-        WHERE salon_id = ?
-          AND type = 'payment'
-          AND status = 'confirmed'
-        LIMIT 1
-      `;
+      ? `SELECT 1 FROM salon_subscriptions
+         WHERE salon_id=$1 AND active_until >= NOW()`
+      : `SELECT 1 FROM salon_subscriptions
+         WHERE salon_id=? AND active_until >= datetime('now')`;
 
   const row = await db.get(sql, [salon_id]);
-  if (!row) {
-    return res.status(403).json({ error: "SALON_NOT_ACTIVE" });
-  }
+  if (!row) return res.status(403).json({ error: "SALON_NOT_ACTIVE" });
 
   next();
 }
 
-// ===== PUBLIC SALON RESOLVER (AUTO-CREATE) =====
+// ===== PUBLIC SALON RESOLVE =====
 app.use("/s/:slug", async (req, _res, next) => {
   const slug = req.params.slug;
-
   const select =
     db.mode === "POSTGRES"
       ? "SELECT * FROM salons WHERE slug=$1"
@@ -139,7 +144,6 @@ app.use("/s/:slug", async (req, _res, next) => {
   next();
 });
 
-// ===== RESOLVE (PUBLIC, NO GUARD) =====
 app.get("/s/:slug/resolve", (req, res) => {
   res.json({
     ok: true,
@@ -149,48 +153,54 @@ app.get("/s/:slug/resolve", (req, res) => {
   });
 });
 
-// ===== OWNER API (GUARDED) =====
+// ===== OWNER (GUARDED) =====
 app.use("/owner", requireActiveSalon, ownerRoutes);
 
-// ===== FINANCE CREATE (GUARDED) =====
-app.post("/finance/event", requireActiveSalon, async (req, res) => {
-  const { salon_id, master_id, type, amount } = req.body;
-  if (!salon_id || !type || !amount) {
+// ===== PAYMENT -> SUBSCRIPTION EXTEND =====
+app.post("/finance/event", async (req, res) => {
+  const { salon_id, type, amount } = req.body;
+  if (!salon_id || !type || !amount)
     return res.status(400).json({ error: "INVALID_INPUT" });
-  }
 
-  const sql =
+  const insertPay =
     db.mode === "POSTGRES"
-      ? `INSERT INTO finance_events
-         (salon_id, master_id, type, amount, status)
-         VALUES ($1,$2,$3,$4,'confirmed')`
-      : `INSERT INTO finance_events
-         (salon_id, master_id, type, amount, status)
-         VALUES (?,?,?,?, 'confirmed')`;
+      ? `INSERT INTO finance_events (salon_id,type,amount,status)
+         VALUES ($1,$2,$3,'confirmed')`
+      : `INSERT INTO finance_events (salon_id,type,amount,status)
+         VALUES (?,?,?,'confirmed')`;
 
-  await db.run(sql, [salon_id, master_id || null, type, amount]);
+  await db.run(insertPay, [salon_id, type, amount]);
+
+  // extend subscription by 30 days
+  const extend =
+    db.mode === "POSTGRES"
+      ? `
+        INSERT INTO salon_subscriptions (salon_id, active_until)
+        VALUES ($1, NOW() + INTERVAL '30 days')
+        ON CONFLICT (salon_id)
+        DO UPDATE SET active_until = GREATEST(
+          salon_subscriptions.active_until,
+          NOW()
+        ) + INTERVAL '30 days'
+      `
+      : `
+        INSERT INTO salon_subscriptions (salon_id, active_until)
+        VALUES (?, datetime('now','+30 days'))
+        ON CONFLICT(salon_id)
+        DO UPDATE SET active_until =
+          datetime(MAX(active_until, datetime('now')), '+30 days')
+      `;
+
+  await db.run(extend, [salon_id]);
   res.json({ ok: true });
-});
-
-// ===== FINANCE READ (GUARDED) =====
-app.get("/finance/salon/:salon_id", requireActiveSalon, async (req, res) => {
-  const sql =
-    db.mode === "POSTGRES"
-      ? `SELECT * FROM finance_events WHERE salon_id=$1 ORDER BY created_at DESC`
-      : `SELECT * FROM finance_events WHERE salon_id=? ORDER BY created_at DESC`;
-
-  const rows = await db.all(sql, [req.params.salon_id]);
-  res.json({ ok: true, items: rows });
 });
 
 // ===== START =====
 async function bootstrap() {
   await ensureSalonsTable();
   await ensureFinanceTable();
-
-  app.listen(PORT, () => {
-    console.log("TOTEM API STARTED", PORT);
-  });
+  await ensureSubscriptionsTable();
+  app.listen(PORT, () => console.log("TOTEM API STARTED", PORT));
 }
 
 bootstrap().catch((e) => {
