@@ -4,6 +4,7 @@ import db from './db.js';
 import ownerRoutes from './routes_owner/index.js';
 import calendarRoutes from './calendar/calendar.routes.js';
 import bookingRoutes from './booking/booking.routes.js';
+import reportsRoutes from './reports/index.js';
 
 import { ensureCalendarTable } from './calendar/calendar.sql.js';
 import { ensureBookingsTable } from './booking/booking.sql.js';
@@ -194,6 +195,7 @@ app.post('/finance/event', async (req, res) => {
 app.use('/owner', ownerRoutes);
 app.use('/calendar', calendarRoutes);
 app.use('/booking', bookingRoutes);
+app.use('/reports', reportsRoutes);
 
 // ===== START =====
 async function bootstrap() {
