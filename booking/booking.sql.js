@@ -2,11 +2,10 @@ import db from '../db.js';
 
 export async function ensureBookingsTable() {
   if (db.mode === 'POSTGRES') {
-    // 1) base table
+    // 1) базовая таблица (старые инсталлы)
     await db.run(`
       CREATE TABLE IF NOT EXISTS bookings (
         id SERIAL PRIMARY KEY,
-        salon_id INTEGER NOT NULL,
         master_id INTEGER NOT NULL,
         start_at TIMESTAMPTZ NOT NULL,
         end_at TIMESTAMPTZ NOT NULL,
@@ -15,18 +14,25 @@ export async function ensureBookingsTable() {
       );
     `);
 
-    // 2) request_id column (idempotency)
+    // 2) salon_id (ДОБАВЛЯЕМ ЕСЛИ НЕТ)
+    await db.run(`
+      ALTER TABLE bookings
+      ADD COLUMN IF NOT EXISTS salon_id INTEGER;
+    `);
+
+    // 3) request_id (IDEMPOTENCY)
     await db.run(`
       ALTER TABLE bookings
       ADD COLUMN IF NOT EXISTS request_id TEXT;
     `);
 
-    // 3) unique constraint (safe)
+    // 4) уникальность request_id (ТОЛЬКО ЕСЛИ НЕТ)
     await db.run(`
       DO $$
       BEGIN
         IF NOT EXISTS (
-          SELECT 1 FROM pg_indexes
+          SELECT 1
+          FROM pg_indexes
           WHERE indexname = 'bookings_request_id_uidx'
         ) THEN
           CREATE UNIQUE INDEX bookings_request_id_uidx
@@ -36,7 +42,7 @@ export async function ensureBookingsTable() {
       END$$;
     `);
   } else {
-    // SQLITE
+    // SQLITE (локалка / тест)
     await db.run(`
       CREATE TABLE IF NOT EXISTS bookings (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
