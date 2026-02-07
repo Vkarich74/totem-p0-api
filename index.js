@@ -126,6 +126,7 @@ app.use('/s/:slug', async (req, res, next) => {
   }
 });
 
+// ===== RESOLVE API =====
 app.get('/s/:slug/resolve', (req, res) => {
   res.json({
     ok: true,
@@ -133,6 +134,53 @@ app.get('/s/:slug/resolve', (req, res) => {
     slug: req.salon.slug,
     status: req.salon.status
   });
+});
+
+// ===== FINANCE EVENT (ACTIVATION) =====
+app.post('/finance/event', async (req, res) => {
+  try {
+    const { salon_id, type, amount } = req.body;
+    if (!salon_id || !type || !amount) {
+      return res.status(400).json({ error: 'INVALID_INPUT' });
+    }
+
+    const insertEvent =
+      db.mode === 'POSTGRES'
+        ? `
+          INSERT INTO finance_events (salon_id, type, amount, status)
+          VALUES ($1,$2,$3,'confirmed')
+        `
+        : `
+          INSERT INTO finance_events (salon_id, type, amount, status)
+          VALUES (?,?,?,'confirmed')
+        `;
+
+    await db.run(insertEvent, [String(salon_id), type, amount]);
+
+    const extend =
+      db.mode === 'POSTGRES'
+        ? `
+          INSERT INTO salon_subscriptions (salon_id, active_until)
+          VALUES ($1, NOW() + INTERVAL '30 days')
+          ON CONFLICT (salon_id)
+          DO UPDATE SET active_until =
+            GREATEST(salon_subscriptions.active_until, NOW())
+            + INTERVAL '30 days'
+        `
+        : `
+          INSERT INTO salon_subscriptions (salon_id, active_until)
+          VALUES (?, datetime('now','+30 days'))
+          ON CONFLICT(salon_id)
+          DO UPDATE SET active_until =
+            datetime(MAX(active_until, datetime('now')), '+30 days')
+        `;
+
+    await db.run(extend, [String(salon_id)]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[FINANCE_EVENT]', e);
+    res.status(500).json({ error: 'FINANCE_EVENT_FAILED' });
+  }
 });
 
 // ===== ROUTES =====
