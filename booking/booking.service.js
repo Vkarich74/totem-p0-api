@@ -14,7 +14,7 @@ export async function createBooking({
     throw err;
   }
 
-  // 1) IDEMPOTENCY CHECK
+  // 1) IDEMPOTENCY FIRST — ДО КАЛЕНДАРЯ
   const findSql =
     db.mode === 'POSTGRES'
       ? `SELECT id FROM bookings WHERE request_id = $1`
@@ -25,7 +25,7 @@ export async function createBooking({
     return existing.id;
   }
 
-  // 2) CALENDAR = SOURCE OF TRUTH
+  // 2) CALENDAR — SOURCE OF TRUTH (ТОЛЬКО ЕСЛИ НОВАЯ БРОНЬ)
   await reserveSlot({ salon_id, master_id, start_at, end_at });
 
   // 3) CREATE BOOKING
