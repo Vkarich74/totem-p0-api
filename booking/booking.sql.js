@@ -2,37 +2,32 @@ import db from '../db.js';
 
 export async function ensureBookingsTable() {
   if (db.mode === 'POSTGRES') {
-    // 1) базовая таблица (старые инсталлы)
+    // 0) гарантируем, что таблица существует (минимальный каркас)
     await db.run(`
       CREATE TABLE IF NOT EXISTS bookings (
-        id SERIAL PRIMARY KEY,
-        master_id INTEGER NOT NULL,
-        start_at TIMESTAMPTZ NOT NULL,
-        end_at TIMESTAMPTZ NOT NULL,
-        status TEXT NOT NULL DEFAULT 'reserved',
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        id SERIAL PRIMARY KEY
       );
     `);
 
-    // 2) salon_id (ДОБАВЛЯЕМ ЕСЛИ НЕТ)
-    await db.run(`
-      ALTER TABLE bookings
-      ADD COLUMN IF NOT EXISTS salon_id INTEGER;
-    `);
+    // 1) обязательные колонки для текущего кода booking.service.js
+    await db.run(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS salon_id INTEGER;`);
+    await db.run(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS master_id INTEGER;`);
+    await db.run(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS start_at TIMESTAMPTZ;`);
+    await db.run(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS end_at TIMESTAMPTZ;`);
+    await db.run(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS status TEXT;`);
+    await db.run(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS request_id TEXT;`);
+    await db.run(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;`);
 
-    // 3) request_id (IDEMPOTENCY)
-    await db.run(`
-      ALTER TABLE bookings
-      ADD COLUMN IF NOT EXISTS request_id TEXT;
-    `);
+    // 2) дефолты (только если их нет — делаем мягко через UPDATE для NULL)
+    await db.run(`UPDATE bookings SET status='reserved' WHERE status IS NULL;`);
+    await db.run(`UPDATE bookings SET created_at=NOW() WHERE created_at IS NULL;`);
 
-    // 4) уникальность request_id (ТОЛЬКО ЕСЛИ НЕТ)
+    // 3) уникальность request_id (без падений)
     await db.run(`
       DO $$
       BEGIN
         IF NOT EXISTS (
-          SELECT 1
-          FROM pg_indexes
+          SELECT 1 FROM pg_indexes
           WHERE indexname = 'bookings_request_id_uidx'
         ) THEN
           CREATE UNIQUE INDEX bookings_request_id_uidx
@@ -42,7 +37,7 @@ export async function ensureBookingsTable() {
       END$$;
     `);
   } else {
-    // SQLITE (локалка / тест)
+    // SQLITE
     await db.run(`
       CREATE TABLE IF NOT EXISTS bookings (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
