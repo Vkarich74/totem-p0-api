@@ -1,0 +1,12 @@
+START
+[DB] MODE: POSTGRES
+HARD_NEGATIVE_START
+RACE_DEBITS_OK: 5
+
+HARD_NEGATIVE_FAIL
+error: relation "ledger_entries" does not exist
+    at C:\Users\Vitaly\Desktop\odoo-local\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async resetDB (file:///C:/Users/Vitaly/Desktop/odoo-local/[eval1]:20:3)
+    at async main (file:///C:/Users/Vitaly/Desktop/odoo-local/[eval1]:112:3)
+

@@ -1,0 +1,11 @@
+{
+  "started_at": "2026-02-08T14:40:16.708284+00:00",
+  "status": "SUCCESS",
+  "result": {
+    "wallets_count": "3",
+    "currency_unit": "cents",
+    "direction_logic": "credit=+ , debit=-"
+  },
+  "error": null,
+  "finished_at": "2026-02-08T14:40:20.615366+00:00"
+}

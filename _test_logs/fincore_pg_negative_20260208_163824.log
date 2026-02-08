@@ -1,0 +1,7 @@
+NEGATIVE_TEST_START
+NEGATIVE_TEST_FAIL
+error: update or delete on table "wallets" violates foreign key constraint "service_invoices_system_wallet_fkey" on table "service_invoices"
+    at C:\Users\Vitaly\Desktop\odoo-local\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async q (file:///C:/Users/Vitaly/Desktop/odoo-local/[eval1]:20:40)
+    at async main (file:///C:/Users/Vitaly/Desktop/odoo-local/[eval1]:27:3)
