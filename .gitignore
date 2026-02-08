@@ -1,38 +1,115 @@
-# === Node.js ===
+# =====================================================
+# TOTEM — .gitignore (FINAL / CANONICAL)
+# RULE: BACKEND ONLY
+# ROOT: C:\Users\Vitaly\Desktop\odoo-local
+# =====================================================
+
+# -------------------------
+# OS / Editors
+# -------------------------
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.tmp
+
+# -------------------------
+# Node.js
+# -------------------------
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# === Environment ===
+# -------------------------
+# Environment / Secrets
+# -------------------------
 .env
 .env.*
 !.env.example
 
-# === OS / Editor ===
-.DS_Store
-Thumbs.db
-.vscode/
-.idea/
-
-# === Logs ===
-logs/
-*.log
-
-# === Build / Cache ===
-dist/
-build/
-.cache/
-.tmp/
-
-# === SQLite / Local DB ===
-*.db
-*.db-shm
-*.db-wal
-
-# === Work in progress ===
-wip/
-
-# === Misc ===
+# -------------------------
+# Local Databases / Runtime
+# -------------------------
+totem.db
+totem.db-*
+data.db
+data.db-*
 *.bak
-*.swp
+*.DEBUG.bak
+
+# -------------------------
+# Logs / Dumps / Backups
+# -------------------------
+logs/
+dumps/
+backups/
+db_snapshot/
+exports/
+
+# -------------------------
+# Odoo / Frontend / Ops (OUT OF GIT)
+# -------------------------
+frontend/
+front/
+public/
+public_static/
+widget/
+scripts/
+docker-compose.yml
+odoo_*.py
+odoo_*.sql
+odoo_*.json
+api_*.py
+site_*.json
+site_pages_list.txt
+export_*.csv
+ir_*.txt
+dt.txt
+cabinet_inventory.json
+
+# -------------------------
+# Handoff / Archives
+# -------------------------
+TOTEM_HANDOFF/
+TOTEM_HANDOFF2/
+TOTEM_release_*.zip
+
+# -------------------------
+# Extra local / ops leftovers (LITERAL)
+# -------------------------
+ru_RU
+'ru_RU'
+'ru_RU'/
+docker
+docker/
+wip/
+db_check.txt
+docs/UI_CONTRACT_V1.md
+tools/AUTO_OWNER_REPORTS_RELEASE.py
+
+# -------------------------
+# Garbage / Accidental files
+# -------------------------
+^
+^/
+{
+{/
+cd
+dir
+git
+node
+npm
+notepad
+type
+if
+set
+taskkill
+-files --others --exclude-standard
+py
+python
+
+# -------------------------
+# Misc
+# -------------------------
+*.cmd
