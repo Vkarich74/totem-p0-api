@@ -1,73 +1,51 @@
 // services/invoice/service-invoice.service.js
 // ===========================================
-// Service Invoices — platform billing
+// Service Invoices (Postgres core)
+// - debit from source wallet (blocks overdraft)
+// - credit to system wallet
+// - idempotent per wallet+direction+reference
 // ===========================================
 
 import { pool } from "../../db/index.js";
-import { getWalletBalance } from "../wallet/wallet.service.js";
-import { addLedgerEntry } from "../wallet/ledger.service.js";
+import { debit, credit } from "../wallet/ledger.service.js";
 
-/**
- * Create service invoice and immediately collect funds.
- * Funds move: source wallet -> system wallet.
- */
-export async function createServiceInvoice({
-  sourceWalletId,
-  systemWalletId,
-  description,
-  amountCents,
-}) {
+function requirePool() {
+  if (!pool) throw new Error("[Invoice] Postgres pool not available. DB_MODE must be POSTGRES and DATABASE_URL set.");
+}
+
+export async function createServiceInvoice({ sourceWalletId, systemWalletId, description, amountCents }) {
+  requirePool();
   if (!sourceWalletId) throw new Error("sourceWalletId required");
   if (!systemWalletId) throw new Error("systemWalletId required");
   if (!description) throw new Error("description required");
-  if (amountCents <= 0) throw new Error("amountCents must be positive");
+  if (!Number.isFinite(amountCents) || amountCents <= 0) throw new Error("amountCents must be positive");
 
-  const balance = await getWalletBalance(sourceWalletId);
-  if (balance < amountCents) {
-    throw new Error("insufficient funds");
-  }
+  const ins = await pool.query(
+    `
+    INSERT INTO service_invoices (system_wallet, description, amount_cents)
+    VALUES ($1,$2,$3)
+    RETURNING id
+    `,
+    [systemWalletId, description, amountCents]
+  );
 
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
+  const invoiceId = ins.rows[0].id;
 
-    const res = await client.query(
-      `
-      INSERT INTO service_invoices
-        (system_wallet, description, amount_cents)
-      VALUES ($1, $2, $3)
-      RETURNING id
-      `,
-      [systemWalletId, description, amountCents]
-    );
+  // Debit source (blocks overdraft)
+  await debit({
+    walletId: sourceWalletId,
+    amountCents,
+    referenceType: "service_invoice",
+    referenceId: String(invoiceId),
+  });
 
-    const invoiceId = res.rows[0].id;
+  // Credit system
+  await credit({
+    walletId: systemWalletId,
+    amountCents,
+    referenceType: "service_invoice",
+    referenceId: String(invoiceId),
+  });
 
-    await client.query("COMMIT");
-
-    // Debit source wallet
-    await addLedgerEntry({
-      walletId: sourceWalletId,
-      direction: "debit",
-      amountCents,
-      referenceType: "service_invoice",
-      referenceId: invoiceId,
-    });
-
-    // Credit system wallet
-    await addLedgerEntry({
-      walletId: systemWalletId,
-      direction: "credit",
-      amountCents,
-      referenceType: "service_invoice",
-      referenceId: invoiceId,
-    });
-
-    return invoiceId;
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
+  return invoiceId;
 }

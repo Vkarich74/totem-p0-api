@@ -1,130 +1,93 @@
 // services/payout/payout.service.js
 // =================================
-// Payout Flow — withdrawals
+// Payout Service (Postgres core)
+// - reserve by ledger debit (prevents overdraft)
+// - rollback by ledger credit
 // =================================
 
 import { pool } from "../../db/index.js";
-import { getWalletBalance } from "../wallet/wallet.service.js";
-import { addLedgerEntry } from "../wallet/ledger.service.js";
+import { debit, credit } from "../wallet/ledger.service.js";
 
-/**
- * Request payout.
- * Money is reserved immediately via ledger (debit).
- */
+function requirePool() {
+  if (!pool) throw new Error("[Payout] Postgres pool not available. DB_MODE must be POSTGRES and DATABASE_URL set.");
+}
+
 export async function requestPayout({ walletId, amountCents }) {
+  requirePool();
   if (!walletId) throw new Error("walletId required");
-  if (amountCents <= 0) throw new Error("amountCents must be positive");
+  if (!Number.isFinite(amountCents) || amountCents <= 0) throw new Error("amountCents must be positive");
 
-  const balance = await getWalletBalance(walletId);
-  if (balance < amountCents) {
-    throw new Error("insufficient funds");
-  }
-
+  // Create payout row first (business object), then reserve via ledger debit
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    const res = await client.query(
+    const ins = await client.query(
       `
       INSERT INTO payouts (wallet_id, amount_cents, status)
-      VALUES ($1, $2, 'requested')
+      VALUES ($1,$2,'requested')
       RETURNING id
       `,
       [walletId, amountCents]
     );
 
-    const payoutId = res.rows[0].id;
-
+    const payoutId = ins.rows[0].id;
     await client.query("COMMIT");
 
-    // Reserve funds
-    await addLedgerEntry({
+    // Reserve: ledger will block overdraft and enforce idempotency for this (wallet,payoutId,debit)
+    await debit({
       walletId,
-      direction: "debit",
       amountCents,
       referenceType: "payout",
-      referenceId: payoutId,
+      referenceId: String(payoutId),
     });
 
     return payoutId;
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
+  } catch (e) {
+    try { await client.query("ROLLBACK"); } catch {}
+    throw e;
   } finally {
     client.release();
   }
 }
 
-/**
- * Mark payout as completed.
- * No ledger action here (already reserved).
- */
-export async function markPayoutCompleted({ payoutId }) {
-  const res = await pool.query(
-    `
-    UPDATE payouts
-    SET status = 'completed', completed_at = now()
-    WHERE id = $1 AND status = 'requested'
-    RETURNING id
-    `,
-    [payoutId]
-  );
-
-  if (res.rowCount === 0) {
-    throw new Error("payout not found or invalid state");
-  }
-}
-
-/**
- * Fail payout and rollback funds via ledger.
- */
 export async function markPayoutFailed({ payoutId }) {
+  requirePool();
+  if (!payoutId) throw new Error("payoutId required");
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    const res = await client.query(
+    const sel = await client.query(
       `
       SELECT id, wallet_id, amount_cents, status
       FROM payouts
-      WHERE id = $1
+      WHERE id=$1
       FOR UPDATE
       `,
       [payoutId]
     );
 
-    if (res.rows.length === 0) {
-      throw new Error("payout not found");
-    }
+    if (sel.rows.length === 0) throw new Error("payout not found");
+    const p = sel.rows[0];
+    if (p.status !== "requested") throw new Error("payout not in requested state");
 
-    const payout = res.rows[0];
-
-    if (payout.status !== "requested") {
-      throw new Error("payout not in requested state");
-    }
-
-    await client.query(
-      `
-      UPDATE payouts
-      SET status = 'failed'
-      WHERE id = $1
-      `,
-      [payoutId]
-    );
-
+    await client.query(`UPDATE payouts SET status='failed' WHERE id=$1`, [payoutId]);
     await client.query("COMMIT");
 
-    // Rollback reserved funds
-    await addLedgerEntry({
-      walletId: payout.wallet_id,
-      direction: "credit",
-      amountCents: payout.amount_cents,
+    // Rollback credit (idempotent by UNIQUE)
+    await credit({
+      walletId: p.wallet_id,
+      amountCents: Number(p.amount_cents),
       referenceType: "payout_rollback",
-      referenceId: payoutId,
+      referenceId: String(payoutId),
     });
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
+
+    return { ok: true };
+  } catch (e) {
+    try { await client.query("ROLLBACK"); } catch {}
+    throw e;
   } finally {
     client.release();
   }
