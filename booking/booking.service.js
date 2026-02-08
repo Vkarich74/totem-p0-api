@@ -8,10 +8,9 @@ export async function createBooking({
   request_id
 }) {
   try {
-    // BEGIN
     await db.run('BEGIN');
 
-    // 1. Reserve calendar slot (idempotent)
+    // 1. Reserve calendar slot (idempotent via PARTIAL UNIQUE INDEX)
     const slotInsert =
       db.mode === 'POSTGRES'
         ? `
@@ -19,7 +18,7 @@ export async function createBooking({
             (master_id, salon_id, start_at, end_at, status, request_id)
           VALUES
             ($1, $2, $3, $4, 'reserved', $5)
-          ON CONFLICT (request_id)
+          ON CONFLICT ON CONSTRAINT calendar_request_id_uidx
           DO UPDATE SET request_id = EXCLUDED.request_id
           RETURNING id
         `
@@ -52,7 +51,7 @@ export async function createBooking({
 
     const calendar_slot_id = slotRow.id;
 
-    // 2. Create booking (STRICT — matches ensure schema)
+    // 2. Create booking (schema-aligned)
     const bookingInsert =
       db.mode === 'POSTGRES'
         ? `
@@ -114,10 +113,9 @@ export async function createBooking({
             );
           })();
 
-    // COMMIT
     await db.run('COMMIT');
-
     return bookingRow.id;
+
   } catch (e) {
     await db.run('ROLLBACK');
 
