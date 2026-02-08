@@ -10,7 +10,7 @@ export async function createBooking({
   try {
     await db.run('BEGIN');
 
-    // 1. Reserve calendar slot (idempotent via PARTIAL UNIQUE INDEX)
+    // 1. Try insert calendar slot (NO ON CONFLICT!)
     const slotInsert =
       db.mode === 'POSTGRES'
         ? `
@@ -18,9 +18,7 @@ export async function createBooking({
             (master_id, salon_id, start_at, end_at, status, request_id)
           VALUES
             ($1, $2, $3, $4, 'reserved', $5)
-          ON CONFLICT ON CONSTRAINT calendar_request_id_uidx
-          DO UPDATE SET request_id = EXCLUDED.request_id
-          RETURNING id
+          DO NOTHING
         `
         : `
           INSERT OR IGNORE INTO calendar_slots
@@ -29,19 +27,21 @@ export async function createBooking({
             (?, ?, ?, ?, 'reserved', ?)
         `;
 
-    const slotRow =
+    await db.run(slotInsert, [
+      master_id,
+      salon_id,
+      start_at,
+      end_at,
+      request_id
+    ]);
+
+    // 2. Fetch slot by request_id
+    const slotRow = await db.get(
       db.mode === 'POSTGRES'
-        ? await db.get(slotInsert, [
-            master_id,
-            salon_id,
-            start_at,
-            end_at,
-            request_id
-          ])
-        : await db.get(
-            `SELECT id FROM calendar_slots WHERE request_id = ?`,
-            [request_id]
-          );
+        ? `SELECT id FROM calendar_slots WHERE request_id = $1`
+        : `SELECT id FROM calendar_slots WHERE request_id = ?`,
+      [request_id]
+    );
 
     if (!slotRow || !slotRow.id) {
       const err = new Error('CALENDAR_CONFLICT');
@@ -51,7 +51,7 @@ export async function createBooking({
 
     const calendar_slot_id = slotRow.id;
 
-    // 2. Create booking (schema-aligned)
+    // 3. Create booking (schema-aligned)
     const bookingInsert =
       db.mode === 'POSTGRES'
         ? `
@@ -90,7 +90,7 @@ export async function createBooking({
       db.mode === 'POSTGRES'
         ? await db.get(bookingInsert, [
             salon_id,
-            String(salon_id), // salon_slug fallback
+            String(salon_id),
             master_id,
             start_at,
             end_at,
@@ -119,8 +119,14 @@ export async function createBooking({
   } catch (e) {
     await db.run('ROLLBACK');
 
-    if (e.code === 409) throw e;
+    // exclusion constraint → overlap
+    if (e.code === '23P01') {
+      const err = new Error('CALENDAR_CONFLICT');
+      err.code = 409;
+      throw err;
+    }
 
+    // idempotency
     if (e.code === '23505') {
       const err = new Error('DUPLICATE_REQUEST');
       err.code = 400;
