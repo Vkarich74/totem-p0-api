@@ -10,7 +10,7 @@ export async function createBooking({
   try {
     await db.run('BEGIN');
 
-    // 1. Try insert calendar slot (NO ON CONFLICT!)
+    // 1. Try insert calendar slot (idempotent, conflict-safe)
     const slotInsert =
       db.mode === 'POSTGRES'
         ? `
@@ -18,7 +18,7 @@ export async function createBooking({
             (master_id, salon_id, start_at, end_at, status, request_id)
           VALUES
             ($1, $2, $3, $4, 'reserved', $5)
-          DO NOTHING
+          ON CONFLICT DO NOTHING
         `
         : `
           INSERT OR IGNORE INTO calendar_slots
@@ -51,7 +51,7 @@ export async function createBooking({
 
     const calendar_slot_id = slotRow.id;
 
-    // 3. Create booking (schema-aligned)
+    // 3. Create booking linked to slot
     const bookingInsert =
       db.mode === 'POSTGRES'
         ? `
@@ -90,7 +90,7 @@ export async function createBooking({
       db.mode === 'POSTGRES'
         ? await db.get(bookingInsert, [
             salon_id,
-            String(salon_id),
+            String(salon_id), // salon_slug fallback
             master_id,
             start_at,
             end_at,
@@ -119,7 +119,7 @@ export async function createBooking({
   } catch (e) {
     await db.run('ROLLBACK');
 
-    // exclusion constraint → overlap
+    // overlap via exclusion constraint
     if (e.code === '23P01') {
       const err = new Error('CALENDAR_CONFLICT');
       err.code = 409;
