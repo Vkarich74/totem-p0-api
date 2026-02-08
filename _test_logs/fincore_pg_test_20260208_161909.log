@@ -1,7 +1,0 @@
-FINCORE_PG_TEST_START
-TEST_FAIL
-error: syntax error at or near "$"
-    at C:\Users\Vitaly\Desktop\odoo-local\node_modules\pg-pool\index.js:45:11
-    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
-    at async q (file:///C:/Users/Vitaly/Desktop/odoo-local/[eval1]:28:40)
-    at async main (file:///C:/Users/Vitaly/Desktop/odoo-local/[eval1]:31:3)
