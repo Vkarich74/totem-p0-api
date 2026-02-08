@@ -8,7 +8,7 @@ export async function createBooking({
   request_id
 }) {
   try {
-    // BEGIN TRANSACTION
+    // BEGIN
     await db.run('BEGIN');
 
     // 1. Reserve calendar slot (idempotent)
@@ -30,7 +30,7 @@ export async function createBooking({
             (?, ?, ?, ?, 'reserved', ?)
         `;
 
-    const slotRes =
+    const slotRow =
       db.mode === 'POSTGRES'
         ? await db.get(slotInsert, [
             master_id,
@@ -44,33 +44,54 @@ export async function createBooking({
             [request_id]
           );
 
-    if (!slotRes || !slotRes.id) {
-      throw Object.assign(new Error('CALENDAR_CONFLICT'), { code: 409 });
+    if (!slotRow || !slotRow.id) {
+      const err = new Error('CALENDAR_CONFLICT');
+      err.code = 409;
+      throw err;
     }
 
-    const calendar_slot_id = slotRes.id;
+    const calendar_slot_id = slotRow.id;
 
-    // 2. Create booking linked to calendar slot
+    // 2. Create booking (STRICT — matches ensure schema)
     const bookingInsert =
       db.mode === 'POSTGRES'
         ? `
           INSERT INTO bookings
-            (salon_id, master_id, start_at, end_at, status, request_id, calendar_slot_id)
+            (
+              salon_id,
+              salon_slug,
+              master_id,
+              start_at,
+              end_at,
+              status,
+              request_id,
+              calendar_slot_id
+            )
           VALUES
-            ($1, $2, $3, $4, 'pending_payment', $5, $6)
+            ($1, $2, $3, $4, $5, 'pending_payment', $6, $7)
           RETURNING id
         `
         : `
           INSERT INTO bookings
-            (salon_id, master_id, start_at, end_at, status, request_id, calendar_slot_id)
+            (
+              salon_id,
+              salon_slug,
+              master_id,
+              start_at,
+              end_at,
+              status,
+              request_id,
+              calendar_slot_id
+            )
           VALUES
-            (?, ?, ?, ?, 'pending_payment', ?, ?)
+            (?, ?, ?, ?, ?, 'pending_payment', ?, ?)
         `;
 
-    const bookingRes =
+    const bookingRow =
       db.mode === 'POSTGRES'
         ? await db.get(bookingInsert, [
             salon_id,
+            String(salon_id), // salon_slug fallback
             master_id,
             start_at,
             end_at,
@@ -80,6 +101,7 @@ export async function createBooking({
         : (() => {
             db.run(bookingInsert, [
               salon_id,
+              String(salon_id),
               master_id,
               start_at,
               end_at,
@@ -95,7 +117,7 @@ export async function createBooking({
     // COMMIT
     await db.run('COMMIT');
 
-    return bookingRes.id;
+    return bookingRow.id;
   } catch (e) {
     await db.run('ROLLBACK');
 

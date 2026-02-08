@@ -6,20 +6,17 @@ const ALLOW_RESET =
 export async function ensureBookingsTable() {
   if (db.mode === 'POSTGRES') {
 
-    // ⚠️ HARD RESET — DEV ONLY (explicit flag)
     if (ALLOW_RESET) {
       console.warn('[BOOKINGS] SCHEMA RESET ENABLED');
       await db.run(`DROP TABLE IF EXISTS bookings`);
     }
 
-    // Base table (never destructive)
     await db.run(`
       CREATE TABLE IF NOT EXISTS bookings (
         id SERIAL PRIMARY KEY
       );
     `);
 
-    // Canonical columns (idempotent)
     await db.run(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS salon_id INTEGER;`);
     await db.run(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS salon_slug TEXT;`);
     await db.run(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS master_id INTEGER;`);
@@ -27,47 +24,43 @@ export async function ensureBookingsTable() {
     await db.run(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS end_at TIMESTAMPTZ;`);
     await db.run(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS status TEXT;`);
     await db.run(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS request_id TEXT;`);
+    await db.run(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS calendar_slot_id UUID;`);
     await db.run(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;`);
 
-    // Defaults for legacy rows
+    // defaults
     await db.run(`UPDATE bookings SET status='reserved' WHERE status IS NULL;`);
     await db.run(`UPDATE bookings SET created_at=NOW() WHERE created_at IS NULL;`);
 
-    // NOT NULL guarantees (safe: after defaults)
+    // FK (idempotent)
     await db.run(`
       DO $$
       BEGIN
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_name='bookings' AND column_name='salon_id'
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE constraint_name = 'bookings_calendar_slot_fk'
         ) THEN
-          ALTER TABLE bookings ALTER COLUMN salon_id SET NOT NULL;
-        END IF;
-
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_name='bookings' AND column_name='salon_slug'
-        ) THEN
-          ALTER TABLE bookings ALTER COLUMN salon_slug SET NOT NULL;
-        END IF;
-
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_name='bookings' AND column_name='master_id'
-        ) THEN
-          ALTER TABLE bookings ALTER COLUMN master_id SET NOT NULL;
-        END IF;
-
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_name='bookings' AND column_name='request_id'
-        ) THEN
-          ALTER TABLE bookings ALTER COLUMN request_id SET NOT NULL;
+          ALTER TABLE bookings
+          ADD CONSTRAINT bookings_calendar_slot_fk
+          FOREIGN KEY (calendar_slot_id)
+          REFERENCES calendar_slots(id)
+          ON DELETE RESTRICT;
         END IF;
       END$$;
     `);
 
-    // Unique index for idempotency
+    // NOT NULL (SAFE)
+    await db.run(`
+      DO $$
+      BEGIN
+        ALTER TABLE bookings ALTER COLUMN salon_id SET NOT NULL;
+        ALTER TABLE bookings ALTER COLUMN salon_slug SET NOT NULL;
+        ALTER TABLE bookings ALTER COLUMN master_id SET NOT NULL;
+        ALTER TABLE bookings ALTER COLUMN request_id SET NOT NULL;
+        ALTER TABLE bookings ALTER COLUMN calendar_slot_id SET NOT NULL;
+      END$$;
+    `);
+
+    // idempotency
     await db.run(`
       DO $$
       BEGIN
@@ -82,7 +75,6 @@ export async function ensureBookingsTable() {
     `);
 
   } else {
-    // SQLITE (local/dev)
     if (ALLOW_RESET) {
       await db.run(`DROP TABLE IF EXISTS bookings`);
     }
@@ -97,6 +89,7 @@ export async function ensureBookingsTable() {
         end_at TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'reserved',
         request_id TEXT NOT NULL UNIQUE,
+        calendar_slot_id TEXT NOT NULL,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
     `);
