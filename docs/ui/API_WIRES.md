@@ -1,52 +1,65 @@
-# TOTEM — UI / ODOO API WIRES (UI-4)
+# TOTEM — UI / ODOO API WIRES
 
 Status: **UI Track**
+Version: **v1.1**
 Core: **READ ONLY**
-Rule: **UI = thin client, backend = source of truth**
+Security model: **backend-enforced**
 
-This document defines:
-- which UI pages call which backend APIs
-- which HTTP methods are used
-- how UI must react to responses
+This document defines the exact wiring between UI pages and backend APIs.
+UI is a thin client. Backend is the source of truth.
 
-NO business logic.  
-NO data transformation.  
-NO retries unless explicitly allowed.
+NO business logic in UI.
+NO assumptions.
+NO silent fallbacks.
 
 ---
 
 ## 0) Global Rules (Hard)
 
-1) UI never infers state.
-2) UI never fixes errors.
-3) UI never retries conflicts (409).
-4) UI never modifies payloads beyond form completeness.
-5) UI renders backend response **as-is**.
+1) UI never infers availability, conflicts, roles, or permissions.
+2) UI never retries failed operations automatically.
+3) UI never alters backend semantics.
+4) UI renders backend responses as-is.
+5) Any mismatch between UI and backend behavior must be resolved by updating this document.
 
 ---
 
-## 1) Authentication Wiring (Generic)
+## 1) Authentication Wiring (Global)
 
 ### Token usage
 - Header: `Authorization: Bearer <token>`
-- If token missing or invalid → backend decides.
 
-### UI reaction
+### UI behavior
+- Token missing → backend decides
+- Token invalid → backend decides
+
+### Status handling
 - `401` → redirect to `/login`
 - `403` → show “Forbidden”
-- Any other error → render + stop
+- Other errors → render and stop
 
 ---
 
-## 2) PUBLIC / LANDING WIRES
+## 2) PUBLIC / LANDING
 
 ### 2.1 HOME (`/`)
-- API calls: ❌ NONE
-- Purpose: marketing / navigation only
-- Allowed:
-  - links to `/s/:slug`
-  - links to `/s/:slug/booking`
-  - links to `/login`
+
+**API calls:** ❌ NONE
+
+**Purpose:**
+- marketing
+- entry point
+- navigation only
+
+**Allowed:**
+- links to `/s/:slug`
+- links to `/s/:slug/booking`
+- links to `/login`
+
+**Forbidden:**
+- API calls
+- auth checks
+- data rendering
 
 ---
 
@@ -54,37 +67,35 @@ NO retries unless explicitly allowed.
 
 ### 3.1 Salon Landing (`/s/:slug`)
 
-**Purpose:** read-only salon entry page
+**Purpose:** public salon entry page
 
 **API:**
 - `GET /s/:slug/resolve`
 
 **UI behavior:**
-- Render returned salon metadata
-- No caching
-- No assumptions
+- render returned metadata only
 
 **Errors:**
-- `404` → show “Salon not found”
-- `500` → show server error
+- `404` → salon not found
+- `500` → server error
 
 ---
 
 ### 3.2 Booking (`/s/:slug/booking`)
 
-**Purpose:** create booking
+**Purpose:** create booking request
 
-**API (read):**
-- `GET /calendar/master/:master_id`
-  - Used to render availability
+**Security model:**
+- Calendar read is **NOT public**
+- UI does **NOT** preload availability
 
-**API (write):**
+**API (write only):**
 - `POST /calendar/reserve`
 
 **UI behavior:**
-- Collect form fields only
-- Send payload as-is
-- Generate idempotency key per submit (if required)
+- collect form fields only
+- send payload as-is
+- backend validates conflicts and availability
 
 **Errors:**
 - `401` → login required
@@ -94,24 +105,27 @@ NO retries unless explicitly allowed.
 - `500` → server error
 
 UI MUST NOT:
-- adjust time
-- suggest alternative slot
+- call `GET /calendar/master/:id` without auth
+- infer availability
 - retry automatically
 
 ---
 
 ### 3.3 Calendar (`/s/:slug/calendar`)
 
-**Purpose:** read-only availability view
+**Purpose:** availability view
+
+**Access:** **AUTH REQUIRED**
 
 **API:**
 - `GET /calendar/master/:master_id`
 
 **UI behavior:**
-- Render slots exactly as returned
+- if authenticated → render calendar
+- if not authenticated → redirect to login
 
 **Errors:**
-- `404` → not found
+- `401 / 403` → access denied
 - `500` → server error
 
 ---
@@ -121,13 +135,12 @@ UI MUST NOT:
 **Purpose:** read-only reporting
 
 **API:**
-- `GET /reports/*` (exact endpoints defined by backend)
+- `GET /reports/*` (backend-defined)
 
-**UI behavior:**
-- Render tables / summaries only
+**Access:** auth required
 
 **Errors:**
-- `401 / 403` → access denied
+- `401 / 403` → forbidden
 - `500` → server error
 
 ---
@@ -140,8 +153,7 @@ UI MUST NOT:
 - OWNER-scoped GET endpoints only
 
 **UI behavior:**
-- No write operations
-- No admin actions
+- no write operations
 
 **Errors:**
 - `403` → forbidden
@@ -149,133 +161,66 @@ UI MUST NOT:
 
 ---
 
-## 4) MASTER WIRES
+## 4) MASTER AREA (Auth required)
 
-### 4.1 Master Cabinet (`/masters/cabinet`)
-
-**API:**
+### 4.1 `/masters/cabinet`
 - `GET /master/profile`
 - `GET /master/summary`
 
-**Errors:**
-- `401 / 403` → redirect / forbidden
-- `500` → server error
-
----
-
-### 4.2 Master Schedule (`/masters/schedule`)
-
-**API:**
+### 4.2 `/masters/schedule`
 - `GET /calendar/master/:master_id`
 
-**Behavior:**
-- Read-only view
-
----
-
-### 4.3 Master Bookings (`/masters/bookings`)
-
-**API:**
+### 4.3 `/masters/bookings`
 - `GET /bookings/master/:master_id`
 
-**Behavior:**
-- List only
-- No inline edits
-
----
-
-### 4.4 Master Clients (`/masters/clients`)
-
-**API:**
+### 4.4 `/masters/clients`
 - `GET /clients/master/:master_id`
 
----
-
-### 4.5 Master Money (`/masters/money`)
-
-**API:**
+### 4.5 `/masters/money`
 - `GET /ledger/master/:master_id`
-
-**Notes:**
 - Ledger is append-only
-- UI never computes totals
+- UI does not compute totals
 
----
-
-### 4.6 Master Salons (`/masters/salons`)
-
-**API:**
+### 4.6 `/masters/salons`
 - `GET /salons/master/:master_id`
 
----
-
-### 4.7 Master Settings (`/masters/settings`)
-
-**API:**
+### 4.7 `/masters/settings`
 - `GET /master/settings`
-
-**Write operations:** ❌ NONE (UI-4 scope)
+- Write operations: ❌ NONE (UI scope)
 
 ---
 
-## 5) SALON WIRES
+## 5) SALON AREA (Auth required)
 
-### 5.1 Salon Cabinet (`/salons/cabinet`)
-
-**API:**
+### 5.1 `/salons/cabinet`
 - `GET /salon/profile`
 
----
-
-### 5.2 Salon Schedule (`/salons/schedule`)
-
-**API:**
+### 5.2 `/salons/schedule`
 - `GET /calendar/salon/:salon_id`
 
----
-
-### 5.3 Salon Bookings (`/salons/bookings`)
-
-**API:**
+### 5.3 `/salons/bookings`
 - `GET /bookings/salon/:salon_id`
 
----
-
-### 5.4 Salon Clients (`/salons/clients`)
-
-**API:**
+### 5.4 `/salons/clients`
 - `GET /clients/salon/:salon_id`
 
----
-
-### 5.5 Salon Masters (`/salons/masters`)
-
-**API:**
+### 5.5 `/salons/masters`
 - `GET /masters/salon/:salon_id`
 
----
-
-### 5.6 Salon Money (`/salons/money`)
-
-**API:**
+### 5.6 `/salons/money`
 - `GET /ledger/salon/:salon_id`
 
----
-
-### 5.7 Salon Settings (`/salons/settings`)
-
-**API:**
+### 5.7 `/salons/settings`
 - `GET /salon/settings`
-
-**Write operations:** ❌ NONE (UI-4 scope)
+- Write operations: ❌ NONE (UI scope)
 
 ---
 
-## 6) Error Handling Canon (ALL PAGES)
+## 6) Error Handling Canon (All Pages)
 
 | Status | UI Action |
 |------:|----------|
-| 200/201 | Render success |
+| 200 / 201 | Render success |
 | 400 | Show error + stop |
 | 401 | Redirect to login |
 | 403 | Forbidden |
@@ -286,23 +231,35 @@ UI MUST NOT:
 
 ---
 
-## 7) Forbidden Patterns (Explicit)
+## 7) Explicitly Forbidden
 
 UI must NOT:
+- preload calendar availability publicly
+- infer roles or permissions
 - cache responses
 - merge API results
-- compute availability
-- infer roles
-- hide backend errors
 - invent fallback flows
 
 ---
 
-## 8) Acceptance Criteria (UI-4 Done)
+## 8) Contract Change Log
 
-UI-4 is DONE when:
-1) This file exists: `docs/ui/API_WIRES.md`
-2) File is committed (if repo is used) or frozen (odoo-local)
-3) UI wiring follows this document strictly
+### v1.1 — 2026-02-09
+- Calendar read requires authentication
+- Public booking no longer assumes availability read
+- Change triggered by SANDBOX FAIL (403 without auth)
+- Backend unchanged
+- DB unchanged
+
+---
+
+## 9) Acceptance
+
+This document is canonical when:
+- it matches backend behavior
+- SANDBOX passes
+- UI logic follows it strictly
+
+Any deviation requires UNFREEZE.
 
 ---
