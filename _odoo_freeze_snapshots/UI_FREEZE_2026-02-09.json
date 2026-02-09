@@ -1,0 +1,665 @@
+{
+  "meta": {
+    "snapshot": "UI_FREEZE",
+    "date": "2026-02-09",
+    "generated_at": "2026-02-09T10:59:44",
+    "auth": "common.login + execute_kw",
+    "uid": 2,
+    "login": "kantotemus@gmail.com",
+    "scope": [
+      "website",
+      "website.page",
+      "website.menu",
+      "ir.ui.view (website/layout only)"
+    ],
+    "read_only": true
+  },
+  "website": [
+    {
+      "id": 1,
+      "name": "TOTEM Platform",
+      "domain": false,
+      "default_lang_id": [
+        63,
+        "Russian / русский язык"
+      ]
+    }
+  ],
+  "website_page": [
+    {
+      "id": 2,
+      "name": "Home",
+      "url": "/",
+      "is_published": true,
+      "website_id": false,
+      "write_date": "2026-01-31 09:13:23"
+    },
+    {
+      "id": 5,
+      "name": "Home",
+      "url": "/",
+      "is_published": true,
+      "website_id": [
+        1,
+        "TOTEM Platform"
+      ],
+      "write_date": "2026-01-31 13:01:43"
+    },
+    {
+      "id": 3,
+      "name": "Contact Us",
+      "url": "/contactus",
+      "is_published": true,
+      "website_id": false,
+      "write_date": "2026-01-31 09:13:23"
+    },
+    {
+      "id": 1,
+      "name": "Thanks (Contact us)",
+      "url": "/contactus-thank-you",
+      "is_published": true,
+      "website_id": false,
+      "write_date": "2026-01-31 09:13:23"
+    },
+    {
+      "id": 29,
+      "name": "Мастера",
+      "url": "/masters",
+      "is_published": false,
+      "website_id": false,
+      "write_date": "2026-02-04 19:46:34"
+    },
+    {
+      "id": 33,
+      "name": "Записи",
+      "url": "/masters/bookings",
+      "is_published": false,
+      "website_id": false,
+      "write_date": "2026-02-04 19:47:38"
+    },
+    {
+      "id": 30,
+      "name": "Кабинет мастера",
+      "url": "/masters/cabinet",
+      "is_published": false,
+      "website_id": false,
+      "write_date": "2026-02-04 19:46:50"
+    },
+    {
+      "id": 36,
+      "name": "Клиенты",
+      "url": "/masters/clients",
+      "is_published": false,
+      "website_id": false,
+      "write_date": "2026-02-04 20:00:39"
+    },
+    {
+      "id": 34,
+      "name": "Деньги",
+      "url": "/masters/money",
+      "is_published": false,
+      "website_id": false,
+      "write_date": "2026-02-04 19:47:54"
+    },
+    {
+      "id": 31,
+      "name": "Мои салоны",
+      "url": "/masters/salons",
+      "is_published": false,
+      "website_id": false,
+      "write_date": "2026-02-04 19:47:06"
+    },
+    {
+      "id": 32,
+      "name": "Расписание",
+      "url": "/masters/schedule",
+      "is_published": false,
+      "website_id": false,
+      "write_date": "2026-02-04 19:47:22"
+    },
+    {
+      "id": 35,
+      "name": "Настройки",
+      "url": "/masters/settings",
+      "is_published": false,
+      "website_id": false,
+      "write_date": "2026-02-04 19:48:10"
+    },
+    {
+      "id": 4,
+      "name": "Privacy Policy",
+      "url": "/privacy",
+      "is_published": true,
+      "website_id": false,
+      "write_date": "2026-01-31 09:13:23"
+    },
+    {
+      "id": 37,
+      "name": "TOTEM — Salon",
+      "url": "/s/:slug",
+      "is_published": true,
+      "website_id": [
+        1,
+        "TOTEM Platform"
+      ],
+      "write_date": "2026-02-07 18:23:28"
+    },
+    {
+      "id": 38,
+      "name": "TOTEM — Booking",
+      "url": "/s/:slug/booking",
+      "is_published": true,
+      "website_id": [
+        1,
+        "TOTEM Platform"
+      ],
+      "write_date": "2026-02-07 18:23:38"
+    },
+    {
+      "id": 39,
+      "name": "TOTEM — Calendar",
+      "url": "/s/:slug/calendar",
+      "is_published": true,
+      "website_id": [
+        1,
+        "TOTEM Platform"
+      ],
+      "write_date": "2026-02-07 18:23:49"
+    },
+    {
+      "id": 41,
+      "name": "TOTEM — Owner",
+      "url": "/s/:slug/owner",
+      "is_published": true,
+      "website_id": [
+        1,
+        "TOTEM Platform"
+      ],
+      "write_date": "2026-02-07 18:24:08"
+    },
+    {
+      "id": 40,
+      "name": "TOTEM — Reports",
+      "url": "/s/:slug/reports",
+      "is_published": true,
+      "website_id": [
+        1,
+        "TOTEM Platform"
+      ],
+      "write_date": "2026-02-07 18:23:59"
+    },
+    {
+      "id": 21,
+      "name": "Салоны",
+      "url": "/salons",
+      "is_published": false,
+      "website_id": false,
+      "write_date": "2026-02-04 19:44:23"
+    },
+    {
+      "id": 25,
+      "name": "Записи",
+      "url": "/salons/bookings",
+      "is_published": false,
+      "website_id": false,
+      "write_date": "2026-02-04 19:45:29"
+    },
+    {
+      "id": 22,
+      "name": "Кабинет салона",
+      "url": "/salons/cabinet",
+      "is_published": false,
+      "website_id": false,
+      "write_date": "2026-02-04 19:44:40"
+    },
+    {
+      "id": 26,
+      "name": "Клиенты",
+      "url": "/salons/clients",
+      "is_published": false,
+      "website_id": false,
+      "write_date": "2026-02-04 19:45:45"
+    },
+    {
+      "id": 23,
+      "name": "Мастера",
+      "url": "/salons/masters",
+      "is_published": false,
+      "website_id": false,
+      "write_date": "2026-02-04 19:44:56"
+    },
+    {
+      "id": 27,
+      "name": "Деньги",
+      "url": "/salons/money",
+      "is_published": false,
+      "website_id": false,
+      "write_date": "2026-02-04 19:46:01"
+    },
+    {
+      "id": 24,
+      "name": "Расписание",
+      "url": "/salons/schedule",
+      "is_published": false,
+      "website_id": false,
+      "write_date": "2026-02-04 19:45:13"
+    },
+    {
+      "id": 28,
+      "name": "Настройки",
+      "url": "/salons/settings",
+      "is_published": false,
+      "website_id": false,
+      "write_date": "2026-02-04 19:46:17"
+    },
+    {
+      "id": 6,
+      "name": "Task Submitted",
+      "url": "/your-task-has-been-submitted",
+      "is_published": true,
+      "website_id": false,
+      "write_date": "2026-01-31 09:13:23"
+    }
+  ],
+  "website_menu": [
+    {
+      "id": 1,
+      "name": "Default Main Menu",
+      "url": "#",
+      "parent_id": false,
+      "sequence": 0
+    },
+    {
+      "id": 3,
+      "name": "Top Menu for Website 1",
+      "url": "#",
+      "parent_id": false,
+      "sequence": 0
+    },
+    {
+      "id": 4,
+      "name": "Home",
+      "url": "/",
+      "parent_id": [
+        3,
+        "Top Menu for Website 1"
+      ],
+      "sequence": 0
+    },
+    {
+      "id": 24,
+      "name": "Кабинет",
+      "url": "/salons/cabinet",
+      "parent_id": [
+        23,
+        "Салоны"
+      ],
+      "sequence": 0
+    },
+    {
+      "id": 32,
+      "name": "Кабинет",
+      "url": "/masters/cabinet",
+      "parent_id": [
+        31,
+        "Мастера"
+      ],
+      "sequence": 0
+    },
+    {
+      "id": 5,
+      "name": "Appointment",
+      "url": "/appointment",
+      "parent_id": [
+        3,
+        "Top Menu for Website 1"
+      ],
+      "sequence": 1
+    },
+    {
+      "id": 25,
+      "name": "Мастера",
+      "url": "/salons/masters",
+      "parent_id": [
+        23,
+        "Салоны"
+      ],
+      "sequence": 1
+    },
+    {
+      "id": 33,
+      "name": "Мои салоны",
+      "url": "/masters/salons",
+      "parent_id": [
+        31,
+        "Мастера"
+      ],
+      "sequence": 1
+    },
+    {
+      "id": 23,
+      "name": "Салоны",
+      "url": "#",
+      "parent_id": [
+        3,
+        "Top Menu for Website 1"
+      ],
+      "sequence": 2
+    },
+    {
+      "id": 26,
+      "name": "Расписание",
+      "url": "/salons/schedule",
+      "parent_id": [
+        23,
+        "Салоны"
+      ],
+      "sequence": 2
+    },
+    {
+      "id": 34,
+      "name": "Расписание",
+      "url": "/masters/schedule",
+      "parent_id": [
+        31,
+        "Мастера"
+      ],
+      "sequence": 2
+    },
+    {
+      "id": 27,
+      "name": "Записи",
+      "url": "/salons/bookings",
+      "parent_id": [
+        23,
+        "Салоны"
+      ],
+      "sequence": 3
+    },
+    {
+      "id": 31,
+      "name": "Мастера",
+      "url": "#",
+      "parent_id": [
+        3,
+        "Top Menu for Website 1"
+      ],
+      "sequence": 3
+    },
+    {
+      "id": 39,
+      "name": "Клиенты",
+      "url": "/masters/clients",
+      "parent_id": [
+        31,
+        "Мастера"
+      ],
+      "sequence": 3
+    },
+    {
+      "id": 28,
+      "name": "Клиенты",
+      "url": "/salons/clients",
+      "parent_id": [
+        23,
+        "Салоны"
+      ],
+      "sequence": 4
+    },
+    {
+      "id": 35,
+      "name": "Записи",
+      "url": "/masters/bookings",
+      "parent_id": [
+        31,
+        "Мастера"
+      ],
+      "sequence": 4
+    },
+    {
+      "id": 29,
+      "name": "Деньги",
+      "url": "/salons/money",
+      "parent_id": [
+        23,
+        "Салоны"
+      ],
+      "sequence": 5
+    },
+    {
+      "id": 36,
+      "name": "Деньги",
+      "url": "/masters/money",
+      "parent_id": [
+        31,
+        "Мастера"
+      ],
+      "sequence": 5
+    },
+    {
+      "id": 30,
+      "name": "Настройки",
+      "url": "/salons/settings",
+      "parent_id": [
+        23,
+        "Салоны"
+      ],
+      "sequence": 6
+    },
+    {
+      "id": 37,
+      "name": "Настройки",
+      "url": "/masters/settings",
+      "parent_id": [
+        31,
+        "Мастера"
+      ],
+      "sequence": 6
+    },
+    {
+      "id": 2,
+      "name": "Home",
+      "url": "/",
+      "parent_id": [
+        1,
+        "Default Main Menu"
+      ],
+      "sequence": 10
+    },
+    {
+      "id": 41,
+      "name": "Салон",
+      "url": "/s/:slug",
+      "parent_id": [
+        40,
+        "TOTEM"
+      ],
+      "sequence": 10
+    },
+    {
+      "id": 42,
+      "name": "Запись",
+      "url": "/s/:slug/booking",
+      "parent_id": [
+        40,
+        "TOTEM"
+      ],
+      "sequence": 10
+    },
+    {
+      "id": 43,
+      "name": "Календарь",
+      "url": "/s/:slug/calendar",
+      "parent_id": [
+        40,
+        "TOTEM"
+      ],
+      "sequence": 10
+    },
+    {
+      "id": 44,
+      "name": "Отчёты",
+      "url": "/s/:slug/reports",
+      "parent_id": [
+        40,
+        "TOTEM"
+      ],
+      "sequence": 10
+    },
+    {
+      "id": 45,
+      "name": "Владелец",
+      "url": "/s/:slug/owner",
+      "parent_id": [
+        40,
+        "TOTEM"
+      ],
+      "sequence": 10
+    },
+    {
+      "id": 6,
+      "name": "Appointment",
+      "url": "/appointment",
+      "parent_id": [
+        1,
+        "Default Main Menu"
+      ],
+      "sequence": 55
+    },
+    {
+      "id": 40,
+      "name": "TOTEM",
+      "url": "#",
+      "parent_id": false,
+      "sequence": 100
+    }
+  ],
+  "ir_ui_view": [
+    {
+      "id": 583,
+      "name": "Home",
+      "key": "website.homepage",
+      "website_id": [
+        1,
+        "TOTEM Platform"
+      ],
+      "inherit_id": false,
+      "active": true,
+      "write_date": "2026-01-31 13:09:59"
+    },
+    {
+      "id": 2204,
+      "name": "Template Header Default",
+      "key": "website.template_header_default",
+      "website_id": [
+        1,
+        "TOTEM Platform"
+      ],
+      "inherit_id": [
+        586,
+        "Main layout"
+      ],
+      "active": true,
+      "write_date": "2026-01-31 09:16:15"
+    },
+    {
+      "id": 2207,
+      "name": "Default",
+      "key": "website.footer_custom",
+      "website_id": [
+        1,
+        "TOTEM Platform"
+      ],
+      "inherit_id": [
+        586,
+        "Main layout"
+      ],
+      "active": true,
+      "write_date": "2026-02-04 09:36:58"
+    },
+    {
+      "id": 2209,
+      "name": "Join Salon",
+      "key": "website.join-salon",
+      "website_id": [
+        1,
+        "TOTEM Platform"
+      ],
+      "inherit_id": false,
+      "active": true,
+      "write_date": "2026-01-31 12:23:59"
+    },
+    {
+      "id": 2210,
+      "name": "Join Master",
+      "key": "website.join-master",
+      "website_id": [
+        1,
+        "TOTEM Platform"
+      ],
+      "inherit_id": false,
+      "active": true,
+      "write_date": "2026-01-31 12:12:25"
+    },
+    {
+      "id": 2246,
+      "name": "TOTEM — Salon",
+      "key": "totem.root.20260208_002311",
+      "website_id": [
+        1,
+        "TOTEM Platform"
+      ],
+      "inherit_id": false,
+      "active": true,
+      "write_date": "2026-02-07 18:23:28"
+    },
+    {
+      "id": 2247,
+      "name": "TOTEM — Booking",
+      "key": "totem.booking.20260208_002311",
+      "website_id": [
+        1,
+        "TOTEM Platform"
+      ],
+      "inherit_id": false,
+      "active": true,
+      "write_date": "2026-02-07 18:23:38"
+    },
+    {
+      "id": 2248,
+      "name": "TOTEM — Calendar",
+      "key": "totem.calendar.20260208_002311",
+      "website_id": [
+        1,
+        "TOTEM Platform"
+      ],
+      "inherit_id": false,
+      "active": true,
+      "write_date": "2026-02-07 18:23:49"
+    },
+    {
+      "id": 2249,
+      "name": "TOTEM — Reports",
+      "key": "totem.reports.20260208_002311",
+      "website_id": [
+        1,
+        "TOTEM Platform"
+      ],
+      "inherit_id": false,
+      "active": true,
+      "write_date": "2026-02-07 18:23:59"
+    },
+    {
+      "id": 2250,
+      "name": "TOTEM — Owner",
+      "key": "totem.owner.20260208_002311",
+      "website_id": [
+        1,
+        "TOTEM Platform"
+      ],
+      "inherit_id": false,
+      "active": true,
+      "write_date": "2026-02-07 18:24:08"
+    }
+  ]
+}
