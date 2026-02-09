@@ -12,6 +12,7 @@ router.use((req, res, next) => {
   next();
 });
 
-router.use("/", onboarding);
+// mount: /system/onboarding/*
+router.use("/onboarding", onboarding);
 
 export default router;

@@ -4,7 +4,8 @@ import db from "../db.js";
 
 const router = express.Router();
 
-router.post("/onboarding/identity", async (req, res) => {
+// POST /system/onboarding/identity
+router.post("/identity", async (req, res) => {
   const { lead_id, odoo_user_id, email, requested_role } = req.body || {};
   if (!lead_id || !odoo_user_id || !email || !requested_role)
     return res.status(400).json({ error: "INVALID_INPUT" });

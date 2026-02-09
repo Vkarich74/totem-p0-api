@@ -1,6 +1,6 @@
 # TOTEM_ONBOARDING_FULL_AUTO.py
-# EXECUTION MODE — ONE FILE — FULL AUTO
-# WINDOWS-SAFE PSQL EXECUTION (NO cmd /c, NO nested quotes)
+# EXECUTION MODE — FINAL
+# FIX: correct Express routing for /system/onboarding/identity
 
 import os, sys, subprocess
 from datetime import datetime
@@ -24,20 +24,19 @@ def log(msg):
     with open(REPORT, "a", encoding="utf-8") as f:
         f.write(msg + "\n")
 
-def run(stage, args, cwd=None):
+def run(stage, args, cwd=None, check_http_200=False):
     log(f"\n$ {' '.join(args)}")
-    p = subprocess.run(
-        args,
-        cwd=cwd,
-        capture_output=True,
-        text=True
-    )
+    p = subprocess.run(args, cwd=cwd, capture_output=True, text=True)
     if p.stdout:
         log(p.stdout.rstrip())
     if p.stderr:
         log(p.stderr.rstrip())
     if p.returncode != 0:
         log(f"[FAIL] {stage}")
+        log(f"REPORT: {REPORT}")
+        sys.exit(1)
+    if check_http_200 and "200" not in p.stdout:
+        log(f"[FAIL] {stage} (HTTP != 200)")
         log(f"REPORT: {REPORT}")
         sys.exit(1)
     log(f"[OK] {stage}")
@@ -49,7 +48,7 @@ log(f"TS: {ts}")
 run("GIT STATUS", ["git", "status", "--porcelain"])
 run("HEALTH", ["curl", "-i", f"{API}/health"])
 
-# 2️⃣ WRITE SQL
+# 2️⃣ SQL (idempotent)
 os.makedirs(os.path.join(ROOT, "sql"), exist_ok=True)
 SQL_FILE = os.path.join(ROOT, "sql", "system_onboarding_identity.sql")
 
@@ -68,10 +67,9 @@ CREATE TABLE IF NOT EXISTS onboarding_identities (
 );
 COMMIT;
 """)
-
 log("[OK] SQL FILE CREATED")
 
-# 3️⃣ DB PROBE (EXACTLY LIKE MANUAL, BUT SAFE)
+# 3️⃣ DB PROBE
 run(
     "DB PROBE",
     [PG_EXE, PG_URL, "-v", "ON_ERROR_STOP=1", "-c", "select 1 as ok;"],
@@ -85,7 +83,7 @@ run(
     cwd=PG_BIN
 )
 
-# 5️⃣ WRITE ROUTE
+# 5️⃣ ROUTE FILE (FIXED PATH)
 ROUTES_DIR = os.path.join(ROOT, "routes")
 os.makedirs(ROUTES_DIR, exist_ok=True)
 
@@ -96,7 +94,8 @@ import db from "../db.js";
 
 const router = express.Router();
 
-router.post("/onboarding/identity", async (req, res) => {
+// POST /system/onboarding/identity
+router.post("/identity", async (req, res) => {
   const { lead_id, odoo_user_id, email, requested_role } = req.body || {};
   if (!lead_id || !odoo_user_id || !email || !requested_role)
     return res.status(400).json({ error: "INVALID_INPUT" });
@@ -121,10 +120,9 @@ router.post("/onboarding/identity", async (req, res) => {
 
 export default router;
 """)
-
 log("[OK] ROUTE FILE CREATED")
 
-# 6️⃣ OVERWRITE routes/system.js
+# 6️⃣ system.js (FIXED MOUNT)
 with open(os.path.join(ROOT, "routes", "system.js"), "w", encoding="utf-8") as f:
     f.write(f"""
 import express from "express";
@@ -140,14 +138,14 @@ router.use((req, res, next) => {{
   next();
 }});
 
-router.use("/", onboarding);
+// mount: /system/onboarding/*
+router.use("/onboarding", onboarding);
 
 export default router;
 """)
+log("[OK] SYSTEM ROUTER FIXED")
 
-log("[OK] SYSTEM ROUTER WRITTEN")
-
-# 7️⃣ OVERWRITE index.js
+# 7️⃣ index.js (canonical)
 with open(os.path.join(ROOT, "index.js"), "w", encoding="utf-8") as f:
     f.write("""
 import express from 'express';
@@ -191,15 +189,14 @@ bootstrap().catch((e) => {
   process.exit(1);
 });
 """)
-
 log("[OK] INDEX WRITTEN")
 
 # 8️⃣ GIT
 run("GIT ADD", ["git", "add", "."])
-run("GIT COMMIT", ["git", "commit", "-m", "system: onboarding full auto canonical"])
+run("GIT COMMIT", ["git", "commit", "-m", "fix: system onboarding route canonical"])
 run("GIT PUSH", ["git", "push"])
 
-# 9️⃣ SMOKE
+# 9️⃣ SMOKE — MUST RETURN 200
 run(
     "SMOKE",
     [
@@ -207,7 +204,8 @@ run(
         "-H", "Content-Type: application/json",
         "-H", f"X-System-Token: {SYSTEM_TOKEN}",
         "-d", f'{{"lead_id":"auto-{ts}","odoo_user_id":"1","email":"a@a","requested_role":"MASTER"}}'
-    ]
+    ],
+    check_http_200=True
 )
 
 log("[OK] DONE")
