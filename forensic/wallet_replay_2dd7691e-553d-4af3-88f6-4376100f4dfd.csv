@@ -1,0 +1,4 @@
+SET
+created_at,reference_type,reference_id,direction,amount_cents,running_balance_cents
+2026-02-08 11:59:54.079331+00,payment,19c9662d-e656-483e-9592-1ac5953e7638,credit,7000,7000
+(1 row)

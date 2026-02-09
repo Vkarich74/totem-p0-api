@@ -1,0 +1,6 @@
+SET
+wallet_id,owner_type,owner_id,balance_cents
+2dd7691e-553d-4af3-88f6-4376100f4dfd,master,200,7000
+8202eb58-936b-42c8-912c-b83e1e7282f1,system,1,0
+852816a3-ca10-4f0b-ab6d-9b43dce05202,master,100,0
+(3 rows)
