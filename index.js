@@ -7,6 +7,7 @@ import calendarRoutes from './calendar/calendar.routes.js';
 import bookingRoutes from './booking/booking.routes.js';
 import reportsRoutes from './reports/index.js';
 import systemRoutes from './routes/system.js';
+import systemOnboardingRoutes from './routes/system_onboarding.js';
 
 import { ensureCalendarTable } from './calendar/calendar.sql.js';
 import { ensureBookingsTable } from './booking/booking.sql.js';
@@ -20,6 +21,7 @@ app.get('/health', (req, res) => {
   res.json({ ok: true });
 });
 
+app.use('/system/onboarding', systemOnboardingRoutes);
 app.use('/system', systemRoutes);
 app.use('/owner', ownerRoutes);
 app.use('/calendar', calendarRoutes);

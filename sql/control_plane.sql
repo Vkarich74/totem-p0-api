@@ -1,0 +1,36 @@
+
+BEGIN;
+CREATE TABLE IF NOT EXISTS audit_events(
+ id BIGSERIAL PRIMARY KEY,
+ event_type TEXT NOT NULL,
+ actor TEXT NOT NULL,
+ lead_id TEXT,
+ core_user_id BIGINT,
+ data JSONB NOT NULL DEFAULT '{}',
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS onboarding_state_transitions(
+ id BIGSERIAL PRIMARY KEY,
+ core_user_id BIGINT NOT NULL,
+ from_state TEXT NOT NULL,
+ to_state TEXT NOT NULL,
+ reason TEXT NOT NULL DEFAULT '',
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS permission_snapshots(
+ id BIGSERIAL PRIMARY KEY,
+ core_user_id BIGINT NOT NULL,
+ role TEXT NOT NULL,
+ snapshot JSONB NOT NULL DEFAULT '{}',
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS system_tokens(
+ id BIGSERIAL PRIMARY KEY,
+ token_hash TEXT UNIQUE NOT NULL,
+ status TEXT NOT NULL DEFAULT 'ACTIVE',
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ revoked_at TIMESTAMPTZ
+);
+INSERT INTO system_tokens(token_hash,status)
+VALUES('190c9f4014cd16039950b91e0edf7269e174eca983f517b87d63b0cbb4939ce9','ACTIVE') ON CONFLICT(token_hash) DO NOTHING;
+COMMIT;
