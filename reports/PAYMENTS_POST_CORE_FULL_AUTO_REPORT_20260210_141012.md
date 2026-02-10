@@ -1,0 +1,14 @@
+# PAYMENTS POST CORE — FULL AUTO REPORT
+
+Timestamp: 20260210_141012
+
+Created:
+- SANDBOX MOCK PROVIDER
+- OPS / RECONCILIATION JOB
+- REPORTING / FINANCE v1 VIEW
+
+Database:
+- reporting SQL applied via psql
+
+Status:
+DONE
