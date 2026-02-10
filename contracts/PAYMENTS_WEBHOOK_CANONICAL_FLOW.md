@@ -1,14 +1,5 @@
-# PAYMENTS WEBHOOK CANONICAL FLOW
-
-Endpoint:
+# WEBHOOK CANON
 POST /payments/webhook
-
-Requirements:
-- signature verification
-- idempotency check
-- replay protection
-- append-only event log
-
-Failure handling:
-- retry-safe
-- duplicate-safe
+signature check
+idempotency
+append-only events
