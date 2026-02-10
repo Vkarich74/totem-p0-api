@@ -1,0 +1,13 @@
+                                                                       Table "public.payment_intents"
+   Column   |            Type             | Collation | Nullable |                      Default                       | Storage  | Compression | Stats target | Description 
+------------+-----------------------------+-----------+----------+----------------------------------------------------+----------+-------------+--------------+-------------
+ intent_id  | integer                     |           | not null | nextval('payment_intents_intent_id_seq'::regclass) | plain    |             |              | 
+ request_id | integer                     |           | not null |                                                    | plain    |             |              | 
+ amount     | integer                     |           | not null |                                                    | plain    |             |              | 
+ currency   | text                        |           | not null |                                                    | extended |             |              | 
+ status     | text                        |           | not null |                                                    | extended |             |              | 
+ created_at | timestamp without time zone |           |          | now()                                              | plain    |             |              | 
+Indexes:
+    "payment_intents_pkey" PRIMARY KEY, btree (intent_id)
+Access method: heap
+
