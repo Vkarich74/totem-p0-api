@@ -1,0 +1,10 @@
+UTC: 2026-02-10T19:43:57.728181Z
+ROOT: C:\Users\Vitaly\Desktop\odoo-local
+DOCS_DIR: C:\Users\Vitaly\Desktop\odoo-local\docs\prod
+
+FILES:
+- PAYMENTS_CONTRACT.md | 1175 bytes | mtime=2026-02-10T19:43:57.357227Z
+- WEBHOOK_ABSTRACT.md | 714 bytes | mtime=2026-02-10T19:43:57.360174Z
+- PAYMENT_BOOKING_LINK.md | 493 bytes | mtime=2026-02-10T19:43:57.364174Z
+- REFUND_POLICY.md | 579 bytes | mtime=2026-02-10T19:43:57.367170Z
+- PAYMENTS_AUDIT.md | 399 bytes | mtime=2026-02-10T19:43:57.369174Z
