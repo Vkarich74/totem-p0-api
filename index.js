@@ -1,6 +1,5 @@
 import express from "express";
 import db from "./db.js";
-import cookieParser from "cookie-parser";
 
 import ownerRoutes from "./routes_owner/index.js";
 import calendarRoutes from "./calendar/calendar.routes.js";
@@ -8,43 +7,31 @@ import bookingRoutes from "./booking/booking.routes.js";
 import reportsRoutes from "./reports/index.js";
 import systemRoutes from "./routes/system.js";
 import systemOnboardingRoutes from "./routes/system_onboarding.js";
-
 import authRoutes from "./auth/auth.routes.js";
-import { ensureAuthTables } from "./auth/auth.sql.js";
+import debugAuthRoutes from "./routes/debug.auth.js";
 
 import { ensureCalendarTable } from "./calendar/calendar.sql.js";
 import { ensureBookingsTable } from "./booking/booking.sql.js";
+import { ensureAuthTables } from "./auth/auth.sql.js";
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 
 app.use(express.json());
-app.use(cookieParser());
 
-// ===== HEALTH =====
 app.get("/health", (req, res) => {
   res.json({ ok: true });
 });
 
-// ===== AUTH =====
-app.use(authRoutes);
+app.use("/debug", debugAuthRoutes);
 
-// ===== SYSTEM =====
 app.use("/system/onboarding", systemOnboardingRoutes);
 app.use("/system", systemRoutes);
-
-// ===== CORE =====
 app.use("/owner", ownerRoutes);
 app.use("/calendar", calendarRoutes);
 app.use("/booking", bookingRoutes);
 app.use("/reports", reportsRoutes);
-
-app.use((req, res) => res.status(404).json({ error: "NOT_FOUND" }));
-
-app.use((err, req, res, next) => {
-  console.error(err);
-  res.status(500).json({ error: "INTERNAL_ERROR" });
-});
+app.use("/auth", authRoutes);
 
 async function bootstrap() {
   await ensureCalendarTable();
