@@ -1,4 +1,3 @@
-
 import express from 'express';
 import db from './db.js';
 
@@ -17,12 +16,33 @@ const PORT = process.env.PORT || 8080;
 
 app.use(express.json());
 
+/**
+ * Health check
+ */
 app.get('/health', (req, res) => {
   res.json({ ok: true });
 });
 
+/**
+ * AUTH RESOLVE STUB
+ * Canonical backend role resolution endpoint
+ * (v1: always public)
+ */
+app.get('/auth/resolve', (req, res) => {
+  return res.status(200).json({
+    role: 'public'
+  });
+});
+
+/**
+ * System routes
+ */
 app.use('/system/onboarding', systemOnboardingRoutes);
 app.use('/system', systemRoutes);
+
+/**
+ * Core routes
+ */
 app.use('/owner', ownerRoutes);
 app.use('/calendar', calendarRoutes);
 app.use('/booking', bookingRoutes);
