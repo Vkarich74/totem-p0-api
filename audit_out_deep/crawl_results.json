@@ -1,0 +1,1191 @@
+[
+  {
+    "url": "/",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/",
+    "title": "Home | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "780f146b7902dde992db52691ba20594d24c4400e5a5dbbb6c11d2c7efaf2965"
+  },
+  {
+    "url": "/contactus",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/contactus",
+    "title": "Contact Us | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "05bc54d0a2d3a7aad351470e4da087db83dc27de4ded10f97d546d13689e5f45",
+        "action": "/website/form/",
+        "method": "post",
+        "id": "contactus_form",
+        "class": "o_mark_required",
+        "data_model_name": "mail.mail",
+        "input_names": [
+          "company",
+          "description",
+          "email_from",
+          "email_to",
+          "name",
+          "phone",
+          "subject",
+          "website_form_signature"
+        ]
+      }
+    ],
+    "html_sha256": "8d01c254dbf80540bf35a862e88b65c59666a746bd67b4021dca4a140835bb09"
+  },
+  {
+    "url": "/contactus-thank-you",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/contactus-thank-you",
+    "title": "Thanks (Contact us) | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "6d03453bb391783ba2df0d634d6843991c17abda8ba7bee885ae868e78bf759d"
+  },
+  {
+    "url": "/demo",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/demo",
+    "title": "TOTEM DEMO HOME | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "adf4461246f8a001daaa62e42c1ead7371495cd5265da9ff6b5489eb4bd60e40"
+  },
+  {
+    "url": "/demo/s/test",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/demo/s/test",
+    "title": "TOTEM DEMO S test | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "4c118395c1ae6dfb814645553335e554d89351735653d2c66cd7654a24815086"
+  },
+  {
+    "url": "/demo/s/test/booking",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/demo/s/test/booking",
+    "title": "TOTEM DEMO /demo/s/test/booking | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "03ce3d5b11380d0f6d6589fde5f6661d1fc1618b2551c6a5355b180d746847ac"
+  },
+  {
+    "url": "/demo/s/test/calendar",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/demo/s/test/calendar",
+    "title": "TOTEM DEMO /demo/s/test/calendar | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "3285cad24c231482cea73392ac2c3adfd534899f041ca60b666ffcc4fc17ece0"
+  },
+  {
+    "url": "/masters",
+    "http_status": 404,
+    "final_url": "https://totem-platform.odoo.com/masters",
+    "title": "Page Not Found | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "ec362953b3ed4e05679f7b27cf01873a7a802dd2a1138452d8416f95050ba814"
+  },
+  {
+    "url": "/masters/bookings",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/masters/bookings",
+    "title": "Записи | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "7669bcc21ffa8f7d8201653b1185ca583cae76ac50eeedab638c4168d0c86b46"
+  },
+  {
+    "url": "/masters/cabinet",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/masters/cabinet",
+    "title": "TOTEM REDIRECT /masters/cabinet | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "a92281d6fd087490e40c61651ce0b69ac2f4f1aeab2c3ee1089f050b462dd4c8"
+  },
+  {
+    "url": "/masters/clients",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/masters/clients",
+    "title": "Клиенты | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "e2614bcbc3464d90c5104fc69d61fc8d532e78d4aa5ef19bdc3d1e790f37cfd7"
+  },
+  {
+    "url": "/masters/money",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/masters/money",
+    "title": "Деньги | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "7a624b6618b668498f0b09848908bea4474704e6a3b18feab9188f1db0b800ce"
+  },
+  {
+    "url": "/masters/salons",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/masters/salons",
+    "title": "Мои салоны | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "ceb06e7d517ab0cb09be9826f1e79e2f8aad069fbc4067368df5e942570921bf"
+  },
+  {
+    "url": "/masters/schedule",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/masters/schedule",
+    "title": "Расписание | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "77173c7291c2ec638cfa41de0f946b469865fb5809c1c2a1ff90d86a94e68ebc"
+  },
+  {
+    "url": "/masters/settings",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/masters/settings",
+    "title": "Настройки | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "7365dec2c7343e660fe3a7aa89cc205c90de3f2ebd7e0546620014cd75a58986"
+  },
+  {
+    "url": "/privacy",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/privacy",
+    "title": "Privacy Policy | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "851b3b715c06568aecf620d1cf9dcae535c03047f82c5a4a109640689b64eef0"
+  },
+  {
+    "url": "/s/:slug",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/s/:slug",
+    "title": "Survey: Access Code page | TOTEM Platform",
+    "forms_detected": [],
+    "html_sha256": "6abdb1527a5ea19145d40bf3a89d12c929dd6b1547d627b2c5d5873aa17d6c39"
+  },
+  {
+    "url": "/s/:slug/booking",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/s/:slug/booking",
+    "title": "TOTEM — Booking | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "f0d676d8bea76146849e3eb6f067b9c22b8b35ac4737c48e8305de74677b3c53"
+  },
+  {
+    "url": "/s/:slug/calendar",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/s/:slug/calendar",
+    "title": "TOTEM — Calendar | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "c82f10a762a8a06d35ce66b315bb2a1c1056640e497c42c117c1902d7c43b691"
+  },
+  {
+    "url": "/s/:slug/owner",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/s/:slug/owner",
+    "title": "TOTEM — Owner | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "6ae30b6882bae5c1626d4af1e6fcb322be0957144eff1180ba43e5ecfaf47751"
+  },
+  {
+    "url": "/s/:slug/reports",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/s/:slug/reports",
+    "title": "TOTEM — Reports | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "39777f0b1dbc135023bd04fbd9fc2d20cc6cf6f1fec7aeec846affbb91c71d90"
+  },
+  {
+    "url": "/s/test",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/s/test",
+    "title": "Survey: Access Code page | TOTEM Platform",
+    "forms_detected": [],
+    "html_sha256": "ca1142acd40cb047365cb8f9cb01463ade2f148bc63631fdcf4657cc1b043cf8"
+  },
+  {
+    "url": "/s/test/booking",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/s/test/booking",
+    "title": "TOTEM STUB /s/test/booking | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "79fdc685754319e1e98019b9ee265d87c7d1a6252bf75b058fa103aa388d08ba"
+  },
+  {
+    "url": "/s/test/calendar",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/s/test/calendar",
+    "title": "TOTEM STUB /s/test/calendar | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "2e5aae47b3e29d56eec135d6e169d5ff67405ef9f94631edb22eed91bb71af75"
+  },
+  {
+    "url": "/s/test/owner",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/s/test/owner",
+    "title": "TOTEM REDIRECT /s/test/owner | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "6d868aa05c19d0b431a35f591379fe0aa09255bc00ec22cb84f57c317d920299"
+  },
+  {
+    "url": "/s/test/reports",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/s/test/reports",
+    "title": "TOTEM REDIRECT /s/test/reports | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "f5df45c19b3f99e11f93f2f8043150a3b39cf5ad4bf2465fa603d349c907a5ff"
+  },
+  {
+    "url": "/salons",
+    "http_status": 404,
+    "final_url": "https://totem-platform.odoo.com/salons",
+    "title": "Page Not Found | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "98c174ba3dc8207c2d9098bfc1b5ad4d35e4e797dcac4ee19b65b0defa700201"
+  },
+  {
+    "url": "/salons/bookings",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/salons/bookings",
+    "title": "Записи | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "a7423273b2e263237c099d77563897087d7f426ea98eefdd08c36b8429b3532d"
+  },
+  {
+    "url": "/salons/cabinet",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/salons/cabinet",
+    "title": "TOTEM REDIRECT /salons/cabinet | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "19d02716459247a21cd2c54cb7f932e1b95b55578da79f411d62704d48fb65d0"
+  },
+  {
+    "url": "/salons/clients",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/salons/clients",
+    "title": "Клиенты | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "24362e3efd4e49dca04d7f753350d54a76c1829c2138dcf16da722142f491dd7"
+  },
+  {
+    "url": "/salons/masters",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/salons/masters",
+    "title": "Мастера | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "8d5855f219cb2770f41dde9ecd2962580fd95de5212aaba651716701c1e4b8bb"
+  },
+  {
+    "url": "/salons/money",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/salons/money",
+    "title": "Деньги | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "8b7d4ce670eac55873b637e477ee481a7e9bca6d707d70d1c34ed91c49ea14a9"
+  },
+  {
+    "url": "/salons/schedule",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/salons/schedule",
+    "title": "Расписание | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "4dbeb71bbd3a8faf648f3f0964d3dd60786c2cfba9b430cc36fc8ccba111c8be"
+  },
+  {
+    "url": "/salons/settings",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/salons/settings",
+    "title": "Настройки | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "f6d94a686582c8d9305e408728e04d736d335779b59a7a1b528bed140abe8de1"
+  },
+  {
+    "url": "/start",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/start",
+    "title": "TOTEM START | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "2bdc1ddfc41ce2c419ae586fccf6b7b5185f9cafbc75c89d4aa1a83600180b36"
+  },
+  {
+    "url": "/waitlist",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/waitlist",
+    "title": "TOTEM WAITLIST | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "13d36213168fd397fdf1afa4fc38bf6a4e91601d8b8f1478c29a4b0159ad5a02"
+  },
+  {
+    "url": "/your-task-has-been-submitted",
+    "http_status": 200,
+    "final_url": "https://totem-platform.odoo.com/your-task-has-been-submitted",
+    "title": "Task Submitted | TOTEM Platform",
+    "forms_detected": [
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      },
+      {
+        "signature": "7a5d84d4151ac6337ce948430d91d3735707f2ba852d1de2fb3f3f2d75c2ce5d",
+        "action": "/website/search",
+        "method": "get",
+        "id": null,
+        "class": "o_searchbar_form s_searchbar_input ",
+        "data_model_name": null,
+        "input_names": [
+          "order",
+          "search"
+        ]
+      }
+    ],
+    "html_sha256": "305a38c19ba8daf70f7c5dd17dbe2d5a609f73b6b1a0de9dfaef0e648fd62162"
+  }
+]

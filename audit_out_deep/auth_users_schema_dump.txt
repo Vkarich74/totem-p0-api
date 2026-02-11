@@ -1,0 +1,7 @@
+AUTH_USERS SCHEMA DUMP
+========================================
+[DB MODE] SQLITE
+[TIME UTC] 2026-02-11T13:38:16.775Z
+
+This dump script is designed for POSTGRES mode.
+Current mode is not POSTGRES. Exiting.

@@ -1,40 +1,20 @@
-import express from "express";
-import cors from "cors";
-import morgan from "morgan";
+app.get("/s/:slug/resolve", async (req, res) => {
+  try {
+    const slug = req.params.slug;
 
-import calendarRoutes from "./routes/calendar.js";
-import { authResolveHandler } from "./routes/auth.resolve.js";
+    if (!slug) {
+      return res.status(400).json({ ok: false, error: "missing_slug" });
+    }
 
-const app = express();
+    // Временно: просто подтверждаем существование slug
+    return res.json({
+      ok: true,
+      slug,
+      exists: true
+    });
 
-app.use(cors());
-app.use(express.json());
-app.use(morgan("dev"));
-
-app.get("/health", (req, res) => res.json({ ok: true }));
-
-/**
- * AUTH RESOLVE STUB
- * Canonical role resolution endpoint
- */
-app.get("/auth/resolve", authResolveHandler);
-
-/**
- * Calendar routes
- */
-app.use("/calendar", calendarRoutes);
-
-/**
- * 404
- */
-app.use((req, res) => res.status(404).json({ error: "NOT_FOUND" }));
-
-/**
- * Error handler
- */
-app.use((err, req, res, next) => {
-  console.error(err);
-  res.status(500).json({ error: "INTERNAL_ERROR" });
+  } catch (e) {
+    console.error("SLUG RESOLVE ERROR:", e);
+    return res.status(500).json({ ok: false });
+  }
 });
-
-export default app;

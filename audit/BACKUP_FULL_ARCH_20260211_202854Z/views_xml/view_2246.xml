@@ -1,0 +1,7 @@
+<t t-name="totem.root">
+  <t t-call="website.layout">
+    <div class="container my-5">
+      <div id="totem-root" data-page="root"/>
+    </div>
+  </t>
+</t>

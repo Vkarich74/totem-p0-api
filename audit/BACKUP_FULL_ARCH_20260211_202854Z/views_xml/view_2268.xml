@@ -1,0 +1,7 @@
+<t t-name="totem.page.waitlist">
+  <t t-call="website.layout">
+    <div class="container">
+      <h2>Ранний доступ</h2><p>Email: <a href="mailto:kantotemus@gmail.com">kantotemus@gmail.com</a></p>
+    </div>
+  </t>
+</t>

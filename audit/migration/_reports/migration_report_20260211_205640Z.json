@@ -1,0 +1,149 @@
+{
+  "time_utc": "2026-02-11T20:56:53.868417Z",
+  "odoo_url": "https://totem-platform.odoo.com",
+  "db": "totem-platform",
+  "login": "kantotemus@gmail.com",
+  "auth_uid": 2,
+  "migrations": [
+    {
+      "old": "test",
+      "new": "salon-1"
+    }
+  ],
+  "pages_moved_count": 8,
+  "views_updated_count": 6,
+  "pages_moved": [
+    {
+      "id": 43,
+      "old_url": "/s/test/booking",
+      "new_url": "/s/salon-1/booking"
+    },
+    {
+      "id": 44,
+      "old_url": "/s/test/calendar",
+      "new_url": "/s/salon-1/calendar"
+    },
+    {
+      "id": 45,
+      "old_url": "/s/test/owner",
+      "new_url": "/s/salon-1/owner"
+    },
+    {
+      "id": 46,
+      "old_url": "/s/test/reports",
+      "new_url": "/s/salon-1/reports"
+    },
+    {
+      "id": 48,
+      "old_url": "/demo/s/test",
+      "new_url": "/demo/s/salon-1"
+    },
+    {
+      "id": 42,
+      "old_url": "/s/test",
+      "new_url": "/s/salon-1"
+    },
+    {
+      "id": 49,
+      "old_url": "/demo/s/test/booking",
+      "new_url": "/demo/s/salon-1/booking"
+    },
+    {
+      "id": 50,
+      "old_url": "/demo/s/test/calendar",
+      "new_url": "/demo/s/salon-1/calendar"
+    }
+  ],
+  "views_updated": [
+    {
+      "id": 2256,
+      "name": "TOTEM STUB /s/test",
+      "key": "totem_auto__s_test",
+      "replacements": [
+        [
+          "/s/test",
+          "/s/salon-1"
+        ],
+        [
+          "/demo/s/test",
+          "/demo/s/salon-1"
+        ]
+      ]
+    },
+    {
+      "id": 2257,
+      "name": "TOTEM STUB /s/test/booking",
+      "key": "totem_auto__s_test_booking",
+      "replacements": [
+        [
+          "/s/test",
+          "/s/salon-1"
+        ],
+        [
+          "/demo/s/test",
+          "/demo/s/salon-1"
+        ]
+      ]
+    },
+    {
+      "id": 2258,
+      "name": "TOTEM STUB /s/test/calendar",
+      "key": "totem_auto__s_test_calendar",
+      "replacements": [
+        [
+          "/s/test",
+          "/s/salon-1"
+        ],
+        [
+          "/demo/s/test",
+          "/demo/s/salon-1"
+        ]
+      ]
+    },
+    {
+      "id": 2260,
+      "name": "TOTEM REDIRECT /s/test/owner",
+      "key": "gen_key.202a96",
+      "replacements": [
+        [
+          "/s/test",
+          "/s/salon-1"
+        ],
+        [
+          "/demo/s/test",
+          "/demo/s/salon-1"
+        ]
+      ]
+    },
+    {
+      "id": 2261,
+      "name": "TOTEM REDIRECT /s/test/reports",
+      "key": "gen_key.6c355c",
+      "replacements": [
+        [
+          "/s/test",
+          "/s/salon-1"
+        ],
+        [
+          "/demo/s/test",
+          "/demo/s/salon-1"
+        ]
+      ]
+    },
+    {
+      "id": 2265,
+      "name": "TOTEM DEMO S test",
+      "key": "gen_key.fc8753",
+      "replacements": [
+        [
+          "/s/test",
+          "/s/salon-1"
+        ],
+        [
+          "/demo/s/test",
+          "/demo/s/salon-1"
+        ]
+      ]
+    }
+  ]
+}

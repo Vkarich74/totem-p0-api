@@ -1,0 +1,219 @@
+{
+  "generated_at": "2026-02-11T10:50:23.724581+00:00",
+  "odoo_url": "https://totem-platform.odoo.com",
+  "db": "totem-platform",
+  "cabinet_pages_count": 16,
+  "views_count": 16,
+  "pages": [
+    {
+      "page_id": 28,
+      "url": "/salons/settings",
+      "name": "Настройки",
+      "view_id": 2237
+    },
+    {
+      "page_id": 31,
+      "url": "/masters/salons",
+      "name": "Мои салоны",
+      "view_id": 2240
+    },
+    {
+      "page_id": 21,
+      "url": "/salons",
+      "name": "Салоны",
+      "view_id": 2230
+    },
+    {
+      "page_id": 29,
+      "url": "/masters",
+      "name": "Мастера",
+      "view_id": 2238
+    },
+    {
+      "page_id": 32,
+      "url": "/masters/schedule",
+      "name": "Расписание",
+      "view_id": 2241
+    },
+    {
+      "page_id": 36,
+      "url": "/masters/clients",
+      "name": "Клиенты",
+      "view_id": 2245
+    },
+    {
+      "page_id": 33,
+      "url": "/masters/bookings",
+      "name": "Записи",
+      "view_id": 2242
+    },
+    {
+      "page_id": 34,
+      "url": "/masters/money",
+      "name": "Деньги",
+      "view_id": 2243
+    },
+    {
+      "page_id": 35,
+      "url": "/masters/settings",
+      "name": "Настройки",
+      "view_id": 2244
+    },
+    {
+      "page_id": 30,
+      "url": "/masters/cabinet",
+      "name": "TOTEM REDIRECT /masters/cabinet",
+      "view_id": 2262
+    },
+    {
+      "page_id": 22,
+      "url": "/salons/cabinet",
+      "name": "TOTEM REDIRECT /salons/cabinet",
+      "view_id": 2263
+    },
+    {
+      "page_id": 23,
+      "url": "/salons/masters",
+      "name": "Мастера",
+      "view_id": 2232
+    },
+    {
+      "page_id": 24,
+      "url": "/salons/schedule",
+      "name": "Расписание",
+      "view_id": 2233
+    },
+    {
+      "page_id": 25,
+      "url": "/salons/bookings",
+      "name": "Записи",
+      "view_id": 2234
+    },
+    {
+      "page_id": 26,
+      "url": "/salons/clients",
+      "name": "Клиенты",
+      "view_id": 2235
+    },
+    {
+      "page_id": 27,
+      "url": "/salons/money",
+      "name": "Деньги",
+      "view_id": 2236
+    }
+  ],
+  "views": [
+    {
+      "id": 2230,
+      "name": "Салоны",
+      "key": "gen_key.7f34c2",
+      "write_date": "2026-02-04 19:44:23",
+      "arch_db": "<t t-name=\"website.salons\">\n  <t t-call=\"website.layout\">\n    <div class=\"container mt-4\">\n      <h1>Салоны</h1>\n      <p>Раздел в разработке.</p>\n    </div>\n  </t>\n</t>"
+    },
+    {
+      "id": 2232,
+      "name": "Мастера",
+      "key": "gen_key.6f65c2",
+      "write_date": "2026-02-05 01:22:31",
+      "arch_db": "<t t-name=\"totem.v1_1.data.2232\">\n  <t t-call=\"website.layout\">\n    <div class=\"container mt-4\">\n      <h1>Мастера салона</h1>\n      <p class=\"text-muted\">Страница-источник данных для кабинета салона (v1.1).</p>\n\n      <div class=\"card mt-3\">\n        <div class=\"card-body\">\n          <h5 class=\"card-title\">Статус</h5>\n          <p class=\"card-text\">v1.1: страница активна.</p>\n        </div>\n      </div>\n\n      <div class=\"mt-4\">\n        <p class=\"text-muted\">Контейнер под таблицу данных (v2).</p>\n      </div>\n    </div>\n  \n\n\n\n<!-- DATA_CONTRACT v2 -->\n<div id=\"totem-data-root\" data-role=\"salon\" data-entity=\"masters\" data-endpoint=\"/owner/masters\" data-params=\"salon_id\">\n  <div id=\"totem-table-container\"/>\n</div>\n\n</t>\n</t>"
+    },
+    {
+      "id": 2233,
+      "name": "Расписание",
+      "key": "gen_key.98ba8e",
+      "write_date": "2026-02-05 01:22:36",
+      "arch_db": "<t t-name=\"totem.v1_1.data.2233\">\n  <t t-call=\"website.layout\">\n    <div class=\"container mt-4\">\n      <h1>Расписание салона</h1>\n      <p class=\"text-muted\">Страница-источник данных для кабинета салона (v1.1).</p>\n\n      <div class=\"card mt-3\">\n        <div class=\"card-body\">\n          <h5 class=\"card-title\">Статус</h5>\n          <p class=\"card-text\">v1.1: страница активна.</p>\n        </div>\n      </div>\n\n      <div class=\"mt-4\">\n        <p class=\"text-muted\">Контейнер под таблицу данных (v2).</p>\n      </div>\n    </div>\n  \n\n\n\n<!-- DATA_CONTRACT v2 -->\n<div id=\"totem-data-root\" data-role=\"salon\" data-entity=\"schedule\" data-endpoint=\"/owner/schedule\" data-params=\"salon_id, date\">\n  <div id=\"totem-table-container\"/>\n</div>\n\n</t>\n</t>"
+    },
+    {
+      "id": 2234,
+      "name": "Записи",
+      "key": "gen_key.42c54a",
+      "write_date": "2026-02-05 01:22:26",
+      "arch_db": "<t t-name=\"totem.v1_1.data.2234\">\n  <t t-call=\"website.layout\">\n    <div class=\"container mt-4\">\n      <h1>Записи салона</h1>\n      <p class=\"text-muted\">Страница-источник данных для кабинета салона (v1.1).</p>\n\n      <div class=\"card mt-3\">\n        <div class=\"card-body\">\n          <h5 class=\"card-title\">Статус</h5>\n          <p class=\"card-text\">v1.1: страница активна.</p>\n        </div>\n      </div>\n\n      <div class=\"mt-4\">\n        <p class=\"text-muted\">Контейнер под таблицу данных (v2).</p>\n      </div>\n    </div>\n  \n\n\n\n<!-- DATA_CONTRACT v2 -->\n<div id=\"totem-data-root\" data-role=\"salon\" data-entity=\"bookings\" data-endpoint=\"/public/bookings\" data-params=\"salon_id\">\n  <div id=\"totem-table-container\"/>\n</div>\n\n</t>\n</t>"
+    },
+    {
+      "id": 2235,
+      "name": "Клиенты",
+      "key": "gen_key.0edffc",
+      "write_date": "2026-02-05 01:22:28",
+      "arch_db": "<t t-name=\"totem.v1_1.data.2235\">\n  <t t-call=\"website.layout\">\n    <div class=\"container mt-4\">\n      <h1>Клиенты салона</h1>\n      <p class=\"text-muted\">Страница-источник данных для кабинета салона (v1.1).</p>\n\n      <div class=\"card mt-3\">\n        <div class=\"card-body\">\n          <h5 class=\"card-title\">Статус</h5>\n          <p class=\"card-text\">v1.1: страница активна.</p>\n        </div>\n      </div>\n\n      <div class=\"mt-4\">\n        <p class=\"text-muted\">Контейнер под таблицу данных (v2).</p>\n      </div>\n    </div>\n  \n\n\n\n<!-- DATA_CONTRACT v2 -->\n<div id=\"totem-data-root\" data-role=\"salon\" data-entity=\"clients\" data-endpoint=\"/owner/clients\" data-params=\"salon_id\">\n  <div id=\"totem-table-container\"/>\n</div>\n\n</t>\n</t>"
+    },
+    {
+      "id": 2236,
+      "name": "Деньги",
+      "key": "gen_key.d7b88d",
+      "write_date": "2026-02-05 01:22:33",
+      "arch_db": "<t t-name=\"totem.v1_1.data.2236\">\n  <t t-call=\"website.layout\">\n    <div class=\"container mt-4\">\n      <h1>Финансы салона</h1>\n      <p class=\"text-muted\">Страница-источник данных для кабинета салона (v1.1).</p>\n\n      <div class=\"card mt-3\">\n        <div class=\"card-body\">\n          <h5 class=\"card-title\">Статус</h5>\n          <p class=\"card-text\">v1.1: страница активна.</p>\n        </div>\n      </div>\n\n      <div class=\"mt-4\">\n        <p class=\"text-muted\">Контейнер под таблицу данных (v2).</p>\n      </div>\n    </div>\n  \n\n\n\n<!-- DATA_CONTRACT v2 -->\n<div id=\"totem-data-root\" data-role=\"salon\" data-entity=\"money\" data-endpoint=\"/owner/money\" data-params=\"salon_id, period\">\n  <div id=\"totem-table-container\"/>\n</div>\n\n</t>\n</t>"
+    },
+    {
+      "id": 2237,
+      "name": "Настройки",
+      "key": "gen_key.9a9c74",
+      "write_date": "2026-02-05 00:09:33",
+      "arch_db": "<t t-name=\"totem.v1.fix.salons.2237\">\n  <t t-call=\"website.layout\">\n    <div class=\"container mt-4\">\n      <h1>Настройки салона</h1>\n      <p class=\"text-muted\">Настройки и конфигурация салона (v1).</p>\n\n      <div class=\"card mt-3\">\n        <div class=\"card-body\">\n          <h5 class=\"card-title\">Статус</h5>\n          <p class=\"card-text\">v1: страница активна.</p>\n        </div>\n      </div>\n\n      <div class=\"mt-4\">\n        <p class=\"text-muted\">Контент будет добавлен на следующем этапе.</p>\n      </div>\n    </div>\n  </t>\n</t>"
+    },
+    {
+      "id": 2238,
+      "name": "Мастера",
+      "key": "gen_key.a4720f",
+      "write_date": "2026-02-05 00:15:27",
+      "arch_db": "<t t-name=\"totem.v1.fix.masters.root\">\n  <t t-call=\"website.layout\">\n    <div class=\"container mt-4\">\n      <h1>Мастера</h1>\n      <p class=\"text-muted\">\n        Раздел мастеров. Навигация и вход в личный кабинет.\n      </p>\n\n      <div class=\"card mt-3\">\n        <div class=\"card-body\">\n          <h5 class=\"card-title\">Статус</h5>\n          <p class=\"card-text\">v1: страница активна.</p>\n        </div>\n      </div>\n\n      <div class=\"mt-4\">\n        <p class=\"text-muted\">\n          Используйте меню для перехода в кабинет, записи, расписание и другие разделы.\n        </p>\n      </div>\n    </div>\n  </t>\n</t>"
+    },
+    {
+      "id": 2240,
+      "name": "Мои салоны",
+      "key": "gen_key.081e72",
+      "write_date": "2026-02-05 01:22:43",
+      "arch_db": "<t t-name=\"totem.v1_1.data.2240\">\n  <t t-call=\"website.layout\">\n    <div class=\"container mt-4\">\n      <h1>Мои салоны</h1>\n      <p class=\"text-muted\">Страница-источник данных для кабинета мастера (v1.1).</p>\n\n      <div class=\"card mt-3\">\n        <div class=\"card-body\">\n          <h5 class=\"card-title\">Статус</h5>\n          <p class=\"card-text\">v1.1: страница активна.</p>\n        </div>\n      </div>\n\n      <div class=\"mt-4\">\n        <p class=\"text-muted\">Контейнер под таблицу данных (v2).</p>\n      </div>\n    </div>\n  \n\n\n\n<!-- DATA_CONTRACT v2 -->\n<div id=\"totem-data-root\" data-role=\"master\" data-entity=\"salons\" data-endpoint=\"/owner/salons\" data-params=\"master_id\">\n  <div id=\"totem-table-container\"/>\n</div>\n\n</t>\n</t>"
+    },
+    {
+      "id": 2241,
+      "name": "Расписание",
+      "key": "gen_key.32c8fc",
+      "write_date": "2026-02-05 01:22:48",
+      "arch_db": "<t t-name=\"totem.v1_1.data.2241\">\n  <t t-call=\"website.layout\">\n    <div class=\"container mt-4\">\n      <h1>Расписание мастера</h1>\n      <p class=\"text-muted\">Страница-источник данных для кабинета мастера (v1.1).</p>\n\n      <div class=\"card mt-3\">\n        <div class=\"card-body\">\n          <h5 class=\"card-title\">Статус</h5>\n          <p class=\"card-text\">v1.1: страница активна.</p>\n        </div>\n      </div>\n\n      <div class=\"mt-4\">\n        <p class=\"text-muted\">Контейнер под таблицу данных (v2).</p>\n      </div>\n    </div>\n  \n\n\n\n<!-- DATA_CONTRACT v2 -->\n<div id=\"totem-data-root\" data-role=\"master\" data-entity=\"schedule\" data-endpoint=\"/owner/schedule\" data-params=\"master_id, date\">\n  <div id=\"totem-table-container\"/>\n</div>\n\n</t>\n</t>"
+    },
+    {
+      "id": 2242,
+      "name": "Записи",
+      "key": "gen_key.394765",
+      "write_date": "2026-02-05 01:22:38",
+      "arch_db": "<t t-name=\"totem.v1_1.data.2242\">\n  <t t-call=\"website.layout\">\n    <div class=\"container mt-4\">\n      <h1>Записи мастера</h1>\n      <p class=\"text-muted\">Страница-источник данных для кабинета мастера (v1.1).</p>\n\n      <div class=\"card mt-3\">\n        <div class=\"card-body\">\n          <h5 class=\"card-title\">Статус</h5>\n          <p class=\"card-text\">v1.1: страница активна.</p>\n        </div>\n      </div>\n\n      <div class=\"mt-4\">\n        <p class=\"text-muted\">Контейнер под таблицу данных (v2).</p>\n      </div>\n    </div>\n  \n\n\n\n<!-- DATA_CONTRACT v2 -->\n<div id=\"totem-data-root\" data-role=\"master\" data-entity=\"bookings\" data-endpoint=\"/public/bookings\" data-params=\"master_id\">\n  <div id=\"totem-table-container\"/>\n</div>\n\n</t>\n</t>"
+    },
+    {
+      "id": 2243,
+      "name": "Деньги",
+      "key": "gen_key.6e2c1a",
+      "write_date": "2026-02-05 01:22:45",
+      "arch_db": "<t t-name=\"totem.v1_1.data.2243\">\n  <t t-call=\"website.layout\">\n    <div class=\"container mt-4\">\n      <h1>Финансы мастера</h1>\n      <p class=\"text-muted\">Страница-источник данных для кабинета мастера (v1.1).</p>\n\n      <div class=\"card mt-3\">\n        <div class=\"card-body\">\n          <h5 class=\"card-title\">Статус</h5>\n          <p class=\"card-text\">v1.1: страница активна.</p>\n        </div>\n      </div>\n\n      <div class=\"mt-4\">\n        <p class=\"text-muted\">Контейнер под таблицу данных (v2).</p>\n      </div>\n    </div>\n  \n\n\n\n<!-- DATA_CONTRACT v2 -->\n<div id=\"totem-data-root\" data-role=\"master\" data-entity=\"money\" data-endpoint=\"/owner/money\" data-params=\"master_id, period\">\n  <div id=\"totem-table-container\"/>\n</div>\n\n</t>\n</t>"
+    },
+    {
+      "id": 2244,
+      "name": "Настройки",
+      "key": "gen_key.389ea7",
+      "write_date": "2026-02-04 19:48:10",
+      "arch_db": "<t t-name=\"website.masters_settings\">\n  <t t-call=\"website.layout\">\n    <div class=\"container mt-4\">\n      <h1>Настройки</h1>\n      <p>Раздел в разработке.</p>\n    </div>\n  </t>\n</t>"
+    },
+    {
+      "id": 2245,
+      "name": "Клиенты",
+      "key": "gen_key.4b2519",
+      "write_date": "2026-02-05 01:22:40",
+      "arch_db": "<t t-name=\"totem.v1_1.data.2245\">\n  <t t-call=\"website.layout\">\n    <div class=\"container mt-4\">\n      <h1>Клиенты мастера</h1>\n      <p class=\"text-muted\">Страница-источник данных для кабинета мастера (v1.1).</p>\n\n      <div class=\"card mt-3\">\n        <div class=\"card-body\">\n          <h5 class=\"card-title\">Статус</h5>\n          <p class=\"card-text\">v1.1: страница активна.</p>\n        </div>\n      </div>\n\n      <div class=\"mt-4\">\n        <p class=\"text-muted\">Контейнер под таблицу данных (v2).</p>\n      </div>\n    </div>\n  \n\n\n\n<!-- DATA_CONTRACT v2 -->\n<div id=\"totem-data-root\" data-role=\"master\" data-entity=\"clients\" data-endpoint=\"/owner/clients\" data-params=\"master_id\">\n  <div id=\"totem-table-container\"/>\n</div>\n\n</t>\n</t>"
+    },
+    {
+      "id": 2262,
+      "name": "TOTEM REDIRECT /masters/cabinet",
+      "key": "website.totem-redirect-masterscabinet",
+      "write_date": "2026-02-10 22:28:38",
+      "arch_db": "<t t-name=\"totem.redirect./\">\n  <t t-call=\"website.layout\">\n    <script type=\"text/javascript\">window.location.replace(\"/\");</script>\n    <div class=\"container\">\n      <p>Перенаправление… <a href=\"/\">нажмите здесь</a></p>\n    </div>\n  </t>\n</t>"
+    },
+    {
+      "id": 2263,
+      "name": "TOTEM REDIRECT /salons/cabinet",
+      "key": "website.totem-redirect-salonscabinet",
+      "write_date": "2026-02-10 22:28:41",
+      "arch_db": "<t t-name=\"totem.redirect./\">\n  <t t-call=\"website.layout\">\n    <script type=\"text/javascript\">window.location.replace(\"/\");</script>\n    <div class=\"container\">\n      <p>Перенаправление… <a href=\"/\">нажмите здесь</a></p>\n    </div>\n  </t>\n</t>"
+    }
+  ]
+}

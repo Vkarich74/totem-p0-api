@@ -1,0 +1,31 @@
+<t t-name="totem.role_gate.stub">
+  <section class="container py-5">
+    <div class="row justify-content-center">
+      <div class="col-lg-7">
+        <div class="card shadow-sm">
+          <div class="card-body p-4">
+            <h2 class="mb-2">Master cabinet locked</h2>
+            <p class="text-muted mb-4">URL: /masters/schedule</p>
+
+            <div class="alert alert-warning" role="alert">
+              Этот раздел доступен только после подтверждения роли (Master/Salon) через ядро TOTEM (backend).
+              Odoo-админка не является ролью продукта.
+            </div>
+
+            <div class="d-flex gap-2 flex-wrap">
+              <a class="btn btn-primary" href="/start">Start</a>
+              <a class="btn btn-outline-secondary" href="/waitlist">Waitlist</a>
+              <a class="btn btn-link" href="/">Home</a>
+            </div>
+
+            <hr class="my-4"/>
+
+            <p class="small text-muted mb-0">
+              Статус: ROLE GATE STUB (v1). Следующий шаг: подключение role resolution к backend session.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</t>

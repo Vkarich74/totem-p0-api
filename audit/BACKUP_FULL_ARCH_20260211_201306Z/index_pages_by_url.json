@@ -1,0 +1,268 @@
+[
+  {
+    "page_id": 5,
+    "url": "/",
+    "name": "Home",
+    "is_published": true,
+    "view_id": 583
+  },
+  {
+    "page_id": 2,
+    "url": "/",
+    "name": "Home",
+    "is_published": true,
+    "view_id": 575
+  },
+  {
+    "page_id": 3,
+    "url": "/contactus",
+    "name": "Contact Us",
+    "is_published": true,
+    "view_id": 576
+  },
+  {
+    "page_id": 1,
+    "url": "/contactus-thank-you",
+    "name": "Thanks (Contact us)",
+    "is_published": true,
+    "view_id": 577
+  },
+  {
+    "page_id": 47,
+    "url": "/demo",
+    "name": "TOTEM DEMO HOME",
+    "is_published": true,
+    "view_id": 2264
+  },
+  {
+    "page_id": 48,
+    "url": "/demo/s/test",
+    "name": "TOTEM DEMO S test",
+    "is_published": true,
+    "view_id": 2265
+  },
+  {
+    "page_id": 49,
+    "url": "/demo/s/test/booking",
+    "name": "TOTEM DEMO /demo/s/test/booking",
+    "is_published": true,
+    "view_id": 2270
+  },
+  {
+    "page_id": 50,
+    "url": "/demo/s/test/calendar",
+    "name": "TOTEM DEMO /demo/s/test/calendar",
+    "is_published": true,
+    "view_id": 2271
+  },
+  {
+    "page_id": 29,
+    "url": "/masters",
+    "name": "Мастера",
+    "is_published": false,
+    "view_id": 2238
+  },
+  {
+    "page_id": 33,
+    "url": "/masters/bookings",
+    "name": "Записи",
+    "is_published": true,
+    "view_id": 2242
+  },
+  {
+    "page_id": 30,
+    "url": "/masters/cabinet",
+    "name": "TOTEM REDIRECT /masters/cabinet",
+    "is_published": true,
+    "view_id": 2262
+  },
+  {
+    "page_id": 36,
+    "url": "/masters/clients",
+    "name": "Клиенты",
+    "is_published": true,
+    "view_id": 2245
+  },
+  {
+    "page_id": 34,
+    "url": "/masters/money",
+    "name": "Деньги",
+    "is_published": true,
+    "view_id": 2243
+  },
+  {
+    "page_id": 31,
+    "url": "/masters/salons",
+    "name": "Мои салоны",
+    "is_published": true,
+    "view_id": 2240
+  },
+  {
+    "page_id": 32,
+    "url": "/masters/schedule",
+    "name": "Расписание",
+    "is_published": true,
+    "view_id": 2241
+  },
+  {
+    "page_id": 35,
+    "url": "/masters/settings",
+    "name": "Настройки",
+    "is_published": true,
+    "view_id": 2244
+  },
+  {
+    "page_id": 4,
+    "url": "/privacy",
+    "name": "Privacy Policy",
+    "is_published": true,
+    "view_id": 582
+  },
+  {
+    "page_id": 37,
+    "url": "/s/:slug",
+    "name": "TOTEM — Salon",
+    "is_published": true,
+    "view_id": 2246
+  },
+  {
+    "page_id": 38,
+    "url": "/s/:slug/booking",
+    "name": "TOTEM — Booking",
+    "is_published": true,
+    "view_id": 2247
+  },
+  {
+    "page_id": 39,
+    "url": "/s/:slug/calendar",
+    "name": "TOTEM — Calendar",
+    "is_published": true,
+    "view_id": 2248
+  },
+  {
+    "page_id": 41,
+    "url": "/s/:slug/owner",
+    "name": "TOTEM — Owner",
+    "is_published": true,
+    "view_id": 2250
+  },
+  {
+    "page_id": 40,
+    "url": "/s/:slug/reports",
+    "name": "TOTEM — Reports",
+    "is_published": true,
+    "view_id": 2249
+  },
+  {
+    "page_id": 42,
+    "url": "/s/test",
+    "name": "TOTEM STUB /s/test",
+    "is_published": true,
+    "view_id": 2256
+  },
+  {
+    "page_id": 43,
+    "url": "/s/test/booking",
+    "name": "TOTEM STUB /s/test/booking",
+    "is_published": true,
+    "view_id": 2257
+  },
+  {
+    "page_id": 44,
+    "url": "/s/test/calendar",
+    "name": "TOTEM STUB /s/test/calendar",
+    "is_published": true,
+    "view_id": 2258
+  },
+  {
+    "page_id": 45,
+    "url": "/s/test/owner",
+    "name": "TOTEM REDIRECT /s/test/owner",
+    "is_published": true,
+    "view_id": 2260
+  },
+  {
+    "page_id": 46,
+    "url": "/s/test/reports",
+    "name": "TOTEM REDIRECT /s/test/reports",
+    "is_published": true,
+    "view_id": 2261
+  },
+  {
+    "page_id": 21,
+    "url": "/salons",
+    "name": "Салоны",
+    "is_published": false,
+    "view_id": 2230
+  },
+  {
+    "page_id": 25,
+    "url": "/salons/bookings",
+    "name": "Записи",
+    "is_published": true,
+    "view_id": 2234
+  },
+  {
+    "page_id": 22,
+    "url": "/salons/cabinet",
+    "name": "TOTEM REDIRECT /salons/cabinet",
+    "is_published": true,
+    "view_id": 2263
+  },
+  {
+    "page_id": 26,
+    "url": "/salons/clients",
+    "name": "Клиенты",
+    "is_published": true,
+    "view_id": 2235
+  },
+  {
+    "page_id": 23,
+    "url": "/salons/masters",
+    "name": "Мастера",
+    "is_published": true,
+    "view_id": 2232
+  },
+  {
+    "page_id": 27,
+    "url": "/salons/money",
+    "name": "Деньги",
+    "is_published": true,
+    "view_id": 2236
+  },
+  {
+    "page_id": 24,
+    "url": "/salons/schedule",
+    "name": "Расписание",
+    "is_published": true,
+    "view_id": 2233
+  },
+  {
+    "page_id": 28,
+    "url": "/salons/settings",
+    "name": "Настройки",
+    "is_published": true,
+    "view_id": 2237
+  },
+  {
+    "page_id": 52,
+    "url": "/start",
+    "name": "TOTEM START",
+    "is_published": true,
+    "view_id": 2269
+  },
+  {
+    "page_id": 51,
+    "url": "/waitlist",
+    "name": "TOTEM WAITLIST",
+    "is_published": true,
+    "view_id": 2268
+  },
+  {
+    "page_id": 6,
+    "url": "/your-task-has-been-submitted",
+    "name": "Task Submitted",
+    "is_published": true,
+    "view_id": 2046
+  }
+]

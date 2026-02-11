@@ -1,0 +1,7 @@
+<t t-name="totem.page.demo_home">
+  <t t-call="website.layout">
+    <div class="container">
+      <h2>Internal Demo</h2><ul><li><a href="/demo/s/test">Demo Salon</a></li></ul>
+    </div>
+  </t>
+</t>

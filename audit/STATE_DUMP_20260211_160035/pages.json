@@ -1,0 +1,162 @@
+[
+  {
+    "id": 28,
+    "name": "Настройки",
+    "url": "/salons/settings",
+    "view_id": [
+      2237,
+      "Настройки"
+    ],
+    "is_published": true
+  },
+  {
+    "id": 31,
+    "name": "Мои салоны",
+    "url": "/masters/salons",
+    "view_id": [
+      2240,
+      "Мои салоны"
+    ],
+    "is_published": true
+  },
+  {
+    "id": 21,
+    "name": "Салоны",
+    "url": "/salons",
+    "view_id": [
+      2230,
+      "Салоны"
+    ],
+    "is_published": false
+  },
+  {
+    "id": 29,
+    "name": "Мастера",
+    "url": "/masters",
+    "view_id": [
+      2238,
+      "Мастера"
+    ],
+    "is_published": false
+  },
+  {
+    "id": 32,
+    "name": "Расписание",
+    "url": "/masters/schedule",
+    "view_id": [
+      2241,
+      "Расписание"
+    ],
+    "is_published": true
+  },
+  {
+    "id": 36,
+    "name": "Клиенты",
+    "url": "/masters/clients",
+    "view_id": [
+      2245,
+      "Клиенты"
+    ],
+    "is_published": true
+  },
+  {
+    "id": 33,
+    "name": "Записи",
+    "url": "/masters/bookings",
+    "view_id": [
+      2242,
+      "Записи"
+    ],
+    "is_published": true
+  },
+  {
+    "id": 34,
+    "name": "Деньги",
+    "url": "/masters/money",
+    "view_id": [
+      2243,
+      "Деньги"
+    ],
+    "is_published": true
+  },
+  {
+    "id": 35,
+    "name": "Настройки",
+    "url": "/masters/settings",
+    "view_id": [
+      2244,
+      "Настройки"
+    ],
+    "is_published": true
+  },
+  {
+    "id": 30,
+    "name": "TOTEM REDIRECT /masters/cabinet",
+    "url": "/masters/cabinet",
+    "view_id": [
+      2262,
+      "TOTEM REDIRECT /masters/cabinet"
+    ],
+    "is_published": true
+  },
+  {
+    "id": 22,
+    "name": "TOTEM REDIRECT /salons/cabinet",
+    "url": "/salons/cabinet",
+    "view_id": [
+      2263,
+      "TOTEM REDIRECT /salons/cabinet"
+    ],
+    "is_published": true
+  },
+  {
+    "id": 23,
+    "name": "Мастера",
+    "url": "/salons/masters",
+    "view_id": [
+      2232,
+      "Мастера"
+    ],
+    "is_published": true
+  },
+  {
+    "id": 24,
+    "name": "Расписание",
+    "url": "/salons/schedule",
+    "view_id": [
+      2233,
+      "Расписание"
+    ],
+    "is_published": true
+  },
+  {
+    "id": 25,
+    "name": "Записи",
+    "url": "/salons/bookings",
+    "view_id": [
+      2234,
+      "Записи"
+    ],
+    "is_published": true
+  },
+  {
+    "id": 26,
+    "name": "Клиенты",
+    "url": "/salons/clients",
+    "view_id": [
+      2235,
+      "Клиенты"
+    ],
+    "is_published": true
+  },
+  {
+    "id": 27,
+    "name": "Деньги",
+    "url": "/salons/money",
+    "view_id": [
+      2236,
+      "Деньги"
+    ],
+    "is_published": true
+  }
+]

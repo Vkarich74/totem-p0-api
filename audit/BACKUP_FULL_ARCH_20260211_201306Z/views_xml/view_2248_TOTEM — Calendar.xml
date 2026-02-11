@@ -1,0 +1,7 @@
+<t t-name="totem.calendar">
+  <t t-call="website.layout">
+    <div class="container my-5">
+      <div id="totem-root" data-page="calendar"/>
+    </div>
+  </t>
+</t>

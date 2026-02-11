@@ -1,0 +1,8 @@
+<t t-name="totem.redirect./s/test">
+  <t t-call="website.layout">
+    <script type="text/javascript">window.location.replace("/s/test");</script>
+    <div class="container">
+      <p>Перенаправление… <a href="/s/test">нажмите здесь</a></p>
+    </div>
+  </t>
+</t>

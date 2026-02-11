@@ -1,0 +1,10 @@
+C:\Users\Vitaly\Desktop\odoo-local\src\payments\index.ts
+C:\Users\Vitaly\Desktop\odoo-local\src\payments\payments.flags.ts
+C:\Users\Vitaly\Desktop\odoo-local\src\payments\PaymentService.ts
+C:\Users\Vitaly\Desktop\odoo-local\src\payments\PaymentTypes.ts
+C:\Users\Vitaly\Desktop\odoo-local\src\payments\wire.runtime.ts
+C:\Users\Vitaly\Desktop\odoo-local\src\payments\providers\ProviderAdapter.ts
+C:\Users\Vitaly\Desktop\odoo-local\src\payments\providers\ProviderRegistry.ts
+C:\Users\Vitaly\Desktop\odoo-local\src\payments\providers\stripe.adapter.ts
+C:\Users\Vitaly\Desktop\odoo-local\src\payments\webhooks\payments.webhook.ts
+C:\Users\Vitaly\Desktop\odoo-local\src\routes\auth.resolve.ts
