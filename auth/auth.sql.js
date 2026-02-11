@@ -4,19 +4,20 @@ export async function ensureAuthTables() {
 
   if (db.mode === "POSTGRES") {
 
+    // Ensure base table exists
     await db.run(`
       CREATE TABLE IF NOT EXISTS auth_users (
         id SERIAL PRIMARY KEY,
-        email TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL,
-        role TEXT NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        email TEXT UNIQUE
       );
     `);
 
     // Add missing columns safely
+    await db.run(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS password TEXT;`);
+    await db.run(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS role TEXT;`);
     await db.run(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS master_id TEXT;`);
     await db.run(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS salon_id TEXT;`);
+    await db.run(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();`);
 
     await db.run(`
       CREATE TABLE IF NOT EXISTS auth_sessions (
@@ -30,6 +31,7 @@ export async function ensureAuthTables() {
     const row = await db.get(`SELECT COUNT(*)::int AS count FROM auth_users`);
 
     if (row && Number(row.count) === 0) {
+
       await db.run(
         `
         INSERT INTO auth_users (email, password, role, master_id, salon_id)
@@ -51,12 +53,12 @@ export async function ensureAuthTables() {
     await db.run(`
       CREATE TABLE IF NOT EXISTS auth_users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        email TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL,
-        role TEXT NOT NULL,
+        email TEXT UNIQUE,
+        password TEXT,
+        role TEXT,
         master_id TEXT,
         salon_id TEXT,
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        created_at TEXT DEFAULT (datetime('now'))
       );
     `);
 
@@ -64,7 +66,7 @@ export async function ensureAuthTables() {
       CREATE TABLE IF NOT EXISTS auth_sessions (
         id TEXT PRIMARY KEY,
         user_id INTEGER NOT NULL,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        created_at TEXT DEFAULT (datetime('now')),
         expires_at TEXT NOT NULL
       );
     `);
