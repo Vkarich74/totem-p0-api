@@ -1,6 +1,5 @@
 # =====================================================
-# TOTEM — .gitignore (FINAL / CANONICAL)
-# RULE: BACKEND ONLY
+# TOTEM — .gitignore (FINAL / CLEAN BACKEND SAFE)
 # ROOT: C:\Users\Vitaly\Desktop\odoo-local
 # =====================================================
 
@@ -76,38 +75,30 @@ TOTEM_HANDOFF2/
 TOTEM_release_*.zip
 
 # -------------------------
-# Extra local / ops leftovers (LITERAL)
+# Extra local leftovers
 # -------------------------
 ru_RU
-'ru_RU'
-'ru_RU'/
-docker
 docker/
 wip/
 db_check.txt
 docs/UI_CONTRACT_V1.md
 tools/AUTO_OWNER_REPORTS_RELEASE.py
 
-# -------------------------
-# Garbage / Accidental files
-# -------------------------
-^
-^/
-{
-{/
-cd
-dir
-git
-node
-npm
-notepad
-type
-if
-set
-taskkill
--files --others --exclude-standard
-py
-python
+# =====================================================
+# === TOTEM: LOCAL AUDIT ARTIFACTS (DO NOT PUSH) ===
+# =====================================================
+
+audit/
+audit_out_deep/
+project_dump/
+tools/
+_SCAN_TS.txt
+
+STATE_DUMP_*/
+BACKUP_*/
+
+*_report_*.json
+audit/migration/_reports/
 
 # -------------------------
 # Misc
