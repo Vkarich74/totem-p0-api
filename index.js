@@ -1,5 +1,6 @@
 import express from "express";
 import db from "./db.js";
+import cookieParser from "cookie-parser";
 
 import ownerRoutes from "./routes_owner/index.js";
 import calendarRoutes from "./calendar/calendar.routes.js";
@@ -18,6 +19,7 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 
 app.use(express.json());
+app.use(cookieParser()); // <<< ВАЖНО
 
 app.get("/health", (req, res) => {
   res.json({ ok: true });
