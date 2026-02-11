@@ -1,7 +1,0 @@
-<t t-name="totem.page.start">
-  <t t-call="website.layout">
-    <div class="container">
-      <p><a href="/waitlist">Ранний доступ</a></p><p><a href="/demo">Demo</a></p>
-    </div>
-  </t>
-</t>

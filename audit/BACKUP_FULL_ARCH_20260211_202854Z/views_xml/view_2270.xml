@@ -1,7 +1,0 @@
-<t t-name="totem.page.demo_stub">
-  <t t-call="website.layout">
-    <div class="container">
-      <p>Demo stub</p>
-    </div>
-  </t>
-</t>

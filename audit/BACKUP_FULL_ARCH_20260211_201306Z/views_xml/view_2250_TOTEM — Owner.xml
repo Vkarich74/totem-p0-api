@@ -1,7 +1,0 @@
-<t t-name="totem.owner">
-  <t t-call="website.layout">
-    <div class="container my-5">
-      <div id="totem-root" data-page="owner"/>
-    </div>
-  </t>
-</t>

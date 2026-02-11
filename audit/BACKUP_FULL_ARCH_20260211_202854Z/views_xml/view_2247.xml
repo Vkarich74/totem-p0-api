@@ -1,7 +1,0 @@
-<t t-name="totem.booking">
-  <t t-call="website.layout">
-    <div class="container my-5">
-      <div id="totem-root" data-page="booking"/>
-    </div>
-  </t>
-</t>

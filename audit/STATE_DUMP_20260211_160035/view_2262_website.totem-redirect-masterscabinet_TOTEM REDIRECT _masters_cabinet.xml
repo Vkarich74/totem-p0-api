@@ -1,8 +1,0 @@
-<template id="totem_clean_gate_page" name="TOTEM Clean Gate Page">
-  <t t-call="website.layout">
-    <div id="wrap" class="container" style="padding:24px 0;">
-      <h3>Loading…</h3>
-      <p>TOTEM role gate is checking your session.</p>
-    </div>
-  </t>
-</template>

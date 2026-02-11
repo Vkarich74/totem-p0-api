@@ -1,5 +1,0 @@
-PROJECT STRUCTURE DUMP
-Generated: 2026-02-11T11:20:29.291151+00:00
-Root: C:\Users\Vitaly\Desktop\odoo-local
-Total directories: 115
-Total files: 924
