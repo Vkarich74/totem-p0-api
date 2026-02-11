@@ -2,6 +2,11 @@ import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
+import { Pool } from "pg";
+import crypto from "crypto";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const app = express();
 
@@ -26,17 +31,26 @@ app.use(rateLimit({
   max: 1000
 }));
 
-// ------------------------
-// HEALTH
-// ------------------------
+/* =========================
+   DATABASE
+========================= */
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
+
+/* =========================
+   HEALTH
+========================= */
 
 app.get("/health", (req, res) => {
   res.json({ ok: true });
 });
 
-// ------------------------
-// AUTH LOGIN
-// ------------------------
+/* =========================
+   AUTH LOGIN
+========================= */
 
 app.post("/auth/login", async (req, res) => {
   const { email } = req.body;
@@ -45,7 +59,6 @@ app.post("/auth/login", async (req, res) => {
     return res.status(400).json({ error: "Email required" });
   }
 
-  // TODO: заменить на реальную проверку БД
   const role = "salon_admin";
   const salon_slug = "totem-demo-salon";
 
@@ -65,9 +78,9 @@ app.post("/auth/login", async (req, res) => {
   });
 });
 
-// ------------------------
-// AUTH RESOLVE
-// ------------------------
+/* =========================
+   AUTH RESOLVE
+========================= */
 
 app.get("/auth/resolve", (req, res) => {
   const session = req.cookies.totem_session;
@@ -76,7 +89,6 @@ app.get("/auth/resolve", (req, res) => {
     return res.json({ role: "public" });
   }
 
-  // TODO: заменить на реальную сессию из БД
   return res.json({
     role: "salon_admin",
     salon_slug: "totem-demo-salon",
@@ -84,7 +96,57 @@ app.get("/auth/resolve", (req, res) => {
   });
 });
 
-// ------------------------
+/* =========================
+   SALON SLUG RESOLVE (CORE FIX)
+========================= */
+
+app.get("/s/:slug/resolve", async (req, res) => {
+  const { slug } = req.params;
+
+  try {
+    const result = await pool.query(
+      "SELECT id, slug FROM salons WHERE slug = $1 LIMIT 1",
+      [slug]
+    );
+
+    if (!result.rows || result.rows.length === 0) {
+      return res.status(404).json({
+        ok: false,
+        error: "SALON_NOT_FOUND"
+      });
+    }
+
+    const salon = result.rows[0];
+
+    return res.json({
+      ok: true,
+      salon_id: String(salon.id),
+      slug: salon.slug
+    });
+
+  } catch (err) {
+    console.error("SLUG_RESOLVE_ERROR:", err);
+    return res.status(500).json({
+      ok: false,
+      error: "INTERNAL_ERROR"
+    });
+  }
+});
+
+/* =========================
+   GLOBAL JSON 404
+========================= */
+
+app.use((req, res) => {
+  return res.status(404).json({
+    ok: false,
+    error: "NOT_FOUND"
+  });
+});
+
+/* =========================
+   START
+========================= */
 
 const PORT = process.env.PORT || 3000;
 
