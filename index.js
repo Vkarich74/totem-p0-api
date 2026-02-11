@@ -4,9 +4,6 @@ import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
 import { Pool } from "pg";
 import crypto from "crypto";
-import dotenv from "dotenv";
-
-dotenv.config();
 
 const app = express();
 
@@ -102,7 +99,7 @@ app.get("/auth/resolve", (req, res) => {
 });
 
 /* =========================
-   SALON SLUG RESOLVE
+   SLUG RESOLVE
 ========================= */
 
 app.get("/s/:slug/resolve", async (req, res) => {
