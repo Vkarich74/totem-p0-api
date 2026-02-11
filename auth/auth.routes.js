@@ -4,171 +4,100 @@ import db from "../db.js";
 
 const router = express.Router();
 
-function newId() {
-  return crypto.randomUUID();
-}
-
-function nowMs() {
-  return Date.now();
-}
-
-function msToIso(ms) {
-  return new Date(ms).toISOString();
-}
-
-async function createSession(user_id) {
-  const id = newId();
-  const expiresMs = nowMs() + 7 * 24 * 60 * 60 * 1000; // 7 days
-
-  if (db.mode === "POSTGRES") {
-    await db.run(
-      `
-      INSERT INTO auth_sessions (id, user_id, expires_at)
-      VALUES ($1, $2, $3::timestamptz)
-      `,
-      [id, user_id, msToIso(expiresMs)]
-    );
-  } else {
-    await db.run(
-      `
-      INSERT INTO auth_sessions (id, user_id, expires_at)
-      VALUES (?, ?, ?)
-      `,
-      [id, user_id, msToIso(expiresMs)]
-    );
-  }
-
-  return { id, expiresMs };
-}
-
-async function getUserByEmail(email) {
-  const sql =
-    db.mode === "POSTGRES"
-      ? `SELECT id, email, password, role, master_id, salon_id FROM auth_users WHERE email=$1 LIMIT 1`
-      : `SELECT id, email, password, role, master_id, salon_id FROM auth_users WHERE email=? LIMIT 1`;
-
-  return db.get(sql, [email]);
-}
-
-async function getSession(sessionId) {
-  const sql =
-    db.mode === "POSTGRES"
-      ? `SELECT id, user_id, expires_at FROM auth_sessions WHERE id=$1 LIMIT 1`
-      : `SELECT id, user_id, expires_at FROM auth_sessions WHERE id=? LIMIT 1`;
-
-  return db.get(sql, [sessionId]);
-}
-
-async function deleteSession(sessionId) {
-  const sql = db.mode === "POSTGRES"
-    ? `DELETE FROM auth_sessions WHERE id=$1`
-    : `DELETE FROM auth_sessions WHERE id=?`;
-
-  await db.run(sql, [sessionId]);
-}
-
-async function getUserById(userId) {
-  const sql =
-    db.mode === "POSTGRES"
-      ? `SELECT id, role, master_id, salon_id FROM auth_users WHERE id=$1 LIMIT 1`
-      : `SELECT id, role, master_id, salon_id FROM auth_users WHERE id=? LIMIT 1`;
-
-  return db.get(sql, [userId]);
-}
-
-// POST /auth/login
-router.post("/auth/login", async (req, res) => {
+/*
+  LOGIN:
+  - проверяет только email
+  - проверяет enabled=true
+  - password игнорируется (тестовый режим)
+*/
+router.post("/login", async (req, res) => {
   try {
-    const { email, password } = req.body || {};
-    if (!email || !password) return res.status(400).json({ error: "BAD_REQUEST" });
+    const { email } = req.body;
 
-    const user = await getUserByEmail(String(email));
-    if (!user || String(user.password) !== String(password)) {
-      return res.status(401).json({ error: "INVALID_CREDENTIALS" });
+    if (!email) {
+      return res.status(400).json({ error: "EMAIL_REQUIRED" });
     }
 
-    const session = await createSession(String(user.id));
+    const user = await db.get(
+      `SELECT id, email, role, salon_slug, master_slug, enabled
+       FROM auth_users
+       WHERE email=$1
+       LIMIT 1`,
+      [email]
+    );
 
-    res.cookie("totem_session", session.id, {
+    if (!user) {
+      return res.status(401).json({ error: "USER_NOT_FOUND" });
+    }
+
+    if (!user.enabled) {
+      return res.status(403).json({ error: "USER_DISABLED" });
+    }
+
+    const sessionId = crypto.randomUUID();
+    const expires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    await db.run(
+      `
+      INSERT INTO auth_sessions (id, user_id, expires_at)
+      VALUES ($1,$2,$3)
+      `,
+      [sessionId, user.id, expires]
+    );
+
+    res.cookie("totem_session", sessionId, {
       httpOnly: true,
       sameSite: "lax",
-      path: "/",
+      secure: true
     });
 
-    return res.status(200).json({ ok: true, role: user.role, user_id: user.id });
+    return res.json({
+      ok: true,
+      role: user.role,
+      salon_slug: user.salon_slug,
+      master_slug: user.master_slug
+    });
+
   } catch (e) {
-    console.error("[AUTH_LOGIN][ERROR]", e);
+    console.error("[AUTH_LOGIN_ERROR]", e);
     return res.status(500).json({ error: "INTERNAL_ERROR" });
   }
 });
 
-// POST /auth/logout
-router.post("/auth/logout", async (req, res) => {
+/*
+  RESOLVE:
+*/
+router.get("/resolve", async (req, res) => {
   try {
-    const sid = req.cookies?.totem_session;
-    if (sid) {
-      try { await deleteSession(String(sid)); } catch (_) {}
+    const sessionId = req.cookies?.totem_session;
+
+    if (!sessionId) {
+      return res.json({ role: "public" });
     }
-    res.clearCookie("totem_session", { path: "/" });
-    return res.status(200).json({ ok: true });
+
+    const session = await db.get(
+      `
+      SELECT s.id, u.role, u.salon_slug, u.master_slug
+      FROM auth_sessions s
+      JOIN auth_users u ON u.id = s.user_id
+      WHERE s.id=$1
+      LIMIT 1
+      `,
+      [sessionId]
+    );
+
+    if (!session) {
+      return res.json({ role: "public" });
+    }
+
+    return res.json({
+      role: session.role,
+      salon_slug: session.salon_slug,
+      master_slug: session.master_slug
+    });
+
   } catch (e) {
-    console.error("[AUTH_LOGOUT][ERROR]", e);
-    return res.status(500).json({ error: "INTERNAL_ERROR" });
-  }
-});
-
-// GET /auth/resolve
-router.get("/auth/resolve", async (req, res) => {
-  try {
-    const sid = req.cookies?.totem_session;
-    if (!sid) return res.status(200).json({ role: "public" });
-
-    const session = await getSession(String(sid));
-    if (!session) return res.status(200).json({ role: "public" });
-
-    const expMs = Date.parse(String(session.expires_at));
-    if (!Number.isFinite(expMs) || expMs < nowMs()) {
-      try { await deleteSession(String(sid)); } catch (_) {}
-      return res.status(200).json({ role: "public" });
-    }
-
-    const user = await getUserById(String(session.user_id));
-    if (!user) return res.status(200).json({ role: "public" });
-
-    if (user.role === "master") {
-      return res.status(200).json({
-        role: "master",
-        master_id: user.master_id,
-        salon_ids: user.salon_id ? [user.salon_id] : [],
-        permissions: {
-          can_edit_profile: true,
-          can_manage_schedule: true,
-        },
-      });
-    }
-
-    if (user.role === "salon") {
-      return res.status(200).json({
-        role: "salon",
-        salon_id: user.salon_id,
-        permissions: {
-          can_manage_masters: true,
-          can_view_reports: true,
-        },
-      });
-    }
-
-    if (user.role === "owner") {
-      return res.status(200).json({
-        role: "owner",
-        owner_id: user.id,
-        permissions: {},
-      });
-    }
-
-    return res.status(200).json({ role: "public" });
-  } catch (e) {
-    console.error("[AUTH_RESOLVE][ERROR]", e);
+    console.error("[AUTH_RESOLVE_ERROR]", e);
     return res.status(500).json({ error: "INTERNAL_ERROR" });
   }
 });
