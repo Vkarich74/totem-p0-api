@@ -21,20 +21,19 @@ const PORT = process.env.PORT || 8080;
 app.use(express.json());
 app.use(cookieParser());
 
+// ===== HEALTH =====
 app.get("/health", (req, res) => {
   res.json({ ok: true });
 });
 
-/**
- * AUTH (keeps canonical paths)
- * - POST /auth/login
- * - POST /auth/logout
- * - GET  /auth/resolve
- */
+// ===== AUTH =====
 app.use(authRoutes);
 
+// ===== SYSTEM =====
 app.use("/system/onboarding", systemOnboardingRoutes);
 app.use("/system", systemRoutes);
+
+// ===== CORE =====
 app.use("/owner", ownerRoutes);
 app.use("/calendar", calendarRoutes);
 app.use("/booking", bookingRoutes);
