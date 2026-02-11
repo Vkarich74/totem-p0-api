@@ -1,10 +1,8 @@
 import db from "../db.js";
 
 export async function ensureAuthTables() {
-
   if (db.mode === "POSTGRES") {
-
-    // Ensure base table exists
+    // Base table (safe)
     await db.run(`
       CREATE TABLE IF NOT EXISTS auth_users (
         id SERIAL PRIMARY KEY,
@@ -12,13 +10,14 @@ export async function ensureAuthTables() {
       );
     `);
 
-    // Add missing columns safely
+    // Ensure required columns exist (safe migrations)
     await db.run(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS password TEXT;`);
     await db.run(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS role TEXT;`);
     await db.run(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS master_id TEXT;`);
     await db.run(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS salon_id TEXT;`);
     await db.run(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();`);
 
+    // Sessions table
     await db.run(`
       CREATE TABLE IF NOT EXISTS auth_sessions (
         id TEXT PRIMARY KEY,
@@ -28,28 +27,35 @@ export async function ensureAuthTables() {
       );
     `);
 
-    const row = await db.get(`SELECT COUNT(*)::int AS count FROM auth_users`);
+    // FORCE-SEED test users (idempotent)
+    await db.run(
+      `
+      INSERT INTO auth_users (email, password, role, master_id, salon_id)
+      VALUES ($1,$2,$3,$4,$5)
+      ON CONFLICT (email) DO NOTHING
+      `,
+      ["master@test.com", "1234", "master", "m_test_1", null]
+    );
 
-    if (row && Number(row.count) === 0) {
+    await db.run(
+      `
+      INSERT INTO auth_users (email, password, role, master_id, salon_id)
+      VALUES ($1,$2,$3,$4,$5)
+      ON CONFLICT (email) DO NOTHING
+      `,
+      ["salon@test.com", "1234", "salon", null, "s_test_1"]
+    );
 
-      await db.run(
-        `
-        INSERT INTO auth_users (email, password, role, master_id, salon_id)
-        VALUES
-          ($1,$2,$3,$4,$5),
-          ($6,$7,$8,$9,$10),
-          ($11,$12,$13,$14,$15)
-        `,
-        [
-          "master@test.com", "1234", "master", "m_test_1", null,
-          "salon@test.com", "1234", "salon", null, "s_test_1",
-          "owner@test.com", "1234", "owner", null, null
-        ]
-      );
-    }
-
+    await db.run(
+      `
+      INSERT INTO auth_users (email, password, role, master_id, salon_id)
+      VALUES ($1,$2,$3,$4,$5)
+      ON CONFLICT (email) DO NOTHING
+      `,
+      ["owner@test.com", "1234", "owner", null, null]
+    );
   } else {
-
+    // SQLite fallback
     await db.run(`
       CREATE TABLE IF NOT EXISTS auth_users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,5 +77,18 @@ export async function ensureAuthTables() {
       );
     `);
 
+    // FORCE-SEED (idempotent)
+    await db.run(
+      `INSERT OR IGNORE INTO auth_users (email, password, role, master_id, salon_id) VALUES (?,?,?,?,?)`,
+      ["master@test.com", "1234", "master", "m_test_1", null]
+    );
+    await db.run(
+      `INSERT OR IGNORE INTO auth_users (email, password, role, master_id, salon_id) VALUES (?,?,?,?,?)`,
+      ["salon@test.com", "1234", "salon", null, "s_test_1"]
+    );
+    await db.run(
+      `INSERT OR IGNORE INTO auth_users (email, password, role, master_id, salon_id) VALUES (?,?,?,?,?)`,
+      ["owner@test.com", "1234", "owner", null, null]
+    );
   }
 }
