@@ -32,13 +32,18 @@ app.use(rateLimit({
 }));
 
 /* =========================
-   DATABASE
+   SAFE DB HELPER
 ========================= */
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
-});
+function getPool() {
+  if (!process.env.DATABASE_URL) {
+    return null;
+  }
+
+  return new Pool({
+    connectionString: process.env.DATABASE_URL
+  });
+}
 
 /* =========================
    HEALTH
@@ -97,13 +102,22 @@ app.get("/auth/resolve", (req, res) => {
 });
 
 /* =========================
-   SALON SLUG RESOLVE (CORE FIX)
+   SALON SLUG RESOLVE
 ========================= */
 
 app.get("/s/:slug/resolve", async (req, res) => {
-  const { slug } = req.params;
-
   try {
+    const pool = getPool();
+
+    if (!pool) {
+      return res.status(500).json({
+        ok: false,
+        error: "DATABASE_NOT_CONFIGURED"
+      });
+    }
+
+    const { slug } = req.params;
+
     const result = await pool.query(
       "SELECT id, slug FROM salons WHERE slug = $1 LIMIT 1",
       [slug]
