@@ -1,6 +1,7 @@
 import db from "../db.js";
 
 export async function ensureAuthTables() {
+
   if (db.mode === "POSTGRES") {
 
     await db.run(`
@@ -9,11 +10,13 @@ export async function ensureAuthTables() {
         email TEXT UNIQUE NOT NULL,
         password TEXT NOT NULL,
         role TEXT NOT NULL,
-        master_id TEXT,
-        salon_id TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
+
+    // Add missing columns safely
+    await db.run(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS master_id TEXT;`);
+    await db.run(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS salon_id TEXT;`);
 
     await db.run(`
       CREATE TABLE IF NOT EXISTS auth_sessions (
@@ -34,7 +37,6 @@ export async function ensureAuthTables() {
           ($1,$2,$3,$4,$5),
           ($6,$7,$8,$9,$10),
           ($11,$12,$13,$14,$15)
-        ON CONFLICT (email) DO NOTHING
         `,
         [
           "master@test.com", "1234", "master", "m_test_1", null,
