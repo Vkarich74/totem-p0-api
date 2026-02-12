@@ -47,16 +47,14 @@ function slugifyEmail(email) {
 function requireMasterAuth(req, res, next) {
   try {
     const auth = req.headers.authorization;
-    if (!auth || !auth.startsWith("Bearer ")) {
+    if (!auth || !auth.startsWith("Bearer "))
       return res.status(401).json({ ok: false, error: "TOKEN_REQUIRED" });
-    }
 
     const token = auth.split(" ")[1];
     const decoded = jwt.verify(token, JWT_SECRET);
 
-    if (decoded.role !== "master") {
+    if (decoded.role !== "master")
       return res.status(403).json({ ok: false, error: "INVALID_ROLE" });
-    }
 
     req.master = decoded;
     next();
@@ -106,10 +104,7 @@ app.post("/master/register", async (req, res) => {
       [masterSlug, name, userId]
     );
 
-    res.json({
-      ok: true,
-      master_id: masterInsert.rows[0].id
-    });
+    res.json({ ok: true, master_id: masterInsert.rows[0].id });
 
   } catch (err) {
     console.error("REGISTER_ERROR:", err);
@@ -146,7 +141,6 @@ app.post("/master/login", async (req, res) => {
       return res.status(403).json({ ok: false, error: "ACCOUNT_DISABLED" });
 
     const valid = await bcrypt.compare(password, row.password_hash);
-
     if (!valid)
       return res.status(401).json({ ok: false, error: "INVALID_CREDENTIALS" });
 
@@ -158,10 +152,8 @@ app.post("/master/login", async (req, res) => {
     if (!master.rows.length)
       return res.status(500).json({ ok: false, error: "MASTER_PROFILE_MISSING" });
 
-    const masterId = master.rows[0].id;
-
     const token = jwt.sign(
-      { master_id: masterId, role: "master" },
+      { master_id: master.rows[0].id, role: "master" },
       JWT_SECRET,
       { expiresIn: JWT_EXPIRES_IN }
     );
@@ -236,6 +228,16 @@ app.post("/booking/create", requireMasterAuth, async (req, res) => {
     if (!salon_id || !client_name || !start_at || !end_at || !calendar_slot_id)
       return res.status(400).json({ ok: false, error: "missing_fields" });
 
+    const salon = await pool.query(
+      "SELECT slug FROM salons WHERE id=$1 LIMIT 1",
+      [salon_id]
+    );
+
+    if (!salon.rows.length)
+      return res.status(400).json({ ok: false, error: "salon_not_found" });
+
+    const salon_slug = salon.rows[0].slug;
+
     const ms = await pool.query(
       `SELECT 1 FROM master_salon
        WHERE master_id=$1 AND salon_id=$2`,
@@ -282,10 +284,19 @@ app.post("/booking/create", requireMasterAuth, async (req, res) => {
 
     const insertBooking = await pool.query(
       `INSERT INTO bookings
-       (salon_id,master_id,client_id,start_at,end_at,status,request_id,calendar_slot_id)
-       VALUES ($1,$2,$3,$4,$5,'reserved',$6,$7)
+       (salon_id,salon_slug,master_id,client_id,start_at,end_at,status,request_id,calendar_slot_id)
+       VALUES ($1,$2,$3,$4,$5,$6,'reserved',$7,$8)
        RETURNING id`,
-      [salon_id, master_id, clientId, start_at, end_at, requestId, calendar_slot_id]
+      [
+        salon_id,
+        salon_slug,
+        master_id,
+        clientId,
+        start_at,
+        end_at,
+        requestId,
+        calendar_slot_id
+      ]
     );
 
     res.json({ ok: true, booking_id: insertBooking.rows[0].id });
