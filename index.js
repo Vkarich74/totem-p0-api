@@ -41,9 +41,7 @@ function getPool() {
   return _pool;
 }
 
-function slugifyEmail(email) {
-  return email.split("@")[0] + "-" + crypto.randomUUID().slice(0, 8);
-}
+/* ================= ACTOR HELPERS ================= */
 
 function readActorFromHeaders(req) {
   const rawType =
@@ -71,135 +69,14 @@ function readActorFromHeaders(req) {
 }
 
 async function setActorLocals(client, actor) {
-  // values in SET LOCAL are per-transaction
-  await client.query("SET LOCAL app.actor_type = $1", [actor.actor_type]);
-  await client.query("SET LOCAL app.actor_id = $1", [actor.actor_id || ""]);
-  await client.query("SET LOCAL app.source = $1", [actor.source || "api"]);
+  const safeType = actor.actor_type.replace(/'/g, "");
+  const safeId = (actor.actor_id || "").replace(/'/g, "");
+  const safeSource = (actor.source || "api").replace(/'/g, "");
+
+  await client.query(`SET LOCAL app.actor_type = '${safeType}'`);
+  await client.query(`SET LOCAL app.actor_id = '${safeId}'`);
+  await client.query(`SET LOCAL app.source = '${safeSource}'`);
 }
-
-/* ================= JWT MIDDLEWARE ================= */
-
-function requireMasterAuth(req, res, next) {
-  try {
-    const auth = req.headers.authorization;
-    if (!auth || !auth.startsWith("Bearer "))
-      return res.status(401).json({ ok: false, error: "TOKEN_REQUIRED" });
-
-    const token = auth.split(" ")[1];
-    const decoded = jwt.verify(token, JWT_SECRET);
-
-    if (decoded.role !== "master")
-      return res.status(403).json({ ok: false, error: "INVALID_ROLE" });
-
-    req.master = decoded;
-    next();
-  } catch {
-    return res.status(401).json({ ok: false, error: "INVALID_TOKEN" });
-  }
-}
-
-/* ================= MASTER REGISTER ================= */
-
-app.post("/master/register", async (req, res) => {
-  try {
-    const pool = getPool();
-    const { email, password, name } = req.body || {};
-
-    if (!email || !password || !name)
-      return res.status(400).json({ ok: false, error: "EMAIL_PASSWORD_NAME_REQUIRED" });
-
-    const cleanEmail = email.trim().toLowerCase();
-
-    const existing = await pool.query(
-      "SELECT id FROM auth_users WHERE email=$1 AND role='master'",
-      [cleanEmail]
-    );
-
-    if (existing.rows.length)
-      return res.status(400).json({ ok: false, error: "MASTER_EXISTS" });
-
-    const password_hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-    const masterSlug = slugifyEmail(cleanEmail);
-
-    const userInsert = await pool.query(
-      `INSERT INTO auth_users
-       (email, role, enabled, created_at, master_slug, password_hash)
-       VALUES ($1,'master',true,now(),$2,$3)
-       RETURNING id`,
-      [cleanEmail, masterSlug, password_hash]
-    );
-
-    const userId = userInsert.rows[0].id;
-
-    const masterInsert = await pool.query(
-      `INSERT INTO masters
-       (slug, name, user_id, created_at)
-       VALUES ($1,$2,$3,now())
-       RETURNING id`,
-      [masterSlug, name, userId]
-    );
-
-    res.json({ ok: true, master_id: masterInsert.rows[0].id });
-
-  } catch (err) {
-    console.error("REGISTER_ERROR:", err);
-    res.status(500).json({ ok: false });
-  }
-});
-
-/* ================= MASTER LOGIN ================= */
-
-app.post("/master/login", async (req, res) => {
-  try {
-    const pool = getPool();
-    const { email, password } = req.body || {};
-
-    if (!email || !password)
-      return res.status(400).json({ ok: false, error: "EMAIL_PASSWORD_REQUIRED" });
-
-    const cleanEmail = email.trim().toLowerCase();
-
-    const user = await pool.query(
-      `SELECT id, password_hash, enabled
-       FROM auth_users
-       WHERE email=$1 AND role='master'
-       LIMIT 1`,
-      [cleanEmail]
-    );
-
-    if (!user.rows.length)
-      return res.status(401).json({ ok: false, error: "INVALID_CREDENTIALS" });
-
-    const row = user.rows[0];
-
-    if (!row.enabled)
-      return res.status(403).json({ ok: false, error: "ACCOUNT_DISABLED" });
-
-    const valid = await bcrypt.compare(password, row.password_hash);
-    if (!valid)
-      return res.status(401).json({ ok: false, error: "INVALID_CREDENTIALS" });
-
-    const master = await pool.query(
-      "SELECT id FROM masters WHERE user_id=$1 LIMIT 1",
-      [row.id]
-    );
-
-    if (!master.rows.length)
-      return res.status(500).json({ ok: false, error: "MASTER_PROFILE_MISSING" });
-
-    const token = jwt.sign(
-      { master_id: master.rows[0].id, role: "master" },
-      JWT_SECRET,
-      { expiresIn: JWT_EXPIRES_IN }
-    );
-
-    res.json({ ok: true, token });
-
-  } catch (err) {
-    console.error("LOGIN_ERROR:", err);
-    res.status(500).json({ ok: false });
-  }
-});
 
 /* ================= CONFIRM BOOKING ================= */
 
@@ -239,7 +116,6 @@ app.post("/bookings/:id/confirm", async (req, res) => {
     }
 
     await client.query("BEGIN");
-
     await setActorLocals(client, actor);
 
     await client.query(
@@ -248,26 +124,6 @@ app.post("/bookings/:id/confirm", async (req, res) => {
        VALUES ($1,'confirm_booking',$2)`,
       [idempotencyKey, requestHash]
     );
-
-    const booking = await client.query(
-      `SELECT id, status
-       FROM public.bookings
-       WHERE id=$1
-       FOR UPDATE`,
-      [bookingId]
-    );
-
-    if (!booking.rows.length) {
-      const response = { ok: false, error: "BOOKING_NOT_FOUND" };
-      await client.query(
-        `UPDATE public.api_idempotency_keys
-         SET response_code=404, response_body=$2
-         WHERE idempotency_key=$1`,
-        [idempotencyKey, response]
-      );
-      await client.query("COMMIT");
-      return res.status(404).json(response);
-    }
 
     await client.query(
       `UPDATE public.bookings
@@ -335,7 +191,6 @@ app.post("/bookings/:id/cancel", async (req, res) => {
     }
 
     await client.query("BEGIN");
-
     await setActorLocals(client, actor);
 
     await client.query(
@@ -344,26 +199,6 @@ app.post("/bookings/:id/cancel", async (req, res) => {
        VALUES ($1,'cancel_booking',$2)`,
       [idempotencyKey, requestHash]
     );
-
-    const booking = await client.query(
-      `SELECT id, status
-       FROM public.bookings
-       WHERE id=$1
-       FOR UPDATE`,
-      [bookingId]
-    );
-
-    if (!booking.rows.length) {
-      const response = { ok: false, error: "BOOKING_NOT_FOUND" };
-      await client.query(
-        `UPDATE public.api_idempotency_keys
-         SET response_code=404, response_body=$2
-         WHERE idempotency_key=$1`,
-        [idempotencyKey, response]
-      );
-      await client.query("COMMIT");
-      return res.status(404).json(response);
-    }
 
     await client.query(
       `UPDATE public.bookings
@@ -393,19 +228,11 @@ app.post("/bookings/:id/cancel", async (req, res) => {
   }
 });
 
-/* ================= ROOT ================= */
-
-app.get("/", (req, res) => {
-  res.status(200).send("OK");
-});
-
 /* ================= HEALTH ================= */
 
 app.get("/health", (req, res) => {
   res.json({ ok: true });
 });
-
-/* ================= SERVER START ================= */
 
 const PORT = process.env.PORT || 8080;
 
