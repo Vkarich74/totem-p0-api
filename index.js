@@ -88,7 +88,6 @@ app.post("/master/register", async (req, res) => {
     const password_hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
     const masterSlug = slugifyEmail(cleanEmail);
 
-    // 1️⃣ create auth_user
     const userInsert = await pool.query(
       `INSERT INTO auth_users
        (email, role, enabled, created_at, master_slug, password_hash)
@@ -99,7 +98,6 @@ app.post("/master/register", async (req, res) => {
 
     const userId = userInsert.rows[0].id;
 
-    // 2️⃣ create masters row
     const masterInsert = await pool.query(
       `INSERT INTO masters
        (slug, name, user_id, created_at)
@@ -152,7 +150,6 @@ app.post("/master/login", async (req, res) => {
     if (!valid)
       return res.status(401).json({ ok: false, error: "INVALID_CREDENTIALS" });
 
-    // получить masters.id
     const master = await pool.query(
       "SELECT id FROM masters WHERE user_id=$1 LIMIT 1",
       [row.id]
@@ -215,6 +212,86 @@ app.post("/secure/master/invite", async (req, res) => {
 
   } catch (err) {
     console.error("INVITE_ERROR:", err);
+    res.status(500).json({ ok: false });
+  }
+});
+
+/* ================= CREATE BOOKING ================= */
+
+app.post("/booking/create", requireMasterAuth, async (req, res) => {
+  try {
+    const pool = getPool();
+    const {
+      salon_id,
+      client_name,
+      client_phone,
+      client_email,
+      start_at,
+      end_at,
+      calendar_slot_id
+    } = req.body;
+
+    const master_id = req.master.master_id;
+
+    if (!salon_id || !client_name || !start_at || !end_at || !calendar_slot_id)
+      return res.status(400).json({ ok: false, error: "missing_fields" });
+
+    const ms = await pool.query(
+      `SELECT 1 FROM master_salon
+       WHERE master_id=$1 AND salon_id=$2`,
+      [master_id, salon_id]
+    );
+
+    if (!ms.rows.length)
+      return res.status(403).json({ ok: false, error: "master_not_in_salon" });
+
+    let client = await pool.query(
+      `SELECT id FROM clients
+       WHERE salon_id=$1 AND phone=$2 LIMIT 1`,
+      [salon_id, client_phone || null]
+    );
+
+    let clientId;
+
+    if (!client.rows.length) {
+      const insertClient = await pool.query(
+        `INSERT INTO clients
+         (salon_id,name,phone,email)
+         VALUES ($1,$2,$3,$4)
+         RETURNING id`,
+        [salon_id, client_name, client_phone || null, client_email || null]
+      );
+      clientId = insertClient.rows[0].id;
+    } else {
+      clientId = client.rows[0].id;
+    }
+
+    const overlap = await pool.query(
+      `SELECT id FROM bookings
+       WHERE master_id=$1
+       AND salon_id=$2
+       AND tstzrange(start_at,end_at) &&
+           tstzrange($3::timestamptz,$4::timestamptz)`,
+      [master_id, salon_id, start_at, end_at]
+    );
+
+    if (overlap.rows.length)
+      return res.status(409).json({ ok: false, error: "time_overlap" });
+
+    const requestId = crypto.randomUUID();
+
+    const insertBooking = await pool.query(
+      `INSERT INTO bookings
+       (salon_id,master_id,client_id,start_at,end_at,status,request_id,calendar_slot_id)
+       VALUES ($1,$2,$3,$4,$5,'reserved',$6,$7)
+       RETURNING id`,
+      [salon_id, master_id, clientId, start_at, end_at, requestId, calendar_slot_id]
+    );
+
+    res.json({ ok: true, booking_id: insertBooking.rows[0].id });
+
+  } catch (err) {
+    console.error("BOOKING_CREATE_ERROR:", err);
     res.status(500).json({ ok: false });
   }
 });
