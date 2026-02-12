@@ -40,18 +40,14 @@ app.use(rateLimit({
 }));
 
 /* =========================
-   DB (SAFE SINGLETON)
+   DB
 ========================= */
 
 let _pool = null;
 
 function getPool() {
   if (_pool) return _pool;
-
-  if (!process.env.DATABASE_URL) {
-    // Не падаем: сервер должен стартовать всегда
-    return null;
-  }
+  if (!process.env.DATABASE_URL) return null;
 
   _pool = new Pool({
     connectionString: process.env.DATABASE_URL
@@ -80,10 +76,7 @@ async function resolveSalonBySlug(pool, slug) {
 }
 
 /* =========================
-   AUTH: LOAD SESSION
-   - Reads cookie
-   - Fetches auth_sessions + auth_users
-   - Sets req.auth
+   AUTH LOADER
 ========================= */
 
 async function loadAuth(req, res, next) {
@@ -100,23 +93,14 @@ async function loadAuth(req, res, next) {
       return next();
     }
 
-    const q = `
-      SELECT
-        s.id as session_id,
-        s.user_id,
-        s.expires_at,
-        u.email,
-        u.role,
-        u.salon_slug,
-        u.master_slug,
-        u.enabled
-      FROM auth_sessions s
-      JOIN auth_users u ON u.id = s.user_id
-      WHERE s.id = $1
-      LIMIT 1
-    `;
-
-    const r = await pool.query(q, [sid]);
+    const r = await pool.query(
+      `SELECT s.user_id, s.expires_at,
+              u.role, u.salon_slug, u.master_slug, u.enabled
+       FROM auth_sessions s
+       JOIN auth_users u ON u.id = s.user_id
+       WHERE s.id = $1 LIMIT 1`,
+      [sid]
+    );
 
     if (!r.rows || r.rows.length === 0) {
       req.auth = { role: "public" };
@@ -125,28 +109,23 @@ async function loadAuth(req, res, next) {
 
     const row = r.rows[0];
 
-    if (row.enabled === false) {
+    if (row.enabled === false ||
+        !row.expires_at ||
+        new Date(row.expires_at).getTime() <= Date.now()) {
       req.auth = { role: "public" };
       return next();
     }
 
-    if (!row.expires_at || new Date(row.expires_at).getTime() <= Date.now()) {
-      req.auth = { role: "public" };
-      return next();
-    }
-
-    // Optional: derive salon_id if salon_slug exists
     let salon = null;
     if (row.salon_slug) {
       salon = await resolveSalonBySlug(pool, row.salon_slug);
     }
 
     req.auth = {
-      role: row.role || "public",
+      role: row.role,
       user_id: row.user_id,
-      email: row.email,
-      salon_slug: row.salon_slug || null,
-      master_slug: row.master_slug || null,
+      salon_slug: row.salon_slug,
+      master_slug: row.master_slug,
       salon_id: salon ? salon.salon_id : null
     };
 
@@ -161,27 +140,37 @@ async function loadAuth(req, res, next) {
 app.use(loadAuth);
 
 /* =========================
+   TENANT CONTEXT (HARD MODE)
+========================= */
+
+function requireTenant(req, res, next) {
+  if (!req.auth || !req.auth.user_id) {
+    return res.status(401).json({ ok: false, error: "AUTH_REQUIRED" });
+  }
+
+  if (!req.auth.salon_id) {
+    return res.status(403).json({ ok: false, error: "TENANT_NOT_BOUND" });
+  }
+
+  // 🔒 Единственный источник salon_id — сессия
+  req.tenant = {
+    salon_id: String(req.auth.salon_id),
+    role: req.auth.role
+  };
+
+  return next();
+}
+
+/* =========================
    HEALTH
 ========================= */
 
-app.get("/health", async (req, res) => {
-  try {
-    const pool = getPool();
-    if (!pool) return res.status(200).json({ ok: true, db: "not_configured" });
-    await pool.query("SELECT 1");
-    return res.status(200).json({ ok: true });
-  } catch (err) {
-    console.error("HEALTH_ERROR:", err);
-    return res.status(500).json({ ok: false });
-  }
+app.get("/health", (req, res) => {
+  res.json({ ok: true });
 });
 
 /* =========================
-   AUTH LOGIN (REAL)
-   Contract:
-   - user must exist in auth_users
-   - creates row in auth_sessions
-   - cookie value = session_id
+   AUTH LOGIN
 ========================= */
 
 app.post("/auth/login", async (req, res) => {
@@ -192,12 +181,12 @@ app.post("/auth/login", async (req, res) => {
     }
 
     const { email } = req.body || {};
-    if (!email || typeof email !== "string") {
+    if (!email) {
       return res.status(400).json({ ok: false, error: "EMAIL_REQUIRED" });
     }
 
     const u = await pool.query(
-      "SELECT id, email, role, salon_slug, master_slug, enabled FROM auth_users WHERE email = $1 LIMIT 1",
+      "SELECT id, role, salon_slug, master_slug, enabled FROM auth_users WHERE email = $1 LIMIT 1",
       [email.trim().toLowerCase()]
     );
 
@@ -225,41 +214,44 @@ app.post("/auth/login", async (req, res) => {
       sameSite: "None"
     });
 
-    // Optional: derive salon_id for frontend
-    let salon = null;
-    if (user.salon_slug) {
-      salon = await resolveSalonBySlug(pool, user.salon_slug);
-    }
-
     return res.json({
       ok: true,
       role: user.role,
-      salon_slug: user.salon_slug || null,
-      master_slug: user.master_slug || null,
-      salon_id: salon ? salon.salon_id : null
+      salon_slug: user.salon_slug,
+      master_slug: user.master_slug
     });
   } catch (err) {
     console.error("AUTH_LOGIN_ERROR:", err);
-    return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
+    return res.status(500).json({ ok: false });
   }
 });
 
 /* =========================
-   AUTH RESOLVE (REAL)
+   AUTH RESOLVE
 ========================= */
 
 app.get("/auth/resolve", (req, res) => {
-  const a = req.auth || { role: "public" };
-
-  if (!a.user_id) {
+  if (!req.auth.user_id) {
     return res.json({ role: "public" });
   }
 
   return res.json({
-    role: a.role || "public",
-    salon_slug: a.salon_slug || null,
-    master_slug: a.master_slug || null,
-    salon_id: a.salon_id || null
+    role: req.auth.role,
+    salon_slug: req.auth.salon_slug,
+    master_slug: req.auth.master_slug,
+    salon_id: req.auth.salon_id
+  });
+});
+
+/* =========================
+   PROTECTED EXAMPLE (NO salon_id param)
+========================= */
+
+app.get("/secure/me", requireTenant, async (req, res) => {
+  return res.json({
+    ok: true,
+    salon_id: req.tenant.salon_id,
+    role: req.tenant.role
   });
 });
 
@@ -268,40 +260,28 @@ app.get("/auth/resolve", (req, res) => {
 ========================= */
 
 app.get("/s/:slug/resolve", async (req, res) => {
-  try {
-    const pool = getPool();
-    if (!pool) {
-      return res.status(500).json({ ok: false, error: "DATABASE_NOT_CONFIGURED" });
-    }
-
-    const { slug } = req.params;
-
-    const salon = await resolveSalonBySlug(pool, slug);
-    if (!salon) {
-      return res.status(404).json({ ok: false, error: "SALON_NOT_FOUND" });
-    }
-
-    return res.json({ ok: true, salon_id: salon.salon_id, slug: salon.slug });
-  } catch (err) {
-    console.error("SLUG_RESOLVE_ERROR:", err);
-    return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
+  const pool = getPool();
+  if (!pool) {
+    return res.status(500).json({ ok: false });
   }
+
+  const salon = await resolveSalonBySlug(pool, req.params.slug);
+  if (!salon) {
+    return res.status(404).json({ ok: false });
+  }
+
+  return res.json({ ok: true, salon_id: salon.salon_id, slug: salon.slug });
 });
 
 /* =========================
-   GLOBAL JSON 404
+   404
 ========================= */
 
 app.use((req, res) => {
-  return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+  return res.status(404).json({ ok: false });
 });
 
-/* =========================
-   START
-========================= */
-
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
   console.log("Server running on port", PORT);
 });
