@@ -85,6 +85,7 @@ async function loadAuth(req, res, next) {
 
     let salons = [];
 
+    // salon_admin = owner
     if (row.role === "salon_admin") {
       const result = await pool.query(
         `SELECT s.id, s.slug
@@ -96,6 +97,7 @@ async function loadAuth(req, res, next) {
       salons = result.rows;
     }
 
+    // master
     if (row.role === "master") {
       const result = await pool.query(
         `SELECT s.id, s.slug
@@ -190,7 +192,7 @@ app.post("/auth/login", async (req, res) => {
 
     res.json({ ok: true });
   } catch (err) {
-    console.error(err);
+    console.error("LOGIN_ERROR:", err);
     res.status(500).json({ ok: false });
   }
 });
@@ -248,8 +250,9 @@ app.post("/secure/master/invite", requireTenant, async (req, res) => {
 
     if (!existing.rows.length) {
       await pool.query(
-        `INSERT INTO master_salon (master_id, salon_id, status, created_at)
-         VALUES ($1,$2,'active',now())`,
+        `INSERT INTO master_salon
+         (master_id, salon_id, status, created_at, updated_at)
+         VALUES ($1,$2,'active',now(),now())`,
         [String(masterId), req.tenant.salon_id]
       );
     }
