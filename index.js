@@ -169,7 +169,98 @@ app.post("/master/login", async (req, res) => {
   }
 });
 
-/* ================= ROOT (Railway healthcheck) ================= */
+/* ================= CONFIRM BOOKING ================= */
+
+app.post("/bookings/:id/confirm", async (req, res) => {
+  const pool = getPool();
+  const bookingId = req.params.id;
+  const idempotencyKey = req.headers["idempotency-key"];
+
+  if (!idempotencyKey)
+    return res.status(400).json({ ok: false, error: "IDEMPOTENCY_KEY_REQUIRED" });
+
+  const requestHash = crypto
+    .createHash("sha256")
+    .update(JSON.stringify(req.body || {}))
+    .digest("hex");
+
+  const client = await pool.connect();
+
+  try {
+    const existing = await client.query(
+      `SELECT request_hash, response_code, response_body
+       FROM public.api_idempotency_keys
+       WHERE idempotency_key=$1
+       LIMIT 1`,
+      [idempotencyKey]
+    );
+
+    if (existing.rows.length) {
+      const row = existing.rows[0];
+      if (row.request_hash !== requestHash)
+        return res.status(409).json({ ok: false, error: "IDEMPOTENCY_KEY_CONFLICT" });
+
+      return res.status(row.response_code).json(row.response_body);
+    }
+
+    await client.query("BEGIN");
+
+    await client.query(
+      `INSERT INTO public.api_idempotency_keys
+       (idempotency_key, endpoint, request_hash)
+       VALUES ($1,'confirm_booking',$2)`,
+      [idempotencyKey, requestHash]
+    );
+
+    const booking = await client.query(
+      `SELECT id, status
+       FROM public.bookings
+       WHERE id=$1
+       FOR UPDATE`,
+      [bookingId]
+    );
+
+    if (!booking.rows.length) {
+      const response = { ok: false, error: "BOOKING_NOT_FOUND" };
+      await client.query(
+        `UPDATE public.api_idempotency_keys
+         SET response_code=404, response_body=$2
+         WHERE idempotency_key=$1`,
+        [idempotencyKey, response]
+      );
+      await client.query("COMMIT");
+      return res.status(404).json(response);
+    }
+
+    await client.query(
+      `UPDATE public.bookings
+       SET status='confirmed'
+       WHERE id=$1`,
+      [bookingId]
+    );
+
+    const response = { ok: true, status: "confirmed" };
+
+    await client.query(
+      `UPDATE public.api_idempotency_keys
+       SET response_code=200, response_body=$2
+       WHERE idempotency_key=$1`,
+      [idempotencyKey, response]
+    );
+
+    await client.query("COMMIT");
+    return res.json(response);
+
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("CONFIRM_ERROR:", err);
+    return res.status(400).json({ ok: false, error: "CONFIRM_FAILED" });
+  } finally {
+    client.release();
+  }
+});
+
+/* ================= ROOT ================= */
 
 app.get("/", (req, res) => {
   res.status(200).send("OK");
