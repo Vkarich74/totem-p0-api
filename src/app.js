@@ -4,6 +4,7 @@ import cors from 'cors';
 import pkg from 'pg';
 
 import { confirmBooking } from './routes/confirmBooking.js';
+import { cancelBooking } from './routes/bookings/cancelBooking.js';
 
 const { Pool } = pkg;
 
@@ -93,10 +94,11 @@ app.get('/s/:slug/resolve', async (req, res) => {
 });
 
 /* =========================
-   BOOKINGS: CONFIRM (API Layer)
+   BOOKINGS
 ========================= */
 
 app.post('/bookings/:id/confirm', confirmBooking);
+app.post('/bookings/:id/cancel', cancelBooking);
 
 /* =========================
    GLOBAL JSON 404
