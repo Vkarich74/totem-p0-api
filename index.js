@@ -16,9 +16,6 @@ app.set("trust proxy", 1);
 const FRONTEND_ORIGIN =
   process.env.FRONTEND_ORIGIN || "https://totem-platform.odoo.com";
 
-const SESSION_COOKIE = "totem_session";
-const SESSION_TTL_DAYS = Number(process.env.SESSION_TTL_DAYS || 30);
-
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
 const BCRYPT_ROUNDS = Number(process.env.BCRYPT_ROUNDS || 12);
@@ -63,7 +60,7 @@ function requireMasterAuth(req, res, next) {
 
     req.master = decoded;
     next();
-  } catch (err) {
+  } catch {
     return res.status(401).json({ ok: false, error: "INVALID_TOKEN" });
   }
 }
@@ -73,10 +70,10 @@ function requireMasterAuth(req, res, next) {
 app.post("/master/register", async (req, res) => {
   try {
     const pool = getPool();
-    const { email, password } = req.body || {};
+    const { email, password, name } = req.body || {};
 
-    if (!email || !password)
-      return res.status(400).json({ ok: false, error: "EMAIL_PASSWORD_REQUIRED" });
+    if (!email || !password || !name)
+      return res.status(400).json({ ok: false, error: "EMAIL_PASSWORD_NAME_REQUIRED" });
 
     const cleanEmail = email.trim().toLowerCase();
 
@@ -91,7 +88,8 @@ app.post("/master/register", async (req, res) => {
     const password_hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
     const masterSlug = slugifyEmail(cleanEmail);
 
-    const insert = await pool.query(
+    // 1️⃣ create auth_user
+    const userInsert = await pool.query(
       `INSERT INTO auth_users
        (email, role, enabled, created_at, master_slug, password_hash)
        VALUES ($1,'master',true,now(),$2,$3)
@@ -99,7 +97,21 @@ app.post("/master/register", async (req, res) => {
       [cleanEmail, masterSlug, password_hash]
     );
 
-    res.json({ ok: true, master_id: insert.rows[0].id });
+    const userId = userInsert.rows[0].id;
+
+    // 2️⃣ create masters row
+    const masterInsert = await pool.query(
+      `INSERT INTO masters
+       (slug, name, user_id, created_at)
+       VALUES ($1,$2,$3,now())
+       RETURNING id`,
+      [masterSlug, name, userId]
+    );
+
+    res.json({
+      ok: true,
+      master_id: masterInsert.rows[0].id
+    });
 
   } catch (err) {
     console.error("REGISTER_ERROR:", err);
@@ -140,8 +152,19 @@ app.post("/master/login", async (req, res) => {
     if (!valid)
       return res.status(401).json({ ok: false, error: "INVALID_CREDENTIALS" });
 
+    // получить masters.id
+    const master = await pool.query(
+      "SELECT id FROM masters WHERE user_id=$1 LIMIT 1",
+      [row.id]
+    );
+
+    if (!master.rows.length)
+      return res.status(500).json({ ok: false, error: "MASTER_PROFILE_MISSING" });
+
+    const masterId = master.rows[0].id;
+
     const token = jwt.sign(
-      { master_id: row.id, role: "master" },
+      { master_id: masterId, role: "master" },
       JWT_SECRET,
       { expiresIn: JWT_EXPIRES_IN }
     );
@@ -159,12 +182,15 @@ app.post("/master/login", async (req, res) => {
 app.get("/master/profile", requireMasterAuth, async (req, res) => {
   const pool = getPool();
 
-  const user = await pool.query(
-    "SELECT id, email FROM auth_users WHERE id=$1",
+  const master = await pool.query(
+    `SELECT m.id, m.name, u.email
+     FROM masters m
+     JOIN auth_users u ON u.id = m.user_id
+     WHERE m.id=$1`,
     [req.master.master_id]
   );
 
-  res.json({ ok: true, user: user.rows[0] });
+  res.json({ ok: true, master: master.rows[0] });
 });
 
 /* ================= MASTER INVITE ================= */
@@ -172,41 +198,17 @@ app.get("/master/profile", requireMasterAuth, async (req, res) => {
 app.post("/secure/master/invite", async (req, res) => {
   try {
     const pool = getPool();
-    const { email } = req.body || {};
-    const activeSalonId = req.query?.active_salon_id;
+    const { master_id, salon_id } = req.body || {};
 
-    if (!email)
-      return res.status(400).json({ ok: false, error: "EMAIL_REQUIRED" });
-
-    const cleanEmail = email.trim().toLowerCase();
-    const masterSlug = slugifyEmail(cleanEmail);
-
-    let user = await pool.query(
-      "SELECT id FROM auth_users WHERE email=$1 LIMIT 1",
-      [cleanEmail]
-    );
-
-    let masterId;
-
-    if (!user.rows.length) {
-      const insert = await pool.query(
-        `INSERT INTO auth_users
-         (email, role, enabled, created_at, master_slug, password_hash)
-         VALUES ($1,'master',true,now(),$2,'TEMP_PASSWORD')
-         RETURNING id`,
-        [cleanEmail, masterSlug]
-      );
-      masterId = insert.rows[0].id;
-    } else {
-      masterId = user.rows[0].id;
-    }
+    if (!master_id || !salon_id)
+      return res.status(400).json({ ok: false, error: "MASTER_ID_SALON_ID_REQUIRED" });
 
     await pool.query(
       `INSERT INTO master_salon
        (master_id, salon_id, status, created_at, updated_at)
        VALUES ($1,$2,'active',now(),now())
-       ON CONFLICT DO NOTHING`,
-      [String(masterId), String(activeSalonId)]
+       ON CONFLICT (master_id, salon_id) DO NOTHING`,
+      [master_id, salon_id]
     );
 
     res.json({ ok: true });
