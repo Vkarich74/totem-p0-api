@@ -1,12 +1,14 @@
-const crypto = require('crypto');
-const { Pool } = require('pg');
+import crypto from 'crypto';
+import pkg from 'pg';
+
+const { Pool } = pkg;
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
 
-async function confirmBooking(req, res) {
+export async function confirmBooking(req, res) {
   const bookingId = String(req.params.id || '').trim();
   const idempotencyKey = String(req.headers['idempotency-key'] || '').trim();
   const actorType = String((req.body && req.body.actor_type) ? req.body.actor_type : 'system').trim() || 'system';
@@ -20,7 +22,7 @@ async function confirmBooking(req, res) {
   const client = await pool.connect();
 
   try {
-    // 1) idempotency hit
+    // idempotency hit
     const existing = await client.query(
       `SELECT request_hash, response_code, response_body
          FROM public.api_idempotency_keys
@@ -45,7 +47,7 @@ async function confirmBooking(req, res) {
 
     await client.query('BEGIN');
 
-    // 2) reserve key
+    // reserve key
     try {
       await client.query(
         `INSERT INTO public.api_idempotency_keys (idempotency_key, endpoint, request_hash)
@@ -53,7 +55,6 @@ async function confirmBooking(req, res) {
         [idempotencyKey, 'confirm_booking', requestHash]
       );
     } catch (e) {
-      // race: someone inserted same key
       const again = await client.query(
         `SELECT request_hash, response_code, response_body
            FROM public.api_idempotency_keys
@@ -78,10 +79,10 @@ async function confirmBooking(req, res) {
       return res.status(409).json({ ok: false, error: 'IDEMPOTENCY_IN_PROGRESS' });
     }
 
-    // 3) actor in session var (safe even if trigger doesn't use it yet)
+    // actor in session var (safe)
     await client.query(`SET LOCAL app.actor_type = $1`, [actorType]);
 
-    // 4) lock booking
+    // lock booking
     const booking = await client.query(
       `SELECT id, status
          FROM public.bookings
@@ -103,7 +104,6 @@ async function confirmBooking(req, res) {
       return res.status(404).json(responseBody);
     }
 
-    // idempotent by state
     if (booking.rows[0].status === 'confirmed') {
       const responseBody = { ok: true, status: 'already_confirmed' };
       await client.query(
@@ -117,7 +117,7 @@ async function confirmBooking(req, res) {
       return res.status(200).json(responseBody);
     }
 
-    // 5) DB-enforced confirm (trigger checks payments + transitions)
+    // DB-enforced confirm (trigger validates payments + transitions)
     try {
       await client.query(
         `UPDATE public.bookings
@@ -157,5 +157,3 @@ async function confirmBooking(req, res) {
     client.release();
   }
 }
-
-module.exports = { confirmBooking };

@@ -1,9 +1,11 @@
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const { Pool } = require('pg');
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import pkg from 'pg';
 
-const { confirmBooking } = require('./routes/confirmBooking');
+import { confirmBooking } from './routes/confirmBooking.js';
+
+const { Pool } = pkg;
 
 const app = express();
 app.use(express.json());
@@ -74,10 +76,7 @@ app.get('/s/:slug/resolve', async (req, res) => {
     );
 
     if (!result.rows || result.rows.length === 0) {
-      return res.status(404).json({
-        ok: false,
-        error: 'SALON_NOT_FOUND'
-      });
+      return res.status(404).json({ ok: false, error: 'SALON_NOT_FOUND' });
     }
 
     const salon = result.rows[0];
@@ -87,13 +86,9 @@ app.get('/s/:slug/resolve', async (req, res) => {
       salon_id: String(salon.id),
       slug: salon.slug
     });
-
   } catch (err) {
     console.error('SLUG_RESOLVE_ERROR:', err);
-    return res.status(500).json({
-      ok: false,
-      error: 'INTERNAL_ERROR'
-    });
+    return res.status(500).json({ ok: false, error: 'INTERNAL_ERROR' });
   }
 });
 
@@ -108,17 +103,14 @@ app.post('/bookings/:id/confirm', confirmBooking);
 ========================= */
 
 app.use((req, res) => {
-  return res.status(404).json({
-    ok: false,
-    error: 'NOT_FOUND'
-  });
+  return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
 });
 
 /* =========================
    START SERVER
 ========================= */
 
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT || 8080);
 
 app.listen(PORT, () => {
   console.log(`TOTEM backend running on port ${PORT}`);
