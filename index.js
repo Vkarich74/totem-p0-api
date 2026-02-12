@@ -169,6 +169,12 @@ app.post("/master/login", async (req, res) => {
   }
 });
 
+/* ================= ROOT (Railway healthcheck) ================= */
+
+app.get("/", (req, res) => {
+  res.status(200).send("OK");
+});
+
 /* ================= HEALTH ================= */
 
 app.get("/health", (req, res) => {
@@ -179,18 +185,6 @@ app.get("/health", (req, res) => {
 
 const PORT = process.env.PORT || 8080;
 
-const server = app.listen(PORT, () => {
+app.listen(PORT, () => {
   console.log("Server running on port:", PORT);
-});
-
-setInterval(() => {
-  console.log("Heartbeat alive");
-}, 15000);
-
-process.on("uncaughtException", (err) => {
-  console.error("UNCAUGHT EXCEPTION:", err);
-});
-
-process.on("unhandledRejection", (err) => {
-  console.error("UNHANDLED REJECTION:", err);
 });
