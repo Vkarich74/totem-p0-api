@@ -6,8 +6,7 @@ import { Pool } from "pg";
 import crypto from "crypto";
 
 const app = express();
-
-app.set("trust proxy", 1); // Railway fix
+app.set("trust proxy", 1);
 
 const FRONTEND_ORIGIN =
   process.env.FRONTEND_ORIGIN || "https://totem-platform.odoo.com";
@@ -15,18 +14,10 @@ const FRONTEND_ORIGIN =
 const SESSION_COOKIE = "totem_session";
 const SESSION_TTL_DAYS = Number(process.env.SESSION_TTL_DAYS || 30);
 
-app.use(cors({
-  origin: FRONTEND_ORIGIN,
-  credentials: true
-}));
-
+app.use(cors({ origin: FRONTEND_ORIGIN, credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
-
-app.use(rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 1000
-}));
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 1000 }));
 
 /* =========================
    DB
@@ -111,7 +102,7 @@ async function loadAuth(req, res, next) {
          FROM master_salon ms
          JOIN salons s ON s.id = ms.salon_id
          WHERE ms.master_id = $1`,
-        [String(row.user_id)] // FIX TYPE
+        [String(row.user_id)]
       );
       salons = result.rows;
     }
@@ -173,18 +164,15 @@ app.post("/auth/login", async (req, res) => {
     const pool = getPool();
     const { email } = req.body || {};
 
-    if (!email) {
-      return res.status(400).json({ ok: false });
-    }
+    if (!email) return res.status(400).json({ ok: false });
 
     const u = await pool.query(
       "SELECT id, role, enabled FROM auth_users WHERE email=$1 LIMIT 1",
       [email.trim().toLowerCase()]
     );
 
-    if (!u.rows.length || !u.rows[0].enabled) {
+    if (!u.rows.length || !u.rows[0].enabled)
       return res.status(401).json({ ok: false });
-    }
 
     const sessionId = crypto.randomUUID();
     const expiresAt = addDays(new Date(), SESSION_TTL_DAYS);
@@ -202,15 +190,14 @@ app.post("/auth/login", async (req, res) => {
 
     res.json({ ok: true });
   } catch (err) {
-    console.error("LOGIN_ERROR:", err);
+    console.error(err);
     res.status(500).json({ ok: false });
   }
 });
 
 app.get("/auth/resolve", (req, res) => {
-  if (!req.auth.user_id) {
+  if (!req.auth.user_id)
     return res.json({ role: "public" });
-  }
 
   res.json({
     role: req.auth.role,
@@ -219,7 +206,64 @@ app.get("/auth/resolve", (req, res) => {
 });
 
 /* =========================
-   MASTER LIST (FIXED)
+   MASTER INVITE FLOW
+========================= */
+
+app.post("/secure/master/invite", requireTenant, async (req, res) => {
+  try {
+    if (req.tenant.role !== "salon_admin")
+      return res.status(403).json({ ok: false });
+
+    const pool = getPool();
+    const { email } = req.body || {};
+    if (!email)
+      return res.status(400).json({ ok: false, error: "EMAIL_REQUIRED" });
+
+    const cleanEmail = email.trim().toLowerCase();
+
+    let user = await pool.query(
+      "SELECT id FROM auth_users WHERE email=$1 LIMIT 1",
+      [cleanEmail]
+    );
+
+    let masterId;
+
+    if (!user.rows.length) {
+      const insert = await pool.query(
+        `INSERT INTO auth_users (email, role, enabled, created_at)
+         VALUES ($1, 'master', true, now())
+         RETURNING id`,
+        [cleanEmail]
+      );
+      masterId = insert.rows[0].id;
+    } else {
+      masterId = user.rows[0].id;
+    }
+
+    const existing = await pool.query(
+      `SELECT id FROM master_salon
+       WHERE master_id=$1 AND salon_id=$2`,
+      [String(masterId), req.tenant.salon_id]
+    );
+
+    if (!existing.rows.length) {
+      await pool.query(
+        `INSERT INTO master_salon (master_id, salon_id, status, created_at)
+         VALUES ($1,$2,'active',now())`,
+        [String(masterId), req.tenant.salon_id]
+      );
+    }
+
+    res.json({ ok: true, master_id: masterId });
+
+  } catch (err) {
+    console.error("MASTER_INVITE_ERROR:", err);
+    res.status(500).json({ ok: false });
+  }
+});
+
+/* =========================
+   MASTER LIST
 ========================= */
 
 app.get("/secure/masters", requireTenant, async (req, res) => {
