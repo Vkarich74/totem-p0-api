@@ -34,7 +34,10 @@ let _pool = null;
 
 function getPool() {
   if (_pool) return _pool;
-  _pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  _pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false }
+  });
   return _pool;
 }
 
@@ -166,153 +169,28 @@ app.post("/master/login", async (req, res) => {
   }
 });
 
-/* ================= MASTER PROFILE ================= */
-
-app.get("/master/profile", requireMasterAuth, async (req, res) => {
-  const pool = getPool();
-
-  const master = await pool.query(
-    `SELECT m.id, m.name, u.email
-     FROM masters m
-     JOIN auth_users u ON u.id = m.user_id
-     WHERE m.id=$1`,
-    [req.master.master_id]
-  );
-
-  res.json({ ok: true, master: master.rows[0] });
-});
-
-/* ================= MASTER INVITE ================= */
-
-app.post("/secure/master/invite", async (req, res) => {
-  try {
-    const pool = getPool();
-    const { master_id, salon_id } = req.body || {};
-
-    if (!master_id || !salon_id)
-      return res.status(400).json({ ok: false, error: "MASTER_ID_SALON_ID_REQUIRED" });
-
-    await pool.query(
-      `INSERT INTO master_salon
-       (master_id, salon_id, status, created_at, updated_at)
-       VALUES ($1,$2,'active',now(),now())
-       ON CONFLICT (master_id, salon_id) DO NOTHING`,
-      [master_id, salon_id]
-    );
-
-    res.json({ ok: true });
-
-  } catch (err) {
-    console.error("INVITE_ERROR:", err);
-    res.status(500).json({ ok: false });
-  }
-});
-
-/* ================= CREATE BOOKING ================= */
-
-app.post("/booking/create", requireMasterAuth, async (req, res) => {
-  try {
-    const pool = getPool();
-    const {
-      salon_id,
-      client_name,
-      client_phone,
-      client_email,
-      start_at,
-      end_at,
-      calendar_slot_id
-    } = req.body;
-
-    const master_id = req.master.master_id;
-
-    if (!salon_id || !client_name || !start_at || !end_at || !calendar_slot_id)
-      return res.status(400).json({ ok: false, error: "missing_fields" });
-
-    const salon = await pool.query(
-      "SELECT slug FROM salons WHERE id=$1 LIMIT 1",
-      [salon_id]
-    );
-
-    if (!salon.rows.length)
-      return res.status(400).json({ ok: false, error: "salon_not_found" });
-
-    const salon_slug = salon.rows[0].slug;
-
-    const ms = await pool.query(
-      `SELECT 1 FROM master_salon
-       WHERE master_id=$1 AND salon_id=$2`,
-      [master_id, salon_id]
-    );
-
-    if (!ms.rows.length)
-      return res.status(403).json({ ok: false, error: "master_not_in_salon" });
-
-    let client = await pool.query(
-      `SELECT id FROM clients
-       WHERE salon_id=$1 AND phone=$2 LIMIT 1`,
-      [salon_id, client_phone || null]
-    );
-
-    let clientId;
-
-    if (!client.rows.length) {
-      const insertClient = await pool.query(
-        `INSERT INTO clients
-         (salon_id,name,phone,email)
-         VALUES ($1,$2,$3,$4)
-         RETURNING id`,
-        [salon_id, client_name, client_phone || null, client_email || null]
-      );
-      clientId = insertClient.rows[0].id;
-    } else {
-      clientId = client.rows[0].id;
-    }
-
-    const overlap = await pool.query(
-      `SELECT id FROM bookings
-       WHERE master_id=$1
-       AND salon_id=$2
-       AND tstzrange(start_at,end_at) &&
-           tstzrange($3::timestamptz,$4::timestamptz)`,
-      [master_id, salon_id, start_at, end_at]
-    );
-
-    if (overlap.rows.length)
-      return res.status(409).json({ ok: false, error: "time_overlap" });
-
-    const requestId = crypto.randomUUID();
-
-    const insertBooking = await pool.query(
-      `INSERT INTO bookings
-       (salon_id,salon_slug,master_id,client_id,start_at,end_at,status,request_id,calendar_slot_id)
-       VALUES ($1,$2,$3,$4,$5,$6,'reserved',$7,$8)
-       RETURNING id`,
-      [
-        salon_id,
-        salon_slug,
-        master_id,
-        clientId,
-        start_at,
-        end_at,
-        requestId,
-        calendar_slot_id
-      ]
-    );
-
-    res.json({ ok: true, booking_id: insertBooking.rows[0].id });
-
-  } catch (err) {
-    console.error("BOOKING_CREATE_ERROR:", err);
-    res.status(500).json({ ok: false });
-  }
-});
-
 /* ================= HEALTH ================= */
 
 app.get("/health", (req, res) => {
   res.json({ ok: true });
 });
 
-app.listen(process.env.PORT || 3000, () => {
-  console.log("Server running");
+/* ================= SERVER START ================= */
+
+const PORT = process.env.PORT || 8080;
+
+const server = app.listen(PORT, () => {
+  console.log("Server running on port:", PORT);
+});
+
+setInterval(() => {
+  console.log("Heartbeat alive");
+}, 15000);
+
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION:", err);
+});
+
+process.on("unhandledRejection", (err) => {
+  console.error("UNHANDLED REJECTION:", err);
 });
