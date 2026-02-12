@@ -7,6 +7,8 @@ import crypto from "crypto";
 
 const app = express();
 
+app.set("trust proxy", 1); // Railway fix
+
 const FRONTEND_ORIGIN =
   process.env.FRONTEND_ORIGIN || "https://totem-platform.odoo.com";
 
@@ -92,7 +94,6 @@ async function loadAuth(req, res, next) {
 
     let salons = [];
 
-    // salon_admin = owner
     if (row.role === "salon_admin") {
       const result = await pool.query(
         `SELECT s.id, s.slug
@@ -104,14 +105,13 @@ async function loadAuth(req, res, next) {
       salons = result.rows;
     }
 
-    // master role
     if (row.role === "master") {
       const result = await pool.query(
         `SELECT s.id, s.slug
          FROM master_salon ms
          JOIN salons s ON s.id = ms.salon_id
          WHERE ms.master_id = $1`,
-        [row.user_id]
+        [String(row.user_id)] // FIX TYPE
       );
       salons = result.rows;
     }
@@ -202,7 +202,7 @@ app.post("/auth/login", async (req, res) => {
 
     res.json({ ok: true });
   } catch (err) {
-    console.error(err);
+    console.error("LOGIN_ERROR:", err);
     res.status(500).json({ ok: false });
   }
 });
@@ -219,21 +219,26 @@ app.get("/auth/resolve", (req, res) => {
 });
 
 /* =========================
-   MASTER LIST
+   MASTER LIST (FIXED)
 ========================= */
 
 app.get("/secure/masters", requireTenant, async (req, res) => {
-  const pool = getPool();
+  try {
+    const pool = getPool();
 
-  const masters = await pool.query(
-    `SELECT u.id, u.email
-     FROM master_salon ms
-     JOIN auth_users u ON u.id = ms.master_id
-     WHERE ms.salon_id = $1`,
-    [req.tenant.salon_id]
-  );
+    const masters = await pool.query(
+      `SELECT u.id, u.email
+       FROM master_salon ms
+       JOIN auth_users u ON u.id::text = ms.master_id
+       WHERE ms.salon_id = $1`,
+      [req.tenant.salon_id]
+    );
 
-  res.json({ ok: true, masters: masters.rows });
+    res.json({ ok: true, masters: masters.rows });
+  } catch (err) {
+    console.error("MASTER_LIST_ERROR:", err);
+    res.status(500).json({ ok: false });
+  }
 });
 
 /* =========================
