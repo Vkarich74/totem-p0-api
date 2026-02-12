@@ -92,7 +92,8 @@ async function loadAuth(req, res, next) {
 
     let salons = [];
 
-    if (row.role === "owner") {
+    // salon_admin = owner
+    if (row.role === "salon_admin") {
       const result = await pool.query(
         `SELECT s.id, s.slug
          FROM owner_salon os
@@ -103,6 +104,7 @@ async function loadAuth(req, res, next) {
       salons = result.rows;
     }
 
+    // master role
     if (row.role === "master") {
       const result = await pool.query(
         `SELECT s.id, s.slug
@@ -217,7 +219,7 @@ app.get("/auth/resolve", (req, res) => {
 });
 
 /* =========================
-   MASTER TEST ENDPOINT
+   MASTER LIST
 ========================= */
 
 app.get("/secure/masters", requireTenant, async (req, res) => {
