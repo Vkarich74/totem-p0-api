@@ -4,6 +4,8 @@ import cors from 'cors';
 import pkg from 'pg';
 
 import { resolveAuth } from './middleware/resolveAuth.js';
+import { requireAuth } from './middleware/requireAuth.js';
+import { requireRole } from './middleware/requireRole.js';
 
 const { Pool } = pkg;
 
@@ -78,6 +80,22 @@ app.get('/auth/resolve', async (req, res) => {
 });
 
 /* =========================
+   OWNER API
+========================= */
+
+app.get('/owner/ping',
+  requireAuth,
+  requireRole(['owner', 'salon_admin']),
+  async (req, res) => {
+    return res.status(200).json({
+      ok: true,
+      role: req.auth.role,
+      user_id: req.auth.user_id
+    });
+  }
+);
+
+/* =========================
    SLUG RESOLVE
 ========================= */
 
@@ -108,7 +126,7 @@ app.get('/s/:slug/resolve', async (req, res) => {
 });
 
 /* =========================
-   BOOKINGS (TEMP SAFE STUB)
+   BOOKINGS (SAFE STUB)
 ========================= */
 
 app.post('/bookings/:id/confirm', async (req, res) => {
