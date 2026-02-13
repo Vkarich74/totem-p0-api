@@ -39,7 +39,11 @@ function resolveAuth(req, res, next) {
   const user_id = rawId ? Number.parseInt(rawId.toString(), 10) : null;
   const role = rawRole ? rawRole.toString().trim() : null;
 
-  if (Number.isInteger(user_id) && user_id > 0 && (role === "salon_admin" || role === "master")) {
+  if (
+    Number.isInteger(user_id) &&
+    user_id > 0 &&
+    (role === "salon_admin" || role === "master")
+  ) {
     req.auth = { user_id, role };
   } else {
     req.auth = null;
@@ -104,7 +108,193 @@ async function enforceBookingSalonAccess(client, auth, bookingId) {
   return { ok: true };
 }
 
+async function ensureMasterAllowedForBooking(client, auth, salon_id, master_id) {
+  if (!Number.isInteger(master_id) || master_id <= 0) {
+    return { ok: false, code: 400, error: "INVALID_MASTER_ID" };
+  }
+
+  if (auth.role === "master") {
+    // master can only book for himself
+    const r = await client.query(
+      `SELECT 1
+       FROM public.masters m
+       WHERE m.id = $1
+         AND m.user_id = $2
+       LIMIT 1`,
+      [master_id, auth.user_id]
+    );
+    if (r.rowCount === 0) return { ok: false, code: 403, error: "MASTER_ID_MISMATCH" };
+    return { ok: true };
+  }
+
+  // salon_admin: master must be active in this salon
+  const r = await client.query(
+    `SELECT 1
+     FROM public.master_salon ms
+     WHERE ms.master_id = $1
+       AND ms.salon_id = $2
+       AND ms.status = 'active'
+     LIMIT 1`,
+    [master_id, salon_id]
+  );
+  if (r.rowCount === 0) return { ok: false, code: 400, error: "MASTER_NOT_IN_SALON" };
+  return { ok: true };
+}
+
+function parseIsoDate(value) {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
 app.use(resolveAuth);
+
+/* ================= HEALTH ================= */
+
+app.get("/health", (req, res) => res.json({ ok: true }));
+
+/* ================= BOOKING ENGINE V2 =================
+   slot -> booking (idempotency by request_id = Idempotency-Key)
+   Required booking columns: salon_id, salon_slug, master_id, start_at, end_at, request_id, calendar_slot_id
+   Also: service_id (enforced by DB trigger on INSERT), price_snapshot filled by DB trigger
+*/
+
+app.post("/bookings/v2", requireAuth, async (req, res) => {
+  const pool = getPool();
+
+  const idempotencyKey = req.headers["idempotency-key"];
+  if (!idempotencyKey) {
+    return res.status(400).json({ ok: false, error: "IDEMPOTENCY_KEY_REQUIRED" });
+  }
+
+  const {
+    salon_id,
+    salon_slug,
+    master_id,
+    service_id,
+    start_at,
+    end_at,
+    client_id
+  } = req.body || {};
+
+  const salonId = Number.parseInt(String(salon_id), 10);
+  const masterId = Number.parseInt(String(master_id), 10);
+  const serviceId = Number.parseInt(String(service_id), 10);
+
+  if (!Number.isInteger(salonId) || salonId <= 0) {
+    return res.status(400).json({ ok: false, error: "INVALID_SALON_ID" });
+  }
+  if (!salon_slug || typeof salon_slug !== "string" || salon_slug.trim().length < 1) {
+    return res.status(400).json({ ok: false, error: "SALON_SLUG_REQUIRED" });
+  }
+  if (!Number.isInteger(masterId) || masterId <= 0) {
+    return res.status(400).json({ ok: false, error: "INVALID_MASTER_ID" });
+  }
+  if (!Number.isInteger(serviceId) || serviceId <= 0) {
+    return res.status(400).json({ ok: false, error: "SERVICE_REQUIRED" });
+  }
+
+  const startIso = parseIsoDate(start_at);
+  const endIso = parseIsoDate(end_at);
+  if (!startIso || !endIso) {
+    return res.status(400).json({ ok: false, error: "INVALID_TIME_RANGE" });
+  }
+  if (new Date(startIso) >= new Date(endIso)) {
+    return res.status(400).json({ ok: false, error: "INVALID_TIME_RANGE" });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    // Guard: user can access salon
+    const allowedSalon = await canAccessSalon(client, req.auth.user_id, req.auth.role, salonId);
+    if (!allowedSalon) return res.status(403).json({ ok: false, error: "SALON_ACCESS_DENIED" });
+
+    // Guard: master validity (master role must match himself, salon_admin must pick active master in salon)
+    const masterGate = await ensureMasterAllowedForBooking(client, req.auth, salonId, masterId);
+    if (!masterGate.ok) return res.status(masterGate.code).json({ ok: false, error: masterGate.error });
+
+    await client.query("BEGIN");
+
+    // Idempotency: if booking already exists for this request_id, return it
+    const existingBooking = await client.query(
+      `SELECT *
+       FROM public.bookings
+       WHERE request_id = $1
+       LIMIT 1`,
+      [idempotencyKey]
+    );
+    if (existingBooking.rows.length) {
+      await client.query("COMMIT");
+      return res.json({ ok: true, booking: existingBooking.rows[0], idempotent: true });
+    }
+
+    // Create calendar slot (enforced no-overlap by EXCLUDE indexes)
+    // calendar_slots.status_check allows only reserved/cancelled/completed
+    const slotRes = await client.query(
+      `INSERT INTO public.calendar_slots (master_id, salon_id, start_at, end_at, status, request_id)
+       VALUES ($1,$2,$3,$4,'reserved',$5)
+       RETURNING id`,
+      [masterId, salonId, startIso, endIso, idempotencyKey]
+    );
+    const calendarSlotId = slotRes.rows[0].id;
+
+    // Create booking (DB trigger will validate service & fill price_snapshot)
+    const bookingRes = await client.query(
+      `INSERT INTO public.bookings
+         (salon_id, salon_slug, master_id, start_at, end_at, status, request_id, calendar_slot_id, client_id, service_id)
+       VALUES
+         ($1,$2,$3,$4,$5,'reserved',$6,$7,$8,$9)
+       RETURNING *`,
+      [salonId, salon_slug.trim(), masterId, startIso, endIso, idempotencyKey, calendarSlotId, client_id ?? null, serviceId]
+    );
+
+    await client.query("COMMIT");
+    return res.json({ ok: true, booking: bookingRes.rows[0] });
+
+  } catch (err) {
+    try { await client.query("ROLLBACK"); } catch {}
+
+    // Map common DB constraint signals
+    const code = err?.code;
+    const constraint = err?.constraint;
+    const msg = (err?.message || "").toString();
+
+    console.error("BOOKING_V2_CREATE_ERROR:", {
+      message: err?.message,
+      code: err?.code,
+      detail: err?.detail,
+      constraint: err?.constraint,
+      stack: err?.stack
+    });
+
+    // Exclusion violation (overlap) often = 23P01
+    if (code === "23P01") return res.status(409).json({ ok: false, error: "SLOT_UNAVAILABLE" });
+
+    // Unique violation for request_id
+    if (code === "23505" && (constraint === "calendar_request_id_uidx" || constraint === "calendar_slots_request_id_uq" || msg.includes("request_id"))) {
+      // idempotency race: return existing booking if created
+      try {
+        const r = await pool.query(
+          `SELECT * FROM public.bookings WHERE request_id=$1 LIMIT 1`,
+          [idempotencyKey]
+        );
+        if (r.rows.length) return res.json({ ok: true, booking: r.rows[0], idempotent: true });
+      } catch {}
+      return res.status(409).json({ ok: false, error: "IDEMPOTENCY_CONFLICT" });
+    }
+
+    // Trigger exceptions from enforce_booking_service_insert()
+    if (msg.includes("SERVICE_REQUIRED")) return res.status(400).json({ ok: false, error: "SERVICE_REQUIRED" });
+    if (msg.includes("SERVICE_NOT_FOUND")) return res.status(400).json({ ok: false, error: "SERVICE_NOT_FOUND" });
+    if (msg.includes("SERVICE_INACTIVE")) return res.status(400).json({ ok: false, error: "SERVICE_INACTIVE" });
+    if (msg.includes("SERVICE_SALON_MISMATCH")) return res.status(400).json({ ok: false, error: "SERVICE_SALON_MISMATCH" });
+
+    return res.status(400).json({ ok: false, error: "CREATE_BOOKING_FAILED" });
+  } finally {
+    client.release();
+  }
+});
 
 /* ================= CONFIRM ================= */
 
@@ -191,15 +381,6 @@ app.post("/bookings/:id/cancel", requireAuth, async (req, res) => {
     client.release();
   }
 });
-
-app.get("/health", (req, res) => res.json({ ok: true }));
-
-const PORT = 8080;
-app.listen(PORT, () => {
-  console.log("Server running on port:", PORT);
-});
-
-
 
 /* ================= SERVICES V2 ================= */
 
@@ -339,43 +520,7 @@ app.post("/services/:id/deactivate", requireAuth, async (req, res) => {
   }
 });
 
-
-
-/* ================= CREATE BOOKING ================= */
-
-app.post("/bookings", requireAuth, async (req, res) => {
-
-  const { salon_id, service_id } = req.body;
-
-  if (!salon_id || !service_id)
-    return res.status(400).json({ ok: false, error: "SERVICE_REQUIRED" });
-
-  const pool = getPool();
-  const client = await pool.connect();
-
-  try {
-    const allowed = await canAccessSalon(
-      client,
-      req.auth.user_id,
-      req.auth.role,
-      salon_id
-    );
-
-    if (!allowed)
-      return res.status(403).json({ ok: false, error: "SALON_ACCESS_DENIED" });
-
-    const r = await client.query(
-      `INSERT INTO public.bookings (salon_id, service_id, status)
-       VALUES ($1,$2,'reserved')
-       RETURNING *`,
-      [salon_id, service_id]
-    );
-
-    return res.json({ ok: true, booking: r.rows[0] });
-
-  } catch (err) {
-    return res.status(400).json({ ok: false, error: "CREATE_BOOKING_FAILED" });
-  } finally {
-    client.release();
-  }
+const PORT = 8080;
+app.listen(PORT, () => {
+  console.log("Server running on port:", PORT);
 });
