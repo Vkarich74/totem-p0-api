@@ -3,8 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import pkg from 'pg';
 
-import { confirmBooking } from './routes/confirmBooking.js';
-import { cancelBooking } from './routes/bookings/cancelBooking.js';
+import { resolveAuth } from './middleware/resolveAuth.js';
 
 const { Pool } = pkg;
 
@@ -27,10 +26,16 @@ app.use((req, res, next) => {
   res.header('Access-Control-Allow-Credentials', 'true');
   res.header(
     'Access-Control-Allow-Headers',
-    'Origin, X-Requested-With, Content-Type, Accept, Authorization, Idempotency-Key'
+    'Origin, X-Requested-With, Content-Type, Accept, Authorization, Idempotency-Key, X-User-Id, X-Role'
   );
   next();
 });
+
+/* =========================
+   AUTH CONTEXT
+========================= */
+
+app.use(resolveAuth);
 
 /* =========================
    DATABASE
@@ -60,7 +65,16 @@ app.get('/health', async (req, res) => {
 ========================= */
 
 app.get('/auth/resolve', async (req, res) => {
-  return res.status(200).json({ ok: true });
+  return res.status(200).json({
+    ok: true,
+    auth: req.auth
+      ? {
+          user_id: req.auth.user_id,
+          role: req.auth.role,
+          source: req.auth.source
+        }
+      : null
+  });
 });
 
 /* =========================
@@ -94,11 +108,22 @@ app.get('/s/:slug/resolve', async (req, res) => {
 });
 
 /* =========================
-   BOOKINGS
+   BOOKINGS (TEMP SAFE STUB)
 ========================= */
 
-app.post('/bookings/:id/confirm', confirmBooking);
-app.post('/bookings/:id/cancel', cancelBooking);
+app.post('/bookings/:id/confirm', async (req, res) => {
+  return res.status(501).json({
+    ok: false,
+    error: 'CONFIRM_BOOKING_NOT_ENABLED_RUNTIME'
+  });
+});
+
+app.post('/bookings/:id/cancel', async (req, res) => {
+  return res.status(501).json({
+    ok: false,
+    error: 'CANCEL_BOOKING_NOT_ENABLED_RUNTIME'
+  });
+});
 
 /* =========================
    GLOBAL JSON 404
