@@ -13,7 +13,7 @@ const app = express();
 app.use(express.json());
 
 /* =========================
-   PRODUCTION CORS
+   CORS
 ========================= */
 
 const ALLOWED_ORIGIN = 'https://totem-platform.odoo.com';
@@ -83,7 +83,8 @@ app.get('/auth/resolve', async (req, res) => {
    OWNER API
 ========================= */
 
-app.get('/owner/ping',
+app.get(
+  '/owner/ping',
   requireAuth,
   requireRole(['owner', 'salon_admin']),
   async (req, res) => {
@@ -126,7 +127,7 @@ app.get('/s/:slug/resolve', async (req, res) => {
 });
 
 /* =========================
-   BOOKINGS (SAFE STUB)
+   BOOKINGS (TEMP SAFE STUB)
 ========================= */
 
 app.post('/bookings/:id/confirm', async (req, res) => {
@@ -144,7 +145,7 @@ app.post('/bookings/:id/cancel', async (req, res) => {
 });
 
 /* =========================
-   GLOBAL JSON 404
+   GLOBAL 404
 ========================= */
 
 app.use((req, res) => {
@@ -152,11 +153,11 @@ app.use((req, res) => {
 });
 
 /* =========================
-   START SERVER
+   START SERVER (FIXED 8080)
 ========================= */
 
-const PORT = Number(process.env.PORT || 8080);
+const PORT = 8080;
 
 app.listen(PORT, () => {
-  console.log(`TOTEM backend running on port ${PORT}`);
+  console.log(`Server running on port: ${PORT}`);
 });
