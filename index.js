@@ -114,6 +114,26 @@ function requireSalonAccessFromParam(paramName) {
   };
 }
 
+async function getBookingSalonId(client, bookingId) {
+  const q = `SELECT salon_id FROM public.bookings WHERE id = $1 LIMIT 1`;
+  const r = await client.query(q, [bookingId]);
+  if (!r.rows.length) return null;
+  const v = r.rows[0].salon_id;
+  const n = Number.parseInt(String(v), 10);
+  if (!Number.isInteger(n) || n <= 0) return null;
+  return n;
+}
+
+async function enforceBookingSalonAccess(client, auth, bookingId) {
+  const salonId = await getBookingSalonId(client, bookingId);
+  if (!salonId) return { ok: false, code: 404, error: "BOOKING_NOT_FOUND" };
+
+  const allowed = await canAccessSalon(client, auth.user_id, auth.role, salonId);
+  if (!allowed) return { ok: false, code: 403, error: "SALON_ACCESS_DENIED" };
+
+  return { ok: true, salon_id: salonId };
+}
+
 app.use(resolveAuth);
 
 /* ================= ROUTES ================= */
@@ -130,23 +150,215 @@ app.get("/owner/salons/:salonId/ping",
   requireAuth,
   requireRole(["salon_admin"]),
   requireSalonAccessFromParam("salonId"),
-  (req, res) => {
-    res.json({ ok: true, salon_id: Number.parseInt(req.params.salonId, 10) });
-  }
+  (req, res) => res.json({ ok: true, salon_id: Number.parseInt(req.params.salonId, 10) })
 );
 
 app.get("/master/salons/:salonId/ping",
   requireAuth,
   requireRole(["master"]),
   requireSalonAccessFromParam("salonId"),
-  (req, res) => {
-    res.json({ ok: true, salon_id: Number.parseInt(req.params.salonId, 10) });
-  }
+  (req, res) => res.json({ ok: true, salon_id: Number.parseInt(req.params.salonId, 10) })
 );
 
-app.get("/health", (req, res) => {
-  res.json({ ok: true });
+/* ================= ACTOR HELPERS (kept simple) ================= */
+
+function readActorFromHeaders(req) {
+  const rawType =
+    (req.headers["x-actor-type"] || req.headers["actor-type"] || "system")
+      .toString()
+      .trim()
+      .toLowerCase();
+
+  if (!["owner", "master", "system"].includes(rawType)) {
+    return { ok: false, error: "INVALID_ACTOR_TYPE" };
+  }
+
+  const actorIdHeader = req.headers["x-actor-id"] || req.headers["actor-id"];
+  const sourceHeader = req.headers["x-source"] || req.headers["source"];
+
+  const actor_id = actorIdHeader ? actorIdHeader.toString().trim() : "";
+  const source = sourceHeader ? sourceHeader.toString().trim() : "api";
+
+  return { ok: true, actor_type: rawType, actor_id, source };
+}
+
+async function setActorLocals(client, actor) {
+  const safeType = actor.actor_type.replace(/'/g, "");
+  const safeId = (actor.actor_id || "").replace(/'/g, "");
+  const safeSource = (actor.source || "api").replace(/'/g, "");
+
+  await client.query(`SET LOCAL app.actor_type = '${safeType}'`);
+  await client.query(`SET LOCAL app.actor_id = '${safeId}'`);
+  await client.query(`SET LOCAL app.source = '${safeSource}'`);
+}
+
+/* ================= CONFIRM BOOKING (NOW GATED) ================= */
+
+app.post("/bookings/:id/confirm", requireAuth, async (req, res) => {
+  const pool = getPool();
+  const bookingId = Number.parseInt(req.params.id, 10);
+  const idempotencyKey = req.headers["idempotency-key"];
+
+  if (!Number.isInteger(bookingId) || bookingId <= 0) {
+    return res.status(400).json({ ok: false, error: "INVALID_BOOKING_ID" });
+  }
+  if (!idempotencyKey) {
+    return res.status(400).json({ ok: false, error: "IDEMPOTENCY_KEY_REQUIRED" });
+  }
+
+  const actor = readActorFromHeaders(req);
+  if (!actor.ok) return res.status(400).json({ ok: false, error: actor.error });
+
+  const requestHash = crypto
+    .createHash("sha256")
+    .update(JSON.stringify(req.body || {}))
+    .digest("hex");
+
+  const client = await pool.connect();
+
+  try {
+    // gate by booking.salon_id
+    const gate = await enforceBookingSalonAccess(client, req.auth, bookingId);
+    if (!gate.ok) return res.status(gate.code).json({ ok: false, error: gate.error });
+
+    const existing = await client.query(
+      `SELECT request_hash, response_code, response_body
+       FROM public.api_idempotency_keys
+       WHERE idempotency_key=$1
+       LIMIT 1`,
+      [idempotencyKey]
+    );
+
+    if (existing.rows.length) {
+      const row = existing.rows[0];
+      if (row.request_hash !== requestHash)
+        return res.status(409).json({ ok: false, error: "IDEMPOTENCY_KEY_CONFLICT" });
+
+      return res.status(row.response_code).json(row.response_body);
+    }
+
+    await client.query("BEGIN");
+    await setActorLocals(client, actor);
+
+    await client.query(
+      `INSERT INTO public.api_idempotency_keys (idempotency_key, endpoint, request_hash)
+       VALUES ($1,'confirm_booking',$2)`,
+      [idempotencyKey, requestHash]
+    );
+
+    await client.query(
+      `UPDATE public.bookings
+       SET status='confirmed'
+       WHERE id=$1`,
+      [bookingId]
+    );
+
+    const response = { ok: true, status: "confirmed" };
+
+    await client.query(
+      `UPDATE public.api_idempotency_keys
+       SET response_code=200, response_body=$2
+       WHERE idempotency_key=$1`,
+      [idempotencyKey, response]
+    );
+
+    await client.query("COMMIT");
+    return res.json(response);
+
+  } catch (err) {
+    try { await client.query("ROLLBACK"); } catch {}
+    console.error("CONFIRM_ERROR:", err);
+    return res.status(400).json({ ok: false, error: "CONFIRM_FAILED" });
+  } finally {
+    client.release();
+  }
 });
+
+/* ================= CANCEL BOOKING (NOW GATED) ================= */
+
+app.post("/bookings/:id/cancel", requireAuth, async (req, res) => {
+  const pool = getPool();
+  const bookingId = Number.parseInt(req.params.id, 10);
+  const idempotencyKey = req.headers["idempotency-key"];
+
+  if (!Number.isInteger(bookingId) || bookingId <= 0) {
+    return res.status(400).json({ ok: false, error: "INVALID_BOOKING_ID" });
+  }
+  if (!idempotencyKey) {
+    return res.status(400).json({ ok: false, error: "IDEMPOTENCY_KEY_REQUIRED" });
+  }
+
+  const actor = readActorFromHeaders(req);
+  if (!actor.ok) return res.status(400).json({ ok: false, error: actor.error });
+
+  const requestHash = crypto
+    .createHash("sha256")
+    .update(JSON.stringify(req.body || {}))
+    .digest("hex");
+
+  const client = await pool.connect();
+
+  try {
+    // gate by booking.salon_id
+    const gate = await enforceBookingSalonAccess(client, req.auth, bookingId);
+    if (!gate.ok) return res.status(gate.code).json({ ok: false, error: gate.error });
+
+    const existing = await client.query(
+      `SELECT request_hash, response_code, response_body
+       FROM public.api_idempotency_keys
+       WHERE idempotency_key=$1
+       LIMIT 1`,
+      [idempotencyKey]
+    );
+
+    if (existing.rows.length) {
+      const row = existing.rows[0];
+      if (row.request_hash !== requestHash)
+        return res.status(409).json({ ok: false, error: "IDEMPOTENCY_KEY_CONFLICT" });
+
+      return res.status(row.response_code).json(row.response_body);
+    }
+
+    await client.query("BEGIN");
+    await setActorLocals(client, actor);
+
+    await client.query(
+      `INSERT INTO public.api_idempotency_keys (idempotency_key, endpoint, request_hash)
+       VALUES ($1,'cancel_booking',$2)`,
+      [idempotencyKey, requestHash]
+    );
+
+    await client.query(
+      `UPDATE public.bookings
+       SET status='canceled'
+       WHERE id=$1`,
+      [bookingId]
+    );
+
+    const response = { ok: true, status: "canceled" };
+
+    await client.query(
+      `UPDATE public.api_idempotency_keys
+       SET response_code=200, response_body=$2
+       WHERE idempotency_key=$1`,
+      [idempotencyKey, response]
+    );
+
+    await client.query("COMMIT");
+    return res.json(response);
+
+  } catch (err) {
+    try { await client.query("ROLLBACK"); } catch {}
+    console.error("CANCEL_ERROR:", err);
+    return res.status(400).json({ ok: false, error: "CANCEL_FAILED" });
+  } finally {
+    client.release();
+  }
+});
+
+/* ================= HEALTH ================= */
+
+app.get("/health", (req, res) => res.json({ ok: true }));
 
 const PORT = 8080;
 app.listen(PORT, () => {
