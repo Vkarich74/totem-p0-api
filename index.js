@@ -1,241 +1,129 @@
-import dotenv from "dotenv";
-dotenv.config();
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import pkg from 'pg';
 
-import express from "express";
-import cors from "cors";
-import cookieParser from "cookie-parser";
-import rateLimit from "express-rate-limit";
-import { Pool } from "pg";
-import crypto from "crypto";
-import bcrypt from "bcrypt";
-import jwt from "jsonwebtoken";
+const { Pool } = pkg;
 
 const app = express();
-app.set("trust proxy", 1);
-
-const FRONTEND_ORIGIN =
-  process.env.FRONTEND_ORIGIN || "https://totem-platform.odoo.com";
-
-const JWT_SECRET = process.env.JWT_SECRET;
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
-const BCRYPT_ROUNDS = Number(process.env.BCRYPT_ROUNDS || 12);
-
-if (!JWT_SECRET) {
-  console.error("FATAL: JWT_SECRET missing");
-  process.exit(1);
-}
-
-app.use(cors({ origin: FRONTEND_ORIGIN, credentials: true }));
 app.use(express.json());
-app.use(cookieParser());
-app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 1000 }));
 
-let _pool = null;
+/* =========================
+   CORS
+========================= */
 
-function getPool() {
-  if (_pool) return _pool;
-  _pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }
-  });
-  return _pool;
-}
+const ALLOWED_ORIGIN = 'https://totem-platform.odoo.com';
 
-/* ================= ACTOR HELPERS ================= */
+app.use(cors({
+  origin: ALLOWED_ORIGIN,
+  credentials: true
+}));
 
-function readActorFromHeaders(req) {
-  const rawType =
-    (req.headers["x-actor-type"] || req.headers["actor-type"] || "system")
-      .toString()
-      .trim()
-      .toLowerCase();
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header(
+    'Access-Control-Allow-Headers',
+    'Origin, X-Requested-With, Content-Type, Accept, Authorization, Idempotency-Key, X-User-Id, X-Role'
+  );
+  next();
+});
 
-  if (!["owner", "master", "system"].includes(rawType)) {
-    return { ok: false, error: "INVALID_ACTOR_TYPE" };
+/* =========================
+   AUTH (HEADER-BASED)
+========================= */
+
+function resolveAuth(req, res, next) {
+  const rawId = req.headers['x-user-id'];
+  const rawRole = req.headers['x-role'];
+
+  const user_id = rawId ? parseInt(rawId, 10) : null;
+  const role = rawRole ? String(rawRole) : null;
+
+  if (Number.isInteger(user_id) && role) {
+    req.auth = { user_id, role };
+  } else {
+    req.auth = null;
   }
 
-  const actorIdHeader = req.headers["x-actor-id"] || req.headers["actor-id"];
-  const sourceHeader = req.headers["x-source"] || req.headers["source"];
+  next();
+}
 
-  const actor_id = actorIdHeader ? actorIdHeader.toString().trim() : "";
-  const source = sourceHeader ? sourceHeader.toString().trim() : "api";
+function requireAuth(req, res, next) {
+  if (!req.auth) {
+    return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+  }
+  next();
+}
 
-  return {
-    ok: true,
-    actor_type: rawType,
-    actor_id,
-    source
+function requireRole(roles) {
+  return (req, res, next) => {
+    if (!req.auth) {
+      return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+    }
+    if (!roles.includes(req.auth.role)) {
+      return res.status(403).json({ ok: false, error: 'FORBIDDEN' });
+    }
+    next();
   };
 }
 
-async function setActorLocals(client, actor) {
-  const safeType = actor.actor_type.replace(/'/g, "");
-  const safeId = (actor.actor_id || "").replace(/'/g, "");
-  const safeSource = (actor.source || "api").replace(/'/g, "");
+app.use(resolveAuth);
 
-  await client.query(`SET LOCAL app.actor_type = '${safeType}'`);
-  await client.query(`SET LOCAL app.actor_id = '${safeId}'`);
-  await client.query(`SET LOCAL app.source = '${safeSource}'`);
-}
+/* =========================
+   DATABASE
+========================= */
 
-/* ================= CONFIRM BOOKING ================= */
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
 
-app.post("/bookings/:id/confirm", async (req, res) => {
-  const pool = getPool();
-  const bookingId = req.params.id;
-  const idempotencyKey = req.headers["idempotency-key"];
+/* =========================
+   HEALTH
+========================= */
 
-  if (!idempotencyKey)
-    return res.status(400).json({ ok: false, error: "IDEMPOTENCY_KEY_REQUIRED" });
-
-  const actor = readActorFromHeaders(req);
-  if (!actor.ok) return res.status(400).json({ ok: false, error: actor.error });
-
-  const requestHash = crypto
-    .createHash("sha256")
-    .update(JSON.stringify(req.body || {}))
-    .digest("hex");
-
-  const client = await pool.connect();
-
+app.get('/health', async (req, res) => {
   try {
-    const existing = await client.query(
-      `SELECT request_hash, response_code, response_body
-       FROM public.api_idempotency_keys
-       WHERE idempotency_key=$1
-       LIMIT 1`,
-      [idempotencyKey]
-    );
-
-    if (existing.rows.length) {
-      const row = existing.rows[0];
-      if (row.request_hash !== requestHash)
-        return res.status(409).json({ ok: false, error: "IDEMPOTENCY_KEY_CONFLICT" });
-
-      return res.status(row.response_code).json(row.response_body);
-    }
-
-    await client.query("BEGIN");
-    await setActorLocals(client, actor);
-
-    await client.query(
-      `INSERT INTO public.api_idempotency_keys
-       (idempotency_key, endpoint, request_hash)
-       VALUES ($1,'confirm_booking',$2)`,
-      [idempotencyKey, requestHash]
-    );
-
-    await client.query(
-      `UPDATE public.bookings
-       SET status='confirmed'
-       WHERE id=$1`,
-      [bookingId]
-    );
-
-    const response = { ok: true, status: "confirmed" };
-
-    await client.query(
-      `UPDATE public.api_idempotency_keys
-       SET response_code=200, response_body=$2
-       WHERE idempotency_key=$1`,
-      [idempotencyKey, response]
-    );
-
-    await client.query("COMMIT");
-    return res.json(response);
-
+    await pool.query('SELECT 1');
+    return res.status(200).json({ ok: true });
   } catch (err) {
-    await client.query("ROLLBACK");
-    console.error("CONFIRM_ERROR:", err);
-    return res.status(400).json({ ok: false, error: "CONFIRM_FAILED" });
-  } finally {
-    client.release();
+    console.error('HEALTH_ERROR:', err);
+    return res.status(500).json({ ok: false });
   }
 });
 
-/* ================= CANCEL BOOKING ================= */
+/* =========================
+   OWNER API
+========================= */
 
-app.post("/bookings/:id/cancel", async (req, res) => {
-  const pool = getPool();
-  const bookingId = req.params.id;
-  const idempotencyKey = req.headers["idempotency-key"];
-
-  if (!idempotencyKey)
-    return res.status(400).json({ ok: false, error: "IDEMPOTENCY_KEY_REQUIRED" });
-
-  const actor = readActorFromHeaders(req);
-  if (!actor.ok) return res.status(400).json({ ok: false, error: actor.error });
-
-  const requestHash = crypto
-    .createHash("sha256")
-    .update(JSON.stringify(req.body || {}))
-    .digest("hex");
-
-  const client = await pool.connect();
-
-  try {
-    const existing = await client.query(
-      `SELECT request_hash, response_code, response_body
-       FROM public.api_idempotency_keys
-       WHERE idempotency_key=$1
-       LIMIT 1`,
-      [idempotencyKey]
-    );
-
-    if (existing.rows.length) {
-      const row = existing.rows[0];
-      if (row.request_hash !== requestHash)
-        return res.status(409).json({ ok: false, error: "IDEMPOTENCY_KEY_CONFLICT" });
-
-      return res.status(row.response_code).json(row.response_body);
-    }
-
-    await client.query("BEGIN");
-    await setActorLocals(client, actor);
-
-    await client.query(
-      `INSERT INTO public.api_idempotency_keys
-       (idempotency_key, endpoint, request_hash)
-       VALUES ($1,'cancel_booking',$2)`,
-      [idempotencyKey, requestHash]
-    );
-
-    await client.query(
-      `UPDATE public.bookings
-       SET status='canceled'
-       WHERE id=$1`,
-      [bookingId]
-    );
-
-    const response = { ok: true, status: "canceled" };
-
-    await client.query(
-      `UPDATE public.api_idempotency_keys
-       SET response_code=200, response_body=$2
-       WHERE idempotency_key=$1`,
-      [idempotencyKey, response]
-    );
-
-    await client.query("COMMIT");
-    return res.json(response);
-
-  } catch (err) {
-    await client.query("ROLLBACK");
-    console.error("CANCEL_ERROR:", err);
-    return res.status(400).json({ ok: false, error: "CANCEL_FAILED" });
-  } finally {
-    client.release();
+app.get(
+  '/owner/ping',
+  requireAuth,
+  requireRole(['owner', 'salon_admin']),
+  (req, res) => {
+    return res.status(200).json({
+      ok: true,
+      user_id: req.auth.user_id,
+      role: req.auth.role
+    });
   }
+);
+
+/* =========================
+   GLOBAL 404
+========================= */
+
+app.use((req, res) => {
+  return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
 });
 
-/* ================= HEALTH ================= */
+/* =========================
+   START SERVER (FIXED 8080)
+========================= */
 
-app.get("/health", (req, res) => {
-  res.json({ ok: true });
-});
-
-const PORT = process.env.PORT || 8080;
+const PORT = 8080;
 
 app.listen(PORT, () => {
-  console.log("Server running on port:", PORT);
+  console.log(`Server running on port: ${PORT}`);
 });
