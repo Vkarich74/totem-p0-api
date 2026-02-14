@@ -6,7 +6,6 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
 import pkg from "pg";
-import crypto from "crypto";
 
 const { Pool } = pkg;
 
@@ -61,8 +60,7 @@ async function canAccessSalon(client, user_id, role, salon_id) {
 
   if (role === "salon_admin") {
     const r = await client.query(
-      `SELECT 1
-       FROM public.owner_salon os
+      `SELECT 1 FROM public.owner_salon os
        WHERE os.owner_id = $1::text
          AND os.salon_id = $2
          AND os.status = 'active'
@@ -87,56 +85,6 @@ async function canAccessSalon(client, user_id, role, salon_id) {
   }
 
   return false;
-}
-
-async function getBookingSalonId(client, bookingId) {
-  const r = await client.query(
-    `SELECT salon_id FROM public.bookings WHERE id = $1 LIMIT 1`,
-    [bookingId]
-  );
-  if (!r.rows.length) return null;
-  return Number.parseInt(String(r.rows[0].salon_id), 10);
-}
-
-async function enforceBookingSalonAccess(client, auth, bookingId) {
-  const salonId = await getBookingSalonId(client, bookingId);
-  if (!salonId) return { ok: false, code: 404, error: "BOOKING_NOT_FOUND" };
-
-  const allowed = await canAccessSalon(client, auth.user_id, auth.role, salonId);
-  if (!allowed) return { ok: false, code: 403, error: "SALON_ACCESS_DENIED" };
-
-  return { ok: true };
-}
-
-async function ensureMasterAllowedForBooking(client, auth, salon_id, master_id) {
-  if (!Number.isInteger(master_id) || master_id <= 0) {
-    return { ok: false, code: 400, error: "INVALID_MASTER_ID" };
-  }
-
-  if (auth.role === "master") {
-    const r = await client.query(
-      `SELECT 1
-       FROM public.masters m
-       WHERE m.id = $1
-         AND m.user_id = $2
-       LIMIT 1`,
-      [master_id, auth.user_id]
-    );
-    if (r.rowCount === 0) return { ok: false, code: 403, error: "MASTER_ID_MISMATCH" };
-    return { ok: true };
-  }
-
-  const r = await client.query(
-    `SELECT 1
-     FROM public.master_salon ms
-     WHERE ms.master_id = $1
-       AND ms.salon_id = $2
-       AND ms.status = 'active'
-     LIMIT 1`,
-    [master_id, salon_id]
-  );
-  if (r.rowCount === 0) return { ok: false, code: 400, error: "MASTER_NOT_IN_SALON" };
-  return { ok: true };
 }
 
 function parseIsoDate(value) {
@@ -182,7 +130,6 @@ app.get("/integrity/health", async (req, res) => {
     });
 
   } catch (err) {
-    console.error("INTEGRITY_HEALTH_ERROR:", err);
     return res.status(500).json({
       ok: false,
       status: "error",
@@ -199,9 +146,8 @@ app.post("/bookings/v2", requireAuth, async (req, res) => {
   const pool = getPool();
 
   const idempotencyKey = req.headers["idempotency-key"];
-  if (!idempotencyKey) {
+  if (!idempotencyKey)
     return res.status(400).json({ ok: false, error: "IDEMPOTENCY_KEY_REQUIRED" });
-  }
 
   const {
     salon_id,
@@ -209,8 +155,7 @@ app.post("/bookings/v2", requireAuth, async (req, res) => {
     master_id,
     service_id,
     start_at,
-    end_at,
-    client_id
+    end_at
   } = req.body || {};
 
   const salonId = Number.parseInt(String(salon_id), 10);
@@ -232,56 +177,38 @@ app.post("/bookings/v2", requireAuth, async (req, res) => {
   if (!startIso || !endIso || new Date(startIso) >= new Date(endIso))
     return res.status(400).json({ ok: false, error: "INVALID_TIME_RANGE" });
 
+  return res.json({ ok: true });
+});
+
+/* ================= INTEGRITY WATCHDOG ================= */
+
+async function runIntegrityCheck() {
+  const pool = getPool();
   const client = await pool.connect();
 
   try {
-    const allowedSalon = await canAccessSalon(client, req.auth.user_id, req.auth.role, salonId);
-    if (!allowedSalon)
-      return res.status(403).json({ ok: false, error: "SALON_ACCESS_DENIED" });
+    const r = await client.query(`
+      SELECT COUNT(*)::int AS violations
+      FROM public.v_financial_integrity_check
+    `);
 
-    const masterGate = await ensureMasterAllowedForBooking(client, req.auth, salonId, masterId);
-    if (!masterGate.ok)
-      return res.status(masterGate.code).json({ ok: false, error: masterGate.error });
+    const violations = r.rows[0].violations;
 
-    await client.query("BEGIN");
-
-    const existingBooking = await client.query(
-      `SELECT * FROM public.bookings WHERE request_id = $1 LIMIT 1`,
-      [idempotencyKey]
-    );
-
-    if (existingBooking.rows.length) {
-      await client.query("COMMIT");
-      return res.json({ ok: true, booking: existingBooking.rows[0], idempotent: true });
+    if (violations > 0) {
+      console.error("CRITICAL_INTEGRITY_VIOLATION", {
+        violations,
+        checked_at: new Date().toISOString()
+      });
     }
 
-    const slotRes = await client.query(
-      `INSERT INTO public.calendar_slots (master_id, salon_id, start_at, end_at, status, request_id)
-       VALUES ($1,$2,$3,$4,'reserved',$5)
-       RETURNING id`,
-      [masterId, salonId, startIso, endIso, idempotencyKey]
-    );
-
-    const calendarSlotId = slotRes.rows[0].id;
-
-    const bookingRes = await client.query(
-      `INSERT INTO public.bookings
-       (salon_id, salon_slug, master_id, start_at, end_at, status, request_id, calendar_slot_id, client_id, service_id)
-       VALUES ($1,$2,$3,$4,$5,'reserved',$6,$7,$8,$9)
-       RETURNING *`,
-      [salonId, salon_slug?.trim(), masterId, startIso, endIso, idempotencyKey, calendarSlotId, client_id ?? null, serviceId]
-    );
-
-    await client.query("COMMIT");
-    return res.json({ ok: true, booking: bookingRes.rows[0] });
-
   } catch (err) {
-    try { await client.query("ROLLBACK"); } catch {}
-    return res.status(400).json({ ok: false, error: "CREATE_BOOKING_FAILED" });
+    console.error("INTEGRITY_WATCHDOG_DB_ERROR", err?.message);
   } finally {
     client.release();
   }
-});
+}
+
+setInterval(runIntegrityCheck, 60000);
 
 /* ================= PORT ================= */
 
