@@ -150,6 +150,36 @@ setInterval(() => {
   conflictCounter = 0;
 }, 60000);
 
+/* ================= FINANCIAL ANOMALY MONITOR ================= */
+
+async function runFinancialAnomalyCheck() {
+  const pool = getPool();
+  const client = await pool.connect();
+
+  try {
+    const r = await client.query(`
+      SELECT *
+      FROM public.v_financial_integrity_check
+      LIMIT 20
+    `);
+
+    if (r.rowCount > 0) {
+      console.error("CRITICAL_FINANCIAL_ANOMALY", {
+        count: r.rowCount,
+        sample: r.rows,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+  } catch (err) {
+    console.error("FINANCIAL_MONITOR_DB_ERROR", err?.message);
+  } finally {
+    client.release();
+  }
+}
+
+setInterval(runFinancialAnomalyCheck, 60000);
+
 /* ================= GLOBAL ERROR MONITOR ================= */
 
 app.use((err, req, res, next) => {
