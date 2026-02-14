@@ -6,7 +6,6 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
 import pkg from "pg";
-import crypto from "crypto";
 
 const { Pool } = pkg;
 
@@ -79,6 +78,7 @@ app.get("/integrity/health", async (req, res) => {
       FROM public.v_financial_integrity_check
     `);
     const violations = r.rows[0].violations;
+
     if (violations === 0) {
       return res.json({
         ok: true,
@@ -87,13 +87,15 @@ app.get("/integrity/health", async (req, res) => {
         checked_at: new Date().toISOString()
       });
     }
+
     return res.status(500).json({
       ok: false,
       status: "broken",
       integrity_rows: violations,
       checked_at: new Date().toISOString()
     });
-  } catch {
+
+  } catch (err) {
     return res.status(500).json({
       ok: false,
       status: "error",
@@ -104,44 +106,19 @@ app.get("/integrity/health", async (req, res) => {
   }
 });
 
-/* ================= BOOKING ENGINE V2 ================= */
+/* ================= BOOKING ROUTE ================= */
 
-app.post("/bookings/v2", requireAuth, async (req, res) => {
-  const pool = getPool();
+app.post("/bookings/v2", requireAuth, async (req, res, next) => {
+  try {
+    const idempotencyKey = req.headers["idempotency-key"];
+    if (!idempotencyKey)
+      return res.status(400).json({ ok: false, error: "IDEMPOTENCY_KEY_REQUIRED" });
 
-  const idempotencyKey = req.headers["idempotency-key"];
-  if (!idempotencyKey)
-    return res.status(400).json({ ok: false, error: "IDEMPOTENCY_KEY_REQUIRED" });
+    return res.status(200).json({ ok: true, route: "BOOKING_ACTIVE" });
 
-  const {
-    salon_id,
-    salon_slug,
-    master_id,
-    service_id,
-    start_at,
-    end_at
-  } = req.body || {};
-
-  const salonId = Number.parseInt(String(salon_id), 10);
-  const masterId = Number.parseInt(String(master_id), 10);
-  const serviceId = Number.parseInt(String(service_id), 10);
-
-  if (!Number.isInteger(salonId) || salonId <= 0)
-    return res.status(400).json({ ok: false, error: "INVALID_SALON_ID" });
-
-  if (!Number.isInteger(masterId) || masterId <= 0)
-    return res.status(400).json({ ok: false, error: "INVALID_MASTER_ID" });
-
-  if (!Number.isInteger(serviceId) || serviceId <= 0)
-    return res.status(400).json({ ok: false, error: "SERVICE_REQUIRED" });
-
-  const startIso = parseIsoDate(start_at);
-  const endIso = parseIsoDate(end_at);
-
-  if (!startIso || !endIso || new Date(startIso) >= new Date(endIso))
-    return res.status(400).json({ ok: false, error: "INVALID_TIME_RANGE" });
-
-  return res.status(200).json({ ok: true, message: "BOOKING_ROUTE_ACTIVE" });
+  } catch (err) {
+    next(err);
+  }
 });
 
 /* ================= INTEGRITY WATCHDOG ================= */
@@ -166,6 +143,24 @@ async function runIntegrityCheck() {
 }
 
 setInterval(runIntegrityCheck, 60000);
+
+/* ================= GLOBAL ERROR MONITOR ================= */
+
+app.use((err, req, res, next) => {
+  console.error("GLOBAL_ERROR", {
+    message: err?.message,
+    code: err?.code,
+    path: req?.path,
+    method: req?.method,
+    timestamp: new Date().toISOString()
+  });
+
+  if (err?.code === "23505") {
+    return res.status(409).json({ ok: false, error: "DB_CONFLICT" });
+  }
+
+  return res.status(500).json({ ok: false, error: "INTERNAL_SERVER_ERROR" });
+});
 
 /* ================= PORT ================= */
 
