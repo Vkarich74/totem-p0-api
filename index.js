@@ -55,12 +55,6 @@ function requireAuth(req, res, next) {
   next();
 }
 
-function parseIsoDate(value) {
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toISOString();
-}
-
 app.use(resolveAuth);
 
 /* ================= HEALTH ================= */
@@ -95,7 +89,7 @@ app.get("/integrity/health", async (req, res) => {
       checked_at: new Date().toISOString()
     });
 
-  } catch (err) {
+  } catch {
     return res.status(500).json({
       ok: false,
       status: "error",
@@ -110,12 +104,7 @@ app.get("/integrity/health", async (req, res) => {
 
 app.post("/bookings/v2", requireAuth, async (req, res, next) => {
   try {
-    const idempotencyKey = req.headers["idempotency-key"];
-    if (!idempotencyKey)
-      return res.status(400).json({ ok: false, error: "IDEMPOTENCY_KEY_REQUIRED" });
-
     return res.status(200).json({ ok: true, route: "BOOKING_ACTIVE" });
-
   } catch (err) {
     next(err);
   }
@@ -132,9 +121,11 @@ async function runIntegrityCheck() {
       FROM public.v_financial_integrity_check
     `);
     const violations = r.rows[0].violations;
+
     if (violations > 0) {
       console.error("CRITICAL_INTEGRITY_VIOLATION", violations);
     }
+
   } catch (err) {
     console.error("INTEGRITY_WATCHDOG_DB_ERROR", err?.message);
   } finally {
@@ -144,20 +135,35 @@ async function runIntegrityCheck() {
 
 setInterval(runIntegrityCheck, 60000);
 
+/* ================= 409 SPIKE MONITOR ================= */
+
+let conflictCounter = 0;
+
+setInterval(() => {
+  if (conflictCounter > 10) {
+    console.error("CRITICAL_409_SPIKE", {
+      count: conflictCounter,
+      window_seconds: 60,
+      timestamp: new Date().toISOString()
+    });
+  }
+  conflictCounter = 0;
+}, 60000);
+
 /* ================= GLOBAL ERROR MONITOR ================= */
 
 app.use((err, req, res, next) => {
+  if (err?.code === "23505") {
+    conflictCounter++;
+    return res.status(409).json({ ok: false, error: "DB_CONFLICT" });
+  }
+
   console.error("GLOBAL_ERROR", {
     message: err?.message,
-    code: err?.code,
     path: req?.path,
     method: req?.method,
     timestamp: new Date().toISOString()
   });
-
-  if (err?.code === "23505") {
-    return res.status(409).json({ ok: false, error: "DB_CONFLICT" });
-  }
 
   return res.status(500).json({ ok: false, error: "INTERNAL_SERVER_ERROR" });
 });
