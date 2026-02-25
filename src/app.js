@@ -7,6 +7,8 @@ import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
 import pkg from "pg";
 
+import { resolveAuth } from "./middleware/resolveAuth.js";
+
 const { Pool } = pkg;
 
 const app = express();
@@ -30,34 +32,17 @@ function getPool() {
   return _pool;
 }
 
-/* ================= AUTH CONTEXT ================= */
-
-function resolveAuth(req, res, next) {
-  const rawId = req.headers["x-user-id"];
-  const rawRole = req.headers["x-role"];
-  const user_id = rawId ? Number.parseInt(rawId?.toString(), 10) : null;
-  const role = rawRole ? rawRole.toString().trim() : null;
-
-  if (
-    Number.isInteger(user_id) &&
-    user_id > 0 &&
-    (role === "salon_admin" || role === "master")
-  ) {
-    req.auth = { user_id, role };
-  } else {
-    req.auth = null;
-  }
-  next();
-}
-
-function requireAuth(req, res, next) {
-  if (!req.auth) return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
-  next();
-}
+/* ================= AUTH (JWT ONLY) ================= */
 
 app.use(resolveAuth);
 
-/* ================= ROOT HEALTH (ВАЖНО) ================= */
+function requireAuth(req, res, next) {
+  if (!req.auth)
+    return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
+  next();
+}
+
+/* ================= ROOT ================= */
 
 app.get("/", (req, res) => {
   res.status(200).send("OK");
@@ -70,14 +55,20 @@ app.get("/health", (req, res) => res.json({ ok: true }));
 /* ================= BOOKING ROUTE ================= */
 
 app.post("/bookings/v2", requireAuth, async (req, res) => {
-  return res.status(200).json({ ok: true, route: "BOOKING_ACTIVE" });
+  return res.status(200).json({
+    ok: true,
+    route: "BOOKING_ACTIVE",
+    auth: req.auth
+  });
 });
 
 /* ================= GLOBAL ERROR ================= */
 
 app.use((err, req, res, next) => {
   console.error("GLOBAL_ERROR", err?.message);
-  return res.status(500).json({ ok: false, error: "INTERNAL_SERVER_ERROR" });
+  return res
+    .status(500)
+    .json({ ok: false, error: "INTERNAL_SERVER_ERROR" });
 });
 
 /* ================= PORT ================= */
