@@ -37,8 +37,9 @@ function getPool() {
 app.use(resolveAuth);
 
 function requireAuth(req, res, next) {
-  if (!req.auth)
+  if (!req.auth) {
     return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
+  }
   next();
 }
 
@@ -50,7 +51,9 @@ app.get("/", (req, res) => {
 
 /* ================= HEALTH ================= */
 
-app.get("/health", (req, res) => res.json({ ok: true }));
+app.get("/health", (req, res) => {
+  res.status(200).json({ ok: true });
+});
 
 /* ================= BOOKING ROUTE ================= */
 
@@ -66,14 +69,15 @@ app.post("/bookings/v2", requireAuth, async (req, res) => {
 
 app.use((err, req, res, next) => {
   console.error("GLOBAL_ERROR", err?.message);
-  return res
-    .status(500)
-    .json({ ok: false, error: "INTERNAL_SERVER_ERROR" });
+  return res.status(500).json({
+    ok: false,
+    error: "INTERNAL_SERVER_ERROR"
+  });
 });
 
-/* ================= PORT ================= */
+/* ================= PORT (Railway compatible) ================= */
 
-const PORT = 8080;
+const PORT = process.env.PORT || 8080;
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log("Server running on port:", PORT);
