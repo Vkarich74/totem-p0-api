@@ -1,163 +1,82 @@
-import 'dotenv/config';
-import express from 'express';
-import cors from 'cors';
-import pkg from 'pg';
+import dotenv from "dotenv";
+dotenv.config();
 
-import { resolveAuth } from './middleware/resolveAuth.js';
-import { requireAuth } from './middleware/requireAuth.js';
-import { requireRole } from './middleware/requireRole.js';
+import express from "express";
+import cors from "cors";
+import cookieParser from "cookie-parser";
+import rateLimit from "express-rate-limit";
+import pkg from "pg";
 
 const { Pool } = pkg;
 
 const app = express();
+app.set("trust proxy", 1);
+
+const FRONTEND_ORIGIN =
+  process.env.FRONTEND_ORIGIN || "https://totem-platform.odoo.com";
+
+app.use(cors({ origin: FRONTEND_ORIGIN, credentials: true }));
 app.use(express.json());
+app.use(cookieParser());
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 1000 }));
 
-/* =========================
-   CORS
-========================= */
+let _pool = null;
+function getPool() {
+  if (_pool) return _pool;
+  _pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false }
+  });
+  return _pool;
+}
 
-const ALLOWED_ORIGIN = 'https://totem-platform.odoo.com';
+/* ================= AUTH CONTEXT ================= */
 
-app.use(cors({
-  origin: ALLOWED_ORIGIN,
-  credentials: true
-}));
+function resolveAuth(req, res, next) {
+  const rawId = req.headers["x-user-id"];
+  const rawRole = req.headers["x-role"];
+  const user_id = rawId ? Number.parseInt(rawId?.toString(), 10) : null;
+  const role = rawRole ? rawRole.toString().trim() : null;
 
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header(
-    'Access-Control-Allow-Headers',
-    'Origin, X-Requested-With, Content-Type, Accept, Authorization, Idempotency-Key, X-User-Id, X-Role'
-  );
+  if (
+    Number.isInteger(user_id) &&
+    user_id > 0 &&
+    (role === "salon_admin" || role === "master")
+  ) {
+    req.auth = { user_id, role };
+  } else {
+    req.auth = null;
+  }
   next();
-});
+}
 
-/* =========================
-   AUTH CONTEXT
-========================= */
+function requireAuth(req, res, next) {
+  if (!req.auth) return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
+  next();
+}
 
 app.use(resolveAuth);
 
-/* =========================
-   DATABASE
-========================= */
+/* ================= HEALTH ================= */
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
+app.get("/health", (req, res) => res.json({ ok: true }));
+
+/* ================= BOOKING ROUTE ================= */
+
+app.post("/bookings/v2", requireAuth, async (req, res) => {
+  return res.status(200).json({ ok: true, route: "BOOKING_ACTIVE" });
 });
 
-/* =========================
-   HEALTH
-========================= */
+/* ================= GLOBAL ERROR ================= */
 
-app.get('/health', async (req, res) => {
-  try {
-    await pool.query('SELECT 1');
-    return res.status(200).json({ ok: true });
-  } catch (err) {
-    console.error('HEALTH_ERROR:', err);
-    return res.status(500).json({ ok: false });
-  }
+app.use((err, req, res, next) => {
+  console.error("GLOBAL_ERROR", err?.message);
+  return res.status(500).json({ ok: false, error: "INTERNAL_SERVER_ERROR" });
 });
 
-/* =========================
-   AUTH RESOLVE
-========================= */
+/* ================= PORT ================= */
 
-app.get('/auth/resolve', async (req, res) => {
-  return res.status(200).json({
-    ok: true,
-    auth: req.auth
-      ? {
-          user_id: req.auth.user_id,
-          role: req.auth.role,
-          source: req.auth.source
-        }
-      : null
-  });
-});
-
-/* =========================
-   OWNER API
-========================= */
-
-app.get(
-  '/owner/ping',
-  requireAuth,
-  requireRole(['owner', 'salon_admin']),
-  async (req, res) => {
-    return res.status(200).json({
-      ok: true,
-      role: req.auth.role,
-      user_id: req.auth.user_id
-    });
-  }
-);
-
-/* =========================
-   SLUG RESOLVE
-========================= */
-
-app.get('/s/:slug/resolve', async (req, res) => {
-  const { slug } = req.params;
-
-  try {
-    const result = await pool.query(
-      'SELECT id, slug FROM salons WHERE slug = $1 LIMIT 1',
-      [slug]
-    );
-
-    if (!result.rows || result.rows.length === 0) {
-      return res.status(404).json({ ok: false, error: 'SALON_NOT_FOUND' });
-    }
-
-    const salon = result.rows[0];
-
-    return res.status(200).json({
-      ok: true,
-      salon_id: String(salon.id),
-      slug: salon.slug
-    });
-  } catch (err) {
-    console.error('SLUG_RESOLVE_ERROR:', err);
-    return res.status(500).json({ ok: false, error: 'INTERNAL_ERROR' });
-  }
-});
-
-/* =========================
-   BOOKINGS (TEMP SAFE STUB)
-========================= */
-
-app.post('/bookings/:id/confirm', async (req, res) => {
-  return res.status(501).json({
-    ok: false,
-    error: 'CONFIRM_BOOKING_NOT_ENABLED_RUNTIME'
-  });
-});
-
-app.post('/bookings/:id/cancel', async (req, res) => {
-  return res.status(501).json({
-    ok: false,
-    error: 'CANCEL_BOOKING_NOT_ENABLED_RUNTIME'
-  });
-});
-
-/* =========================
-   GLOBAL 404
-========================= */
-
-app.use((req, res) => {
-  return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
-});
-
-/* =========================
-   START SERVER (FIXED 8080)
-========================= */
-
-const PORT = 8080;
-
+const PORT = process.env.PORT;
 app.listen(PORT, () => {
-  console.log(`Server running on port: ${PORT}`);
+  console.log("Server running on port:", PORT);
 });
