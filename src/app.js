@@ -79,7 +79,7 @@ app.get("/my-salons", requireAuth, async (req, res) => {
         [userId]
       );
 
-      salons = result.rows.map(r => ({
+      salons = result.rows.map((r) => ({
         salon_id: r.salon_id,
         slug: r.slug,
         role: "master",
@@ -99,7 +99,7 @@ app.get("/my-salons", requireAuth, async (req, res) => {
       );
 
       salons = salons.concat(
-        result.rows.map(r => ({
+        result.rows.map((r) => ({
           salon_id: r.salon_id,
           slug: r.slug,
           role: "owner",
@@ -113,13 +113,71 @@ app.get("/my-salons", requireAuth, async (req, res) => {
       user_id: userId,
       salons
     });
-
   } catch (err) {
     console.error("MY_SALONS_ERROR", err.message);
     return res.status(500).json({
       ok: false,
       error: "MY_SALONS_FAILED"
     });
+  }
+});
+
+/* ================= DEFAULT SALON (MULTI-TENANT) ================= */
+/**
+ * PATCH /me/default-salon
+ * body: { "slug": "..." }
+ * stores in: user_default_salon(user_id, default_salon_slug)
+ * validates that slug is accessible by this user (master_salon or owner_salon).
+ */
+app.patch("/me/default-salon", requireAuth, async (req, res) => {
+  try {
+    const pool = getPool();
+    const userId = req.auth.user_id;
+    const userIdText = String(userId);
+
+    const slug = String(req.body?.slug || "").trim();
+    if (!slug) {
+      return res.status(400).json({ ok: false, error: "SLUG_REQUIRED" });
+    }
+
+    // Validate access: master path (user_id int) OR owner path (owner_id text)
+    const access = await pool.query(
+      `
+      SELECT 1
+      FROM masters m
+      JOIN master_salon ms ON ms.master_id = m.id
+      JOIN salons s ON s.id = ms.salon_id
+      WHERE m.user_id = $1 AND s.slug = $2 AND ms.status = 'active'
+      UNION
+      SELECT 1
+      FROM owner_salon os
+      JOIN salons s ON s.id = os.salon_id
+      WHERE os.owner_id = $3 AND s.slug = $2 AND os.status = 'active'
+      LIMIT 1
+      `,
+      [userId, slug, userIdText]
+    );
+
+    if (access.rowCount === 0) {
+      return res.status(403).json({ ok: false, error: "SLUG_NOT_ALLOWED" });
+    }
+
+    await pool.query(
+      `
+      INSERT INTO user_default_salon (user_id, default_salon_slug)
+      VALUES ($1, $2)
+      ON CONFLICT (user_id)
+      DO UPDATE SET
+        default_salon_slug = EXCLUDED.default_salon_slug,
+        updated_at = now()
+      `,
+      [userId, slug]
+    );
+
+    return res.status(200).json({ ok: true, default_salon_slug: slug });
+  } catch (err) {
+    console.error("DEFAULT_SALON_ERROR", err.message);
+    return res.status(500).json({ ok: false, error: "DEFAULT_SALON_FAILED" });
   }
 });
 
@@ -145,13 +203,7 @@ app.post("/s/:slug/booking", resolveTenant, requireAuth, async (req, res) => {
       price_snapshot
     } = req.body;
 
-    if (
-      !master_id ||
-      !start_at ||
-      !end_at ||
-      !calendar_slot_id ||
-      !request_id
-    ) {
+    if (!master_id || !start_at || !end_at || !calendar_slot_id || !request_id) {
       return res.status(400).json({
         ok: false,
         error: "MISSING_REQUIRED_FIELDS"
@@ -193,7 +245,6 @@ app.post("/s/:slug/booking", resolveTenant, requireAuth, async (req, res) => {
       ok: true,
       booking_id: result.rows[0].id
     });
-
   } catch (err) {
     console.error("BOOKING_INSERT_ERROR", err.message);
 
