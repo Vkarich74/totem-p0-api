@@ -121,59 +121,6 @@ app.get("/my-salons", requireAuth, async (req, res) => {
   }
 });
 
-/* ================= DEFAULT SALON ================= */
-
-app.patch("/me/default-salon", requireAuth, async (req, res) => {
-  try {
-    const pool = getPool();
-    const userId = req.auth.user_id;
-    const userIdText = String(userId);
-
-    const slug = String(req.body?.slug || "").trim();
-    if (!slug) {
-      return res.status(400).json({ ok: false, error: "SLUG_REQUIRED" });
-    }
-
-    const access = await pool.query(
-      `
-      SELECT 1
-      FROM masters m
-      JOIN master_salon ms ON ms.master_id = m.id
-      JOIN salons s ON s.id = ms.salon_id
-      WHERE m.user_id = $1 AND s.slug = $2 AND ms.status = 'active'
-      UNION
-      SELECT 1
-      FROM owner_salon os
-      JOIN salons s ON s.id = os.salon_id
-      WHERE os.owner_id = $3 AND s.slug = $2 AND os.status = 'active'
-      LIMIT 1
-      `,
-      [userId, slug, userIdText]
-    );
-
-    if (access.rowCount === 0) {
-      return res.status(403).json({ ok: false, error: "SLUG_NOT_ALLOWED" });
-    }
-
-    await pool.query(
-      `
-      INSERT INTO user_default_salon (user_id, default_salon_slug)
-      VALUES ($1, $2)
-      ON CONFLICT (user_id)
-      DO UPDATE SET
-        default_salon_slug = EXCLUDED.default_salon_slug,
-        updated_at = now()
-      `,
-      [userId, slug]
-    );
-
-    return res.status(200).json({ ok: true, default_salon_slug: slug });
-  } catch (err) {
-    console.error("DEFAULT_SALON_ERROR", err.message);
-    return res.status(500).json({ ok: false, error: "DEFAULT_SALON_FAILED" });
-  }
-});
-
 /* ================= STAGE 4: CREATE PAYMENT INTENT ================= */
 
 app.post("/s/:slug/payment-intent", resolveTenant, requireAuth, async (req, res) => {
@@ -234,18 +181,70 @@ app.post("/s/:slug/payment-intent", resolveTenant, requireAuth, async (req, res)
   }
 });
 
-/* ================= STAGE 2: MULTI-TENANT ================= */
+/* ================= STAGE 4: CONFIRM PAYMENT ================= */
+
+app.post("/payment-intents/:id/confirm", requireAuth, async (req, res) => {
+  const client = await getPool().connect();
+  try {
+    const intentId = Number(req.params.id);
+
+    await client.query("BEGIN");
+
+    const intentRes = await client.query(
+      `SELECT booking_id, amount, status FROM payment_intents WHERE intent_id = $1 FOR UPDATE`,
+      [intentId]
+    );
+
+    if (intentRes.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ ok: false, error: "INTENT_NOT_FOUND" });
+    }
+
+    const intent = intentRes.rows[0];
+
+    if (intent.status !== "created") {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ ok: false, error: "INTENT_ALREADY_PROCESSED" });
+    }
+
+    const paymentRes = await client.query(
+      `
+      INSERT INTO payments (booking_id, amount, provider, status, is_active)
+      VALUES ($1, $2, 'test', 'confirmed', true)
+      RETURNING id
+      `,
+      [intent.booking_id, intent.amount]
+    );
+
+    await client.query(
+      `UPDATE payment_intents SET status = 'confirmed' WHERE intent_id = $1`,
+      [intentId]
+    );
+
+    await client.query("COMMIT");
+
+    return res.status(200).json({ ok: true, payment_id: paymentRes.rows[0].id });
+
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("CONFIRM_PAYMENT_ERROR", err.message);
+    return res.status(500).json({ ok: false, error: "CONFIRM_FAILED" });
+  } finally {
+    client.release();
+  }
+});
+
+/* ================= STAGE 2 ================= */
 
 app.get("/s/:slug", resolveTenant, (req, res) => {
   return res.status(200).json({ ok: true, tenant: req.tenant });
 });
 
-/* ================= STAGE 3: REAL BOOKING INSERT ================= */
+/* ================= STAGE 3 ================= */
 
 app.post("/s/:slug/booking", resolveTenant, requireAuth, async (req, res) => {
   try {
     const pool = getPool();
-
     const {
       master_id,
       start_at,
@@ -300,29 +299,11 @@ app.post("/s/:slug/booking", resolveTenant, requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error("BOOKING_INSERT_ERROR", err.message);
-
-    if (err.code === "23505") {
-      return res.status(409).json({
-        ok: false,
-        error: "DUPLICATE_REQUEST_ID"
-      });
-    }
-
     return res.status(500).json({
       ok: false,
       error: "BOOKING_FAILED"
     });
   }
-});
-
-/* ================= GLOBAL ERROR ================= */
-
-app.use((err, req, res, next) => {
-  console.error("GLOBAL_ERROR", err?.message);
-  return res.status(500).json({
-    ok: false,
-    error: "INTERNAL_SERVER_ERROR"
-  });
 });
 
 /* ================= PORT ================= */
