@@ -56,6 +56,99 @@ app.get("/health", (req, res) => {
   res.status(200).json({ ok: true });
 });
 
+/* ================= ENSURE PERSONAL SALON ================= */
+
+app.post("/ensure-personal-salon", requireAuth, async (req, res) => {
+  const pool = getPool();
+  const client = await pool.connect();
+
+  try {
+    if (req.auth.role !== "master") {
+      return res.status(403).json({ ok: false, error: "ONLY_MASTER_ALLOWED" });
+    }
+
+    await client.query("BEGIN");
+
+    const masterResult = await client.query(
+      "SELECT id, slug FROM masters WHERE user_id = $1 LIMIT 1",
+      [req.auth.user_id]
+    );
+
+    if (masterResult.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ ok: false, error: "MASTER_NOT_FOUND" });
+    }
+
+    const master = masterResult.rows[0];
+
+    const existingSalon = await client.query(
+      `
+      SELECT s.id, s.slug
+      FROM salons s
+      JOIN master_salon ms ON ms.salon_id = s.id
+      WHERE ms.master_id = $1
+      AND s.slug = $2
+      LIMIT 1
+      `,
+      [master.id, master.slug]
+    );
+
+    if (existingSalon.rowCount > 0) {
+      await client.query("COMMIT");
+      return res.status(200).json({
+        ok: true,
+        slug: existingSalon.rows[0].slug,
+        created: false
+      });
+    }
+
+    const salonInsert = await client.query(
+      `
+      INSERT INTO salons (slug, name)
+      VALUES ($1, $2)
+      RETURNING id
+      `,
+      [master.slug, master.slug]
+    );
+
+    const salonId = salonInsert.rows[0].id;
+
+    await client.query(
+      `
+      INSERT INTO master_salon (master_id, salon_id, status)
+      VALUES ($1, $2, 'active')
+      `,
+      [master.id, salonId]
+    );
+
+    await client.query(
+      `
+      INSERT INTO owner_salon (owner_id, salon_id, status)
+      VALUES ($1, $2, 'active')
+      `,
+      [String(req.auth.user_id), salonId]
+    );
+
+    await client.query("COMMIT");
+
+    return res.status(200).json({
+      ok: true,
+      slug: master.slug,
+      created: true
+    });
+
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("ENSURE_PERSONAL_SALON_ERROR", err.message);
+    return res.status(500).json({
+      ok: false,
+      error: "ENSURE_FAILED"
+    });
+  } finally {
+    client.release();
+  }
+});
+
 /* ================= STAGE 2: MULTI-TENANT ================= */
 
 app.get("/s/:slug", resolveTenant, (req, res) => {
@@ -117,7 +210,7 @@ app.post("/s/:slug/booking", resolveTenant, requireAuth, async (req, res) => {
         request_id,
         calendar_slot_id,
         req.auth.user_id,
-        service_id || null,
+        service_id,
         price_snapshot || null
       ]
     );
@@ -158,7 +251,7 @@ app.get("/s/:slug/owner", resolveTenant, requireAuth, async (req, res) => {
   return res.status(200).json({ ok: true, route: "OWNER_ACTIVE", tenant: req.tenant });
 });
 
-/* ================= LEGACY (НЕ ТРОГАЕМ) ================= */
+/* ================= LEGACY ================= */
 
 app.post("/bookings/v2", requireAuth, async (req, res) => {
   return res.status(200).json({
