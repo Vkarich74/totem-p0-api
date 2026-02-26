@@ -4,7 +4,7 @@ dotenv.config();
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
-import rateLimit from "express-rate-limit";
+import crypto from "crypto";
 import pkg from "pg";
 
 import { resolveAuth } from "./middleware/resolveAuth.js";
@@ -21,7 +21,37 @@ const FRONTEND_ORIGIN =
 app.use(cors({ origin: FRONTEND_ORIGIN, credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
-app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 1000 }));
+
+/* ================= OBSERVABILITY ================= */
+
+// request_id + latency + structured logging
+app.use((req, res, next) => {
+  const start = Date.now();
+  const requestId = crypto.randomUUID();
+
+  req.request_id = requestId;
+  res.setHeader("x-request-id", requestId);
+
+  res.on("finish", () => {
+    const latency = Date.now() - start;
+
+    const log = {
+      ts: new Date().toISOString(),
+      request_id: requestId,
+      method: req.method,
+      path: req.originalUrl,
+      status: res.statusCode,
+      latency_ms: latency,
+      tenant_slug: req.params?.slug || null,
+      user_id: req.auth?.user_id || null,
+      ip: req.ip
+    };
+
+    console.log(JSON.stringify(log));
+  });
+
+  next();
+});
 
 let _pool = null;
 function getPool() {
