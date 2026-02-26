@@ -18,13 +18,14 @@ app.set("trust proxy", 1);
 const FRONTEND_ORIGIN =
   process.env.FRONTEND_ORIGIN || "https://totem-platform.odoo.com";
 
+const INTERNAL_GATE_SECRET = process.env.INTERNAL_GATE_SECRET;
+
 app.use(cors({ origin: FRONTEND_ORIGIN, credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
 
 /* ================= OBSERVABILITY ================= */
 
-// request_id + latency + structured logging
 app.use((req, res, next) => {
   const start = Date.now();
   const requestId = crypto.randomUUID();
@@ -53,39 +54,25 @@ app.use((req, res, next) => {
   next();
 });
 
-/* ================= TENANT RATE LIMIT =================
-   - Applies only after resolveTenant (req.tenant is set)
-   - Excludes / and /health (they don't go through resolveTenant anyway)
-   - In-memory buckets (process-local). OK for Stage 12.2 baseline.
-====================================================== */
+/* ================= TENANT RATE LIMIT ================= */
 
 const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 60_000);
 const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX || 100);
 
 const tenantBuckets = new Map();
 
-/**
- * Simple fixed-window limiter.
- * Key: tenant slug
- * Window: RATE_LIMIT_WINDOW_MS
- * Max: RATE_LIMIT_MAX
- */
 function tenantRateLimit(req, res, next) {
-  // Only enforce when tenant is resolved
   const slug = req.tenant?.slug;
   if (!slug) return next();
 
   const now = Date.now();
-  const key = slug;
-
-  const bucket = tenantBuckets.get(key);
+  const bucket = tenantBuckets.get(slug);
 
   if (!bucket) {
-    tenantBuckets.set(key, { startMs: now, count: 1 });
+    tenantBuckets.set(slug, { startMs: now, count: 1 });
     return next();
   }
 
-  // window rollover
   if (now - bucket.startMs >= RATE_LIMIT_WINDOW_MS) {
     bucket.startMs = now;
     bucket.count = 1;
@@ -100,9 +87,7 @@ function tenantRateLimit(req, res, next) {
         ts: new Date().toISOString(),
         type: "RATE_LIMIT_EXCEEDED",
         request_id: req.request_id,
-        tenant_slug: slug,
-        limit: RATE_LIMIT_MAX,
-        window_ms: RATE_LIMIT_WINDOW_MS
+        tenant_slug: slug
       })
     );
 
@@ -143,6 +128,74 @@ app.get("/", (req, res) => {
 
 app.get("/health", (req, res) => {
   res.status(200).json({ ok: true });
+});
+
+/* ================= INTERNAL GATE CHECK ================= */
+
+app.post("/internal/gate-check", async (req, res) => {
+  try {
+    const secret = req.headers["x-internal-secret"];
+
+    if (!INTERNAL_GATE_SECRET || secret !== INTERNAL_GATE_SECRET) {
+      return res.status(403).json({ ok: false, error: "FORBIDDEN" });
+    }
+
+    const pool = getPool();
+
+    // 1) payout mismatches
+    const payoutRes = await pool.query(`
+      SELECT po.id
+      FROM public.payouts po
+      WHERE po.status = 'paid'
+      AND NOT EXISTS (
+        SELECT 1
+        FROM totem_test.ledger_entries le
+        WHERE le.reference_type = 'payout'
+        AND le.reference_id = po.id::text
+      )
+    `);
+
+    // 2) refund mismatches
+    const refundRes = await pool.query(`
+      SELECT pr.id
+      FROM public.payment_refunds pr
+      WHERE pr.status = 'succeeded'
+      AND EXISTS (
+        SELECT 1 FROM public.payouts po
+        WHERE po.payment_id = pr.payment_id
+        AND po.status = 'paid'
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM totem_test.ledger_entries le
+        WHERE le.reference_type = 'refund_reverse'
+        AND le.reference_id = pr.id::text
+      )
+    `);
+
+    // 3) global balance
+    const balanceRes = await pool.query(`
+      SELECT *
+      FROM totem_test.v_ledger_global_balance
+      WHERE net_cents <> 0
+    `);
+
+    const pass =
+      payoutRes.rowCount === 0 &&
+      refundRes.rowCount === 0 &&
+      balanceRes.rowCount === 0;
+
+    return res.status(pass ? 200 : 500).json({
+      ok: pass,
+      payout_issues: payoutRes.rowCount,
+      refund_issues: refundRes.rowCount,
+      global_balance_issues: balanceRes.rowCount
+    });
+
+  } catch (err) {
+    console.error("GATE_CHECK_ERROR", err.message);
+    return res.status(500).json({ ok: false, error: "GATE_CHECK_FAILED" });
+  }
 });
 
 /* ================= RECONCILIATION ================= */
