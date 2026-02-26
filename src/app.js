@@ -52,79 +52,6 @@ app.get("/health", (req, res) => {
   res.status(200).json({ ok: true });
 });
 
-/* ================= REFUND ================= */
-
-app.post("/s/:slug/refund", resolveTenant, requireAuth, async (req, res) => {
-  const client = await getPool().connect();
-
-  try {
-    const { payment_id } = req.body;
-
-    if (!payment_id) {
-      return res.status(400).json({ ok: false, error: "PAYMENT_ID_REQUIRED" });
-    }
-
-    await client.query("BEGIN");
-
-    const paymentRes = await client.query(
-      `
-      SELECT p.id
-      FROM payments p
-      JOIN bookings b ON b.id = p.booking_id
-      WHERE p.id = $1
-        AND b.salon_id = $2
-      FOR UPDATE
-      `,
-      [payment_id, req.tenant.salon_id]
-    );
-
-    if (paymentRes.rowCount === 0) {
-      await client.query("ROLLBACK");
-      return res.status(404).json({ ok: false, error: "PAYMENT_NOT_FOUND" });
-    }
-
-    const refundRes = await client.query(
-      `
-      SELECT id, status
-      FROM payment_refunds
-      WHERE payment_id = $1
-      FOR UPDATE
-      `,
-      [payment_id]
-    );
-
-    if (refundRes.rowCount === 0) {
-      await client.query("ROLLBACK");
-      return res.status(400).json({ ok: false, error: "REFUND_NOT_EXISTS" });
-    }
-
-    if (refundRes.rows[0].status === "succeeded") {
-      await client.query("ROLLBACK");
-      return res.status(400).json({ ok: false, error: "REFUND_ALREADY_SUCCEEDED" });
-    }
-
-    await client.query(
-      `
-      UPDATE payment_refunds
-      SET status = 'succeeded'
-      WHERE payment_id = $1
-      `,
-      [payment_id]
-    );
-
-    await client.query("COMMIT");
-
-    return res.status(200).json({ ok: true });
-
-  } catch (err) {
-    await client.query("ROLLBACK");
-    console.error("REFUND_ERROR", err.message);
-    return res.status(500).json({ ok: false, error: "REFUND_FAILED" });
-  } finally {
-    client.release();
-  }
-});
-
 /* ================= RECONCILIATION ================= */
 
 app.get(
@@ -143,9 +70,16 @@ app.get(
       const baseRes = await pool.query(
         `
         SELECT
-          p.*,
+          p.id AS payment_id,
+          p.amount,
+          p.status AS payment_status,
+          p.is_active,
+          p.created_at AS payment_created_at,
+          p.updated_at AS payment_updated_at,
+
           b.id AS booking_id,
           b.salon_id,
+          b.salon_slug,
           b.master_id,
           b.status AS booking_status,
           b.request_id,
@@ -155,18 +89,34 @@ app.get(
           b.created_at AS booking_created_at,
 
           po.id AS payout_id,
-          po.provider_amount,
           po.status AS payout_status,
-          po.payout_batch_id,
+          po.gross_amount,
+          po.platform_fee,
+          po.provider_amount,
           po.settlement_period_id,
+          po.payout_batch_id,
+          po.created_at AS payout_created_at,
 
+          sp.id AS period_id,
           sp.status AS period_status,
+          sp.period_start,
+          sp.period_end,
+          sp.closed_at,
 
+          sb.id AS batch_id,
           sb.status AS batch_status,
+          sb.total_gross,
+          sb.total_platform_fee,
+          sb.total_provider_amount,
+          sb.paid_at,
+          sb.created_at AS batch_created_at,
 
           pr.id AS refund_id,
           pr.status AS refund_status,
-          pr.amount AS refund_amount
+          pr.amount AS refund_amount,
+          pr.created_at AS refund_created_at,
+          pr.updated_at AS refund_updated_at,
+          pr.finalized_at
         FROM payments p
         JOIN bookings b ON b.id = p.booking_id
         LEFT JOIN payouts po ON po.payment_id = p.id
@@ -193,7 +143,7 @@ app.get(
         OR reference_id IN (
           SELECT id::text FROM public.payment_refunds WHERE payment_id = $1
         )
-        ORDER BY created_at
+        ORDER BY created_at ASC
         `,
         [paymentId]
       );
