@@ -207,13 +207,28 @@ app.post("/payment-intents/:id/confirm", requireAuth, async (req, res) => {
       return res.status(400).json({ ok: false, error: "INTENT_ALREADY_PROCESSED" });
     }
 
+    // 1️⃣ INSERT pending
     const paymentRes = await client.query(
       `
       INSERT INTO payments (booking_id, amount, provider, status, is_active)
-      VALUES ($1, $2, 'test', 'confirmed', true)
+      VALUES ($1, $2, 'test', 'pending', false)
       RETURNING id
       `,
       [intent.booking_id, intent.amount]
+    );
+
+    const paymentId = paymentRes.rows[0].id;
+
+    // 2️⃣ UPDATE → confirmed (trigger сработает здесь)
+    await client.query(
+      `
+      UPDATE payments
+      SET status = 'confirmed',
+          is_active = true,
+          updated_at = now()
+      WHERE id = $1
+      `,
+      [paymentId]
     );
 
     await client.query(
@@ -223,7 +238,7 @@ app.post("/payment-intents/:id/confirm", requireAuth, async (req, res) => {
 
     await client.query("COMMIT");
 
-    return res.status(200).json({ ok: true, payment_id: paymentRes.rows[0].id });
+    return res.status(200).json({ ok: true, payment_id: paymentId });
 
   } catch (err) {
     await client.query("ROLLBACK");
