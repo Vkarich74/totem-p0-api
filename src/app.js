@@ -52,7 +52,7 @@ app.get("/health", (req, res) => {
   res.status(200).json({ ok: true });
 });
 
-/* ================= REFUND ENDPOINT ================= */
+/* ================= REFUND ================= */
 
 app.post("/s/:slug/refund", resolveTenant, requireAuth, async (req, res) => {
   const client = await getPool().connect();
@@ -125,7 +125,7 @@ app.post("/s/:slug/refund", resolveTenant, requireAuth, async (req, res) => {
   }
 });
 
-/* ================= RECONCILIATION ENDPOINT ================= */
+/* ================= RECONCILIATION ================= */
 
 app.get(
   "/s/:slug/reconciliation/:payment_id",
@@ -140,61 +140,33 @@ app.get(
         return res.status(400).json({ ok: false, error: "INVALID_PAYMENT_ID" });
       }
 
-      // 1) Base chain: payment -> booking -> payout -> batch -> refund -> period
       const baseRes = await pool.query(
         `
         SELECT
-          p.id                 AS payment_id,
-          p.booking_id         AS payment_booking_id,
-          p.amount             AS payment_amount,
-          p.provider           AS payment_provider,
-          p.status             AS payment_status,
-          p.is_active          AS payment_is_active,
-          p.created_at         AS payment_created_at,
-          p.updated_at         AS payment_updated_at,
+          p.*,
+          b.id AS booking_id,
+          b.salon_id,
+          b.master_id,
+          b.status AS booking_status,
+          b.request_id,
+          b.price_snapshot,
+          b.start_at,
+          b.end_at,
+          b.created_at AS booking_created_at,
 
-          b.id                 AS booking_id,
-          b.salon_id           AS booking_salon_id,
-          b.salon_slug         AS booking_salon_slug,
-          b.master_id          AS booking_master_id,
-          b.status             AS booking_status,
-          b.request_id         AS booking_request_id,
-          b.price_snapshot     AS booking_price_snapshot,
-          b.start_at           AS booking_start_at,
-          b.end_at             AS booking_end_at,
-          b.created_at         AS booking_created_at,
-          b.updated_at         AS booking_updated_at,
+          po.id AS payout_id,
+          po.provider_amount,
+          po.status AS payout_status,
+          po.payout_batch_id,
+          po.settlement_period_id,
 
-          po.id                AS payout_id,
-          po.status            AS payout_status,
-          po.payment_id        AS payout_payment_id,
-          po.booking_id        AS payout_booking_id,
-          po.gross_amount      AS payout_gross_amount,
-          po.platform_fee      AS payout_platform_fee,
-          po.provider_amount   AS payout_provider_amount,
-          po.settlement_period_id AS payout_settlement_period_id,
-          po.payout_batch_id   AS payout_batch_id,
-          po.created_at        AS payout_created_at,
+          sp.status AS period_status,
 
-          sp.id                AS period_id,
-          sp.status            AS period_status,
-          sp.period_start      AS period_start,
-          sp.period_end        AS period_end,
+          sb.status AS batch_status,
 
-          sb.id                AS batch_id,
-          sb.status            AS batch_status,
-          sb.total_gross       AS batch_total_gross,
-          sb.total_platform_fee AS batch_total_platform_fee,
-          sb.total_provider_amount AS batch_total_provider_amount,
-          sb.paid_at           AS batch_paid_at,
-          sb.created_at        AS batch_created_at,
-
-          pr.id                AS refund_id,
-          pr.status            AS refund_status,
-          pr.amount            AS refund_amount,
-          pr.created_at        AS refund_created_at,
-          pr.updated_at        AS refund_updated_at,
-          pr.finalized_at      AS refund_finalized_at
+          pr.id AS refund_id,
+          pr.status AS refund_status,
+          pr.amount AS refund_amount
         FROM payments p
         JOIN bookings b ON b.id = p.booking_id
         LEFT JOIN payouts po ON po.payment_id = p.id
@@ -211,21 +183,6 @@ app.get(
         return res.status(404).json({ ok: false, error: "NOT_FOUND" });
       }
 
-      const base = baseRes.rows[0];
-
-      // 2) finance_events: for this refund_id + payment-type events for same salon/master/amount window (best-effort)
-      const financeRes = await pool.query(
-        `
-        SELECT *
-        FROM public.finance_events
-        WHERE (refund_id = $1)
-           OR (type = 'payment' AND salon_id = $2::text)
-        ORDER BY created_at ASC
-        `,
-        [base.refund_id || null, String(req.tenant.salon_id)]
-      );
-
-      // 3) ledger_entries for payout and refund ids (reference_id is text)
       const ledgerRes = await pool.query(
         `
         SELECT *
@@ -236,12 +193,11 @@ app.get(
         OR reference_id IN (
           SELECT id::text FROM public.payment_refunds WHERE payment_id = $1
         )
-        ORDER BY created_at ASC
+        ORDER BY created_at
         `,
         [paymentId]
       );
 
-      // 4) Net delta across returned entries (credit - debit)
       const net = ledgerRes.rows.reduce((acc, row) => {
         const amt = Number(row.amount_cents) || 0;
         if (row.direction === "credit") return acc + amt;
@@ -251,13 +207,11 @@ app.get(
 
       return res.status(200).json({
         ok: true,
-        tenant: req.tenant,
-        payment_id: paymentId,
-        chain: base,
-        finance_events: financeRes.rows,
+        chain: baseRes.rows[0],
         ledger_entries: ledgerRes.rows,
         net_delta_cents: net
       });
+
     } catch (err) {
       console.error("RECONCILIATION_ERROR", err.message);
       return res.status(500).json({ ok: false, error: "RECONCILIATION_FAILED" });
