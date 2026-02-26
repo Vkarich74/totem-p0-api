@@ -11,11 +11,13 @@ jobs:
 
     steps:
       - name: Call internal gate endpoint
+        id: gate
         run: |
           RESPONSE=$(curl -s -X POST \
             -H "x-internal-secret: TOTEM_GATE_2026_SECRET" \
             https://totem-p0-api-production.up.railway.app/internal/gate-check)
 
+          echo "response=$RESPONSE" >> $GITHUB_OUTPUT
           echo "Response: $RESPONSE"
 
           if echo "$RESPONSE" | grep -q '"ok":true'; then
@@ -25,3 +27,16 @@ jobs:
             echo "Gate FAIL"
             exit 1
           fi
+
+      - name: Send Telegram Alert (ONLY IF FAIL)
+        if: failure()
+        run: |
+          MESSAGE="🚨 TOTEM GATE FAILURE 🚨
+          Repo: ${{ github.repository }}
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          Time: $(date -u)
+          Check immediately."
+
+          curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
+            -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+            -d text="$MESSAGE"
