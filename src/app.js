@@ -42,7 +42,7 @@ app.use((req, res, next) => {
       path: req.originalUrl,
       status: res.statusCode,
       latency_ms: latency,
-      tenant_slug: req.params?.slug || null,
+      tenant_slug: req.tenant?.slug || req.params?.slug || null,
       user_id: req.auth?.user_id || null,
       ip: req.ip
     };
@@ -52,6 +52,69 @@ app.use((req, res, next) => {
 
   next();
 });
+
+/* ================= TENANT RATE LIMIT =================
+   - Applies only after resolveTenant (req.tenant is set)
+   - Excludes / and /health (they don't go through resolveTenant anyway)
+   - In-memory buckets (process-local). OK for Stage 12.2 baseline.
+====================================================== */
+
+const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 60_000);
+const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX || 100);
+
+const tenantBuckets = new Map();
+
+/**
+ * Simple fixed-window limiter.
+ * Key: tenant slug
+ * Window: RATE_LIMIT_WINDOW_MS
+ * Max: RATE_LIMIT_MAX
+ */
+function tenantRateLimit(req, res, next) {
+  // Only enforce when tenant is resolved
+  const slug = req.tenant?.slug;
+  if (!slug) return next();
+
+  const now = Date.now();
+  const key = slug;
+
+  const bucket = tenantBuckets.get(key);
+
+  if (!bucket) {
+    tenantBuckets.set(key, { startMs: now, count: 1 });
+    return next();
+  }
+
+  // window rollover
+  if (now - bucket.startMs >= RATE_LIMIT_WINDOW_MS) {
+    bucket.startMs = now;
+    bucket.count = 1;
+    return next();
+  }
+
+  bucket.count += 1;
+
+  if (bucket.count > RATE_LIMIT_MAX) {
+    console.warn(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        type: "RATE_LIMIT_EXCEEDED",
+        request_id: req.request_id,
+        tenant_slug: slug,
+        limit: RATE_LIMIT_MAX,
+        window_ms: RATE_LIMIT_WINDOW_MS
+      })
+    );
+
+    return res.status(429).json({
+      ok: false,
+      error: "RATE_LIMIT_EXCEEDED",
+      request_id: req.request_id
+    });
+  }
+
+  return next();
+}
 
 let _pool = null;
 function getPool() {
@@ -87,6 +150,7 @@ app.get("/health", (req, res) => {
 app.get(
   "/s/:slug/reconciliation/:payment_id",
   resolveTenant,
+  tenantRateLimit,
   requireAuth,
   async (req, res) => {
     try {
@@ -191,7 +255,6 @@ app.get(
         ledger_entries: ledgerRes.rows,
         net_delta_cents: net
       });
-
     } catch (err) {
       console.error("RECONCILIATION_ERROR", err.message);
       return res.status(500).json({ ok: false, error: "RECONCILIATION_FAILED" });
