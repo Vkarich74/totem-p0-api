@@ -1,0 +1,27 @@
+name: Daily Gate Check
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+jobs:
+  gate-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Call internal gate endpoint
+        run: |
+          RESPONSE=$(curl -s -X POST \
+            -H "x-internal-secret: TOTEM_GATE_2026_SECRET" \
+            https://totem-p0-api-production.up.railway.app/internal/gate-check)
+
+          echo "Response: $RESPONSE"
+
+          if echo "$RESPONSE" | grep -q '"ok":true'; then
+            echo "Gate PASS"
+            exit 0
+          else
+            echo "Gate FAIL"
+            exit 1
+          fi
