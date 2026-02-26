@@ -56,12 +56,11 @@ app.get("/health", (req, res) => {
   res.status(200).json({ ok: true });
 });
 
-/* ================= MY SALONS (STAGE NEXT 1) ================= */
+/* ================= MY SALONS ================= */
 
 app.get("/my-salons", requireAuth, async (req, res) => {
   try {
     const pool = getPool();
-
     const userId = req.auth.user_id;
     const role = req.auth.role;
 
@@ -122,13 +121,8 @@ app.get("/my-salons", requireAuth, async (req, res) => {
   }
 });
 
-/* ================= DEFAULT SALON (MULTI-TENANT) ================= */
-/**
- * PATCH /me/default-salon
- * body: { "slug": "..." }
- * stores in: user_default_salon(user_id, default_salon_slug)
- * validates that slug is accessible by this user (master_salon or owner_salon).
- */
+/* ================= DEFAULT SALON ================= */
+
 app.patch("/me/default-salon", requireAuth, async (req, res) => {
   try {
     const pool = getPool();
@@ -140,7 +134,6 @@ app.patch("/me/default-salon", requireAuth, async (req, res) => {
       return res.status(400).json({ ok: false, error: "SLUG_REQUIRED" });
     }
 
-    // Validate access: master path (user_id int) OR owner path (owner_id text)
     const access = await pool.query(
       `
       SELECT 1
@@ -178,6 +171,66 @@ app.patch("/me/default-salon", requireAuth, async (req, res) => {
   } catch (err) {
     console.error("DEFAULT_SALON_ERROR", err.message);
     return res.status(500).json({ ok: false, error: "DEFAULT_SALON_FAILED" });
+  }
+});
+
+/* ================= STAGE 4: CREATE PAYMENT INTENT ================= */
+
+app.post("/s/:slug/payment-intent", resolveTenant, requireAuth, async (req, res) => {
+  try {
+    const pool = getPool();
+    const { booking_id } = req.body;
+
+    if (!booking_id) {
+      return res.status(400).json({ ok: false, error: "BOOKING_ID_REQUIRED" });
+    }
+
+    const bookingRes = await pool.query(
+      `
+      SELECT id, price_snapshot, status
+      FROM bookings
+      WHERE id = $1 AND salon_id = $2
+      `,
+      [booking_id, req.tenant.salon_id]
+    );
+
+    if (bookingRes.rowCount === 0) {
+      return res.status(404).json({ ok: false, error: "BOOKING_NOT_FOUND" });
+    }
+
+    const booking = bookingRes.rows[0];
+
+    if (booking.status !== "reserved") {
+      return res.status(400).json({ ok: false, error: "BOOKING_NOT_PAYABLE" });
+    }
+
+    if (!booking.price_snapshot) {
+      return res.status(400).json({ ok: false, error: "NO_PRICE_SNAPSHOT" });
+    }
+
+    const intent = await pool.query(
+      `
+      INSERT INTO payment_intents (booking_id, request_id, amount, currency, status)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING intent_id
+      `,
+      [
+        booking_id,
+        booking_id,
+        booking.price_snapshot,
+        "KGS",
+        "created"
+      ]
+    );
+
+    return res.status(200).json({
+      ok: true,
+      intent_id: intent.rows[0].intent_id
+    });
+
+  } catch (err) {
+    console.error("CREATE_PAYMENT_INTENT_ERROR", err.message);
+    return res.status(500).json({ ok: false, error: "INTENT_FAILED" });
   }
 });
 
