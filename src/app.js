@@ -8,6 +8,7 @@ import rateLimit from "express-rate-limit";
 import pkg from "pg";
 
 import { resolveAuth } from "./middleware/resolveAuth.js";
+import { resolveTenant } from "./middleware/resolveTenant.js";
 
 const { Pool } = pkg;
 
@@ -55,7 +56,42 @@ app.get("/health", (req, res) => {
   res.status(200).json({ ok: true });
 });
 
-/* ================= BOOKING ROUTE ================= */
+/* ================= STAGE 2: MULTI-TENANT (slug) =================
+   Contract:
+   /s/:slug
+   /s/:slug/booking
+   /s/:slug/calendar
+   /s/:slug/reports
+   /s/:slug/owner
+*/
+
+app.get("/s/:slug", resolveTenant, (req, res) => {
+  return res.status(200).json({ ok: true, tenant: req.tenant });
+});
+
+app.post("/s/:slug/booking", resolveTenant, requireAuth, async (req, res) => {
+  return res.status(200).json({
+    ok: true,
+    route: "BOOKING_ACTIVE",
+    tenant: req.tenant,
+    auth: req.auth
+  });
+});
+
+// placeholders (UI routing in Odoo, backend returns tenant-context)
+app.get("/s/:slug/calendar", resolveTenant, requireAuth, async (req, res) => {
+  return res.status(200).json({ ok: true, route: "CALENDAR_ACTIVE", tenant: req.tenant });
+});
+
+app.get("/s/:slug/reports", resolveTenant, requireAuth, async (req, res) => {
+  return res.status(200).json({ ok: true, route: "REPORTS_ACTIVE", tenant: req.tenant });
+});
+
+app.get("/s/:slug/owner", resolveTenant, requireAuth, async (req, res) => {
+  return res.status(200).json({ ok: true, route: "OWNER_ACTIVE", tenant: req.tenant });
+});
+
+/* ================= LEGACY (keep for now) ================= */
 
 app.post("/bookings/v2", requireAuth, async (req, res) => {
   return res.status(200).json({
