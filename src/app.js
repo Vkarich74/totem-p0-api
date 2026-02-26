@@ -33,8 +33,6 @@ function getPool() {
   return _pool;
 }
 
-/* ================= AUTH ================= */
-
 app.use(resolveAuth);
 
 function requireAuth(req, res, next) {
@@ -50,274 +48,80 @@ app.get("/", (req, res) => {
   res.status(200).send("OK");
 });
 
-/* ================= HEALTH ================= */
-
 app.get("/health", (req, res) => {
   res.status(200).json({ ok: true });
 });
 
-/* ================= MY SALONS ================= */
+/* ================= REFUND ENDPOINT ================= */
 
-app.get("/my-salons", requireAuth, async (req, res) => {
-  try {
-    const pool = getPool();
-    const userId = req.auth.user_id;
-    const role = req.auth.role;
-
-    let salons = [];
-
-    if (role === "master") {
-      const result = await pool.query(
-        `
-        SELECT s.id AS salon_id, s.slug, ms.status
-        FROM masters m
-        JOIN master_salon ms ON ms.master_id = m.id
-        JOIN salons s ON s.id = ms.salon_id
-        WHERE m.user_id = $1
-        `,
-        [userId]
-      );
-
-      salons = result.rows.map((r) => ({
-        salon_id: r.salon_id,
-        slug: r.slug,
-        role: "master",
-        status: r.status
-      }));
-    }
-
-    if (role === "owner") {
-      const result = await pool.query(
-        `
-        SELECT s.id AS salon_id, s.slug, os.status
-        FROM owner_salon os
-        JOIN salons s ON s.id = os.salon_id
-        WHERE os.owner_id = $1
-        `,
-        [String(userId)]
-      );
-
-      salons = salons.concat(
-        result.rows.map((r) => ({
-          salon_id: r.salon_id,
-          slug: r.slug,
-          role: "owner",
-          status: r.status
-        }))
-      );
-    }
-
-    return res.status(200).json({
-      ok: true,
-      user_id: userId,
-      salons
-    });
-  } catch (err) {
-    console.error("MY_SALONS_ERROR", err.message);
-    return res.status(500).json({
-      ok: false,
-      error: "MY_SALONS_FAILED"
-    });
-  }
-});
-
-/* ================= STAGE 4: CREATE PAYMENT INTENT ================= */
-
-app.post("/s/:slug/payment-intent", resolveTenant, requireAuth, async (req, res) => {
-  try {
-    const pool = getPool();
-    const { booking_id } = req.body;
-
-    if (!booking_id) {
-      return res.status(400).json({ ok: false, error: "BOOKING_ID_REQUIRED" });
-    }
-
-    const bookingRes = await pool.query(
-      `
-      SELECT id, price_snapshot, status
-      FROM bookings
-      WHERE id = $1 AND salon_id = $2
-      `,
-      [booking_id, req.tenant.salon_id]
-    );
-
-    if (bookingRes.rowCount === 0) {
-      return res.status(404).json({ ok: false, error: "BOOKING_NOT_FOUND" });
-    }
-
-    const booking = bookingRes.rows[0];
-
-    if (booking.status !== "reserved") {
-      return res.status(400).json({ ok: false, error: "BOOKING_NOT_PAYABLE" });
-    }
-
-    if (!booking.price_snapshot) {
-      return res.status(400).json({ ok: false, error: "NO_PRICE_SNAPSHOT" });
-    }
-
-    const intent = await pool.query(
-      `
-      INSERT INTO payment_intents (booking_id, request_id, amount, currency, status)
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING intent_id
-      `,
-      [
-        booking_id,
-        booking_id,
-        booking.price_snapshot,
-        "KGS",
-        "created"
-      ]
-    );
-
-    return res.status(200).json({
-      ok: true,
-      intent_id: intent.rows[0].intent_id
-    });
-
-  } catch (err) {
-    console.error("CREATE_PAYMENT_INTENT_ERROR", err.message);
-    return res.status(500).json({ ok: false, error: "INTENT_FAILED" });
-  }
-});
-
-/* ================= STAGE 4: CONFIRM PAYMENT ================= */
-
-app.post("/payment-intents/:id/confirm", requireAuth, async (req, res) => {
+app.post("/s/:slug/refund", resolveTenant, requireAuth, async (req, res) => {
   const client = await getPool().connect();
+
   try {
-    const intentId = Number(req.params.id);
+    const { payment_id } = req.body;
+
+    if (!payment_id) {
+      return res.status(400).json({ ok: false, error: "PAYMENT_ID_REQUIRED" });
+    }
 
     await client.query("BEGIN");
 
-    const intentRes = await client.query(
-      `SELECT booking_id, amount, status FROM payment_intents WHERE intent_id = $1 FOR UPDATE`,
-      [intentId]
-    );
-
-    if (intentRes.rowCount === 0) {
-      await client.query("ROLLBACK");
-      return res.status(404).json({ ok: false, error: "INTENT_NOT_FOUND" });
-    }
-
-    const intent = intentRes.rows[0];
-
-    if (intent.status !== "created") {
-      await client.query("ROLLBACK");
-      return res.status(400).json({ ok: false, error: "INTENT_ALREADY_PROCESSED" });
-    }
-
-    // 1️⃣ INSERT pending
     const paymentRes = await client.query(
       `
-      INSERT INTO payments (booking_id, amount, provider, status, is_active)
-      VALUES ($1, $2, 'test', 'pending', false)
-      RETURNING id
+      SELECT p.id
+      FROM payments p
+      JOIN bookings b ON b.id = p.booking_id
+      WHERE p.id = $1
+        AND b.salon_id = $2
+      FOR UPDATE
       `,
-      [intent.booking_id, intent.amount]
+      [payment_id, req.tenant.salon_id]
     );
 
-    const paymentId = paymentRes.rows[0].id;
+    if (paymentRes.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ ok: false, error: "PAYMENT_NOT_FOUND" });
+    }
 
-    // 2️⃣ UPDATE → confirmed (trigger сработает здесь)
+    const refundRes = await client.query(
+      `
+      SELECT id, status
+      FROM payment_refunds
+      WHERE payment_id = $1
+      FOR UPDATE
+      `,
+      [payment_id]
+    );
+
+    if (refundRes.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ ok: false, error: "REFUND_NOT_EXISTS" });
+    }
+
+    if (refundRes.rows[0].status === "succeeded") {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ ok: false, error: "REFUND_ALREADY_SUCCEEDED" });
+    }
+
     await client.query(
       `
-      UPDATE payments
-      SET status = 'confirmed',
-          is_active = true,
-          updated_at = now()
-      WHERE id = $1
+      UPDATE payment_refunds
+      SET status = 'succeeded'
+      WHERE payment_id = $1
       `,
-      [paymentId]
-    );
-
-    await client.query(
-      `UPDATE payment_intents SET status = 'confirmed' WHERE intent_id = $1`,
-      [intentId]
+      [payment_id]
     );
 
     await client.query("COMMIT");
 
-    return res.status(200).json({ ok: true, payment_id: paymentId });
+    return res.status(200).json({ ok: true });
 
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("CONFIRM_PAYMENT_ERROR", err.message);
-    return res.status(500).json({ ok: false, error: "CONFIRM_FAILED" });
+    console.error("REFUND_ERROR", err.message);
+    return res.status(500).json({ ok: false, error: "REFUND_FAILED" });
   } finally {
     client.release();
-  }
-});
-
-/* ================= STAGE 2 ================= */
-
-app.get("/s/:slug", resolveTenant, (req, res) => {
-  return res.status(200).json({ ok: true, tenant: req.tenant });
-});
-
-/* ================= STAGE 3 ================= */
-
-app.post("/s/:slug/booking", resolveTenant, requireAuth, async (req, res) => {
-  try {
-    const pool = getPool();
-    const {
-      master_id,
-      start_at,
-      end_at,
-      calendar_slot_id,
-      request_id,
-      service_id,
-      price_snapshot
-    } = req.body;
-
-    if (!master_id || !start_at || !end_at || !calendar_slot_id || !request_id) {
-      return res.status(400).json({
-        ok: false,
-        error: "MISSING_REQUIRED_FIELDS"
-      });
-    }
-
-    const result = await pool.query(
-      `
-      INSERT INTO bookings (
-        salon_id,
-        salon_slug,
-        master_id,
-        start_at,
-        end_at,
-        request_id,
-        calendar_slot_id,
-        client_id,
-        service_id,
-        price_snapshot
-      )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-      RETURNING id
-      `,
-      [
-        req.tenant.salon_id,
-        req.tenant.slug,
-        master_id,
-        start_at,
-        end_at,
-        request_id,
-        calendar_slot_id,
-        req.auth.user_id,
-        service_id,
-        price_snapshot || null
-      ]
-    );
-
-    return res.status(200).json({
-      ok: true,
-      booking_id: result.rows[0].id
-    });
-  } catch (err) {
-    console.error("BOOKING_INSERT_ERROR", err.message);
-    return res.status(500).json({
-      ok: false,
-      error: "BOOKING_FAILED"
-    });
   }
 });
 
