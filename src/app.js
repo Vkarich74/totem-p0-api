@@ -56,96 +56,70 @@ app.get("/health", (req, res) => {
   res.status(200).json({ ok: true });
 });
 
-/* ================= ENSURE PERSONAL SALON ================= */
+/* ================= MY SALONS (STAGE NEXT 1) ================= */
 
-app.post("/ensure-personal-salon", requireAuth, async (req, res) => {
-  const pool = getPool();
-  const client = await pool.connect();
-
+app.get("/my-salons", requireAuth, async (req, res) => {
   try {
-    if (req.auth.role !== "master") {
-      return res.status(403).json({ ok: false, error: "ONLY_MASTER_ALLOWED" });
+    const pool = getPool();
+
+    const userId = req.auth.user_id;
+    const role = req.auth.role;
+
+    let salons = [];
+
+    if (role === "master") {
+      const result = await pool.query(
+        `
+        SELECT s.id AS salon_id, s.slug, ms.status
+        FROM masters m
+        JOIN master_salon ms ON ms.master_id = m.id
+        JOIN salons s ON s.id = ms.salon_id
+        WHERE m.user_id = $1
+        `,
+        [userId]
+      );
+
+      salons = result.rows.map(r => ({
+        salon_id: r.salon_id,
+        slug: r.slug,
+        role: "master",
+        status: r.status
+      }));
     }
 
-    await client.query("BEGIN");
+    if (role === "owner") {
+      const result = await pool.query(
+        `
+        SELECT s.id AS salon_id, s.slug, os.status
+        FROM owner_salon os
+        JOIN salons s ON s.id = os.salon_id
+        WHERE os.owner_id = $1
+        `,
+        [String(userId)]
+      );
 
-    const masterResult = await client.query(
-      "SELECT id, slug FROM masters WHERE user_id = $1 LIMIT 1",
-      [req.auth.user_id]
-    );
-
-    if (masterResult.rowCount === 0) {
-      await client.query("ROLLBACK");
-      return res.status(404).json({ ok: false, error: "MASTER_NOT_FOUND" });
+      salons = salons.concat(
+        result.rows.map(r => ({
+          salon_id: r.salon_id,
+          slug: r.slug,
+          role: "owner",
+          status: r.status
+        }))
+      );
     }
-
-    const master = masterResult.rows[0];
-
-    const existingSalon = await client.query(
-      `
-      SELECT s.id, s.slug
-      FROM salons s
-      JOIN master_salon ms ON ms.salon_id = s.id
-      WHERE ms.master_id = $1
-      AND s.slug = $2
-      LIMIT 1
-      `,
-      [master.id, master.slug]
-    );
-
-    if (existingSalon.rowCount > 0) {
-      await client.query("COMMIT");
-      return res.status(200).json({
-        ok: true,
-        slug: existingSalon.rows[0].slug,
-        created: false
-      });
-    }
-
-    const salonInsert = await client.query(
-      `
-      INSERT INTO salons (slug, name)
-      VALUES ($1, $2)
-      RETURNING id
-      `,
-      [master.slug, master.slug]
-    );
-
-    const salonId = salonInsert.rows[0].id;
-
-    await client.query(
-      `
-      INSERT INTO master_salon (master_id, salon_id, status)
-      VALUES ($1, $2, 'active')
-      `,
-      [master.id, salonId]
-    );
-
-    await client.query(
-      `
-      INSERT INTO owner_salon (owner_id, salon_id, status)
-      VALUES ($1, $2, 'active')
-      `,
-      [String(req.auth.user_id), salonId]
-    );
-
-    await client.query("COMMIT");
 
     return res.status(200).json({
       ok: true,
-      slug: master.slug,
-      created: true
+      user_id: userId,
+      salons
     });
 
   } catch (err) {
-    await client.query("ROLLBACK");
-    console.error("ENSURE_PERSONAL_SALON_ERROR", err.message);
+    console.error("MY_SALONS_ERROR", err.message);
     return res.status(500).json({
       ok: false,
-      error: "ENSURE_FAILED"
+      error: "MY_SALONS_FAILED"
     });
-  } finally {
-    client.release();
   }
 });
 
@@ -235,30 +209,6 @@ app.post("/s/:slug/booking", resolveTenant, requireAuth, async (req, res) => {
       error: "BOOKING_FAILED"
     });
   }
-});
-
-/* ================= PLACEHOLDERS ================= */
-
-app.get("/s/:slug/calendar", resolveTenant, requireAuth, async (req, res) => {
-  return res.status(200).json({ ok: true, route: "CALENDAR_ACTIVE", tenant: req.tenant });
-});
-
-app.get("/s/:slug/reports", resolveTenant, requireAuth, async (req, res) => {
-  return res.status(200).json({ ok: true, route: "REPORTS_ACTIVE", tenant: req.tenant });
-});
-
-app.get("/s/:slug/owner", resolveTenant, requireAuth, async (req, res) => {
-  return res.status(200).json({ ok: true, route: "OWNER_ACTIVE", tenant: req.tenant });
-});
-
-/* ================= LEGACY ================= */
-
-app.post("/bookings/v2", requireAuth, async (req, res) => {
-  return res.status(200).json({
-    ok: true,
-    route: "BOOKING_ACTIVE",
-    auth: req.auth
-  });
 });
 
 /* ================= GLOBAL ERROR ================= */
