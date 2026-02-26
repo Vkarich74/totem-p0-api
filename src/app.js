@@ -33,7 +33,7 @@ function getPool() {
   return _pool;
 }
 
-/* ================= AUTH (JWT ONLY) ================= */
+/* ================= AUTH ================= */
 
 app.use(resolveAuth);
 
@@ -56,29 +56,96 @@ app.get("/health", (req, res) => {
   res.status(200).json({ ok: true });
 });
 
-/* ================= STAGE 2: MULTI-TENANT (slug) =================
-   Contract:
-   /s/:slug
-   /s/:slug/booking
-   /s/:slug/calendar
-   /s/:slug/reports
-   /s/:slug/owner
-*/
+/* ================= STAGE 2: MULTI-TENANT ================= */
 
 app.get("/s/:slug", resolveTenant, (req, res) => {
   return res.status(200).json({ ok: true, tenant: req.tenant });
 });
 
+/* ================= STAGE 3: REAL BOOKING INSERT ================= */
+
 app.post("/s/:slug/booking", resolveTenant, requireAuth, async (req, res) => {
-  return res.status(200).json({
-    ok: true,
-    route: "BOOKING_ACTIVE",
-    tenant: req.tenant,
-    auth: req.auth
-  });
+  try {
+    const pool = getPool();
+
+    const {
+      master_id,
+      start_at,
+      end_at,
+      calendar_slot_id,
+      request_id,
+      service_id,
+      price_snapshot
+    } = req.body;
+
+    if (
+      !master_id ||
+      !start_at ||
+      !end_at ||
+      !calendar_slot_id ||
+      !request_id
+    ) {
+      return res.status(400).json({
+        ok: false,
+        error: "MISSING_REQUIRED_FIELDS"
+      });
+    }
+
+    const result = await pool.query(
+      `
+      INSERT INTO bookings (
+        salon_id,
+        salon_slug,
+        master_id,
+        start_at,
+        end_at,
+        request_id,
+        calendar_slot_id,
+        client_id,
+        service_id,
+        price_snapshot
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      RETURNING id
+      `,
+      [
+        req.tenant.salon_id,
+        req.tenant.slug,
+        master_id,
+        start_at,
+        end_at,
+        request_id,
+        calendar_slot_id,
+        req.auth.user_id,
+        service_id || null,
+        price_snapshot || null
+      ]
+    );
+
+    return res.status(200).json({
+      ok: true,
+      booking_id: result.rows[0].id
+    });
+
+  } catch (err) {
+    console.error("BOOKING_INSERT_ERROR", err.message);
+
+    if (err.code === "23505") {
+      return res.status(409).json({
+        ok: false,
+        error: "DUPLICATE_REQUEST_ID"
+      });
+    }
+
+    return res.status(500).json({
+      ok: false,
+      error: "BOOKING_FAILED"
+    });
+  }
 });
 
-// placeholders (UI routing in Odoo, backend returns tenant-context)
+/* ================= PLACEHOLDERS ================= */
+
 app.get("/s/:slug/calendar", resolveTenant, requireAuth, async (req, res) => {
   return res.status(200).json({ ok: true, route: "CALENDAR_ACTIVE", tenant: req.tenant });
 });
@@ -91,7 +158,7 @@ app.get("/s/:slug/owner", resolveTenant, requireAuth, async (req, res) => {
   return res.status(200).json({ ok: true, route: "OWNER_ACTIVE", tenant: req.tenant });
 });
 
-/* ================= LEGACY (keep for now) ================= */
+/* ================= LEGACY (НЕ ТРОГАЕМ) ================= */
 
 app.post("/bookings/v2", requireAuth, async (req, res) => {
   return res.status(200).json({
@@ -111,7 +178,7 @@ app.use((err, req, res, next) => {
   });
 });
 
-/* ================= PORT (Railway compatible) ================= */
+/* ================= PORT ================= */
 
 const PORT = process.env.PORT || 8080;
 
