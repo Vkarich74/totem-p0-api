@@ -9,6 +9,7 @@ import pkg from "pg";
 
 import { resolveAuth } from "./middleware/resolveAuth.js";
 import { resolveTenant } from "./middleware/resolveTenant.js";
+import { pool } from "./db.js";
 
 const { Pool } = pkg;
 
@@ -109,17 +110,7 @@ function tenantRateLimit(req, res, next) {
   return next();
 }
 
-/* ================= DATABASE ================= */
-
-let _pool = null;
-function getPool() {
-  if (_pool) return _pool;
-  _pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }
-  });
-  return _pool;
-}
+/* ================= AUTH ================= */
 
 app.use(resolveAuth);
 
@@ -138,6 +129,42 @@ app.get("/", (req, res) => {
 
 app.get("/health", (req, res) => {
   res.status(200).json({ ok: true });
+});
+
+/* ================= PUBLIC SALON RESOLVE ================= */
+
+app.get("/public/salons/:slug", resolveTenant, async (req, res) => {
+  try {
+    const { salon_id, slug } = req.tenant;
+
+    const { rows } = await pool.query(
+      `SELECT id, slug, name, enabled, status
+       FROM salons
+       WHERE id = $1`,
+      [salon_id]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        ok: false,
+        error: "SALON_NOT_FOUND",
+        request_id: req.request_id
+      });
+    }
+
+    return res.json({
+      ok: true,
+      salon: rows[0]
+    });
+  } catch (err) {
+    console.error("PUBLIC_SALON_RESOLVE_ERROR", err.message);
+
+    return res.status(500).json({
+      ok: false,
+      error: "INTERNAL_ERROR",
+      request_id: req.request_id
+    });
+  }
 });
 
 /* ================= PORT ================= */
