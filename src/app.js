@@ -135,12 +135,24 @@ app.get("/health", (req, res) => {
 
 app.get("/public/salons/:slug", resolveTenant, async (req, res) => {
   try {
-    const { salon_id, slug } = req.tenant;
+    const { salon_id } = req.tenant;
 
     const { rows } = await pool.query(
-      `SELECT id, slug, name, enabled, status
-       FROM salons
-       WHERE id = $1`,
+      `
+      SELECT
+        id,
+        slug,
+        name,
+        enabled,
+        status,
+        description,
+        logo_url,
+        cover_url,
+        city,
+        phone
+      FROM salons
+      WHERE id = $1
+      `,
       [salon_id]
     );
 
