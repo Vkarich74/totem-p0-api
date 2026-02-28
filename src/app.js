@@ -11,6 +11,7 @@ import { resolveAuth } from "./middleware/resolveAuth.js";
 import { resolveTenant } from "./middleware/resolveTenant.js";
 import { pool } from "./db.js";
 import { publicCreateBooking } from "./routes/publicCreateBooking.js";
+import { publicMasterAvailability } from "./routes/publicAvailability.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -172,6 +173,14 @@ app.get("/public/salons/:slug/metrics", resolveTenant, async (req, res) => {
 /* ================= BOOKING ================= */
 
 app.post("/public/salons/:slug/bookings", resolveTenant, publicCreateBooking);
+
+/* ================= AVAILABILITY ================= */
+
+app.get(
+  "/public/salons/:slug/masters/:master_id/availability",
+  resolveTenant,
+  publicMasterAvailability
+);
 
 /* ================= PORT ================= */
 
