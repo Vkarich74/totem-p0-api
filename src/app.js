@@ -72,54 +72,9 @@ app.use((req, res, next) => {
   next();
 });
 
-/* ================= TENANT RATE LIMIT ================= */
-
-const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 60_000);
-const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX || 100);
-
-const tenantBuckets = new Map();
-
-function tenantRateLimit(req, res, next) {
-  const slug = req.tenant?.slug;
-  if (!slug) return next();
-
-  const now = Date.now();
-  const bucket = tenantBuckets.get(slug);
-
-  if (!bucket) {
-    tenantBuckets.set(slug, { startMs: now, count: 1 });
-    return next();
-  }
-
-  if (now - bucket.startMs >= RATE_LIMIT_WINDOW_MS) {
-    bucket.startMs = now;
-    bucket.count = 1;
-    return next();
-  }
-
-  bucket.count += 1;
-
-  if (bucket.count > RATE_LIMIT_MAX) {
-    return res.status(429).json({
-      ok: false,
-      error: "RATE_LIMIT_EXCEEDED",
-      request_id: req.request_id
-    });
-  }
-
-  return next();
-}
-
 /* ================= AUTH ================= */
 
 app.use(resolveAuth);
-
-function requireAuth(req, res, next) {
-  if (!req.auth) {
-    return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
-  }
-  next();
-}
 
 /* ================= ROOT ================= */
 
@@ -181,46 +136,40 @@ app.get("/public/salons/:slug", resolveTenant, async (req, res) => {
 });
 
 /* ================= PUBLIC SALON METRICS ================= */
-/*
-  MVP metrics:
-  - bookings_count: total bookings for salon
-  - revenue_total: sum(amount) for paid bookings (if no payments yet -> 0)
-  - avg_check: revenue_total / bookings_count (0 if no bookings)
-*/
+
 app.get("/public/salons/:slug/metrics", resolveTenant, async (req, res) => {
   try {
     const { salon_id } = req.tenant;
 
-    // bookings_count
-    const bookingsCountRes = await pool.query(
+    // Bookings count
+    const bookingsRes = await pool.query(
       `SELECT COUNT(*)::int AS bookings_count
        FROM bookings
        WHERE salon_id = $1`,
       [salon_id]
     );
 
-    const bookings_count = bookingsCountRes.rows?.[0]?.bookings_count ?? 0;
+    const bookings_count = bookingsRes.rows?.[0]?.bookings_count ?? 0;
 
-    // revenue_total:
-    // Мы не лезем в payments/ledger (freeze). Для MVP считаем по bookings.amount, если поле существует.
-    // Если в твоей схеме нет bookings.amount — вернём 0 (без падения).
-    let revenue_total = 0;
+    // Revenue from confirmed active payments
+    const revenueRes = await pool.query(
+      `
+      SELECT COALESCE(SUM(p.amount), 0)::int AS revenue_total
+      FROM payments p
+      JOIN bookings b ON b.id = p.booking_id
+      WHERE b.salon_id = $1
+        AND p.status = 'confirmed'
+        AND p.is_active = true
+      `,
+      [salon_id]
+    );
 
-    try {
-      const revenueRes = await pool.query(
-        `SELECT COALESCE(SUM(amount), 0)::numeric AS revenue_total
-         FROM bookings
-         WHERE salon_id = $1`,
-        [salon_id]
-      );
-      revenue_total = Number(revenueRes.rows?.[0]?.revenue_total ?? 0);
-      if (Number.isNaN(revenue_total)) revenue_total = 0;
-    } catch (_e) {
-      revenue_total = 0;
-    }
+    const revenue_total = revenueRes.rows?.[0]?.revenue_total ?? 0;
 
     const avg_check =
-      bookings_count > 0 ? Math.round((revenue_total / bookings_count) * 100) / 100 : 0;
+      bookings_count > 0
+        ? Math.round((revenue_total / bookings_count) * 100) / 100
+        : 0;
 
     return res.json({
       ok: true,
