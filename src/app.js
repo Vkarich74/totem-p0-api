@@ -7,8 +7,7 @@ import cookieParser from "cookie-parser";
 import crypto from "crypto";
 
 import { resolveTenant } from "./middleware/resolveTenant.js";
-import { redisRateLimit } from "./middleware/redisRateLimit.js";
-import { availabilityCache } from "./middleware/availabilityCache.js";
+import { rateLimit } from "./middleware/rateLimit.js";
 
 import { pool } from "./db.js";
 import { publicCreateBooking } from "./routes/publicCreateBooking.js";
@@ -54,33 +53,49 @@ app.use((req, res, next) => {
 app.get("/", (req, res) => res.status(200).send("OK"));
 app.get("/health", (req, res) => res.status(200).json({ ok: true }));
 
-/* ================= REDIS RATE LIMIT ================= */
+/* ================= RATE LIMIT (OLD SAFE VERSION) ================= */
 
-const publicRateLimit = redisRateLimit({
-  windowSeconds: 120,   // 2 minutes
-  maxRequests: 100,
-  keyPrefix: "public"
+function intEnv(name, fallback) {
+  const v = Number(process.env[name]);
+  return Number.isFinite(v) ? v : fallback;
+}
+
+const RL_WINDOW_MS = intEnv("RATE_LIMIT_WINDOW_MS", 60000);
+
+const rlPublicRead = rateLimit({
+  windowMs: RL_WINDOW_MS,
+  max: intEnv("RATE_LIMIT_PUBLIC_READ_MAX", 120),
+  keyPrefix: "pub_read",
+  keyFn: (req) => `pub_read:${req.ip}:${req.params?.slug ?? "na"}`
 });
 
-const bookingRateLimit = redisRateLimit({
-  windowSeconds: 120,   // 2 minutes
-  maxRequests: 20,
-  keyPrefix: "booking"
+const rlAvailability = rateLimit({
+  windowMs: RL_WINDOW_MS,
+  max: intEnv("RATE_LIMIT_AVAILABILITY_MAX", 60),
+  keyPrefix: "availability",
+  keyFn: (req) =>
+    `availability:${req.ip}:${req.params?.slug ?? "na"}:${req.params?.master_id ?? "na"}`
+});
+
+const rlBookingCreate = rateLimit({
+  windowMs: RL_WINDOW_MS,
+  max: intEnv("RATE_LIMIT_BOOKING_CREATE_MAX", 20),
+  keyPrefix: "booking_create",
+  keyFn: (req) => `booking_create:${req.ip}:${req.params?.slug ?? "na"}`
 });
 
 /* ================= ROUTES ================= */
 
 app.post(
   "/public/salons/:slug/bookings",
-  bookingRateLimit,
+  rlBookingCreate,
   resolveTenant,
   publicCreateBooking
 );
 
 app.get(
   "/public/salons/:slug/masters/:master_id/availability",
-  publicRateLimit,
-  availabilityCache(30),
+  rlAvailability,
   resolveTenant,
   publicMasterAvailability
 );
