@@ -5,18 +5,48 @@ import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
+import Redis from "ioredis";
 
 import { resolveTenant } from "./middleware/resolveTenant.js";
 import { rateLimit } from "./middleware/rateLimit.js";
 import { pool } from "./db.js";
-
 import { publicCreateBooking } from "./routes/publicCreateBooking.js";
 import { publicMasterAvailability } from "./routes/publicAvailability.js";
-
 import { expireReservedBookings } from "./jobs/expireReserved.js";
 
 const app = express();
 app.set("trust proxy", 1);
+
+/* ================= REDIS CONNECTIVITY ================= */
+
+let redis = null;
+
+if (process.env.REDIS_URL) {
+  try {
+    redis = new Redis(process.env.REDIS_URL, {
+      maxRetriesPerRequest: 3,
+      enableReadyCheck: true,
+      lazyConnect: false,
+    });
+
+    redis.on("connect", () => {
+      console.log("REDIS_CONNECTED");
+    });
+
+    redis.on("error", (err) => {
+      console.error("REDIS_ERROR", err.message);
+    });
+
+    redis.ping().then((pong) => {
+      console.log("REDIS_PING =", pong);
+    }).catch((err) => {
+      console.error("REDIS_PING_FAILED", err.message);
+    });
+
+  } catch (e) {
+    console.error("REDIS_BOOT_ERROR", e.message);
+  }
+}
 
 /* ================= CORS ================= */
 
@@ -52,32 +82,28 @@ app.use((req, res, next) => {
 
   res.on("finish", () => {
     const latency = Date.now() - start;
-    console.log(
-      JSON.stringify({
-        ts: new Date().toISOString(),
-        request_id: requestId,
-        method: req.method,
-        path: req.originalUrl,
-        status: res.statusCode,
-        latency_ms: latency
-      })
-    );
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      request_id: requestId,
+      method: req.method,
+      path: req.originalUrl,
+      status: res.statusCode,
+      latency_ms: latency
+    }));
   });
 
   next();
 });
 
-/* ================= RATE LIMIT (PUBLIC) ================= */
+/* ================= RATE LIMIT ================= */
 
 function intEnv(name, fallback) {
   const v = Number(process.env[name]);
   return Number.isFinite(v) ? v : fallback;
 }
 
-// Defaults tuned for safety; adjust via Railway ENV if needed.
-const RL_WINDOW_MS = intEnv("RATE_LIMIT_WINDOW_MS", 60_000);
+const RL_WINDOW_MS = intEnv("RATE_LIMIT_WINDOW_MS", 60000);
 
-// Read endpoints (salon info, metrics): per IP + per slug
 const rlPublicRead = rateLimit({
   windowMs: RL_WINDOW_MS,
   max: intEnv("RATE_LIMIT_PUBLIC_READ_MAX", 120),
@@ -85,7 +111,6 @@ const rlPublicRead = rateLimit({
   keyFn: (req) => `pub_read:${req.ip}:${req.params?.slug ?? "na"}`
 });
 
-// Availability is expensive: stricter
 const rlAvailability = rateLimit({
   windowMs: RL_WINDOW_MS,
   max: intEnv("RATE_LIMIT_AVAILABILITY_MAX", 60),
@@ -94,7 +119,6 @@ const rlAvailability = rateLimit({
     `availability:${req.ip}:${req.params?.slug ?? "na"}:${req.params?.master_id ?? "na"}`
 });
 
-// Booking create: protect from spam
 const rlBookingCreate = rateLimit({
   windowMs: RL_WINDOW_MS,
   max: intEnv("RATE_LIMIT_BOOKING_CREATE_MAX", 20),
@@ -126,6 +150,7 @@ app.get("/public/salons/:slug", rlPublicRead, resolveTenant, async (req, res) =>
     }
 
     return res.json({ ok: true, salon: rows[0] });
+
   } catch (err) {
     console.error("PUBLIC_SALON_ERROR", err.message);
     return res.status(500).json({ ok: false });
@@ -147,29 +172,11 @@ app.get("/public/salons/:slug/metrics", rlPublicRead, resolveTenant, async (req,
 
     const bookings_count = bookingsRes.rows[0]?.bookings_count ?? 0;
 
-    const revenueRes = await pool.query(
-      `SELECT COALESCE(SUM(p.amount), 0)::int AS revenue_total
-       FROM payments p
-       JOIN bookings b ON b.id = p.booking_id
-       WHERE b.salon_id = $1
-         AND p.status = 'confirmed'
-         AND p.is_active = true`,
-      [salon_id]
-    );
-
-    const revenue_total = revenueRes.rows[0]?.revenue_total ?? 0;
-
-    const avg_check =
-      bookings_count > 0 ? Math.round((revenue_total / bookings_count) * 100) / 100 : 0;
-
     return res.json({
       ok: true,
-      metrics: {
-        bookings_count,
-        revenue_total,
-        avg_check
-      }
+      metrics: { bookings_count }
     });
+
   } catch (err) {
     console.error("METRICS_ERROR", err.message);
     return res.status(500).json({ ok: false });
@@ -178,7 +185,12 @@ app.get("/public/salons/:slug/metrics", rlPublicRead, resolveTenant, async (req,
 
 /* ================= BOOKING ================= */
 
-app.post("/public/salons/:slug/bookings", rlBookingCreate, resolveTenant, publicCreateBooking);
+app.post(
+  "/public/salons/:slug/bookings",
+  rlBookingCreate,
+  resolveTenant,
+  publicCreateBooking
+);
 
 /* ================= AVAILABILITY ================= */
 
@@ -195,10 +207,9 @@ console.log("ENABLE_TTL =", process.env.ENABLE_TTL);
 
 if (process.env.ENABLE_TTL === "true") {
   console.log("TTL ENGINE ENABLED");
-
   setInterval(() => {
     expireReservedBookings();
-  }, 60 * 1000);
+  }, 60000);
 }
 
 /* ================= PORT ================= */
