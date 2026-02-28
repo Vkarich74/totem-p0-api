@@ -11,8 +11,6 @@ import { resolveAuth } from "./middleware/resolveAuth.js";
 import { resolveTenant } from "./middleware/resolveTenant.js";
 import { pool } from "./db.js";
 
-const { Pool } = pkg;
-
 const app = express();
 app.set("trust proxy", 1);
 
@@ -30,9 +28,7 @@ app.use(
   cors({
     origin: function (origin, callback) {
       if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
+      if (allowedOrigins.includes(origin)) return callback(null, true);
       return callback(new Error("Not allowed by CORS"));
     },
     credentials: true
@@ -47,46 +43,30 @@ app.use(cookieParser());
 app.use((req, res, next) => {
   const start = Date.now();
   const requestId = crypto.randomUUID();
-
   req.request_id = requestId;
   res.setHeader("x-request-id", requestId);
 
   res.on("finish", () => {
     const latency = Date.now() - start;
-
-    const log = {
+    console.log(JSON.stringify({
       ts: new Date().toISOString(),
       request_id: requestId,
       method: req.method,
       path: req.originalUrl,
       status: res.statusCode,
-      latency_ms: latency,
-      tenant_slug: req.tenant?.slug || req.params?.slug || null,
-      user_id: req.auth?.user_id || null,
-      ip: req.ip
-    };
-
-    console.log(JSON.stringify(log));
+      latency_ms: latency
+    }));
   });
 
   next();
 });
 
-/* ================= AUTH ================= */
-
-app.use(resolveAuth);
-
 /* ================= ROOT ================= */
 
-app.get("/", (req, res) => {
-  res.status(200).send("OK");
-});
+app.get("/", (req, res) => res.status(200).send("OK"));
+app.get("/health", (req, res) => res.status(200).json({ ok: true }));
 
-app.get("/health", (req, res) => {
-  res.status(200).json({ ok: true });
-});
-
-/* ================= PUBLIC SALON RESOLVE ================= */
+/* ================= PUBLIC SALON ================= */
 
 app.get("/public/salons/:slug", resolveTenant, async (req, res) => {
   try {
@@ -112,36 +92,22 @@ app.get("/public/salons/:slug", resolveTenant, async (req, res) => {
       [salon_id]
     );
 
-    if (rows.length === 0) {
-      return res.status(404).json({
-        ok: false,
-        error: "SALON_NOT_FOUND",
-        request_id: req.request_id
-      });
+    if (!rows.length) {
+      return res.status(404).json({ ok: false });
     }
 
-    return res.json({
-      ok: true,
-      salon: rows[0]
-    });
-  } catch (err) {
-    console.error("PUBLIC_SALON_RESOLVE_ERROR", err.message);
-
-    return res.status(500).json({
-      ok: false,
-      error: "INTERNAL_ERROR",
-      request_id: req.request_id
-    });
+    return res.json({ ok: true, salon: rows[0] });
+  } catch {
+    return res.status(500).json({ ok: false });
   }
 });
 
-/* ================= PUBLIC SALON METRICS ================= */
+/* ================= METRICS ================= */
 
 app.get("/public/salons/:slug/metrics", resolveTenant, async (req, res) => {
   try {
     const { salon_id } = req.tenant;
 
-    // Bookings count
     const bookingsRes = await pool.query(
       `SELECT COUNT(*)::int AS bookings_count
        FROM bookings
@@ -149,10 +115,9 @@ app.get("/public/salons/:slug/metrics", resolveTenant, async (req, res) => {
       [salon_id]
     );
 
-    const bookings_count = bookingsRes.rows?.[0]?.bookings_count ?? 0;
+    const bookings_count = bookingsRes.rows[0]?.bookings_count ?? 0;
 
-    // Revenue from confirmed active payments
-    const revenueRes = await pool.query(
+    const revenueTotalRes = await pool.query(
       `
       SELECT COALESCE(SUM(p.amount), 0)::int AS revenue_total
       FROM payments p
@@ -164,7 +129,22 @@ app.get("/public/salons/:slug/metrics", resolveTenant, async (req, res) => {
       [salon_id]
     );
 
-    const revenue_total = revenueRes.rows?.[0]?.revenue_total ?? 0;
+    const revenue_total = revenueTotalRes.rows[0]?.revenue_total ?? 0;
+
+    const revenue30dRes = await pool.query(
+      `
+      SELECT COALESCE(SUM(p.amount), 0)::int AS revenue_30d
+      FROM payments p
+      JOIN bookings b ON b.id = p.booking_id
+      WHERE b.salon_id = $1
+        AND p.status = 'confirmed'
+        AND p.is_active = true
+        AND p.created_at >= NOW() - INTERVAL '30 days'
+      `,
+      [salon_id]
+    );
+
+    const revenue_30d = revenue30dRes.rows[0]?.revenue_30d ?? 0;
 
     const avg_check =
       bookings_count > 0
@@ -176,24 +156,17 @@ app.get("/public/salons/:slug/metrics", resolveTenant, async (req, res) => {
       metrics: {
         bookings_count,
         revenue_total,
+        revenue_30d,
         avg_check
       }
     });
-  } catch (err) {
-    console.error("PUBLIC_SALON_METRICS_ERROR", err.message);
 
-    return res.status(500).json({
-      ok: false,
-      error: "INTERNAL_ERROR",
-      request_id: req.request_id
-    });
+  } catch {
+    return res.status(500).json({ ok: false });
   }
 });
 
-/* ================= PORT ================= */
-
 const PORT = process.env.PORT || 8080;
-
 app.listen(PORT, "0.0.0.0", () => {
   console.log("Server running on port:", PORT);
 });
