@@ -10,6 +10,7 @@ import pkg from "pg";
 import { resolveAuth } from "./middleware/resolveAuth.js";
 import { resolveTenant } from "./middleware/resolveTenant.js";
 import { pool } from "./db.js";
+import { publicCreateBooking } from "./routes/publicCreateBooking.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -109,7 +110,6 @@ app.get("/public/salons/:slug/metrics", resolveTenant, async (req, res) => {
   try {
     const { salon_id } = req.tenant;
 
-    // bookings_count
     const bookingsRes = await pool.query(
       `SELECT COUNT(*)::int AS bookings_count
        FROM bookings
@@ -119,7 +119,6 @@ app.get("/public/salons/:slug/metrics", resolveTenant, async (req, res) => {
 
     const bookings_count = bookingsRes.rows[0]?.bookings_count ?? 0;
 
-    // revenue_total (all time, confirmed + active)
     const revenueTotalRes = await pool.query(
       `
       SELECT COALESCE(SUM(p.amount), 0)::int AS revenue_total
@@ -134,7 +133,6 @@ app.get("/public/salons/:slug/metrics", resolveTenant, async (req, res) => {
 
     const revenue_total = revenueTotalRes.rows[0]?.revenue_total ?? 0;
 
-    // revenue_30d (confirmed + active, last 30 days)
     const revenue30dRes = await pool.query(
       `
       SELECT COALESCE(SUM(p.amount), 0)::int AS revenue_30d
@@ -170,6 +168,10 @@ app.get("/public/salons/:slug/metrics", resolveTenant, async (req, res) => {
     return res.status(500).json({ ok: false });
   }
 });
+
+/* ================= BOOKING ================= */
+
+app.post("/public/salons/:slug/bookings", resolveTenant, publicCreateBooking);
 
 /* ================= PORT ================= */
 
