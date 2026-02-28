@@ -97,7 +97,8 @@ app.get("/public/salons/:slug", resolveTenant, async (req, res) => {
     }
 
     return res.json({ ok: true, salon: rows[0] });
-  } catch {
+  } catch (err) {
+    console.error("PUBLIC_SALON_RESOLVE_ERROR", err.message);
     return res.status(500).json({ ok: false });
   }
 });
@@ -108,6 +109,7 @@ app.get("/public/salons/:slug/metrics", resolveTenant, async (req, res) => {
   try {
     const { salon_id } = req.tenant;
 
+    // bookings_count
     const bookingsRes = await pool.query(
       `SELECT COUNT(*)::int AS bookings_count
        FROM bookings
@@ -117,6 +119,7 @@ app.get("/public/salons/:slug/metrics", resolveTenant, async (req, res) => {
 
     const bookings_count = bookingsRes.rows[0]?.bookings_count ?? 0;
 
+    // revenue_total (all time, confirmed + active)
     const revenueTotalRes = await pool.query(
       `
       SELECT COALESCE(SUM(p.amount), 0)::int AS revenue_total
@@ -131,6 +134,7 @@ app.get("/public/salons/:slug/metrics", resolveTenant, async (req, res) => {
 
     const revenue_total = revenueTotalRes.rows[0]?.revenue_total ?? 0;
 
+    // revenue_30d (confirmed + active, last 30 days)
     const revenue30dRes = await pool.query(
       `
       SELECT COALESCE(SUM(p.amount), 0)::int AS revenue_30d
@@ -161,12 +165,16 @@ app.get("/public/salons/:slug/metrics", resolveTenant, async (req, res) => {
       }
     });
 
-  } catch {
+  } catch (err) {
+    console.error("PUBLIC_SALON_METRICS_ERROR", err.message);
     return res.status(500).json({ ok: false });
   }
 });
 
+/* ================= PORT ================= */
+
 const PORT = process.env.PORT || 8080;
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log("Server running on port:", PORT);
 });
