@@ -143,6 +143,7 @@ app.get("/public/salons/:slug", resolveTenant, async (req, res) => {
         id,
         slug,
         name,
+        slogan,
         enabled,
         status,
         description,
