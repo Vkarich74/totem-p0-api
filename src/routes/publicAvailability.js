@@ -8,6 +8,15 @@ function overlaps(aStart, aEnd, bStart, bEnd) {
   return aStart < bEnd && bStart < aEnd;
 }
 
+function parseDate(value) {
+  const d = new Date(String(value || ""));
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function getWeekdayUTC(date) {
+  return date.getUTCDay(); // 0-6 (Sun-Sat)
+}
+
 export async function publicMasterAvailability(req, res) {
   const client = await pool.connect();
 
@@ -21,37 +30,72 @@ export async function publicMasterAvailability(req, res) {
     if (!master_id) return res.status(400).json({ ok: false, error: "MASTER_ID_REQUIRED" });
     if (!service_id) return res.status(400).json({ ok: false, error: "SERVICE_ID_REQUIRED" });
 
-    const from = new Date(req.query.from);
-    const to = new Date(req.query.to);
+    const from = parseDate(req.query.from);
+    const to = parseDate(req.query.to);
 
-    if (isNaN(from.getTime()) || isNaN(to.getTime()))
-      return res.status(400).json({ ok: false, error: "INVALID_DATE_RANGE" });
+    if (!from || !to || !(from < to)) {
+      return res.status(400).json({ ok: false, error: "INVALID_RANGE" });
+    }
 
     const step_min = req.query.step_min ? Number(req.query.step_min) : 15;
 
+    // 1️⃣ Service validation
     const serviceRes = await client.query(
       `SELECT duration_min
-         FROM services_v2
-        WHERE id = $1
-          AND salon_id = $2
-          AND is_active = true`,
+       FROM services_v2
+       WHERE id = $1 AND salon_id = $2 AND is_active = true`,
       [service_id, salon_id]
     );
 
-    if (serviceRes.rowCount === 0)
+    if (!serviceRes.rowCount)
       return res.status(404).json({ ok: false, error: "SERVICE_NOT_FOUND" });
 
-    const duration_min = serviceRes.rows[0].duration_min;
+    const duration_min = Number(serviceRes.rows[0].duration_min);
 
+    // 2️⃣ Working hours
+    const weekday = getWeekdayUTC(from);
+
+    const workingRes = await client.query(
+      `SELECT start_time, end_time
+       FROM master_working_hours
+       WHERE master_id = $1
+         AND salon_id = $2
+         AND weekday = $3`,
+      [master_id, salon_id, weekday]
+    );
+
+    if (!workingRes.rowCount) {
+      return res.json({ ok: true, slots: [] });
+    }
+
+    const { start_time, end_time } = workingRes.rows[0];
+
+    const dayStart = new Date(from);
+    dayStart.setUTCHours(
+      start_time.getUTCHours(),
+      start_time.getUTCMinutes(),
+      0,
+      0
+    );
+
+    const dayEnd = new Date(from);
+    dayEnd.setUTCHours(
+      end_time.getUTCHours(),
+      end_time.getUTCMinutes(),
+      0,
+      0
+    );
+
+    // 3️⃣ Busy intervals
     const busyRes = await client.query(
       `SELECT start_at, end_at
-         FROM calendar_slots
-        WHERE master_id = $1
-          AND salon_id = $2
-          AND status <> 'cancelled'
-          AND start_at < $4
-          AND end_at > $3`,
-      [master_id, salon_id, from, to]
+       FROM calendar_slots
+       WHERE master_id = $1
+         AND salon_id = $2
+         AND status <> 'cancelled'
+         AND start_at < $4
+         AND end_at > $3`,
+      [master_id, salon_id, dayStart, dayEnd]
     );
 
     const busy = busyRes.rows.map(r => ({
@@ -59,10 +103,11 @@ export async function publicMasterAvailability(req, res) {
       end: new Date(r.end_at)
     }));
 
-    const latestStart = addMinutes(to, -duration_min);
+    // 4️⃣ Compute slots inside working hours
     const slots = [];
+    const latestStart = addMinutes(dayEnd, -duration_min);
 
-    for (let t = new Date(from.getTime()); t <= latestStart; t = addMinutes(t, step_min)) {
+    for (let t = new Date(dayStart); t <= latestStart; t = addMinutes(t, step_min)) {
       const tEnd = addMinutes(t, duration_min);
 
       let conflict = false;
@@ -89,7 +134,7 @@ export async function publicMasterAvailability(req, res) {
     });
 
   } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
+    return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
   } finally {
     client.release();
   }
