@@ -7,6 +7,7 @@ import cookieParser from "cookie-parser";
 import crypto from "crypto";
 
 import { resolveTenant } from "./middleware/resolveTenant.js";
+import { rateLimit } from "./middleware/rateLimit.js";
 import { pool } from "./db.js";
 
 import { publicCreateBooking } from "./routes/publicCreateBooking.js";
@@ -51,17 +52,54 @@ app.use((req, res, next) => {
 
   res.on("finish", () => {
     const latency = Date.now() - start;
-    console.log(JSON.stringify({
-      ts: new Date().toISOString(),
-      request_id: requestId,
-      method: req.method,
-      path: req.originalUrl,
-      status: res.statusCode,
-      latency_ms: latency
-    }));
+    console.log(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        request_id: requestId,
+        method: req.method,
+        path: req.originalUrl,
+        status: res.statusCode,
+        latency_ms: latency
+      })
+    );
   });
 
   next();
+});
+
+/* ================= RATE LIMIT (PUBLIC) ================= */
+
+function intEnv(name, fallback) {
+  const v = Number(process.env[name]);
+  return Number.isFinite(v) ? v : fallback;
+}
+
+// Defaults tuned for safety; adjust via Railway ENV if needed.
+const RL_WINDOW_MS = intEnv("RATE_LIMIT_WINDOW_MS", 60_000);
+
+// Read endpoints (salon info, metrics): per IP + per slug
+const rlPublicRead = rateLimit({
+  windowMs: RL_WINDOW_MS,
+  max: intEnv("RATE_LIMIT_PUBLIC_READ_MAX", 120),
+  keyPrefix: "pub_read",
+  keyFn: (req) => `pub_read:${req.ip}:${req.params?.slug ?? "na"}`
+});
+
+// Availability is expensive: stricter
+const rlAvailability = rateLimit({
+  windowMs: RL_WINDOW_MS,
+  max: intEnv("RATE_LIMIT_AVAILABILITY_MAX", 60),
+  keyPrefix: "availability",
+  keyFn: (req) =>
+    `availability:${req.ip}:${req.params?.slug ?? "na"}:${req.params?.master_id ?? "na"}`
+});
+
+// Booking create: protect from spam
+const rlBookingCreate = rateLimit({
+  windowMs: RL_WINDOW_MS,
+  max: intEnv("RATE_LIMIT_BOOKING_CREATE_MAX", 20),
+  keyPrefix: "booking_create",
+  keyFn: (req) => `booking_create:${req.ip}:${req.params?.slug ?? "na"}`
 });
 
 /* ================= ROOT ================= */
@@ -71,7 +109,7 @@ app.get("/health", (req, res) => res.status(200).json({ ok: true }));
 
 /* ================= PUBLIC SALON ================= */
 
-app.get("/public/salons/:slug", resolveTenant, async (req, res) => {
+app.get("/public/salons/:slug", rlPublicRead, resolveTenant, async (req, res) => {
   try {
     const { salon_id } = req.tenant;
 
@@ -88,7 +126,6 @@ app.get("/public/salons/:slug", resolveTenant, async (req, res) => {
     }
 
     return res.json({ ok: true, salon: rows[0] });
-
   } catch (err) {
     console.error("PUBLIC_SALON_ERROR", err.message);
     return res.status(500).json({ ok: false });
@@ -97,7 +134,7 @@ app.get("/public/salons/:slug", resolveTenant, async (req, res) => {
 
 /* ================= METRICS ================= */
 
-app.get("/public/salons/:slug/metrics", resolveTenant, async (req, res) => {
+app.get("/public/salons/:slug/metrics", rlPublicRead, resolveTenant, async (req, res) => {
   try {
     const { salon_id } = req.tenant;
 
@@ -123,9 +160,7 @@ app.get("/public/salons/:slug/metrics", resolveTenant, async (req, res) => {
     const revenue_total = revenueRes.rows[0]?.revenue_total ?? 0;
 
     const avg_check =
-      bookings_count > 0
-        ? Math.round((revenue_total / bookings_count) * 100) / 100
-        : 0;
+      bookings_count > 0 ? Math.round((revenue_total / bookings_count) * 100) / 100 : 0;
 
     return res.json({
       ok: true,
@@ -135,7 +170,6 @@ app.get("/public/salons/:slug/metrics", resolveTenant, async (req, res) => {
         avg_check
       }
     });
-
   } catch (err) {
     console.error("METRICS_ERROR", err.message);
     return res.status(500).json({ ok: false });
@@ -144,16 +178,13 @@ app.get("/public/salons/:slug/metrics", resolveTenant, async (req, res) => {
 
 /* ================= BOOKING ================= */
 
-app.post(
-  "/public/salons/:slug/bookings",
-  resolveTenant,
-  publicCreateBooking
-);
+app.post("/public/salons/:slug/bookings", rlBookingCreate, resolveTenant, publicCreateBooking);
 
 /* ================= AVAILABILITY ================= */
 
 app.get(
   "/public/salons/:slug/masters/:master_id/availability",
+  rlAvailability,
   resolveTenant,
   publicMasterAvailability
 );
