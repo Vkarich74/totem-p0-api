@@ -5,13 +5,14 @@ import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
-import pkg from "pg";
 
-import { resolveAuth } from "./middleware/resolveAuth.js";
 import { resolveTenant } from "./middleware/resolveTenant.js";
 import { pool } from "./db.js";
+
 import { publicCreateBooking } from "./routes/publicCreateBooking.js";
 import { publicMasterAvailability } from "./routes/publicAvailability.js";
+
+import { expireReservedBookings } from "./jobs/expireReserved.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -75,22 +76,10 @@ app.get("/public/salons/:slug", resolveTenant, async (req, res) => {
     const { salon_id } = req.tenant;
 
     const { rows } = await pool.query(
-      `
-      SELECT
-        id,
-        slug,
-        name,
-        slogan,
-        enabled,
-        status,
-        description,
-        logo_url,
-        cover_url,
-        city,
-        phone
-      FROM salons
-      WHERE id = $1
-      `,
+      `SELECT id, slug, name, slogan, enabled, status, description,
+              logo_url, cover_url, city, phone
+       FROM salons
+       WHERE id = $1`,
       [salon_id]
     );
 
@@ -99,8 +88,9 @@ app.get("/public/salons/:slug", resolveTenant, async (req, res) => {
     }
 
     return res.json({ ok: true, salon: rows[0] });
+
   } catch (err) {
-    console.error("PUBLIC_SALON_RESOLVE_ERROR", err.message);
+    console.error("PUBLIC_SALON_ERROR", err.message);
     return res.status(500).json({ ok: false });
   }
 });
@@ -120,34 +110,17 @@ app.get("/public/salons/:slug/metrics", resolveTenant, async (req, res) => {
 
     const bookings_count = bookingsRes.rows[0]?.bookings_count ?? 0;
 
-    const revenueTotalRes = await pool.query(
-      `
-      SELECT COALESCE(SUM(p.amount), 0)::int AS revenue_total
-      FROM payments p
-      JOIN bookings b ON b.id = p.booking_id
-      WHERE b.salon_id = $1
-        AND p.status = 'confirmed'
-        AND p.is_active = true
-      `,
+    const revenueRes = await pool.query(
+      `SELECT COALESCE(SUM(p.amount), 0)::int AS revenue_total
+       FROM payments p
+       JOIN bookings b ON b.id = p.booking_id
+       WHERE b.salon_id = $1
+         AND p.status = 'confirmed'
+         AND p.is_active = true`,
       [salon_id]
     );
 
-    const revenue_total = revenueTotalRes.rows[0]?.revenue_total ?? 0;
-
-    const revenue30dRes = await pool.query(
-      `
-      SELECT COALESCE(SUM(p.amount), 0)::int AS revenue_30d
-      FROM payments p
-      JOIN bookings b ON b.id = p.booking_id
-      WHERE b.salon_id = $1
-        AND p.status = 'confirmed'
-        AND p.is_active = true
-        AND p.created_at >= NOW() - INTERVAL '30 days'
-      `,
-      [salon_id]
-    );
-
-    const revenue_30d = revenue30dRes.rows[0]?.revenue_30d ?? 0;
+    const revenue_total = revenueRes.rows[0]?.revenue_total ?? 0;
 
     const avg_check =
       bookings_count > 0
@@ -159,20 +132,23 @@ app.get("/public/salons/:slug/metrics", resolveTenant, async (req, res) => {
       metrics: {
         bookings_count,
         revenue_total,
-        revenue_30d,
         avg_check
       }
     });
 
   } catch (err) {
-    console.error("PUBLIC_SALON_METRICS_ERROR", err.message);
+    console.error("METRICS_ERROR", err.message);
     return res.status(500).json({ ok: false });
   }
 });
 
 /* ================= BOOKING ================= */
 
-app.post("/public/salons/:slug/bookings", resolveTenant, publicCreateBooking);
+app.post(
+  "/public/salons/:slug/bookings",
+  resolveTenant,
+  publicCreateBooking
+);
 
 /* ================= AVAILABILITY ================= */
 
@@ -181,6 +157,18 @@ app.get(
   resolveTenant,
   publicMasterAvailability
 );
+
+/* ================= TTL ENGINE ================= */
+
+console.log("ENABLE_TTL =", process.env.ENABLE_TTL);
+
+if (process.env.ENABLE_TTL === "true") {
+  console.log("TTL ENGINE ENABLED");
+
+  setInterval(() => {
+    expireReservedBookings();
+  }, 60 * 1000);
+}
 
 /* ================= PORT ================= */
 
