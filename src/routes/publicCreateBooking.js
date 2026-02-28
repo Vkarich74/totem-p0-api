@@ -1,9 +1,7 @@
-import { Request, Response } from "express";
 import { pool } from "../db.js";
 import crypto from "crypto";
-import { resolveTenant } from "../middleware/resolveTenant.js";
 
-export const publicCreateBooking = async (req: Request, res: Response) => {
+export async function publicCreateBooking(req, res) {
   const client = await pool.connect();
 
   try {
@@ -24,7 +22,6 @@ export const publicCreateBooking = async (req: Request, res: Response) => {
 
     await client.query("BEGIN");
 
-    // idempotency check
     const existing = await client.query(
       `SELECT request_hash, response_code, response_body
        FROM public.api_idempotency_keys
@@ -56,7 +53,6 @@ export const publicCreateBooking = async (req: Request, res: Response) => {
       [idempotencyKey, "public_create_booking", requestHash]
     );
 
-    // validate service
     const serviceRes = await client.query(
       `SELECT duration_min, price, salon_id
        FROM public.services_v2
@@ -71,7 +67,6 @@ export const publicCreateBooking = async (req: Request, res: Response) => {
 
     const { duration_min, price, salon_id } = serviceRes.rows[0];
 
-    // validate master belongs to salon
     const masterRes = await client.query(
       `SELECT id
        FROM public.master_salon
@@ -142,7 +137,7 @@ export const publicCreateBooking = async (req: Request, res: Response) => {
 
     return res.status(201).json(responseBody);
 
-  } catch (err: any) {
+  } catch (err) {
     await client.query("ROLLBACK");
 
     if (err.code === "23P01") {
@@ -157,4 +152,4 @@ export const publicCreateBooking = async (req: Request, res: Response) => {
   } finally {
     client.release();
   }
-};
+}
