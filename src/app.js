@@ -180,6 +180,67 @@ app.get("/public/salons/:slug", resolveTenant, async (req, res) => {
   }
 });
 
+/* ================= PUBLIC SALON METRICS ================= */
+/*
+  MVP metrics:
+  - bookings_count: total bookings for salon
+  - revenue_total: sum(amount) for paid bookings (if no payments yet -> 0)
+  - avg_check: revenue_total / bookings_count (0 if no bookings)
+*/
+app.get("/public/salons/:slug/metrics", resolveTenant, async (req, res) => {
+  try {
+    const { salon_id } = req.tenant;
+
+    // bookings_count
+    const bookingsCountRes = await pool.query(
+      `SELECT COUNT(*)::int AS bookings_count
+       FROM bookings
+       WHERE salon_id = $1`,
+      [salon_id]
+    );
+
+    const bookings_count = bookingsCountRes.rows?.[0]?.bookings_count ?? 0;
+
+    // revenue_total:
+    // Мы не лезем в payments/ledger (freeze). Для MVP считаем по bookings.amount, если поле существует.
+    // Если в твоей схеме нет bookings.amount — вернём 0 (без падения).
+    let revenue_total = 0;
+
+    try {
+      const revenueRes = await pool.query(
+        `SELECT COALESCE(SUM(amount), 0)::numeric AS revenue_total
+         FROM bookings
+         WHERE salon_id = $1`,
+        [salon_id]
+      );
+      revenue_total = Number(revenueRes.rows?.[0]?.revenue_total ?? 0);
+      if (Number.isNaN(revenue_total)) revenue_total = 0;
+    } catch (_e) {
+      revenue_total = 0;
+    }
+
+    const avg_check =
+      bookings_count > 0 ? Math.round((revenue_total / bookings_count) * 100) / 100 : 0;
+
+    return res.json({
+      ok: true,
+      metrics: {
+        bookings_count,
+        revenue_total,
+        avg_check
+      }
+    });
+  } catch (err) {
+    console.error("PUBLIC_SALON_METRICS_ERROR", err.message);
+
+    return res.status(500).json({
+      ok: false,
+      error: "INTERNAL_ERROR",
+      request_id: req.request_id
+    });
+  }
+});
+
 /* ================= PORT ================= */
 
 const PORT = process.env.PORT || 8080;
