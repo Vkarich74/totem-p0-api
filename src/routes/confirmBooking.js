@@ -3,10 +3,22 @@ import pkg from 'pg';
 
 const { Pool } = pkg;
 
+// NOTE: Keep pool creation local to this module to avoid changing boot sequence.
+// This route must never block app.listen().
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
+  ssl: { rejectUnauthorized: false },
 });
+
+function jsonStableStringify(obj) {
+  // Deterministic hash for idempotency: stable keys ordering.
+  // Avoids accidental hash changes due to key order differences.
+  if (obj === null || obj === undefined) return 'null';
+  if (typeof obj !== 'object') return JSON.stringify(obj);
+  if (Array.isArray(obj)) return `[${obj.map(jsonStableStringify).join(',')}]`;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${jsonStableStringify(obj[k])}`).join(',')}}`;
+}
 
 export async function confirmBooking(req, res) {
   const bookingId = String(req.params.id || '').trim();
@@ -16,13 +28,14 @@ export async function confirmBooking(req, res) {
   if (!bookingId) return res.status(400).json({ ok: false, error: 'BOOKING_ID_REQUIRED' });
   if (!idempotencyKey) return res.status(400).json({ ok: false, error: 'IDEMPOTENCY_KEY_REQUIRED' });
 
-  const rawBody = JSON.stringify(req.body || {});
+  // Use stable stringify so identical bodies hash identically across clients.
+  const rawBody = jsonStableStringify(req.body || {});
   const requestHash = crypto.createHash('sha256').update(rawBody).digest('hex');
 
   const client = await pool.connect();
 
   try {
-    // idempotency hit
+    // 1) Fast idempotency hit (outside txn is OK, but we still use the same connection).
     const existing = await client.query(
       `SELECT request_hash, response_code, response_body
          FROM public.api_idempotency_keys
@@ -47,7 +60,7 @@ export async function confirmBooking(req, res) {
 
     await client.query('BEGIN');
 
-    // reserve key
+    // 2) Reserve idempotency key (within txn).
     try {
       await client.query(
         `INSERT INTO public.api_idempotency_keys (idempotency_key, endpoint, request_hash)
@@ -55,6 +68,7 @@ export async function confirmBooking(req, res) {
         [idempotencyKey, 'confirm_booking', requestHash]
       );
     } catch (e) {
+      // Another request raced us: resolve deterministically.
       const again = await client.query(
         `SELECT request_hash, response_code, response_body
            FROM public.api_idempotency_keys
@@ -79,10 +93,11 @@ export async function confirmBooking(req, res) {
       return res.status(409).json({ ok: false, error: 'IDEMPOTENCY_IN_PROGRESS' });
     }
 
-    // actor in session var (safe)
+    // 3) Actor in session var (safe).
+    //    If triggers read it, it will be available only in this txn.
     await client.query(`SET LOCAL app.actor_type = $1`, [actorType]);
 
-    // lock booking
+    // 4) Lock booking row and inspect status.
     const booking = await client.query(
       `SELECT id, status
          FROM public.bookings
@@ -104,7 +119,10 @@ export async function confirmBooking(req, res) {
       return res.status(404).json(responseBody);
     }
 
-    if (booking.rows[0].status === 'confirmed') {
+    const currentStatus = String(booking.rows[0].status || '').trim();
+
+    // 5) Idempotent success on already confirmed.
+    if (currentStatus === 'confirmed') {
       const responseBody = { ok: true, status: 'already_confirmed' };
       await client.query(
         `UPDATE public.api_idempotency_keys
@@ -117,11 +135,28 @@ export async function confirmBooking(req, res) {
       return res.status(200).json(responseBody);
     }
 
-    // DB-enforced confirm (trigger validates payments + transitions)
+    // 6) Production-grade hardening: only reserved can be confirmed.
+    //    Fail-fast before hitting trigger errors.
+    if (currentStatus !== 'reserved') {
+      const responseBody = { ok: false, error: 'INVALID_STATUS', status: currentStatus };
+      await client.query(
+        `UPDATE public.api_idempotency_keys
+            SET response_code = 409,
+                response_body = $2
+          WHERE idempotency_key = $1`,
+        [idempotencyKey, responseBody]
+      );
+      await client.query('COMMIT');
+      return res.status(409).json(responseBody);
+    }
+
+    // 7) DB-enforced confirm (triggers validate transitions).
+    //    Also stamp confirmed_at for auditability (column exists in schema).
     try {
       await client.query(
         `UPDATE public.bookings
-            SET status = 'confirmed'
+            SET status = 'confirmed',
+                confirmed_at = NOW()
           WHERE id = $1`,
         [bookingId]
       );
