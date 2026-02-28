@@ -12,16 +12,14 @@ export async function expireReservedBookings() {
           canceled_at = now(),
           cancel_reason = 'TTL_EXPIRED'
       WHERE status = 'reserved'
-        AND created_at < now() - interval '15 minutes'
+        AND created_at < now() - interval '1 minute'
       RETURNING id
     `);
 
     await client.query("COMMIT");
 
     if (result.rowCount > 0) {
-      console.log(
-        `[TTL] Expired ${result.rowCount} reserved bookings`
-      );
+      console.log(`[TTL] Expired ${result.rowCount} reserved bookings`);
     }
 
   } catch (err) {
