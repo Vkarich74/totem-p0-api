@@ -13,8 +13,11 @@ function parseDate(value) {
   return isNaN(d.getTime()) ? null : d;
 }
 
-function getWeekdayUTC(date) {
-  return date.getUTCDay(); // 0-6 (Sun-Sat)
+function parseTimeToUTC(baseDate, timeString) {
+  const [h, m, s] = timeString.split(":").map(Number);
+  const d = new Date(baseDate);
+  d.setUTCHours(h, m, s || 0, 0);
+  return d;
 }
 
 export async function publicMasterAvailability(req, res) {
@@ -39,7 +42,7 @@ export async function publicMasterAvailability(req, res) {
 
     const step_min = req.query.step_min ? Number(req.query.step_min) : 15;
 
-    // 1️⃣ Service validation
+    // Validate service
     const serviceRes = await client.query(
       `SELECT duration_min
        FROM services_v2
@@ -52,8 +55,8 @@ export async function publicMasterAvailability(req, res) {
 
     const duration_min = Number(serviceRes.rows[0].duration_min);
 
-    // 2️⃣ Working hours
-    const weekday = getWeekdayUTC(from);
+    // Working hours
+    const weekday = from.getUTCDay();
 
     const workingRes = await client.query(
       `SELECT start_time, end_time
@@ -70,23 +73,10 @@ export async function publicMasterAvailability(req, res) {
 
     const { start_time, end_time } = workingRes.rows[0];
 
-    const dayStart = new Date(from);
-    dayStart.setUTCHours(
-      start_time.getUTCHours(),
-      start_time.getUTCMinutes(),
-      0,
-      0
-    );
+    const dayStart = parseTimeToUTC(from, start_time);
+    const dayEnd = parseTimeToUTC(from, end_time);
 
-    const dayEnd = new Date(from);
-    dayEnd.setUTCHours(
-      end_time.getUTCHours(),
-      end_time.getUTCMinutes(),
-      0,
-      0
-    );
-
-    // 3️⃣ Busy intervals
+    // Busy intervals
     const busyRes = await client.query(
       `SELECT start_at, end_at
        FROM calendar_slots
@@ -103,7 +93,6 @@ export async function publicMasterAvailability(req, res) {
       end: new Date(r.end_at)
     }));
 
-    // 4️⃣ Compute slots inside working hours
     const slots = [];
     const latestStart = addMinutes(dayEnd, -duration_min);
 
@@ -134,6 +123,7 @@ export async function publicMasterAvailability(req, res) {
     });
 
   } catch (err) {
+    console.error("AVAILABILITY_ERROR", err);
     return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
   } finally {
     client.release();
