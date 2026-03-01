@@ -30,6 +30,102 @@ export function createPublicRouter(deps) {
   );
 
   /**
+   * SALON BOOKINGS (READ)
+   */
+  r.get("/salons/:slug/bookings", resolveTenant, async (req, res) => {
+    try {
+      const { salon_id } = req.tenant;
+      const { status, master_id } = req.query;
+
+      let conditions = ["b.salon_id = $1"];
+      let values = [salon_id];
+      let index = 2;
+
+      if (status) {
+        let dbStatuses = [];
+
+        switch (status) {
+          case "confirmed":
+            dbStatuses = ["reserved", "confirmed"];
+            break;
+          case "completed":
+            dbStatuses = ["completed"];
+            break;
+          case "cancelled":
+            dbStatuses = ["canceled", "cancelled"];
+            break;
+          default:
+            return res
+              .status(400)
+              .json({ ok: false, error: "INVALID_STATUS" });
+        }
+
+        conditions.push(`b.status = ANY($${index})`);
+        values.push(dbStatuses);
+        index++;
+      }
+
+      if (master_id) {
+        conditions.push(`b.master_id = $${index}`);
+        values.push(master_id);
+        index++;
+      }
+
+      const { rows } = await pool.query(
+        `
+        SELECT
+          b.id,
+          b.master_id,
+          m.name AS master_name,
+          COALESCE(c.name, 'Клиент') AS client_name,
+          COALESCE(s.name, 'Услуга') AS service_name,
+          b.start_at,
+          b.end_at,
+          b.status,
+          b.price_snapshot
+        FROM bookings b
+        LEFT JOIN masters m ON m.id = b.master_id
+        LEFT JOIN clients c ON c.id = b.client_id
+        LEFT JOIN services_v2 s ON s.id = b.service_id
+        WHERE ${conditions.join(" AND ")}
+        ORDER BY b.start_at DESC
+        `,
+        values
+      );
+
+      const normalized = rows.map((row) => {
+        let uiStatus = "confirmed";
+
+        if (row.status === "completed") uiStatus = "completed";
+        if (
+          row.status === "canceled" ||
+          row.status === "cancelled"
+        )
+          uiStatus = "cancelled";
+
+        return {
+          id: row.id,
+          master_id: row.master_id,
+          master_name: row.master_name,
+          client_name: row.client_name,
+          service_name: row.service_name,
+          datetime_start: row.start_at,
+          datetime_end: row.end_at,
+          status: uiStatus,
+          price: row.price_snapshot ?? 0,
+        };
+      });
+
+      return res.json({ ok: true, bookings: normalized });
+    } catch (err) {
+      console.error("PUBLIC_SALON_BOOKINGS_ERROR", err.message);
+      return res
+        .status(500)
+        .json({ ok: false, error: "INTERNAL_ERROR" });
+    }
+  });
+
+  /**
    * SALON MASTERS LIST
    */
   r.get("/salons/:slug/masters", async (req, res) => {
@@ -58,10 +154,9 @@ export function createPublicRouter(deps) {
       });
     } catch (err) {
       console.error("PUBLIC_SALON_MASTERS_ERROR", err.message);
-      return res.status(500).json({
-        ok: false,
-        error: "INTERNAL_ERROR",
-      });
+      return res
+        .status(500)
+        .json({ ok: false, error: "INTERNAL_ERROR" });
     }
   });
 
@@ -94,10 +189,9 @@ export function createPublicRouter(deps) {
       });
     } catch (err) {
       console.error("PUBLIC_MASTER_PROFILE_ERROR", err.message);
-      return res.status(500).json({
-        ok: false,
-        error: "INTERNAL_ERROR",
-      });
+      return res
+        .status(500)
+        .json({ ok: false, error: "INTERNAL_ERROR" });
     }
   });
 
@@ -110,7 +204,9 @@ export function createPublicRouter(deps) {
       const { status } = req.query;
 
       if (!status) {
-        return res.status(400).json({ ok: false, error: "STATUS_REQUIRED" });
+        return res
+          .status(400)
+          .json({ ok: false, error: "STATUS_REQUIRED" });
       }
 
       let dbStatuses = [];
@@ -126,7 +222,9 @@ export function createPublicRouter(deps) {
           dbStatuses = ["canceled", "cancelled"];
           break;
         default:
-          return res.status(400).json({ ok: false, error: "INVALID_STATUS" });
+          return res
+            .status(400)
+            .json({ ok: false, error: "INVALID_STATUS" });
       }
 
       const { rows } = await pool.query(
@@ -172,7 +270,9 @@ export function createPublicRouter(deps) {
       return res.json({ ok: true, bookings: normalized });
     } catch (err) {
       console.error("PUBLIC_MASTER_BOOKINGS_ERROR", err.message);
-      return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
+      return res
+        .status(500)
+        .json({ ok: false, error: "INTERNAL_ERROR" });
     }
   });
 
@@ -216,7 +316,9 @@ export function createPublicRouter(deps) {
       });
     } catch (err) {
       console.error("PUBLIC_MASTER_CLIENTS_ERROR", err.message);
-      return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
+      return res
+        .status(500)
+        .json({ ok: false, error: "INTERNAL_ERROR" });
     }
   });
 
