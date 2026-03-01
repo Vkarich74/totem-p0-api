@@ -2,6 +2,7 @@ import express from "express";
 
 import { confirmBooking } from "./confirmBooking.js";
 import { completeBooking } from "./completeBooking.js";
+import calendarRouter from "./calendar.js";
 
 /**
  * INTERNAL API (POSTPAID)
@@ -12,8 +13,12 @@ export function createInternalRouter(deps) {
 
   const r = express.Router();
 
+  // Booking lifecycle
   r.post("/bookings/:id/confirm", rlInternal, confirmBooking);
   r.post("/bookings/:id/complete", rlInternal, completeBooking);
+
+  // Calendar (master schedule source of truth)
+  r.use("/calendar", rlInternal, calendarRouter);
 
   return r;
 }
