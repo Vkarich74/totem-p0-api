@@ -8,6 +8,16 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 });
 
+function jsonStableStringify(obj) {
+  if (obj === null || obj === undefined) return "null";
+  if (typeof obj !== "object") return JSON.stringify(obj);
+  if (Array.isArray(obj)) return `[${obj.map(jsonStableStringify).join(",")}]`;
+  const keys = Object.keys(obj).sort();
+  return `{${keys
+    .map((k) => `${JSON.stringify(k)}:${jsonStableStringify(obj[k])}`)
+    .join(",")}}`;
+}
+
 function mustInternalAuth(req) {
   const required = String(process.env.INTERNAL_API_KEY || "").trim();
   const provided = String(req.headers["x-internal-key"] || "").trim();
@@ -36,10 +46,45 @@ export async function completeBooking(req, res) {
   if (!idempotencyKey)
     return res.status(400).json({ ok: false, error: "IDEMPOTENCY_KEY_REQUIRED" });
 
+  const rawBody = jsonStableStringify(req.body || {});
+  const requestHash = crypto.createHash("sha256").update(rawBody).digest("hex");
+
   const client = await pool.connect();
 
   try {
+    const existing = await client.query(
+      `SELECT request_hash, response_code, response_body
+         FROM public.api_idempotency_keys
+        WHERE idempotency_key = $1
+        LIMIT 1`,
+      [idempotencyKey]
+    );
+
+    if (existing.rows.length > 0) {
+      const row = existing.rows[0];
+
+      if (row.request_hash !== requestHash) {
+        return res
+          .status(409)
+          .json({ ok: false, error: "IDEMPOTENCY_KEY_CONFLICT" });
+      }
+
+      if (row.response_code && row.response_body) {
+        return res.status(row.response_code).json(row.response_body);
+      }
+
+      return res
+        .status(409)
+        .json({ ok: false, error: "IDEMPOTENCY_IN_PROGRESS" });
+    }
+
     await client.query("BEGIN");
+
+    await client.query(
+      `INSERT INTO public.api_idempotency_keys (idempotency_key, endpoint, request_hash)
+       VALUES ($1, $2, $3)`,
+      [idempotencyKey, "complete_booking", requestHash]
+    );
 
     const booking = await client.query(
       `SELECT id, status, price_snapshot
@@ -57,7 +102,7 @@ export async function completeBooking(req, res) {
     const row = booking.rows[0];
 
     if (row.status === "completed") {
-      await client.query("ROLLBACK");
+      await client.query("COMMIT");
       return res.status(200).json({ ok: true, status: "already_completed" });
     }
 
@@ -85,15 +130,24 @@ export async function completeBooking(req, res) {
       [bookingId]
     );
 
+    // 1️⃣ insert as pending
     const paymentInsert = await client.query(
       `INSERT INTO public.payments
        (booking_id, amount, provider, status, is_active)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING id`,
-      [bookingId, amount, "internal", "confirmed", true]
+      [bookingId, amount, "internal", "pending", true]
     );
 
     const paymentId = paymentInsert.rows[0].id;
+
+    // 2️⃣ update to confirmed (this triggers payout)
+    await client.query(
+      `UPDATE public.payments
+          SET status = 'confirmed'
+        WHERE id = $1`,
+      [paymentId]
+    );
 
     await client.query(
       `UPDATE public.bookings
