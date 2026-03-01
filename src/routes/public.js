@@ -14,7 +14,12 @@ export function createPublicRouter(deps) {
   const r = express.Router();
 
   // Create booking
-  r.post("/salons/:slug/bookings", rlBookingCreate, resolveTenant, publicCreateBooking);
+  r.post(
+    "/salons/:slug/bookings",
+    rlBookingCreate,
+    resolveTenant,
+    publicCreateBooking
+  );
 
   // Availability
   r.get(
@@ -23,6 +28,42 @@ export function createPublicRouter(deps) {
     resolveTenant,
     publicMasterAvailability
   );
+
+  /**
+   * SALON MASTERS LIST
+   */
+  r.get("/salons/:slug/masters", async (req, res) => {
+    try {
+      const { slug } = req.params;
+
+      const { rows } = await pool.query(
+        `
+        SELECT
+          m.id,
+          m.slug,
+          m.name,
+          m.active
+        FROM masters m
+        JOIN master_salon ms ON ms.master_id = m.id
+        JOIN salons s ON s.id = ms.salon_id
+        WHERE s.slug = $1
+        ORDER BY m.name ASC
+        `,
+        [slug]
+      );
+
+      return res.json({
+        ok: true,
+        masters: rows,
+      });
+    } catch (err) {
+      console.error("PUBLIC_SALON_MASTERS_ERROR", err.message);
+      return res.status(500).json({
+        ok: false,
+        error: "INTERNAL_ERROR",
+      });
+    }
+  });
 
   /**
    * MASTER PROFILE (READ)
@@ -110,9 +151,11 @@ export function createPublicRouter(deps) {
 
       const normalized = rows.map((row) => {
         let uiStatus = "confirmed";
-
         if (row.status === "completed") uiStatus = "completed";
-        if (row.status === "canceled" || row.status === "cancelled")
+        if (
+          row.status === "canceled" ||
+          row.status === "cancelled"
+        )
           uiStatus = "cancelled";
 
         return {
