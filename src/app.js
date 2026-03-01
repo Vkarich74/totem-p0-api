@@ -9,12 +9,10 @@ import crypto from "crypto";
 import { resolveTenant } from "./middleware/resolveTenant.js";
 import { rateLimit } from "./middleware/rateLimit.js";
 
-import { pool } from "./db.js";
 import { publicCreateBooking } from "./routes/publicCreateBooking.js";
 import { publicMasterAvailability } from "./routes/publicAvailability.js";
-import { expireReservedBookings } from "./jobs/expireReserved.js";
 import { confirmBooking } from "./routes/confirmBooking.js";
-import { createPaymentIntent, confirmPaymentIntent } from "./routes/paymentIntents.js";
+import { completeBooking } from "./routes/completeBooking.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -104,29 +102,20 @@ app.get(
   publicMasterAvailability
 );
 
-/* ================= INTERNAL ROUTES ================= */
+/* ================= INTERNAL ROUTES (POSTPAID) ================= */
 
 app.post("/internal/bookings/:id/confirm", rlInternal, confirmBooking);
+app.post("/internal/bookings/:id/complete", rlInternal, completeBooking);
 
-app.post(
-  "/internal/bookings/:id/payment-intent",
-  rlInternal,
-  createPaymentIntent
-);
+/* ================= PREPAID (FROZEN) =================
+   PaymentIntent endpoints intentionally NOT registered in POSTPAID model.
+   Code remains in src/routes/paymentIntents.js but is unreachable from HTTP.
+*/
 
-app.post(
-  "/internal/payment-intents/:intent_id/confirm",
-  rlInternal,
-  confirmPaymentIntent
-);
-
-/* ================= TTL ENGINE ================= */
-
-if (process.env.ENABLE_TTL === "true") {
-  setInterval(() => {
-    expireReservedBookings();
-  }, 60000);
-}
+/* ================= TTL (REMOVED) =================
+   TTL engine intentionally removed in POSTPAID model.
+   ENABLE_TTL env may still exist but has no effect now.
+*/
 
 /* ================= START ================= */
 
