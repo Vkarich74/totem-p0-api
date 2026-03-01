@@ -14,6 +14,7 @@ import { publicCreateBooking } from "./routes/publicCreateBooking.js";
 import { publicMasterAvailability } from "./routes/publicAvailability.js";
 import { expireReservedBookings } from "./jobs/expireReserved.js";
 import { confirmBooking } from "./routes/confirmBooking.js";
+import { createPaymentIntent, confirmPaymentIntent } from "./routes/paymentIntents.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -56,7 +57,7 @@ app.use((req, res, next) => {
 app.get("/", (req, res) => res.status(200).send("OK"));
 app.get("/health", (req, res) => res.status(200).json({ ok: true }));
 
-/* ================= RATE LIMIT (OLD SAFE VERSION) ================= */
+/* ================= RATE LIMIT ================= */
 
 function intEnv(name, fallback) {
   const v = Number(process.env[name]);
@@ -64,13 +65,6 @@ function intEnv(name, fallback) {
 }
 
 const RL_WINDOW_MS = intEnv("RATE_LIMIT_WINDOW_MS", 60000);
-
-const rlPublicRead = rateLimit({
-  windowMs: RL_WINDOW_MS,
-  max: intEnv("RATE_LIMIT_PUBLIC_READ_MAX", 120),
-  keyPrefix: "pub_read",
-  keyFn: (req) => `pub_read:${req.ip}:${req.params?.slug ?? "na"}`,
-});
 
 const rlAvailability = rateLimit({
   windowMs: RL_WINDOW_MS,
@@ -87,17 +81,21 @@ const rlBookingCreate = rateLimit({
   keyFn: (req) => `booking_create:${req.ip}:${req.params?.slug ?? "na"}`,
 });
 
-// Internal confirm should be rate-limited too (but not tenant-based).
-const rlInternalConfirm = rateLimit({
+const rlInternal = rateLimit({
   windowMs: RL_WINDOW_MS,
-  max: intEnv("RATE_LIMIT_INTERNAL_CONFIRM_MAX", 60),
-  keyPrefix: "internal_confirm",
-  keyFn: (req) => `internal_confirm:${req.ip}`,
+  max: intEnv("RATE_LIMIT_INTERNAL_MAX", 120),
+  keyPrefix: "internal",
+  keyFn: (req) => `internal:${req.ip}`,
 });
 
-/* ================= ROUTES ================= */
+/* ================= PUBLIC ROUTES ================= */
 
-app.post("/public/salons/:slug/bookings", rlBookingCreate, resolveTenant, publicCreateBooking);
+app.post(
+  "/public/salons/:slug/bookings",
+  rlBookingCreate,
+  resolveTenant,
+  publicCreateBooking
+);
 
 app.get(
   "/public/salons/:slug/masters/:master_id/availability",
@@ -106,17 +104,31 @@ app.get(
   publicMasterAvailability
 );
 
-// Stage 22.A — production-safe confirm gate (requires confirmed payment)
-// Secured with INTERNAL_API_KEY via x-internal-key header (see confirmBooking.js)
-app.post("/internal/bookings/:id/confirm", rlInternalConfirm, confirmBooking);
+/* ================= INTERNAL ROUTES ================= */
 
-/* ================= TTL ================= */
+app.post("/internal/bookings/:id/confirm", rlInternal, confirmBooking);
+
+app.post(
+  "/internal/bookings/:id/payment-intent",
+  rlInternal,
+  createPaymentIntent
+);
+
+app.post(
+  "/internal/payment-intents/:intent_id/confirm",
+  rlInternal,
+  confirmPaymentIntent
+);
+
+/* ================= TTL ENGINE ================= */
 
 if (process.env.ENABLE_TTL === "true") {
   setInterval(() => {
     expireReservedBookings();
   }, 60000);
 }
+
+/* ================= START ================= */
 
 const PORT = process.env.PORT || 8080;
 
