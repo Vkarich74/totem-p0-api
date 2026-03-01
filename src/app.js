@@ -6,14 +6,11 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
 
-import { pool } from "./db.js";
 import { resolveTenant } from "./middleware/resolveTenant.js";
 import { rateLimit } from "./middleware/rateLimit.js";
 
-import { publicCreateBooking } from "./routes/publicCreateBooking.js";
-import { publicMasterAvailability } from "./routes/publicAvailability.js";
-import { confirmBooking } from "./routes/confirmBooking.js";
-import { completeBooking } from "./routes/completeBooking.js";
+import { createPublicRouter } from "./routes/public.js";
+import { createInternalRouter } from "./routes/internal.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -87,116 +84,23 @@ const rlInternal = rateLimit({
   keyFn: (req) => `internal:${req.ip}`,
 });
 
-/* ================= PUBLIC ROUTES ================= */
+/* ================= ROUTERS ================= */
 
-app.post(
-  "/public/salons/:slug/bookings",
-  rlBookingCreate,
-  resolveTenant,
-  publicCreateBooking
+app.use(
+  "/public",
+  createPublicRouter({
+    resolveTenant,
+    rlAvailability,
+    rlBookingCreate,
+  })
 );
 
-app.get(
-  "/public/salons/:slug/masters/:master_id/availability",
-  rlAvailability,
-  resolveTenant,
-  publicMasterAvailability
+app.use(
+  "/internal",
+  createInternalRouter({
+    rlInternal,
+  })
 );
-
-/* ================= PUBLIC SALON RESOLVE ================= */
-
-app.get("/public/salons/:slug", resolveTenant, async (req, res) => {
-  try {
-    const { salon_id } = req.tenant;
-
-    const { rows } = await pool.query(
-      `SELECT id, slug, name, enabled, status
-       FROM salons
-       WHERE id = $1`,
-      [salon_id]
-    );
-
-    if (rows.length === 0) {
-      return res.status(404).json({
-        ok: false,
-        error: "SALON_NOT_FOUND",
-        request_id: req.request_id,
-      });
-    }
-
-    return res.json({
-      ok: true,
-      salon: rows[0],
-    });
-  } catch (err) {
-    console.error("PUBLIC_SALON_RESOLVE_ERROR", err.message);
-
-    return res.status(500).json({
-      ok: false,
-      error: "INTERNAL_ERROR",
-      request_id: req.request_id,
-    });
-  }
-});
-
-/* ================= PUBLIC SALON METRICS ================= */
-
-app.get("/public/salons/:slug/metrics", resolveTenant, async (req, res) => {
-  try {
-    const { salon_id } = req.tenant;
-
-    const bookingsCountRes = await pool.query(
-      `SELECT COUNT(*)::int AS bookings_count
-       FROM bookings
-       WHERE salon_id = $1`,
-      [salon_id]
-    );
-
-    const bookings_count = bookingsCountRes.rows?.[0]?.bookings_count ?? 0;
-
-    let revenue_total = 0;
-
-    try {
-      const revenueRes = await pool.query(
-        `SELECT COALESCE(SUM(amount), 0)::numeric AS revenue_total
-         FROM bookings
-         WHERE salon_id = $1`,
-        [salon_id]
-      );
-      revenue_total = Number(revenueRes.rows?.[0]?.revenue_total ?? 0);
-      if (Number.isNaN(revenue_total)) revenue_total = 0;
-    } catch (_e) {
-      revenue_total = 0;
-    }
-
-    const avg_check =
-      bookings_count > 0
-        ? Math.round((revenue_total / bookings_count) * 100) / 100
-        : 0;
-
-    return res.json({
-      ok: true,
-      metrics: {
-        bookings_count,
-        revenue_total,
-        avg_check,
-      },
-    });
-  } catch (err) {
-    console.error("PUBLIC_SALON_METRICS_ERROR", err.message);
-
-    return res.status(500).json({
-      ok: false,
-      error: "INTERNAL_ERROR",
-      request_id: req.request_id,
-    });
-  }
-});
-
-/* ================= INTERNAL ROUTES (POSTPAID) ================= */
-
-app.post("/internal/bookings/:id/confirm", rlInternal, confirmBooking);
-app.post("/internal/bookings/:id/complete", rlInternal, completeBooking);
 
 /* ================= START ================= */
 
