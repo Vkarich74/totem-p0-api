@@ -39,9 +39,6 @@ export async function confirmBooking(req, res) {
 
   const bookingId = String(req.params.id || "").trim();
   const idempotencyKey = String(req.headers["idempotency-key"] || "").trim();
-  const actorType =
-    String(req.body?.actor_type ? req.body.actor_type : "system").trim() ||
-    "system";
 
   if (!bookingId)
     return res.status(400).json({ ok: false, error: "BOOKING_ID_REQUIRED" });
@@ -88,12 +85,6 @@ export async function confirmBooking(req, res) {
       [idempotencyKey, "confirm_booking", requestHash]
     );
 
-    // 🔥 FIX: SET LOCAL без bind-параметров
-    await client.query(
-      `SELECT set_config('app.actor_type', $1, true)`,
-      [actorType]
-    );
-
     const booking = await client.query(
       `SELECT id, status
          FROM public.bookings
@@ -103,79 +94,24 @@ export async function confirmBooking(req, res) {
     );
 
     if (booking.rows.length === 0) {
-      const responseBody = { ok: false, error: "BOOKING_NOT_FOUND" };
-
-      await client.query(
-        `UPDATE public.api_idempotency_keys
-            SET response_code = 404,
-                response_body = $2
-          WHERE idempotency_key = $1`,
-        [idempotencyKey, responseBody]
-      );
-
-      await client.query("COMMIT");
-      return res.status(404).json(responseBody);
+      await client.query("ROLLBACK");
+      return res.status(404).json({ ok: false, error: "BOOKING_NOT_FOUND" });
     }
 
     const currentStatus = String(booking.rows[0].status || "").trim();
 
     if (currentStatus === "confirmed") {
-      const responseBody = { ok: true, status: "already_confirmed" };
-
-      await client.query(
-        `UPDATE public.api_idempotency_keys
-            SET response_code = 200,
-                response_body = $2
-          WHERE idempotency_key = $1`,
-        [idempotencyKey, responseBody]
-      );
-
       await client.query("COMMIT");
-      return res.status(200).json(responseBody);
+      return res.status(200).json({ ok: true, status: "already_confirmed" });
     }
 
     if (currentStatus !== "reserved") {
-      const responseBody = {
+      await client.query("ROLLBACK");
+      return res.status(409).json({
         ok: false,
         error: "INVALID_STATUS",
         status: currentStatus,
-      };
-
-      await client.query(
-        `UPDATE public.api_idempotency_keys
-            SET response_code = 409,
-                response_body = $2
-          WHERE idempotency_key = $1`,
-        [idempotencyKey, responseBody]
-      );
-
-      await client.query("COMMIT");
-      return res.status(409).json(responseBody);
-    }
-
-    const payCheck = await client.query(
-      `SELECT EXISTS(
-          SELECT 1
-            FROM public.payments
-           WHERE booking_id = $1
-             AND status = 'confirmed'
-        ) AS has_confirmed`,
-      [bookingId]
-    );
-
-    if (!payCheck.rows[0].has_confirmed) {
-      const responseBody = { ok: false, error: "PAYMENT_REQUIRED" };
-
-      await client.query(
-        `UPDATE public.api_idempotency_keys
-            SET response_code = 409,
-                response_body = $2
-          WHERE idempotency_key = $1`,
-        [idempotencyKey, responseBody]
-      );
-
-      await client.query("COMMIT");
-      return res.status(409).json(responseBody);
+      });
     }
 
     await client.query(
@@ -186,25 +122,17 @@ export async function confirmBooking(req, res) {
       [bookingId]
     );
 
-    const responseBody = { ok: true, status: "confirmed" };
-
-    await client.query(
-      `UPDATE public.api_idempotency_keys
-          SET response_code = 200,
-              response_body = $2
-        WHERE idempotency_key = $1`,
-      [idempotencyKey, responseBody]
-    );
-
     await client.query("COMMIT");
-    return res.status(200).json(responseBody);
+
+    return res.status(200).json({ ok: true, status: "confirmed" });
+
   } catch (err) {
-    try {
-      await client.query("ROLLBACK");
-    } catch (_) {}
-    return res
-      .status(500)
-      .json({ ok: false, error: "INTERNAL_ERROR", details: err.message });
+    try { await client.query("ROLLBACK"); } catch (_) {}
+    return res.status(500).json({
+      ok: false,
+      error: "INTERNAL_ERROR",
+      details: err.message,
+    });
   } finally {
     client.release();
   }
