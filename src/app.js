@@ -13,6 +13,7 @@ import { pool } from "./db.js";
 import { publicCreateBooking } from "./routes/publicCreateBooking.js";
 import { publicMasterAvailability } from "./routes/publicAvailability.js";
 import { expireReservedBookings } from "./jobs/expireReserved.js";
+import { confirmBooking } from "./routes/confirmBooking.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -24,17 +25,19 @@ const allowedOrigins = [
   "https://www.totemv.com",
   "https://totemv.com",
   "https://app.totemv.com",
-  "http://localhost:5173"
+  "http://localhost:5173",
 ];
 
-app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error("Not allowed by CORS"));
-  },
-  credentials: true
-}));
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error("Not allowed by CORS"));
+    },
+    credentials: true,
+  })
+);
 
 app.use(express.json());
 app.use(cookieParser());
@@ -66,7 +69,7 @@ const rlPublicRead = rateLimit({
   windowMs: RL_WINDOW_MS,
   max: intEnv("RATE_LIMIT_PUBLIC_READ_MAX", 120),
   keyPrefix: "pub_read",
-  keyFn: (req) => `pub_read:${req.ip}:${req.params?.slug ?? "na"}`
+  keyFn: (req) => `pub_read:${req.ip}:${req.params?.slug ?? "na"}`,
 });
 
 const rlAvailability = rateLimit({
@@ -74,24 +77,27 @@ const rlAvailability = rateLimit({
   max: intEnv("RATE_LIMIT_AVAILABILITY_MAX", 60),
   keyPrefix: "availability",
   keyFn: (req) =>
-    `availability:${req.ip}:${req.params?.slug ?? "na"}:${req.params?.master_id ?? "na"}`
+    `availability:${req.ip}:${req.params?.slug ?? "na"}:${req.params?.master_id ?? "na"}`,
 });
 
 const rlBookingCreate = rateLimit({
   windowMs: RL_WINDOW_MS,
   max: intEnv("RATE_LIMIT_BOOKING_CREATE_MAX", 20),
   keyPrefix: "booking_create",
-  keyFn: (req) => `booking_create:${req.ip}:${req.params?.slug ?? "na"}`
+  keyFn: (req) => `booking_create:${req.ip}:${req.params?.slug ?? "na"}`,
+});
+
+// Internal confirm should be rate-limited too (but not tenant-based).
+const rlInternalConfirm = rateLimit({
+  windowMs: RL_WINDOW_MS,
+  max: intEnv("RATE_LIMIT_INTERNAL_CONFIRM_MAX", 60),
+  keyPrefix: "internal_confirm",
+  keyFn: (req) => `internal_confirm:${req.ip}`,
 });
 
 /* ================= ROUTES ================= */
 
-app.post(
-  "/public/salons/:slug/bookings",
-  rlBookingCreate,
-  resolveTenant,
-  publicCreateBooking
-);
+app.post("/public/salons/:slug/bookings", rlBookingCreate, resolveTenant, publicCreateBooking);
 
 app.get(
   "/public/salons/:slug/masters/:master_id/availability",
@@ -99,6 +105,10 @@ app.get(
   resolveTenant,
   publicMasterAvailability
 );
+
+// Stage 22.A — production-safe confirm gate (requires confirmed payment)
+// Secured with INTERNAL_API_KEY via x-internal-key header (see confirmBooking.js)
+app.post("/internal/bookings/:id/confirm", rlInternalConfirm, confirmBooking);
 
 /* ================= TTL ================= */
 
