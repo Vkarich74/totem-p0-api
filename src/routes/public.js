@@ -14,8 +14,10 @@ export function createPublicRouter(deps) {
 
   const r = express.Router();
 
+  // Create booking
   r.post("/salons/:slug/bookings", rlBookingCreate, resolveTenant, publicCreateBooking);
 
+  // Availability
   r.get(
     "/salons/:slug/masters/:master_id/availability",
     rlAvailability,
@@ -23,6 +25,9 @@ export function createPublicRouter(deps) {
     publicMasterAvailability
   );
 
+  /**
+   * MASTER BOOKINGS
+   */
   r.get("/masters/:master_id/bookings", async (req, res) => {
     try {
       const { master_id } = req.params;
@@ -93,6 +98,53 @@ export function createPublicRouter(deps) {
     }
   });
 
+  /**
+   * MASTER CLIENTS (Mini CRM)
+   */
+  r.get("/masters/:master_id/clients", async (req, res) => {
+    try {
+      const { master_id } = req.params;
+
+      const { rows } = await pool.query(
+        `
+        SELECT
+          c.id,
+          COALESCE(c.name, 'Клиент') AS name,
+          COALESCE(c.phone, '') AS phone,
+          COUNT(b.id)::int AS visits_count,
+          MAX(b.start_at) AS last_visit,
+          COALESCE(SUM(b.price_snapshot),0)::numeric AS total_spent
+        FROM clients c
+        LEFT JOIN bookings b ON b.client_id = c.id
+        WHERE b.master_id = $1
+        GROUP BY c.id
+        ORDER BY last_visit DESC NULLS LAST
+        `,
+        [master_id]
+      );
+
+      const normalized = rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        phone: row.phone,
+        visits_count: row.visits_count,
+        last_visit: row.last_visit,
+        total_spent: Number(row.total_spent) || 0,
+      }));
+
+      return res.json({
+        ok: true,
+        clients: normalized,
+      });
+    } catch (err) {
+      console.error("PUBLIC_MASTER_CLIENTS_ERROR", err.message);
+      return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
+    }
+  });
+
+  /**
+   * Salon resolve
+   */
   r.get("/salons/:slug", resolveTenant, async (req, res) => {
     try {
       const { salon_id } = req.tenant;
@@ -108,7 +160,6 @@ export function createPublicRouter(deps) {
         return res.status(404).json({
           ok: false,
           error: "SALON_NOT_FOUND",
-          request_id: req.request_id,
         });
       }
 
@@ -118,11 +169,13 @@ export function createPublicRouter(deps) {
       return res.status(500).json({
         ok: false,
         error: "INTERNAL_ERROR",
-        request_id: req.request_id,
       });
     }
   });
 
+  /**
+   * Salon metrics
+   */
   r.get("/salons/:slug/metrics", resolveTenant, async (req, res) => {
     try {
       const { salon_id } = req.tenant;
@@ -136,20 +189,14 @@ export function createPublicRouter(deps) {
 
       const bookings_count = bookingsCountRes.rows?.[0]?.bookings_count ?? 0;
 
-      let revenue_total = 0;
+      const revenueRes = await pool.query(
+        `SELECT COALESCE(SUM(price_snapshot), 0)::numeric AS revenue_total
+         FROM bookings
+         WHERE salon_id = $1`,
+        [salon_id]
+      );
 
-      try {
-        const revenueRes = await pool.query(
-          `SELECT COALESCE(SUM(price_snapshot), 0)::numeric AS revenue_total
-           FROM bookings
-           WHERE salon_id = $1`,
-          [salon_id]
-        );
-        revenue_total = Number(revenueRes.rows?.[0]?.revenue_total ?? 0);
-        if (Number.isNaN(revenue_total)) revenue_total = 0;
-      } catch {
-        revenue_total = 0;
-      }
+      const revenue_total = Number(revenueRes.rows?.[0]?.revenue_total ?? 0);
 
       const avg_check =
         bookings_count > 0
@@ -165,7 +212,6 @@ export function createPublicRouter(deps) {
       return res.status(500).json({
         ok: false,
         error: "INTERNAL_ERROR",
-        request_id: req.request_id,
       });
     }
   });
