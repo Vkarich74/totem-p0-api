@@ -25,6 +25,95 @@ export function createPublicRouter(deps) {
     publicMasterAvailability
   );
 
+  /**
+   * MASTER BOOKINGS (READ LAYER)
+   * GET /public/masters/:master_id/bookings?status=confirmed
+   */
+  r.get("/masters/:master_id/bookings", async (req, res) => {
+    try {
+      const { master_id } = req.params;
+      const { status } = req.query;
+
+      if (!status) {
+        return res.status(400).json({
+          ok: false,
+          error: "STATUS_REQUIRED",
+        });
+      }
+
+      // Normalize UI status → DB status
+      let dbStatuses = [];
+
+      switch (status) {
+        case "confirmed":
+          dbStatuses = ["reserved", "confirmed"];
+          break;
+        case "completed":
+          dbStatuses = ["completed"];
+          break;
+        case "cancelled":
+          dbStatuses = ["canceled", "cancelled"];
+          break;
+        default:
+          return res.status(400).json({
+            ok: false,
+            error: "INVALID_STATUS",
+          });
+      }
+
+      const { rows } = await pool.query(
+        `
+        SELECT
+          b.id,
+          COALESCE(c.name, 'Unknown') AS client_name,
+          COALESCE(s.name, 'Service') AS service_name,
+          b.start_at,
+          b.end_at,
+          b.status,
+          b.price_snapshot
+        FROM bookings b
+        LEFT JOIN clients c ON c.id = b.client_id
+        LEFT JOIN services_v2 s ON s.id = b.service_id
+        WHERE b.master_id = $1
+          AND b.status = ANY($2)
+        ORDER BY b.start_at ASC
+        `,
+        [master_id, dbStatuses]
+      );
+
+      // Map DB status → UI status
+      const normalized = rows.map((row) => {
+        let uiStatus = "confirmed";
+
+        if (row.status === "completed") uiStatus = "completed";
+        if (row.status === "canceled" || row.status === "cancelled")
+          uiStatus = "cancelled";
+
+        return {
+          id: row.id,
+          client_name: row.client_name,
+          service_name: row.service_name,
+          datetime_start: row.start_at,
+          datetime_end: row.end_at,
+          status: uiStatus,
+          price: row.price_snapshot,
+        };
+      });
+
+      return res.json({
+        ok: true,
+        bookings: normalized,
+      });
+    } catch (err) {
+      console.error("PUBLIC_MASTER_BOOKINGS_ERROR", err.message);
+
+      return res.status(500).json({
+        ok: false,
+        error: "INTERNAL_ERROR",
+      });
+    }
+  });
+
   // Salon resolve
   r.get("/salons/:slug", resolveTenant, async (req, res) => {
     try {
@@ -78,7 +167,7 @@ export function createPublicRouter(deps) {
 
       try {
         const revenueRes = await pool.query(
-          `SELECT COALESCE(SUM(amount), 0)::numeric AS revenue_total
+          `SELECT COALESCE(SUM(price_snapshot), 0)::numeric AS revenue_total
            FROM bookings
            WHERE salon_id = $1`,
           [salon_id]
