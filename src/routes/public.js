@@ -30,6 +30,37 @@ export function createPublicRouter(deps) {
   );
 
   /**
+   * SALON PROFILE (READ)
+   */
+  r.get("/salons/:slug", resolveTenant, async (req, res) => {
+    try {
+      const { salon_id } = req.tenant;
+
+      const { rows } = await pool.query(
+        `
+        SELECT id, slug, name
+        FROM salons
+        WHERE id = $1
+        `,
+        [salon_id]
+      );
+
+      if (!rows.length) {
+        return res
+          .status(404)
+          .json({ ok: false, error: "SALON_NOT_FOUND" });
+      }
+
+      return res.json({ ok: true, salon: rows[0] });
+    } catch (err) {
+      console.error("PUBLIC_SALON_PROFILE_ERROR", err.message);
+      return res
+        .status(500)
+        .json({ ok: false, error: "INTERNAL_ERROR" });
+    }
+  });
+
+  /**
    * SALON METRICS
    */
   r.get("/salons/:slug/metrics", resolveTenant, async (req, res) => {
@@ -201,37 +232,6 @@ export function createPublicRouter(deps) {
       return res.json({ ok: true, masters: rows });
     } catch (err) {
       console.error("PUBLIC_SALON_MASTERS_ERROR", err.message);
-      return res
-        .status(500)
-        .json({ ok: false, error: "INTERNAL_ERROR" });
-    }
-  });
-
-  /**
-   * MASTER PROFILE
-   */
-  r.get("/masters/:master_id/profile", async (req, res) => {
-    try {
-      const { master_id } = req.params;
-
-      const { rows } = await pool.query(
-        `
-        SELECT id, slug, name, active, created_at
-        FROM masters
-        WHERE id = $1
-        `,
-        [master_id]
-      );
-
-      if (!rows.length) {
-        return res
-          .status(404)
-          .json({ ok: false, error: "MASTER_NOT_FOUND" });
-      }
-
-      return res.json({ ok: true, profile: rows[0] });
-    } catch (err) {
-      console.error("PUBLIC_MASTER_PROFILE_ERROR", err.message);
       return res
         .status(500)
         .json({ ok: false, error: "INTERNAL_ERROR" });
