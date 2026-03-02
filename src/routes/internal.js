@@ -6,7 +6,7 @@ import { completeBooking } from "./completeBooking.js";
 import calendarRouter from "./calendar.js";
 
 /**
- * INTERNAL API (POSTPAID / AUTH REQUIRED)
+ * INTERNAL API (AUTH REQUIRED)
  */
 
 export function createInternalRouter(deps) {
@@ -30,10 +30,9 @@ export function createInternalRouter(deps) {
       const { name } = req.body;
 
       if (!name || name.trim().length < 2) {
-        return res.status(400).json({
-          ok: false,
-          error: "INVALID_NAME",
-        });
+        return res
+          .status(400)
+          .json({ ok: false, error: "INVALID_NAME" });
       }
 
       const { rowCount } = await pool.query(
@@ -45,22 +44,62 @@ export function createInternalRouter(deps) {
         [name.trim(), master_id]
       );
 
-      if (rowCount === 0) {
-        return res.status(404).json({
-          ok: false,
-          error: "MASTER_NOT_FOUND",
-        });
+      if (!rowCount) {
+        return res
+          .status(404)
+          .json({ ok: false, error: "MASTER_NOT_FOUND" });
       }
 
-      return res.json({
-        ok: true,
-      });
+      return res.json({ ok: true });
     } catch (err) {
-      console.error("INTERNAL_MASTER_UPDATE_ERROR", err.message);
-      return res.status(500).json({
-        ok: false,
-        error: "INTERNAL_ERROR",
-      });
+      console.error(
+        "INTERNAL_MASTER_UPDATE_ERROR",
+        err.message
+      );
+      return res
+        .status(500)
+        .json({ ok: false, error: "INTERNAL_ERROR" });
+    }
+  });
+
+  /**
+   * UPDATE SALON PROFILE
+   */
+  r.put("/salons/:salon_id", rlInternal, async (req, res) => {
+    try {
+      const { salon_id } = req.params;
+      const { name } = req.body;
+
+      if (!name || name.trim().length < 2) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "INVALID_NAME" });
+      }
+
+      const { rowCount } = await pool.query(
+        `
+        UPDATE salons
+        SET name = $1
+        WHERE id = $2
+        `,
+        [name.trim(), salon_id]
+      );
+
+      if (!rowCount) {
+        return res
+          .status(404)
+          .json({ ok: false, error: "SALON_NOT_FOUND" });
+      }
+
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error(
+        "INTERNAL_SALON_UPDATE_ERROR",
+        err.message
+      );
+      return res
+        .status(500)
+        .json({ ok: false, error: "INTERNAL_ERROR" });
     }
   });
 
