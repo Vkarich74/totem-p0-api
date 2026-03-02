@@ -1,5 +1,6 @@
 import express from "express";
 import { pool } from "../db.js";
+import crypto from "crypto";
 
 import { confirmBooking } from "./confirmBooking.js";
 import { completeBooking } from "./completeBooking.js";
@@ -17,6 +18,100 @@ export function createInternalRouter(deps) {
   // Booking lifecycle
   r.post("/bookings/:id/confirm", rlInternal, confirmBooking);
   r.post("/bookings/:id/complete", rlInternal, completeBooking);
+
+  // ➕ Cancel booking (добавлено безопасно)
+  r.post("/bookings/:id/cancel", rlInternal, async (req, res) => {
+    const client = await pool.connect();
+
+    try {
+      const bookingId = Number(req.params.id);
+      const idempotencyKey = req.header("Idempotency-Key");
+
+      if (!bookingId) {
+        return res.status(400).json({ error: "Invalid booking id" });
+      }
+
+      if (!idempotencyKey) {
+        return res.status(400).json({ error: "Missing Idempotency-Key header" });
+      }
+
+      const requestHash = crypto
+        .createHash("sha256")
+        .update(JSON.stringify({ bookingId }))
+        .digest("hex");
+
+      await client.query("BEGIN");
+
+      const existingKey = await client.query(
+        `SELECT response_code, response_body
+         FROM public.api_idempotency_keys
+         WHERE idempotency_key = $1`,
+        [idempotencyKey]
+      );
+
+      if (existingKey.rowCount > 0) {
+        await client.query("ROLLBACK");
+        return res
+          .status(existingKey.rows[0].response_code)
+          .json(existingKey.rows[0].response_body);
+      }
+
+      const bookingResult = await client.query(
+        `SELECT status FROM public.bookings
+         WHERE id = $1
+         FOR UPDATE`,
+        [bookingId]
+      );
+
+      if (bookingResult.rowCount === 0) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "Booking not found" });
+      }
+
+      if (bookingResult.rows[0].status === "canceled") {
+        await client.query("COMMIT");
+        return res.json({
+          success: true,
+          booking_id: bookingId,
+          status: "canceled",
+        });
+      }
+
+      await client.query(
+        `UPDATE public.bookings
+         SET status = 'canceled'
+         WHERE id = $1`,
+        [bookingId]
+      );
+
+      await client.query(
+        `INSERT INTO public.api_idempotency_keys
+         (idempotency_key, endpoint, request_hash, response_code, response_body)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          idempotencyKey,
+          "cancel_booking",
+          requestHash,
+          200,
+          { success: true, booking_id: bookingId, status: "canceled" },
+        ]
+      );
+
+      await client.query("COMMIT");
+
+      return res.json({
+        success: true,
+        booking_id: bookingId,
+        status: "canceled",
+      });
+
+    } catch (err) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: err.message });
+    } finally {
+      client.release();
+    }
+  });
 
   // Calendar
   r.use("/calendar", rlInternal, calendarRouter);
