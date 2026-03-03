@@ -29,6 +29,7 @@ export function createInternalRouter() {
 
   });
 
+
   // ===============================
   // UPDATE MASTER PROFILE
   // ===============================
@@ -53,35 +54,94 @@ export function createInternalRouter() {
 
   });
 
+
   // ===============================
-  // CREATE MASTER
+  // CREATE MASTER + LINK TO SALON
   // ===============================
 
   r.post("/masters/create", async (req, res) => {
 
-    const { name } = req.body;
+    const { name, salon_slug } = req.body;
 
-    if (!name) {
-      return res.status(400).json({ error: "NAME_REQUIRED" });
+    if (!name || !salon_slug) {
+      return res.status(400).json({
+        error: "NAME_AND_SALON_REQUIRED"
+      });
     }
 
-    const result = await pool.query(`
-      INSERT INTO masters (
-        name,
-        active,
-        created_at,
-        updated_at
-      )
-      VALUES ($1,true,NOW(),NOW())
-      RETURNING id,name
-    `, [name]);
+    const client = await pool.connect();
 
-    res.json({
-      ok: true,
-      master: result.rows[0]
-    });
+    try {
+
+      await client.query("BEGIN");
+
+      const salon = await client.query(
+        `SELECT id FROM salons WHERE slug = $1 LIMIT 1`,
+        [salon_slug]
+      );
+
+      if (!salon.rows.length) {
+
+        await client.query("ROLLBACK");
+
+        return res.status(404).json({
+          error: "SALON_NOT_FOUND"
+        });
+
+      }
+
+      const master = await client.query(`
+        INSERT INTO masters (
+          name,
+          active,
+          created_at,
+          updated_at
+        )
+        VALUES ($1,true,NOW(),NOW())
+        RETURNING id,name
+      `, [name]);
+
+      const masterId = master.rows[0].id;
+      const salonId = salon.rows[0].id;
+
+      await client.query(`
+        INSERT INTO master_salon (
+          master_id,
+          salon_id,
+          status,
+          activated_at,
+          created_at,
+          updated_at
+        )
+        VALUES ($1,$2,'active',NOW(),NOW(),NOW())
+      `, [masterId, salonId]);
+
+      await client.query("COMMIT");
+
+      res.json({
+        ok: true,
+        master: master.rows[0]
+      });
+
+    } catch (err) {
+
+      await client.query("ROLLBACK");
+
+      console.error("CREATE_MASTER_ERROR", err);
+
+      res.status(500).json({
+        ok: false,
+        error: "CREATE_MASTER_FAILED"
+      });
+
+    } finally {
+
+      client.release();
+
+    }
 
   });
+
 
   // ===============================
   // FIRE MASTER
@@ -105,6 +165,7 @@ export function createInternalRouter() {
 
   });
 
+
   // ===============================
   // ACTIVATE MASTER
   // ===============================
@@ -127,6 +188,7 @@ export function createInternalRouter() {
     res.json({ ok:true });
 
   });
+
 
   return r;
 
