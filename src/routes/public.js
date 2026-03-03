@@ -3,6 +3,7 @@ import { pool } from "../db.js";
 
 import { publicCreateBooking } from "./publicCreateBooking.js";
 import { publicMasterAvailability } from "./publicAvailability.js";
+import { publicLifecycle } from "./publicLifecycle.js";
 
 /**
  * PUBLIC API LAYER
@@ -13,7 +14,9 @@ export function createPublicRouter(deps) {
 
   const r = express.Router();
 
-  // Create booking
+  /**
+   * CREATE BOOKING
+   */
   r.post(
     "/salons/:slug/bookings",
     rlBookingCreate,
@@ -21,7 +24,18 @@ export function createPublicRouter(deps) {
     publicCreateBooking
   );
 
-  // Availability
+  /**
+   * BOOKING LIFECYCLE (PUBLIC)
+   */
+  r.post(
+    "/salons/:slug/bookings/:id/lifecycle",
+    resolveTenant,
+    publicLifecycle
+  );
+
+  /**
+   * AVAILABILITY
+   */
   r.get(
     "/salons/:slug/masters/:master_id/availability",
     rlAvailability,
@@ -30,7 +44,7 @@ export function createPublicRouter(deps) {
   );
 
   /**
-   * SALON PROFILE (READ)
+   * SALON PROFILE
    */
   r.get("/salons/:slug", resolveTenant, async (req, res) => {
     try {
@@ -90,9 +104,7 @@ export function createPublicRouter(deps) {
 
       const avg_check =
         bookings_count > 0
-          ? Math.round(
-              (revenue_total / bookings_count) * 100
-            ) / 100
+          ? Math.round((revenue_total / bookings_count) * 100) / 100
           : 0;
 
       return res.json({
