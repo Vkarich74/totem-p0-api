@@ -107,7 +107,6 @@ export function createInternalRouter(deps) {
         booking_id: bookingId,
         status: "canceled",
       });
-
     } catch (err) {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: err.message });
@@ -117,7 +116,7 @@ export function createInternalRouter(deps) {
   });
 
   // ===============================
-  // OWNER MASTERS LIST (NEW)
+  // OWNER MASTERS LIST
   // ===============================
 
   r.get("/salons/:slug/masters", rlInternal, async (req, res) => {
@@ -166,18 +165,7 @@ export function createInternalRouter(deps) {
         [salonId]
       );
 
-      return res.json(
-        rows.map((r) => ({
-          id: r.id,
-          master_slug: r.slug,
-          name: r.name,
-          active: r.active,
-          status: r.status,
-          activated_at: r.activated_at,
-          fired_at: r.fired_at,
-        }))
-      );
-
+      return res.json(rows);
     } catch (err) {
       console.error("INTERNAL_OWNER_MASTERS_ERROR", err.message);
       return res.status(500).json({ error: "INTERNAL_ERROR" });
@@ -187,66 +175,172 @@ export function createInternalRouter(deps) {
   });
 
   // ===============================
-  // PROFILE UPDATES
+  // MASTER INVITE
+  // ===============================
+
+  r.post("/salons/:slug/masters/invite", rlInternal, async (req, res) => {
+    const { slug } = req.params;
+    const { master_id } = req.body;
+
+    const masterId = Number(master_id);
+
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      const salonResult = await client.query(
+        `SELECT id FROM salons WHERE slug = $1 LIMIT 1`,
+        [slug]
+      );
+
+      if (!salonResult.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "SALON_NOT_FOUND" });
+      }
+
+      const salonId = salonResult.rows[0].id;
+
+      await client.query(
+        `
+        INSERT INTO master_salon (
+          salon_id,
+          master_id,
+          status,
+          invited_at,
+          created_at,
+          updated_at
+        )
+        VALUES ($1, $2, 'pending', NOW(), NOW(), NOW())
+        `,
+        [salonId, masterId]
+      );
+
+      await client.query("COMMIT");
+
+      return res.json({
+        ok: true,
+        status: "pending",
+      });
+    } catch (err) {
+      await client.query("ROLLBACK");
+      console.error("MASTER_INVITE_ERROR", err.message);
+      return res.status(500).json({ ok: false });
+    } finally {
+      client.release();
+    }
+  });
+
+  // ===============================
+  // MASTER ACTIVATE
+  // ===============================
+
+  r.post("/salons/:slug/masters/:master_id/activate", rlInternal, async (req, res) => {
+    const { slug, master_id } = req.params;
+
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      const salon = await client.query(
+        `SELECT id FROM salons WHERE slug = $1`,
+        [slug]
+      );
+
+      const salonId = salon.rows[0].id;
+
+      await client.query(
+        `
+        UPDATE master_salon
+        SET status='active',
+        activated_at=NOW(),
+        fired_at=NULL
+        WHERE salon_id=$1 AND master_id=$2
+        `,
+        [salonId, master_id]
+      );
+
+      await client.query("COMMIT");
+
+      return res.json({
+        ok: true,
+        status: "active",
+      });
+    } catch (err) {
+      await client.query("ROLLBACK");
+      return res.status(500).json({ ok: false });
+    } finally {
+      client.release();
+    }
+  });
+
+  // ===============================
+  // MASTER FIRE
+  // ===============================
+
+  r.post("/salons/:slug/masters/:master_id/fire", rlInternal, async (req, res) => {
+    const { slug, master_id } = req.params;
+
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      const salon = await client.query(
+        `SELECT id FROM salons WHERE slug=$1`,
+        [slug]
+      );
+
+      const salonId = salon.rows[0].id;
+
+      await client.query(
+        `
+        UPDATE master_salon
+        SET status='fired',
+        fired_at=NOW()
+        WHERE salon_id=$1 AND master_id=$2
+        `,
+        [salonId, master_id]
+      );
+
+      await client.query("COMMIT");
+
+      return res.json({
+        ok: true,
+        status: "fired",
+      });
+    } catch (err) {
+      await client.query("ROLLBACK");
+      return res.status(500).json({ ok: false });
+    } finally {
+      client.release();
+    }
+  });
+
+  // ===============================
+  // PROFILE UPDATE
   // ===============================
 
   r.put("/masters/:master_id/profile", rlInternal, async (req, res) => {
+    const { master_id } = req.params;
+    const { name } = req.body;
+
     try {
-      const { master_id } = req.params;
-      const { name } = req.body;
-
-      if (!name || name.trim().length < 2) {
-        return res.status(400).json({ ok: false, error: "INVALID_NAME" });
-      }
-
-      const { rowCount } = await pool.query(
-        `UPDATE masters
-         SET name = $1
-         WHERE id = $2`,
-        [name.trim(), master_id]
+      await pool.query(
+        `
+        UPDATE masters
+        SET name=$1
+        WHERE id=$2
+        `,
+        [name, master_id]
       );
 
-      if (!rowCount) {
-        return res.status(404).json({ ok: false, error: "MASTER_NOT_FOUND" });
-      }
-
       return res.json({ ok: true });
-
     } catch (err) {
-      console.error("INTERNAL_MASTER_UPDATE_ERROR", err.message);
-      return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
+      return res.status(500).json({ ok: false });
     }
   });
-
-  r.put("/salons/:salon_id", rlInternal, async (req, res) => {
-    try {
-      const { salon_id } = req.params;
-      const { name } = req.body;
-
-      if (!name || name.trim().length < 2) {
-        return res.status(400).json({ ok: false, error: "INVALID_NAME" });
-      }
-
-      const { rowCount } = await pool.query(
-        `UPDATE salons
-         SET name = $1
-         WHERE id = $2`,
-        [name.trim(), salon_id]
-      );
-
-      if (!rowCount) {
-        return res.status(404).json({ ok: false, error: "SALON_NOT_FOUND" });
-      }
-
-      return res.json({ ok: true });
-
-    } catch (err) {
-      console.error("INTERNAL_SALON_UPDATE_ERROR", err.message);
-      return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
-    }
-  });
-
-  // ===============================
 
   r.use("/calendar", rlInternal, calendarRouter);
 
