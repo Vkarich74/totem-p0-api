@@ -1,6 +1,5 @@
 import express from "express";
 import { pool } from "../db.js";
-import { rlInternal } from "../middleware/rateLimit.js";
 
 export function createInternalRouter() {
 
@@ -10,7 +9,7 @@ export function createInternalRouter() {
   // GET MASTERS OF SALON
   // ===============================
 
-  r.get("/salons/:slug/masters", rlInternal, async (req, res) => {
+  r.get("/salons/:slug/masters", async (req, res) => {
 
     const { slug } = req.params;
 
@@ -34,7 +33,7 @@ export function createInternalRouter() {
   // UPDATE MASTER PROFILE
   // ===============================
 
-  r.put("/masters/:id/profile", rlInternal, async (req, res) => {
+  r.put("/masters/:id/profile", async (req, res) => {
 
     const { id } = req.params;
     const { name } = req.body;
@@ -58,7 +57,7 @@ export function createInternalRouter() {
   // CREATE MASTER
   // ===============================
 
-  r.post("/masters/create", rlInternal, async (req, res) => {
+  r.post("/masters/create", async (req, res) => {
 
     const { name } = req.body;
 
@@ -88,7 +87,7 @@ export function createInternalRouter() {
   // FIRE MASTER
   // ===============================
 
-  r.post("/salons/:slug/masters/:id/fire", rlInternal, async (req, res) => {
+  r.post("/salons/:slug/masters/:id/fire", async (req, res) => {
 
     const { slug, id } = req.params;
 
@@ -110,7 +109,7 @@ export function createInternalRouter() {
   // ACTIVATE MASTER
   // ===============================
 
-  r.post("/salons/:slug/masters/:id/activate", rlInternal, async (req, res) => {
+  r.post("/salons/:slug/masters/:id/activate", async (req, res) => {
 
     const { slug, id } = req.params;
 
