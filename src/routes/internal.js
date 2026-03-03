@@ -56,7 +56,7 @@ export function createInternalRouter() {
 
 
   // ===============================
-  // CREATE MASTER + LINK TO SALON
+  // CREATE MASTER + LINK TO SALON (ACTIVE)
   // ===============================
 
   r.post("/masters/create", async (req, res) => {
@@ -65,6 +65,7 @@ export function createInternalRouter() {
 
     if (!name || !salon_slug) {
       return res.status(400).json({
+        ok: false,
         error: "NAME_AND_SALON_REQUIRED"
       });
     }
@@ -85,6 +86,7 @@ export function createInternalRouter() {
         await client.query("ROLLBACK");
 
         return res.status(404).json({
+          ok: false,
           error: "SALON_NOT_FOUND"
         });
 
@@ -104,21 +106,24 @@ export function createInternalRouter() {
       const masterId = master.rows[0].id;
       const salonId = salon.rows[0].id;
 
+      // ВАЖНО: invited_at часто NOT NULL, поэтому ставим NOW()
       await client.query(`
         INSERT INTO master_salon (
           master_id,
           salon_id,
           status,
+          invited_at,
           activated_at,
+          fired_at,
           created_at,
           updated_at
         )
-        VALUES ($1,$2,'active',NOW(),NOW(),NOW())
+        VALUES ($1,$2,'active',NOW(),NOW(),NULL,NOW(),NOW())
       `, [masterId, salonId]);
 
       await client.query("COMMIT");
 
-      res.json({
+      return res.json({
         ok: true,
         master: master.rows[0]
       });
@@ -129,9 +134,10 @@ export function createInternalRouter() {
 
       console.error("CREATE_MASTER_ERROR", err);
 
-      res.status(500).json({
+      return res.status(500).json({
         ok: false,
-        error: "CREATE_MASTER_FAILED"
+        error: "CREATE_MASTER_FAILED",
+        detail: err.message
       });
 
     } finally {
@@ -154,7 +160,8 @@ export function createInternalRouter() {
     await pool.query(`
       UPDATE master_salon
       SET status='fired',
-          fired_at=NOW()
+          fired_at=NOW(),
+          updated_at=NOW()
       WHERE master_id=$1
       AND salon_id = (
         SELECT id FROM salons WHERE slug=$2
@@ -178,7 +185,8 @@ export function createInternalRouter() {
       UPDATE master_salon
       SET status='active',
           activated_at=NOW(),
-          fired_at=NULL
+          fired_at=NULL,
+          updated_at=NOW()
       WHERE master_id=$1
       AND salon_id = (
         SELECT id FROM salons WHERE slug=$2
