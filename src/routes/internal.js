@@ -9,11 +9,11 @@ export function createInternalRouter() {
   // GET MASTERS OF SALON
   // ===============================
 
-  r.get("/salons/:slug/masters", async (req, res) => {
+  r.get("/salons/:slug/masters", async (req,res)=>{
 
     const { slug } = req.params;
 
-    try {
+    try{
 
       const result = await pool.query(`
         SELECT
@@ -23,13 +23,13 @@ export function createInternalRouter() {
         FROM master_salon ms
         JOIN salons s ON s.id = ms.salon_id
         JOIN masters m ON m.id = ms.master_id
-        WHERE s.slug = $1
+        WHERE s.slug=$1
         ORDER BY m.id
       `,[slug]);
 
       res.json(result.rows);
 
-    } catch(err){
+    }catch(err){
 
       console.error(err);
 
@@ -83,25 +83,36 @@ export function createInternalRouter() {
 
       const email = slug + "@totem.local";
 
-      // создать пользователя
+      const passwordHash = "invite_pending";
+
+      // создаем auth_users
       const user = await client.query(`
-        INSERT INTO auth_users(email,created_at)
-        VALUES ($1,NOW())
+        INSERT INTO auth_users(
+          email,
+          role,
+          master_slug,
+          password_hash
+        )
+        VALUES ($1,'master',$2,$3)
         RETURNING id
-      `,[email]);
+      `,[email,slug,passwordHash]);
 
       const userId = user.rows[0].id;
 
-      // создать мастера
+      // создаем master
       const master = await client.query(`
-        INSERT INTO masters(user_id,slug,name)
+        INSERT INTO masters(
+          user_id,
+          slug,
+          name
+        )
         VALUES ($1,$2,$3)
         RETURNING id,name
       `,[userId,slug,name]);
 
       const masterId = master.rows[0].id;
 
-      // связать с салоном
+      // связываем с салоном
       await client.query(`
         INSERT INTO master_salon(
           master_id,
