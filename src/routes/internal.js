@@ -43,7 +43,7 @@ export function createInternalRouter() {
   });
 
   // ===============================
-  // CREATE MASTER + LINK SALON
+  // CREATE MASTER
   // ===============================
 
   r.post("/masters/create", async (req, res) => {
@@ -63,7 +63,6 @@ export function createInternalRouter() {
 
       await client.query("BEGIN");
 
-      // найти salon
       const salon = await client.query(
         `SELECT id FROM salons WHERE slug=$1`,
         [salon_slug]
@@ -75,31 +74,19 @@ export function createInternalRouter() {
 
       const salonId = salon.rows[0].id;
 
-      // создать USER
-      const user = await client.query(`
-        INSERT INTO users(role,created_at)
-        VALUES ('master',NOW())
-        RETURNING id
-      `);
-
-      const userId = user.rows[0].id;
-
-      // slug мастера
       const slug = name
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/(^-|-$)/g, "");
 
-      // создать MASTER
       const master = await client.query(`
         INSERT INTO masters(user_id,name,slug,active,created_at)
-        VALUES ($1,$2,$3,true,NOW())
+        VALUES (1,$1,$2,true,NOW())
         RETURNING id,name
-      `,[userId,name,slug]);
+      `,[name,slug]);
 
       const masterId = master.rows[0].id;
 
-      // связать с салоном
       await client.query(`
         INSERT INTO master_salon(
           master_id,
@@ -124,7 +111,7 @@ export function createInternalRouter() {
 
       await client.query("ROLLBACK");
 
-      console.error("CREATE_MASTER_ERROR:",err);
+      console.error(err);
 
       res.status(500).json({
         ok:false,
