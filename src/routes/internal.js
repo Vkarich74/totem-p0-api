@@ -29,34 +29,8 @@ export function createInternalRouter() {
 
   });
 
-
   // ===============================
-  // UPDATE MASTER PROFILE
-  // ===============================
-
-  r.put("/masters/:id/profile", async (req, res) => {
-
-    const { id } = req.params;
-    const { name } = req.body;
-
-    const result = await pool.query(`
-      UPDATE masters
-      SET name = $1,
-          updated_at = NOW()
-      WHERE id = $2
-      RETURNING id,name
-    `, [name, id]);
-
-    res.json({
-      ok: true,
-      master: result.rows[0]
-    });
-
-  });
-
-
-  // ===============================
-  // CREATE MASTER + LINK TO SALON (ACTIVE)
+  // CREATE MASTER + LINK SALON
   // ===============================
 
   r.post("/masters/create", async (req, res) => {
@@ -65,8 +39,8 @@ export function createInternalRouter() {
 
     if (!name || !salon_slug) {
       return res.status(400).json({
-        ok: false,
-        error: "NAME_AND_SALON_REQUIRED"
+        ok:false,
+        error:"NAME_AND_SALON_REQUIRED"
       });
     }
 
@@ -77,67 +51,53 @@ export function createInternalRouter() {
       await client.query("BEGIN");
 
       const salon = await client.query(
-        `SELECT id FROM salons WHERE slug = $1 LIMIT 1`,
+        `SELECT id FROM salons WHERE slug=$1`,
         [salon_slug]
       );
 
       if (!salon.rows.length) {
-
-        await client.query("ROLLBACK");
-
-        return res.status(404).json({
-          ok: false,
-          error: "SALON_NOT_FOUND"
-        });
-
+        throw new Error("SALON_NOT_FOUND");
       }
 
-      const master = await client.query(`
-        INSERT INTO masters (
-          name,
-          active,
-          created_at,
-          updated_at
-        )
-        VALUES ($1,true,NOW(),NOW())
-        RETURNING id,name
-      `, [name]);
-
-      const masterId = master.rows[0].id;
       const salonId = salon.rows[0].id;
 
-      // ВАЖНО: invited_at часто NOT NULL, поэтому ставим NOW()
+      const master = await client.query(`
+        INSERT INTO masters(name,active,created_at,updated_at)
+        VALUES ($1,true,NOW(),NOW())
+        RETURNING id,name
+      `,[name]);
+
+      const masterId = master.rows[0].id;
+
       await client.query(`
-        INSERT INTO master_salon (
+        INSERT INTO master_salon(
           master_id,
           salon_id,
           status,
           invited_at,
           activated_at,
-          fired_at,
           created_at,
           updated_at
         )
-        VALUES ($1,$2,'active',NOW(),NOW(),NULL,NOW(),NOW())
-      `, [masterId, salonId]);
+        VALUES($1,$2,'active',NOW(),NOW(),NOW(),NOW())
+      `,[masterId,salonId]);
 
       await client.query("COMMIT");
 
-      return res.json({
-        ok: true,
-        master: master.rows[0]
+      res.json({
+        ok:true,
+        master:master.rows[0]
       });
 
-    } catch (err) {
+    } catch(err) {
 
       await client.query("ROLLBACK");
 
-      console.error("CREATE_MASTER_ERROR", err);
+      console.error("CREATE_MASTER_ERROR:",err);
 
-      return res.status(500).json({
-        ok: false,
-        error: "CREATE_MASTER_FAILED",
-        detail: err.message
+      res.status(500).json({
+        ok:false,
+        error:err.message
       });
 
     } finally {
@@ -147,56 +107,6 @@ export function createInternalRouter() {
     }
 
   });
-
-
-  // ===============================
-  // FIRE MASTER
-  // ===============================
-
-  r.post("/salons/:slug/masters/:id/fire", async (req, res) => {
-
-    const { slug, id } = req.params;
-
-    await pool.query(`
-      UPDATE master_salon
-      SET status='fired',
-          fired_at=NOW(),
-          updated_at=NOW()
-      WHERE master_id=$1
-      AND salon_id = (
-        SELECT id FROM salons WHERE slug=$2
-      )
-    `,[id,slug]);
-
-    res.json({ ok:true });
-
-  });
-
-
-  // ===============================
-  // ACTIVATE MASTER
-  // ===============================
-
-  r.post("/salons/:slug/masters/:id/activate", async (req, res) => {
-
-    const { slug, id } = req.params;
-
-    await pool.query(`
-      UPDATE master_salon
-      SET status='active',
-          activated_at=NOW(),
-          fired_at=NULL,
-          updated_at=NOW()
-      WHERE master_id=$1
-      AND salon_id = (
-        SELECT id FROM salons WHERE slug=$2
-      )
-    `,[id,slug]);
-
-    res.json({ ok:true });
-
-  });
-
 
   return r;
 
