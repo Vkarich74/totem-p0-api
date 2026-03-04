@@ -87,6 +87,55 @@ error:"MASTER_CREATE_FAILED"
 });
 
 /*
+LIST SALON MASTERS
+*/
+r.get("/salons/:slug/masters", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id FROM salons WHERE slug=$1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+const masters = await pool.query(`
+SELECT
+m.id,
+m.name,
+ms.status
+FROM masters m
+JOIN master_salon ms ON ms.master_id=m.id
+WHERE ms.salon_id=$1
+ORDER BY m.id DESC
+`,[salonId]);
+
+res.json({
+ok:true,
+masters:masters.rows
+});
+
+}catch(err){
+
+console.error(err);
+
+res.status(500).json({
+ok:false,
+error:"MASTERS_FETCH_FAILED"
+});
+
+}
+
+});
+
+/*
 SALON METRICS
 */
 r.get("/salons/:slug/metrics", async (req,res)=>{
