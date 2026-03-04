@@ -13,19 +13,32 @@ export function createInternalRouter() {
 
     const { slug } = req.params;
 
-    const result = await pool.query(`
-      SELECT
-        m.id,
-        m.name,
-        ms.status
-      FROM master_salon ms
-      JOIN salons s ON s.id = ms.salon_id
-      JOIN masters m ON m.id = ms.master_id
-      WHERE s.slug = $1
-      ORDER BY m.id
-    `, [slug]);
+    try {
 
-    res.json(result.rows);
+      const result = await pool.query(`
+        SELECT
+          m.id,
+          m.name,
+          ms.status
+        FROM master_salon ms
+        JOIN salons s ON s.id = ms.salon_id
+        JOIN masters m ON m.id = ms.master_id
+        WHERE s.slug = $1
+        ORDER BY m.id
+      `, [slug]);
+
+      res.json(result.rows);
+
+    } catch (err) {
+
+      console.error(err);
+
+      res.status(500).json({
+        ok:false,
+        error:"MASTERS_FETCH_FAILED"
+      });
+
+    }
 
   });
 
@@ -50,6 +63,7 @@ export function createInternalRouter() {
 
       await client.query("BEGIN");
 
+      // получить salon_id
       const salon = await client.query(
         `SELECT id FROM salons WHERE slug=$1`,
         [salon_slug]
@@ -61,14 +75,16 @@ export function createInternalRouter() {
 
       const salonId = salon.rows[0].id;
 
+      // создать мастера (исправлено — без updated_at)
       const master = await client.query(`
-        INSERT INTO masters(name,active,created_at,updated_at)
-        VALUES ($1,true,NOW(),NOW())
+        INSERT INTO masters(name,active,created_at)
+        VALUES ($1,true,NOW())
         RETURNING id,name
       `,[name]);
 
       const masterId = master.rows[0].id;
 
+      // связать с салоном
       await client.query(`
         INSERT INTO master_salon(
           master_id,
