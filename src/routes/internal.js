@@ -5,9 +5,9 @@ export function createInternalRouter() {
 
   const r = express.Router();
 
-  // ===============================
+  // =================================
   // GET MASTERS OF SALON
-  // ===============================
+  // =================================
 
   r.get("/salons/:slug/masters", async (req, res) => {
 
@@ -25,11 +25,11 @@ export function createInternalRouter() {
         JOIN masters m ON m.id = ms.master_id
         WHERE s.slug = $1
         ORDER BY m.id
-      `, [slug]);
+      `,[slug]);
 
       res.json(result.rows);
 
-    } catch (err) {
+    } catch(err){
 
       console.error(err);
 
@@ -42,15 +42,15 @@ export function createInternalRouter() {
 
   });
 
-  // ===============================
+  // =================================
   // CREATE MASTER
-  // ===============================
+  // =================================
 
-  r.post("/masters/create", async (req, res) => {
+  r.post("/masters/create", async (req,res)=>{
 
     const { name, salon_slug } = req.body;
 
-    if (!name || !salon_slug) {
+    if(!name || !salon_slug){
       return res.status(400).json({
         ok:false,
         error:"NAME_AND_SALON_REQUIRED"
@@ -59,36 +59,49 @@ export function createInternalRouter() {
 
     const client = await pool.connect();
 
-    try {
+    try{
 
       await client.query("BEGIN");
 
+      // найти салон
       const salon = await client.query(
         `SELECT id FROM salons WHERE slug=$1`,
         [salon_slug]
       );
 
-      if (!salon.rows.length) {
+      if(!salon.rows.length){
         throw new Error("SALON_NOT_FOUND");
       }
 
       const salonId = salon.rows[0].id;
 
+      // создать пользователя
+      const user = await client.query(`
+        INSERT INTO auth_users(created_at)
+        VALUES (NOW())
+        RETURNING id
+      `);
+
+      const userId = user.rows[0].id;
+
+      // slug мастера
       const baseSlug = name
         .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/(^-|-$)/g, "");
+        .replace(/[^a-z0-9]+/g,"-")
+        .replace(/(^-|-$)/g,"");
 
       const slug = baseSlug + "-" + Date.now();
 
+      // создать мастера
       const master = await client.query(`
-        INSERT INTO masters(user_id,name,slug,active,created_at)
-        VALUES (1,$1,$2,true,NOW())
+        INSERT INTO masters(user_id,slug,name)
+        VALUES ($1,$2,$3)
         RETURNING id,name
-      `,[name,slug]);
+      `,[userId,slug,name]);
 
       const masterId = master.rows[0].id;
 
+      // связать мастер ↔ салон
       await client.query(`
         INSERT INTO master_salon(
           master_id,
@@ -109,7 +122,7 @@ export function createInternalRouter() {
         master:master.rows[0]
       });
 
-    } catch(err) {
+    }catch(err){
 
       await client.query("ROLLBACK");
 
@@ -120,7 +133,7 @@ export function createInternalRouter() {
         error:err.message
       });
 
-    } finally {
+    }finally{
 
       client.release();
 
