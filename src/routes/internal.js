@@ -354,16 +354,70 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 const salonId = salon.rows[0].id;
 
 const bookingsToday = await pool.query(`
-SELECT COUNT(*)::int AS count
+SELECT COUNT(*)::int
 FROM bookings
 WHERE salon_id=$1
 AND DATE(start_at)=CURRENT_DATE
 `,[salonId]);
 
+const bookingsWeek = await pool.query(`
+SELECT COUNT(*)::int
+FROM bookings
+WHERE salon_id=$1
+AND start_at >= NOW() - INTERVAL '7 days'
+`,[salonId]);
+
+const bookingsMonth = await pool.query(`
+SELECT COUNT(*)::int
+FROM bookings
+WHERE salon_id=$1
+AND start_at >= NOW() - INTERVAL '30 days'
+`,[salonId]);
+
+const clientsTotal = await pool.query(`
+SELECT COUNT(*)::int
+FROM clients
+WHERE salon_id=$1
+`,[salonId]);
+
+const clientsToday = await pool.query(`
+SELECT COUNT(*)::int
+FROM clients
+WHERE salon_id=$1
+AND DATE(created_at)=CURRENT_DATE
+`,[salonId]);
+
+const mastersActive = await pool.query(`
+SELECT COUNT(*)::int
+FROM master_salon
+WHERE salon_id=$1
+AND status='active'
+`,[salonId]);
+
+const mastersPending = await pool.query(`
+SELECT COUNT(*)::int
+FROM master_salon
+WHERE salon_id=$1
+AND status='pending'
+`,[salonId]);
+
+const mastersTotal = await pool.query(`
+SELECT COUNT(*)::int
+FROM master_salon
+WHERE salon_id=$1
+`,[salonId]);
+
 res.json({
 ok:true,
 metrics:{
-bookings_today:bookingsToday.rows[0].count
+bookings_today:bookingsToday.rows[0].count,
+bookings_week:bookingsWeek.rows[0].count,
+bookings_month:bookingsMonth.rows[0].count,
+clients_total:clientsTotal.rows[0].count,
+clients_today:clientsToday.rows[0].count,
+masters_active:mastersActive.rows[0].count,
+masters_pending:mastersPending.rows[0].count,
+masters_total:mastersTotal.rows[0].count
 }
 });
 
