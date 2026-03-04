@@ -75,12 +75,18 @@ export function createInternalRouter() {
 
       const salonId = salon.rows[0].id;
 
-      // создать мастера (исправлено — без updated_at)
+      // сгенерировать slug мастера
+      const slug = name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/(^-|-$)/g, "");
+
+      // создать мастера
       const master = await client.query(`
-        INSERT INTO masters(name,active,created_at)
-        VALUES ($1,true,NOW())
+        INSERT INTO masters(name, slug, active, created_at)
+        VALUES ($1,$2,true,NOW())
         RETURNING id,name
-      `,[name]);
+      `,[name,slug]);
 
       const masterId = master.rows[0].id;
 
