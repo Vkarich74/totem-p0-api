@@ -6,6 +6,81 @@ export function createInternalRouter() {
   const r = express.Router();
 
   // ===============================
+  // SALON METRICS
+  // ===============================
+
+  r.get("/salons/:slug/metrics", async (req,res)=>{
+
+    const { slug } = req.params;
+
+    try{
+
+      const salon = await pool.query(
+        `SELECT id FROM salons WHERE slug=$1`,
+        [slug]
+      );
+
+      if(!salon.rows.length){
+        return res.status(404).json({
+          ok:false,
+          error:"SALON_NOT_FOUND"
+        });
+      }
+
+      const salonId = salon.rows[0].id;
+
+      const bookings = await pool.query(`
+        SELECT COUNT(*) AS count
+        FROM bookings
+        WHERE salon_id=$1
+        AND DATE(datetime_start)=CURRENT_DATE
+      `,[salonId]);
+
+      const revenue = await pool.query(`
+        SELECT COALESCE(SUM(price),0) AS revenue
+        FROM bookings
+        WHERE salon_id=$1
+        AND DATE(datetime_start)=CURRENT_DATE
+        AND status='completed'
+      `,[salonId]);
+
+      const masters = await pool.query(`
+        SELECT COUNT(*) AS count
+        FROM master_salon
+        WHERE salon_id=$1
+        AND status='active'
+      `,[salonId]);
+
+      const clients = await pool.query(`
+        SELECT COUNT(DISTINCT client_phone) AS count
+        FROM bookings
+        WHERE salon_id=$1
+      `,[salonId]);
+
+      res.json({
+        ok:true,
+        metrics:{
+          bookings_today:Number(bookings.rows[0].count),
+          revenue_today:Number(revenue.rows[0].revenue),
+          active_masters:Number(masters.rows[0].count),
+          clients_total:Number(clients.rows[0].count)
+        }
+      });
+
+    }catch(err){
+
+      console.error(err);
+
+      res.status(500).json({
+        ok:false,
+        error:"METRICS_FETCH_FAILED"
+      });
+
+    }
+
+  });
+
+  // ===============================
   // GET MASTERS OF SALON
   // ===============================
 
@@ -85,7 +160,6 @@ export function createInternalRouter() {
 
       const passwordHash = "invite_pending";
 
-      // create auth_users
       const user = await client.query(`
         INSERT INTO auth_users(
           email,
@@ -99,7 +173,6 @@ export function createInternalRouter() {
 
       const userId = user.rows[0].id;
 
-      // create master
       const master = await client.query(`
         INSERT INTO masters(
           user_id,
@@ -112,7 +185,6 @@ export function createInternalRouter() {
 
       const masterId = master.rows[0].id;
 
-      // link master to salon
       await client.query(`
         INSERT INTO master_salon(
           master_id,
