@@ -5,9 +5,9 @@ export function createInternalRouter() {
 
   const r = express.Router();
 
-  // =================================
+  // ===============================
   // GET MASTERS OF SALON
-  // =================================
+  // ===============================
 
   r.get("/salons/:slug/masters", async (req, res) => {
 
@@ -42,9 +42,9 @@ export function createInternalRouter() {
 
   });
 
-  // =================================
+  // ===============================
   // CREATE MASTER
-  // =================================
+  // ===============================
 
   r.post("/masters/create", async (req,res)=>{
 
@@ -63,7 +63,6 @@ export function createInternalRouter() {
 
       await client.query("BEGIN");
 
-      // найти салон
       const salon = await client.query(
         `SELECT id FROM salons WHERE slug=$1`,
         [salon_slug]
@@ -75,22 +74,23 @@ export function createInternalRouter() {
 
       const salonId = salon.rows[0].id;
 
-      // создать пользователя
-      const user = await client.query(`
-        INSERT INTO auth_users(created_at)
-        VALUES (NOW())
-        RETURNING id
-      `);
-
-      const userId = user.rows[0].id;
-
-      // slug мастера
       const baseSlug = name
         .toLowerCase()
         .replace(/[^a-z0-9]+/g,"-")
         .replace(/(^-|-$)/g,"");
 
       const slug = baseSlug + "-" + Date.now();
+
+      const email = slug + "@totem.local";
+
+      // создать пользователя
+      const user = await client.query(`
+        INSERT INTO auth_users(email,created_at)
+        VALUES ($1,NOW())
+        RETURNING id
+      `,[email]);
+
+      const userId = user.rows[0].id;
 
       // создать мастера
       const master = await client.query(`
@@ -101,7 +101,7 @@ export function createInternalRouter() {
 
       const masterId = master.rows[0].id;
 
-      // связать мастер ↔ салон
+      // связать с салоном
       await client.query(`
         INSERT INTO master_salon(
           master_id,
