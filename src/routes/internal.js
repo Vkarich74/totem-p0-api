@@ -63,7 +63,7 @@ export function createInternalRouter() {
 
       await client.query("BEGIN");
 
-      // получить salon_id
+      // найти salon
       const salon = await client.query(
         `SELECT id FROM salons WHERE slug=$1`,
         [salon_slug]
@@ -75,18 +75,27 @@ export function createInternalRouter() {
 
       const salonId = salon.rows[0].id;
 
-      // сгенерировать slug мастера
+      // создать USER
+      const user = await client.query(`
+        INSERT INTO users(role,created_at)
+        VALUES ('master',NOW())
+        RETURNING id
+      `);
+
+      const userId = user.rows[0].id;
+
+      // slug мастера
       const slug = name
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/(^-|-$)/g, "");
 
-      // создать мастера
+      // создать MASTER
       const master = await client.query(`
-        INSERT INTO masters(name, slug, active, created_at)
-        VALUES ($1,$2,true,NOW())
+        INSERT INTO masters(user_id,name,slug,active,created_at)
+        VALUES ($1,$2,$3,true,NOW())
         RETURNING id,name
-      `,[name,slug]);
+      `,[userId,name,slug]);
 
       const masterId = master.rows[0].id;
 
