@@ -189,6 +189,99 @@ error:"BOOKINGS_FETCH_FAILED"
 });
 
 /*
+CONFIRM BOOKING
+*/
+r.patch("/bookings/:id/confirm", async (req,res)=>{
+
+const { id } = req.params;
+
+try{
+
+await pool.query(
+`UPDATE bookings
+SET status='confirmed'
+WHERE id=$1`,
+[id]
+);
+
+res.json({ok:true});
+
+}catch(err){
+
+console.error(err);
+
+res.status(500).json({
+ok:false,
+error:"BOOKING_CONFIRM_FAILED"
+});
+
+}
+
+});
+
+/*
+CANCEL BOOKING
+*/
+r.patch("/bookings/:id/cancel", async (req,res)=>{
+
+const { id } = req.params;
+
+try{
+
+await pool.query(
+`UPDATE bookings
+SET status='cancelled'
+WHERE id=$1`,
+[id]
+);
+
+res.json({ok:true});
+
+}catch(err){
+
+console.error(err);
+
+res.status(500).json({
+ok:false,
+error:"BOOKING_CANCEL_FAILED"
+});
+
+}
+
+});
+
+/*
+COMPLETE BOOKING
+*/
+r.patch("/bookings/:id/complete", async (req,res)=>{
+
+const { id } = req.params;
+
+try{
+
+await pool.query(
+`UPDATE bookings
+SET status='completed'
+WHERE id=$1`,
+[id]
+);
+
+res.json({ok:true});
+
+}catch(err){
+
+console.error(err);
+
+res.status(500).json({
+ok:false,
+error:"BOOKING_COMPLETE_FAILED"
+});
+
+}
+
+});
+
+/*
 SALON METRICS
 */
 r.get("/salons/:slug/metrics", async (req,res)=>{
