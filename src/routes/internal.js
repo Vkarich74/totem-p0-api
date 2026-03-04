@@ -85,7 +85,7 @@ export function createInternalRouter() {
 
       const passwordHash = "invite_pending";
 
-      // создаем auth_users
+      // create auth_users
       const user = await client.query(`
         INSERT INTO auth_users(
           email,
@@ -99,7 +99,7 @@ export function createInternalRouter() {
 
       const userId = user.rows[0].id;
 
-      // создаем master
+      // create master
       const master = await client.query(`
         INSERT INTO masters(
           user_id,
@@ -112,7 +112,7 @@ export function createInternalRouter() {
 
       const masterId = master.rows[0].id;
 
-      // связываем с салоном (INVITE → pending)
+      // link master to salon
       await client.query(`
         INSERT INTO master_salon(
           master_id,
@@ -180,14 +180,14 @@ export function createInternalRouter() {
           s.id = ms.salon_id
           AND s.slug=$1
           AND ms.master_id=$2
-          AND ms.status='pending'
+          AND ms.status IN ('pending','fired')
         RETURNING ms.master_id
       `,[salon_slug,master_id]);
 
       if(!result.rows.length){
         return res.status(404).json({
           ok:false,
-          error:"MASTER_NOT_PENDING"
+          error:"MASTER_NOT_PENDING_OR_FIRED"
         });
       }
 
