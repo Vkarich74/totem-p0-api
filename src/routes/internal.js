@@ -323,23 +323,31 @@ WHERE salon_id=$1
 /* FINANCE */
 
 const revenueToday = await pool.query(`
-SELECT COALESCE(SUM(amount),0)::int AS v
-FROM payments
-WHERE salon_id=$1
-AND DATE(created_at)=CURRENT_DATE
+SELECT COALESCE(SUM(p.amount),0)::int AS v
+FROM payments p
+JOIN bookings b ON b.id=p.booking_id
+WHERE b.salon_id=$1
+AND p.status='confirmed'
+AND p.is_active=true
+AND DATE(p.created_at)=CURRENT_DATE
 `,[salonId]);
 
 const revenueMonth = await pool.query(`
-SELECT COALESCE(SUM(amount),0)::int AS v
-FROM payments
-WHERE salon_id=$1
-AND created_at >= NOW() - INTERVAL '30 days'
+SELECT COALESCE(SUM(p.amount),0)::int AS v
+FROM payments p
+JOIN bookings b ON b.id=p.booking_id
+WHERE b.salon_id=$1
+AND p.status='confirmed'
+AND p.is_active=true
+AND p.created_at >= NOW() - INTERVAL '30 days'
 `,[salonId]);
 
 const paymentsTotal = await pool.query(`
 SELECT COUNT(*)::int AS v
-FROM payments
-WHERE salon_id=$1
+FROM payments p
+JOIN bookings b ON b.id=p.booking_id
+WHERE b.salon_id=$1
+AND p.status='confirmed'
 `,[salonId]);
 
 res.json({
