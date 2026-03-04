@@ -136,6 +136,58 @@ error:"MASTERS_FETCH_FAILED"
 });
 
 /*
+LIST SALON CLIENTS
+*/
+r.get("/salons/:slug/clients", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id FROM salons WHERE slug=$1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+const clients = await pool.query(`
+SELECT
+c.id,
+c.name,
+c.phone,
+c.created_at,
+COUNT(b.id)::int AS visits
+FROM clients c
+LEFT JOIN bookings b ON b.client_id=c.id AND b.salon_id=$1
+WHERE c.salon_id=$1
+GROUP BY c.id
+ORDER BY c.id DESC
+`,[salonId]);
+
+res.json({
+ok:true,
+clients:clients.rows
+});
+
+}catch(err){
+
+console.error(err);
+
+res.status(500).json({
+ok:false,
+error:"CLIENTS_FETCH_FAILED"
+});
+
+}
+
+});
+
+/*
 SALON METRICS
 */
 r.get("/salons/:slug/metrics", async (req,res)=>{
