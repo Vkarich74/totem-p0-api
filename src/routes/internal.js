@@ -136,9 +136,9 @@ error:"MASTERS_FETCH_FAILED"
 });
 
 /*
-LIST SALON CLIENTS
+LIST SALON BOOKINGS
 */
-r.get("/salons/:slug/clients", async (req,res)=>{
+r.get("/salons/:slug/bookings", async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -155,23 +155,24 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 
 const salonId = salon.rows[0].id;
 
-const clients = await pool.query(`
+const bookings = await pool.query(`
 SELECT
-c.id,
-c.name,
+b.id,
+b.status,
+b.start_at,
+c.name AS client_name,
 c.phone,
-c.created_at,
-COUNT(b.id)::int AS visits
-FROM clients c
-LEFT JOIN bookings b ON b.client_id=c.id AND b.salon_id=$1
-WHERE c.salon_id=$1
-GROUP BY c.id
-ORDER BY c.id DESC
+m.name AS master_name
+FROM bookings b
+LEFT JOIN clients c ON c.id=b.client_id
+LEFT JOIN masters m ON m.id=b.master_id
+WHERE b.salon_id=$1
+ORDER BY b.id DESC
 `,[salonId]);
 
 res.json({
 ok:true,
-clients:clients.rows
+bookings:bookings.rows
 });
 
 }catch(err){
@@ -180,7 +181,7 @@ console.error(err);
 
 res.status(500).json({
 ok:false,
-error:"CLIENTS_FETCH_FAILED"
+error:"BOOKINGS_FETCH_FAILED"
 });
 
 }
