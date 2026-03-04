@@ -74,10 +74,12 @@ export function createInternalRouter() {
 
       const salonId = salon.rows[0].id;
 
-      const slug = name
+      const baseSlug = name
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/(^-|-$)/g, "");
+
+      const slug = baseSlug + "-" + Date.now();
 
       const master = await client.query(`
         INSERT INTO masters(user_id,name,slug,active,created_at)
