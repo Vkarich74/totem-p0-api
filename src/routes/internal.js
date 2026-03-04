@@ -43,7 +43,7 @@ export function createInternalRouter() {
   });
 
   // ===============================
-  // CREATE MASTER
+  // CREATE MASTER (INVITE)
   // ===============================
 
   r.post("/masters/create", async (req,res)=>{
@@ -112,7 +112,7 @@ export function createInternalRouter() {
 
       const masterId = master.rows[0].id;
 
-      // связываем с салоном
+      // связываем с салоном (INVITE → pending)
       await client.query(`
         INSERT INTO master_salon(
           master_id,
@@ -123,7 +123,7 @@ export function createInternalRouter() {
           created_at,
           updated_at
         )
-        VALUES($1,$2,'active',NOW(),NOW(),NOW(),NOW())
+        VALUES($1,$2,'pending',NOW(),NULL,NOW(),NOW())
       `,[masterId,salonId]);
 
       await client.query("COMMIT");
@@ -147,6 +147,113 @@ export function createInternalRouter() {
     }finally{
 
       client.release();
+
+    }
+
+  });
+
+  // ===============================
+  // ACTIVATE MASTER
+  // ===============================
+
+  r.post("/masters/activate", async (req,res)=>{
+
+    const { master_id, salon_slug } = req.body;
+
+    if(!master_id || !salon_slug){
+      return res.status(400).json({
+        ok:false,
+        error:"MASTER_AND_SALON_REQUIRED"
+      });
+    }
+
+    try{
+
+      const result = await pool.query(`
+        UPDATE master_salon ms
+        SET
+          status='active',
+          activated_at=NOW(),
+          updated_at=NOW()
+        FROM salons s
+        WHERE
+          s.id = ms.salon_id
+          AND s.slug=$1
+          AND ms.master_id=$2
+          AND ms.status='pending'
+        RETURNING ms.master_id
+      `,[salon_slug,master_id]);
+
+      if(!result.rows.length){
+        return res.status(404).json({
+          ok:false,
+          error:"MASTER_NOT_PENDING"
+        });
+      }
+
+      res.json({ ok:true });
+
+    }catch(err){
+
+      console.error(err);
+
+      res.status(500).json({
+        ok:false,
+        error:"ACTIVATE_FAILED"
+      });
+
+    }
+
+  });
+
+  // ===============================
+  // FIRE MASTER
+  // ===============================
+
+  r.post("/masters/fire", async (req,res)=>{
+
+    const { master_id, salon_slug } = req.body;
+
+    if(!master_id || !salon_slug){
+      return res.status(400).json({
+        ok:false,
+        error:"MASTER_AND_SALON_REQUIRED"
+      });
+    }
+
+    try{
+
+      const result = await pool.query(`
+        UPDATE master_salon ms
+        SET
+          status='fired',
+          updated_at=NOW()
+        FROM salons s
+        WHERE
+          s.id = ms.salon_id
+          AND s.slug=$1
+          AND ms.master_id=$2
+          AND ms.status='active'
+        RETURNING ms.master_id
+      `,[salon_slug,master_id]);
+
+      if(!result.rows.length){
+        return res.status(404).json({
+          ok:false,
+          error:"MASTER_NOT_ACTIVE"
+        });
+      }
+
+      res.json({ ok:true });
+
+    }catch(err){
+
+      console.error(err);
+
+      res.status(500).json({
+        ok:false,
+        error:"FIRE_FAILED"
+      });
 
     }
 
