@@ -241,99 +241,6 @@ error:"BOOKINGS_FETCH_FAILED"
 });
 
 /*
-CONFIRM BOOKING
-*/
-r.patch("/bookings/:id/confirm", async (req,res)=>{
-
-const { id } = req.params;
-
-try{
-
-await pool.query(
-`UPDATE bookings
-SET status='confirmed'
-WHERE id=$1`,
-[id]
-);
-
-res.json({ok:true});
-
-}catch(err){
-
-console.error(err);
-
-res.status(500).json({
-ok:false,
-error:"BOOKING_CONFIRM_FAILED"
-});
-
-}
-
-});
-
-/*
-CANCEL BOOKING
-*/
-r.patch("/bookings/:id/cancel", async (req,res)=>{
-
-const { id } = req.params;
-
-try{
-
-await pool.query(
-`UPDATE bookings
-SET status='cancelled'
-WHERE id=$1`,
-[id]
-);
-
-res.json({ok:true});
-
-}catch(err){
-
-console.error(err);
-
-res.status(500).json({
-ok:false,
-error:"BOOKING_CANCEL_FAILED"
-});
-
-}
-
-});
-
-/*
-COMPLETE BOOKING
-*/
-r.patch("/bookings/:id/complete", async (req,res)=>{
-
-const { id } = req.params;
-
-try{
-
-await pool.query(
-`UPDATE bookings
-SET status='completed'
-WHERE id=$1`,
-[id]
-);
-
-res.json({ok:true});
-
-}catch(err){
-
-console.error(err);
-
-res.status(500).json({
-ok:false,
-error:"BOOKING_COMPLETE_FAILED"
-});
-
-}
-
-});
-
-/*
 SALON METRICS
 */
 r.get("/salons/:slug/metrics", async (req,res)=>{
@@ -352,6 +259,8 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 }
 
 const salonId = salon.rows[0].id;
+
+/* BOOKINGS */
 
 const bookingsToday = await pool.query(`
 SELECT COUNT(*)::int
@@ -374,6 +283,8 @@ WHERE salon_id=$1
 AND start_at >= NOW() - INTERVAL '30 days'
 `,[salonId]);
 
+/* CLIENTS */
+
 const clientsTotal = await pool.query(`
 SELECT COUNT(*)::int
 FROM clients
@@ -386,6 +297,8 @@ FROM clients
 WHERE salon_id=$1
 AND DATE(created_at)=CURRENT_DATE
 `,[salonId]);
+
+/* MASTERS */
 
 const mastersActive = await pool.query(`
 SELECT COUNT(*)::int
@@ -407,6 +320,28 @@ FROM master_salon
 WHERE salon_id=$1
 `,[salonId]);
 
+/* FINANCE */
+
+const revenueToday = await pool.query(`
+SELECT COALESCE(SUM(amount),0)::int
+FROM payments
+WHERE salon_id=$1
+AND DATE(created_at)=CURRENT_DATE
+`,[salonId]);
+
+const revenueMonth = await pool.query(`
+SELECT COALESCE(SUM(amount),0)::int
+FROM payments
+WHERE salon_id=$1
+AND created_at >= NOW() - INTERVAL '30 days'
+`,[salonId]);
+
+const paymentsTotal = await pool.query(`
+SELECT COUNT(*)::int
+FROM payments
+WHERE salon_id=$1
+`,[salonId]);
+
 res.json({
 ok:true,
 metrics:{
@@ -417,7 +352,10 @@ clients_total:clientsTotal.rows[0].count,
 clients_today:clientsToday.rows[0].count,
 masters_active:mastersActive.rows[0].count,
 masters_pending:mastersPending.rows[0].count,
-masters_total:mastersTotal.rows[0].count
+masters_total:mastersTotal.rows[0].count,
+revenue_today:revenueToday.rows[0].coalesce,
+revenue_month:revenueMonth.rows[0].coalesce,
+payments_total:paymentsTotal.rows[0].count
 }
 });
 
