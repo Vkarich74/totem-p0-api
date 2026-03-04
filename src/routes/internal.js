@@ -263,21 +263,21 @@ const salonId = salon.rows[0].id;
 /* BOOKINGS */
 
 const bookingsToday = await pool.query(`
-SELECT COUNT(*)::int
+SELECT COUNT(*)::int AS v
 FROM bookings
 WHERE salon_id=$1
 AND DATE(start_at)=CURRENT_DATE
 `,[salonId]);
 
 const bookingsWeek = await pool.query(`
-SELECT COUNT(*)::int
+SELECT COUNT(*)::int AS v
 FROM bookings
 WHERE salon_id=$1
 AND start_at >= NOW() - INTERVAL '7 days'
 `,[salonId]);
 
 const bookingsMonth = await pool.query(`
-SELECT COUNT(*)::int
+SELECT COUNT(*)::int AS v
 FROM bookings
 WHERE salon_id=$1
 AND start_at >= NOW() - INTERVAL '30 days'
@@ -286,13 +286,13 @@ AND start_at >= NOW() - INTERVAL '30 days'
 /* CLIENTS */
 
 const clientsTotal = await pool.query(`
-SELECT COUNT(*)::int
+SELECT COUNT(*)::int AS v
 FROM clients
 WHERE salon_id=$1
 `,[salonId]);
 
 const clientsToday = await pool.query(`
-SELECT COUNT(*)::int
+SELECT COUNT(*)::int AS v
 FROM clients
 WHERE salon_id=$1
 AND DATE(created_at)=CURRENT_DATE
@@ -301,21 +301,21 @@ AND DATE(created_at)=CURRENT_DATE
 /* MASTERS */
 
 const mastersActive = await pool.query(`
-SELECT COUNT(*)::int
+SELECT COUNT(*)::int AS v
 FROM master_salon
 WHERE salon_id=$1
 AND status='active'
 `,[salonId]);
 
 const mastersPending = await pool.query(`
-SELECT COUNT(*)::int
+SELECT COUNT(*)::int AS v
 FROM master_salon
 WHERE salon_id=$1
 AND status='pending'
 `,[salonId]);
 
 const mastersTotal = await pool.query(`
-SELECT COUNT(*)::int
+SELECT COUNT(*)::int AS v
 FROM master_salon
 WHERE salon_id=$1
 `,[salonId]);
@@ -323,21 +323,21 @@ WHERE salon_id=$1
 /* FINANCE */
 
 const revenueToday = await pool.query(`
-SELECT COALESCE(SUM(amount),0)::int
+SELECT COALESCE(SUM(amount),0)::int AS v
 FROM payments
 WHERE salon_id=$1
 AND DATE(created_at)=CURRENT_DATE
 `,[salonId]);
 
 const revenueMonth = await pool.query(`
-SELECT COALESCE(SUM(amount),0)::int
+SELECT COALESCE(SUM(amount),0)::int AS v
 FROM payments
 WHERE salon_id=$1
 AND created_at >= NOW() - INTERVAL '30 days'
 `,[salonId]);
 
 const paymentsTotal = await pool.query(`
-SELECT COUNT(*)::int
+SELECT COUNT(*)::int AS v
 FROM payments
 WHERE salon_id=$1
 `,[salonId]);
@@ -345,23 +345,23 @@ WHERE salon_id=$1
 res.json({
 ok:true,
 metrics:{
-bookings_today:bookingsToday.rows[0].count,
-bookings_week:bookingsWeek.rows[0].count,
-bookings_month:bookingsMonth.rows[0].count,
-clients_total:clientsTotal.rows[0].count,
-clients_today:clientsToday.rows[0].count,
-masters_active:mastersActive.rows[0].count,
-masters_pending:mastersPending.rows[0].count,
-masters_total:mastersTotal.rows[0].count,
-revenue_today:revenueToday.rows[0].coalesce,
-revenue_month:revenueMonth.rows[0].coalesce,
-payments_total:paymentsTotal.rows[0].count
+bookings_today:bookingsToday.rows[0].v,
+bookings_week:bookingsWeek.rows[0].v,
+bookings_month:bookingsMonth.rows[0].v,
+clients_total:clientsTotal.rows[0].v,
+clients_today:clientsToday.rows[0].v,
+masters_active:mastersActive.rows[0].v,
+masters_pending:mastersPending.rows[0].v,
+masters_total:mastersTotal.rows[0].v,
+revenue_today:revenueToday.rows[0].v,
+revenue_month:revenueMonth.rows[0].v,
+payments_total:paymentsTotal.rows[0].v
 }
 });
 
 }catch(err){
 
-console.error(err);
+console.error("METRICS ERROR:",err);
 
 res.status(500).json({
 ok:false,
