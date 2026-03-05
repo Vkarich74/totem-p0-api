@@ -1,6 +1,15 @@
 import express from "express";
 import { pool } from "../db.js";
 
+function slugify(text){
+return text
+.toLowerCase()
+.trim()
+.replace(/[^a-z0-9\s-]/g,"")
+.replace(/\s+/g,"-")
+.replace(/-+/g,"-");
+}
+
 export function createInternalRouter(){
 
 const r = express.Router();
@@ -70,7 +79,27 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 
 const salonId = salon.rows[0].id;
 
-const slug = name.toLowerCase().replace(/\s+/g,"-") + "-" + Date.now();
+/* CREATE CLEAN SLUG */
+
+let baseSlug = slugify(name);
+let slug = baseSlug;
+let i = 2;
+
+while(true){
+
+const exists = await pool.query(
+`SELECT id FROM masters WHERE slug=$1`,
+[slug]
+);
+
+if(!exists.rows.length) break;
+
+slug = baseSlug + "-" + i;
+i++;
+
+}
+
+/* CREATE USER */
 
 const user = await pool.query(
 `INSERT INTO auth_users(email,role,master_slug,password_hash)
@@ -84,10 +113,12 @@ slug
 
 const userId = user.rows[0].id;
 
+/* CREATE MASTER */
+
 const master = await pool.query(
 `INSERT INTO masters(name,slug,user_id)
 VALUES($1,$2,$3)
-RETURNING id,name`,
+RETURNING id,name,slug`,
 [
 name,
 slug,
@@ -96,6 +127,8 @@ userId
 );
 
 const masterId = master.rows[0].id;
+
+/* LINK MASTER TO SALON */
 
 await pool.query(
 `INSERT INTO master_salon(master_id,salon_id,status,invited_at)
@@ -110,7 +143,8 @@ res.json({
 ok:true,
 master:{
 id:masterId,
-name
+name,
+slug
 }
 });
 
@@ -301,8 +335,6 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 
 const salonId = salon.rows[0].id;
 
-/* BOOKINGS */
-
 const bookingsToday = await pool.query(`
 SELECT COUNT(*)::int AS v
 FROM bookings
@@ -324,8 +356,6 @@ WHERE salon_id=$1
 AND start_at >= NOW() - INTERVAL '30 days'
 `,[salonId]);
 
-/* CLIENTS */
-
 const clientsTotal = await pool.query(`
 SELECT COUNT(*)::int AS v
 FROM clients
@@ -338,8 +368,6 @@ FROM clients
 WHERE salon_id=$1
 AND DATE(created_at)=CURRENT_DATE
 `,[salonId]);
-
-/* MASTERS */
 
 const mastersActive = await pool.query(`
 SELECT COUNT(*)::int AS v
@@ -360,8 +388,6 @@ SELECT COUNT(*)::int AS v
 FROM master_salon
 WHERE salon_id=$1
 `,[salonId]);
-
-/* FINANCE */
 
 const revenueToday = await pool.query(`
 SELECT COALESCE(SUM(p.amount),0)::int AS v
