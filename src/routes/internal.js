@@ -6,6 +6,47 @@ export function createInternalRouter(){
 const r = express.Router();
 
 /*
+GET MASTER BY SLUG
+*/
+r.get("/masters/:slug", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const master = await pool.query(`
+SELECT
+m.id,
+m.name,
+m.slug,
+m.user_id
+FROM masters m
+WHERE m.slug=$1
+`,[slug]);
+
+if(!master.rows.length){
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+res.json({
+ok:true,
+master:master.rows[0]
+});
+
+}catch(err){
+
+console.error(err);
+
+res.status(500).json({
+ok:false,
+error:"MASTER_FETCH_FAILED"
+});
+
+}
+
+});
+
+/*
 CREATE MASTER
 */
 r.post("/masters/create", async (req,res)=>{
