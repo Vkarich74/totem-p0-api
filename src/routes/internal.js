@@ -56,6 +56,101 @@ error:"MASTER_FETCH_FAILED"
 });
 
 /*
+MASTER METRICS
+*/
+r.get("/masters/:slug/metrics", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const master = await pool.query(
+`SELECT id FROM masters WHERE slug=$1`,
+[slug]
+);
+
+if(!master.rows.length){
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const masterId = master.rows[0].id;
+
+/* BOOKINGS TODAY */
+
+const bookingsToday = await pool.query(`
+SELECT COUNT(*)::int AS v
+FROM bookings
+WHERE master_id=$1
+AND DATE(start_at)=CURRENT_DATE
+AND status NOT IN ('cancelled','canceled')
+`,[masterId]);
+
+/* BOOKINGS WEEK */
+
+const bookingsWeek = await pool.query(`
+SELECT COUNT(*)::int AS v
+FROM bookings
+WHERE master_id=$1
+AND start_at >= NOW() - INTERVAL '7 days'
+AND status NOT IN ('cancelled','canceled')
+`,[masterId]);
+
+/* CLIENTS TOTAL */
+
+const clientsTotal = await pool.query(`
+SELECT COUNT(DISTINCT client_id)::int AS v
+FROM bookings
+WHERE master_id=$1
+AND client_id IS NOT NULL
+`,[masterId]);
+
+/* REVENUE TODAY */
+
+const revenueToday = await pool.query(`
+SELECT COALESCE(SUM(p.amount),0)::int AS v
+FROM payments p
+JOIN bookings b ON b.id=p.booking_id
+WHERE b.master_id=$1
+AND p.status='confirmed'
+AND DATE(b.start_at)=CURRENT_DATE
+`,[masterId]);
+
+/* REVENUE MONTH */
+
+const revenueMonth = await pool.query(`
+SELECT COALESCE(SUM(p.amount),0)::int AS v
+FROM payments p
+JOIN bookings b ON b.id=p.booking_id
+WHERE b.master_id=$1
+AND p.status='confirmed'
+AND b.start_at >= date_trunc('month',NOW())
+`,[masterId]);
+
+res.json({
+ok:true,
+metrics:{
+bookings_today:bookingsToday.rows[0].v,
+bookings_week:bookingsWeek.rows[0].v,
+clients_total:clientsTotal.rows[0].v,
+revenue_today:revenueToday.rows[0].v,
+revenue_month:revenueMonth.rows[0].v
+}
+});
+
+}catch(err){
+
+console.error("MASTER METRICS ERROR:",err);
+
+res.status(500).json({
+ok:false,
+error:"MASTER_METRICS_FAILED"
+});
+
+}
+
+});
+
+/*
 CREATE MASTER
 */
 r.post("/masters/create", async (req,res)=>{
@@ -79,8 +174,6 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 
 const salonId = salon.rows[0].id;
 
-/* CREATE CLEAN SLUG */
-
 let baseSlug = slugify(name);
 let slug = baseSlug;
 let i = 2;
@@ -99,8 +192,6 @@ i++;
 
 }
 
-/* CREATE USER */
-
 const user = await pool.query(
 `INSERT INTO auth_users(email,role,master_slug,password_hash)
 VALUES($1,'master',$2,'x')
@@ -112,8 +203,6 @@ slug
 );
 
 const userId = user.rows[0].id;
-
-/* CREATE MASTER */
 
 const master = await pool.query(
 `INSERT INTO masters(name,slug,user_id)
@@ -127,8 +216,6 @@ userId
 );
 
 const masterId = master.rows[0].id;
-
-/* LINK MASTER TO SALON */
 
 await pool.query(
 `INSERT INTO master_salon(master_id,salon_id,status,invited_at)
