@@ -1,4 +1,5 @@
 import express from "express";
+import crypto from "crypto";
 import { pool } from "../db.js";
 
 function slugify(text){
@@ -213,7 +214,22 @@ return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 
 const masterId = master.rows[0].id;
 
-let clientId = null;
+/* salon */
+
+const salon = await pool.query(`
+SELECT s.id,s.slug
+FROM salons s
+JOIN master_salon ms ON ms.salon_id=s.id
+WHERE ms.master_id=$1
+LIMIT 1
+`,[masterId]);
+
+const salonId = salon.rows[0].id;
+const salonSlug = salon.rows[0].slug;
+
+/* client */
+
+let clientId;
 
 const existing = await pool.query(
 `SELECT id FROM clients WHERE phone=$1 LIMIT 1`,
@@ -221,36 +237,82 @@ const existing = await pool.query(
 );
 
 if(existing.rows.length){
+
 clientId = existing.rows[0].id;
+
 }else{
 
 const c = await pool.query(`
-INSERT INTO clients(name,phone)
-VALUES($1,$2)
+INSERT INTO clients(
+salon_id,
+name,
+phone
+)
+VALUES($1,$2,$3)
 RETURNING id
-`,[client_name,phone]);
+`,[
+salonId,
+client_name,
+phone
+]);
 
 clientId = c.rows[0].id;
+
 }
+
+/* slot */
 
 const start = new Date(start_at);
 const end = new Date(start.getTime()+30*60000);
 
+const slot = await pool.query(`
+INSERT INTO calendar_slots(
+salon_id,
+master_id,
+start_at,
+end_at,
+status
+)
+VALUES($1,$2,$3,$4,'reserved')
+RETURNING id
+`,[
+salonId,
+masterId,
+start,
+end
+]);
+
+const slotId = slot.rows[0].id;
+
+/* request */
+
+const requestId = crypto.randomUUID();
+
+/* booking */
+
 const booking = await pool.query(`
 INSERT INTO bookings(
+salon_id,
+salon_slug,
 master_id,
 client_id,
-status,
 start_at,
-end_at
+end_at,
+status,
+request_id,
+calendar_slot_id
 )
-VALUES($1,$2,'reserved',$3,$4)
+VALUES($1,$2,$3,$4,$5,$6,'reserved',$7,$8)
 RETURNING *
 `,[
+salonId,
+salonSlug,
 masterId,
 clientId,
 start,
-end
+end,
+requestId,
+slotId
 ]);
 
 res.json({
@@ -270,7 +332,6 @@ error:"BOOKING_CREATE_FAILED"
 }
 
 });
-
 
 /* ===========================
 SALON API
