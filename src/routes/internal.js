@@ -199,7 +199,7 @@ MASTER QUICK BOOKING CREATE
 r.post("/masters/:slug/bookings", async (req,res)=>{
 
 const { slug } = req.params;
-const { client_name, phone, start_at } = req.body;
+const { client_name, phone, start_at, service_id } = req.body;
 
 try{
 
@@ -252,13 +252,22 @@ VALUES($1,$2,$3)
 RETURNING id
 `,[
 salonId,
-client_name,
+client_name || "client",
 phone
 ]);
 
 clientId = c.rows[0].id;
 
 }
+
+/* service */
+
+const service = await pool.query(
+`SELECT price FROM services_v2 WHERE id=$1`,
+[service_id]
+);
+
+const price = service.rows.length ? service.rows[0].price : 0;
 
 /* slot */
 
@@ -300,9 +309,11 @@ start_at,
 end_at,
 status,
 request_id,
-calendar_slot_id
+calendar_slot_id,
+service_id,
+price_snapshot
 )
-VALUES($1,$2,$3,$4,$5,$6,'reserved',$7,$8)
+VALUES($1,$2,$3,$4,$5,$6,'reserved',$7,$8,$9,$10)
 RETURNING *
 `,[
 salonId,
@@ -312,7 +323,9 @@ clientId,
 start,
 end,
 requestId,
-slotId
+slotId,
+service_id,
+price
 ]);
 
 res.json({
