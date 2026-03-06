@@ -201,48 +201,86 @@ r.post("/masters/:slug/bookings", async (req,res)=>{
 const { slug } = req.params;
 const { client_name, phone, start_at, service_id } = req.body;
 
+const db = await pool.connect();
+
 try{
 
-const master = await pool.query(
+await db.query("BEGIN");
+
+if(!start_at){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"START_AT_REQUIRED"});
+}
+
+if(!service_id){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"SERVICE_ID_REQUIRED"});
+}
+
+/* master */
+const master = await db.query(
 `SELECT id FROM masters WHERE slug=$1`,
 [slug]
 );
 
 if(!master.rows.length){
+await db.query("ROLLBACK");
 return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 }
 
 const masterId = master.rows[0].id;
 
 /* salon */
-
-const salon = await pool.query(`
+const salon = await db.query(`
 SELECT s.id,s.slug
 FROM salons s
 JOIN master_salon ms ON ms.salon_id=s.id
 WHERE ms.master_id=$1
+ORDER BY s.id
 LIMIT 1
 `,[masterId]);
+
+if(!salon.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND_FOR_MASTER"});
+}
 
 const salonId = salon.rows[0].id;
 const salonSlug = salon.rows[0].slug;
 
+/* service */
+const service = await db.query(
+`SELECT id FROM services_v2 WHERE id=$1`,
+[service_id]
+);
+
+if(!service.rows.length){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"SERVICE_NOT_FOUND"});
+}
+
 /* client */
+const safeName = String(client_name || "").trim() || "client";
+const safePhone = String(phone || "").trim() || null;
 
-let clientId;
+let clientId = null;
 
-const existing = await pool.query(
-`SELECT id FROM clients WHERE phone=$1 LIMIT 1`,
-[phone]
+if(safePhone){
+const existing = await db.query(
+`SELECT id
+FROM clients
+WHERE salon_id=$1 AND phone=$2
+LIMIT 1`,
+[salonId, safePhone]
 );
 
 if(existing.rows.length){
-
 clientId = existing.rows[0].id;
+}
+}
 
-}else{
-
-const c = await pool.query(`
+if(!clientId){
+const createdClient = await db.query(`
 INSERT INTO clients(
 salon_id,
 name,
@@ -252,29 +290,24 @@ VALUES($1,$2,$3)
 RETURNING id
 `,[
 salonId,
-client_name || "client",
-phone
+safeName,
+safePhone
 ]);
 
-clientId = c.rows[0].id;
-
+clientId = createdClient.rows[0].id;
 }
 
-/* service */
-
-const service = await pool.query(
-`SELECT price FROM services_v2 WHERE id=$1`,
-[service_id]
-);
-
-const price = service.rows.length ? service.rows[0].price : 0;
-
 /* slot */
-
 const start = new Date(start_at);
-const end = new Date(start.getTime()+30*60000);
 
-const slot = await pool.query(`
+if(Number.isNaN(start.getTime())){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"INVALID_START_AT"});
+}
+
+const end = new Date(start.getTime() + 30 * 60000);
+
+const slot = await db.query(`
 INSERT INTO calendar_slots(
 salon_id,
 master_id,
@@ -293,40 +326,39 @@ end
 
 const slotId = slot.rows[0].id;
 
-/* request */
-
+/* booking */
 const requestId = crypto.randomUUID();
 
-/* booking */
-
-const booking = await pool.query(`
+const booking = await db.query(`
 INSERT INTO bookings(
 salon_id,
 salon_slug,
 master_id,
-client_id,
 start_at,
 end_at,
 status,
 request_id,
 calendar_slot_id,
+client_id,
 service_id,
 price_snapshot
 )
-VALUES($1,$2,$3,$4,$5,$6,'reserved',$7,$8,$9,$10)
+VALUES($1,$2,$3,$4,$5,'reserved',$6,$7,$8,$9,$10)
 RETURNING *
 `,[
 salonId,
 salonSlug,
 masterId,
-clientId,
 start,
 end,
 requestId,
 slotId,
+clientId,
 service_id,
-price
+null
 ]);
+
+await db.query("COMMIT");
 
 res.json({
 ok:true,
@@ -335,12 +367,21 @@ booking:booking.rows[0]
 
 }catch(err){
 
-console.error(err);
+try{
+await db.query("ROLLBACK");
+}catch(_rollbackErr){
+}
+
+console.error("MASTER_QUICK_BOOKING_CREATE_ERROR", err);
 
 res.status(500).json({
 ok:false,
 error:"BOOKING_CREATE_FAILED"
 });
+
+}finally{
+
+db.release();
 
 }
 
