@@ -49,6 +49,71 @@ error:"MASTER_FETCH_FAILED"
 
 
 /*
+MASTER METRICS
+*/
+r.get("/masters/:slug/metrics", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const master = await pool.query(
+`SELECT id FROM masters WHERE slug=$1`,
+[slug]
+);
+
+if(!master.rows.length){
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const masterId = master.rows[0].id;
+
+const bookingsToday = await pool.query(`
+SELECT COUNT(*)::int AS v
+FROM bookings
+WHERE master_id=$1
+AND DATE(start_at)=CURRENT_DATE
+`,[masterId]);
+
+const bookingsWeek = await pool.query(`
+SELECT COUNT(*)::int AS v
+FROM bookings
+WHERE master_id=$1
+AND start_at >= NOW() - INTERVAL '7 days'
+`,[masterId]);
+
+const clientsTotal = await pool.query(`
+SELECT COUNT(*)::int AS v
+FROM clients
+WHERE id IN (
+SELECT client_id FROM bookings WHERE master_id=$1
+)
+`,[masterId]);
+
+res.json({
+ok:true,
+metrics:{
+bookings_today:bookingsToday.rows[0].v,
+bookings_week:bookingsWeek.rows[0].v,
+clients_total:clientsTotal.rows[0].v
+}
+});
+
+}catch(err){
+
+console.error("MASTER_METRICS_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"MASTER_METRICS_FAILED"
+});
+
+}
+
+});
+
+
+/*
 MASTER BOOKINGS
 */
 r.get("/masters/:slug/bookings", async (req,res)=>{
@@ -102,6 +167,56 @@ error:"MASTER_BOOKINGS_FETCH_FAILED"
 
 
 /*
+MASTER CLIENTS
+*/
+r.get("/masters/:slug/clients", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const master = await pool.query(
+`SELECT id FROM masters WHERE slug=$1`,
+[slug]
+);
+
+if(!master.rows.length){
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const masterId = master.rows[0].id;
+
+const clients = await pool.query(`
+SELECT DISTINCT
+c.id,
+c.name,
+c.phone
+FROM clients c
+JOIN bookings b ON b.client_id=c.id
+WHERE b.master_id=$1
+ORDER BY c.id DESC
+`,[masterId]);
+
+res.json({
+ok:true,
+clients:clients.rows
+});
+
+}catch(err){
+
+console.error("MASTER_CLIENTS_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"MASTER_CLIENTS_FETCH_FAILED"
+});
+
+}
+
+});
+
+
+/*
 MASTER QUICK BOOKING CREATE
 */
 r.post("/masters/:slug/bookings", async (req,res)=>{
@@ -115,7 +230,6 @@ try{
 
 await db.query("BEGIN");
 
-/* validate */
 if(!start_at){
 await db.query("ROLLBACK");
 return res.status(400).json({ok:false,error:"START_AT_REQUIRED"});
@@ -133,7 +247,6 @@ await db.query("ROLLBACK");
 return res.status(400).json({ok:false,error:"INVALID_START_AT"});
 }
 
-/* master */
 const master = await db.query(
 `SELECT id FROM masters WHERE slug=$1`,
 [slug]
@@ -146,11 +259,6 @@ return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 
 const masterId = master.rows[0].id;
 
-
-/*
-RESOLVE SALON THROUGH SERVICE
-(главный фикс)
-*/
 const serviceLink = await db.query(`
 SELECT sms.salon_id, s.slug
 FROM salon_master_services sms
@@ -172,8 +280,6 @@ return res.status(400).json({ok:false,error:"SERVICE_INACTIVE"});
 const salonId = serviceLink.rows[0].salon_id;
 const salonSlug = serviceLink.rows[0].slug;
 
-
-/* client */
 const safeName = String(client_name || "").trim() || "client";
 const safePhone = String(phone || "").trim() || null;
 
@@ -215,11 +321,6 @@ clientId = createdClient.rows[0].id;
 
 }
 
-
-/*
-SLOT LOGIC
-reuse slot if exists
-*/
 const end = new Date(start.getTime() + 30 * 60000);
 
 let slotId = null;
@@ -285,9 +386,6 @@ slotId = slot.rows[0].id;
 
 }
 
-
-/* booking */
-
 const requestId = crypto.randomUUID();
 
 const booking = await db.query(`
@@ -328,21 +426,13 @@ booking:booking.rows[0]
 
 }catch(err){
 
-try{
-await db.query("ROLLBACK");
-}catch(e){}
+try{ await db.query("ROLLBACK"); }catch(e){}
 
 console.error("BOOKING_ENGINE_ERROR",err);
 
 res.status(500).json({
 ok:false,
-error:"BOOKING_CREATE_FAILED",
-db_error:{
-message:err?.message,
-detail:err?.detail,
-where:err?.where,
-code:err?.code
-}
+error:"BOOKING_CREATE_FAILED"
 });
 
 }finally{
@@ -354,8 +444,180 @@ db.release();
 });
 
 
-/* SALON METRICS */
+/* SALON ROOT */
+r.get("/salons/:slug", async (req,res)=>{
 
+const { slug } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id,name,slug FROM salons WHERE slug=$1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+res.json({
+ok:true,
+salon:salon.rows[0]
+});
+
+}catch(err){
+
+console.error("SALON_FETCH_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"SALON_FETCH_FAILED"
+});
+
+}
+
+});
+
+
+/* SALON MASTERS */
+r.get("/salons/:slug/masters", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id FROM salons WHERE slug=$1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+const masters = await pool.query(`
+SELECT m.id,m.name,m.slug
+FROM masters m
+JOIN master_salon ms ON ms.master_id=m.id
+WHERE ms.salon_id=$1
+`,[salonId]);
+
+res.json({
+ok:true,
+masters:masters.rows
+});
+
+}catch(err){
+
+console.error("SALON_MASTERS_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"SALON_MASTERS_FETCH_FAILED"
+});
+
+}
+
+});
+
+
+/* SALON CLIENTS */
+r.get("/salons/:slug/clients", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id FROM salons WHERE slug=$1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+const clients = await pool.query(`
+SELECT id,name,phone
+FROM clients
+WHERE salon_id=$1
+ORDER BY id DESC
+`,[salonId]);
+
+res.json({
+ok:true,
+clients:clients.rows
+});
+
+}catch(err){
+
+console.error("SALON_CLIENTS_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"SALON_CLIENTS_FETCH_FAILED"
+});
+
+}
+
+});
+
+
+/* SALON BOOKINGS */
+r.get("/salons/:slug/bookings", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id FROM salons WHERE slug=$1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+const bookings = await pool.query(`
+SELECT
+b.id,
+b.start_at,
+b.status,
+c.name,
+c.phone
+FROM bookings b
+LEFT JOIN clients c ON c.id=b.client_id
+WHERE b.salon_id=$1
+ORDER BY b.start_at DESC
+`,[salonId]);
+
+res.json({
+ok:true,
+bookings:bookings.rows
+});
+
+}catch(err){
+
+console.error("SALON_BOOKINGS_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"SALON_BOOKINGS_FETCH_FAILED"
+});
+
+}
+
+});
+
+
+/* SALON METRICS */
 r.get("/salons/:slug/metrics", async (req,res)=>{
 
 const { slug } = req.params;
