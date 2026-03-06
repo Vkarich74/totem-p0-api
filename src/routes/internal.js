@@ -140,6 +140,58 @@ error:"MASTER_METRICS_FAILED"
 
 });
 
+/*
+MASTER BOOKINGS  (NEW ENDPOINT)
+*/
+r.get("/masters/:slug/bookings", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const master = await pool.query(
+`SELECT id FROM masters WHERE slug=$1`,
+[slug]
+);
+
+if(!master.rows.length){
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const masterId = master.rows[0].id;
+
+const bookings = await pool.query(`
+SELECT
+b.id,
+b.status,
+b.start_at,
+b.end_at,
+c.name AS client_name,
+c.phone
+FROM bookings b
+LEFT JOIN clients c ON c.id=b.client_id
+WHERE b.master_id=$1
+ORDER BY b.start_at DESC
+`,[masterId]);
+
+res.json({
+ok:true,
+bookings:bookings.rows
+});
+
+}catch(err){
+
+console.error(err);
+
+res.status(500).json({
+ok:false,
+error:"MASTER_BOOKINGS_FETCH_FAILED"
+});
+
+}
+
+});
+
 
 /* ===========================
 SALON API (OWNER CRM)
@@ -355,7 +407,6 @@ error:"SALON_BOOKINGS_FETCH_FAILED"
 }
 
 });
-
 
 return r;
 
