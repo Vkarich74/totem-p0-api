@@ -2,15 +2,6 @@ import express from "express";
 import crypto from "crypto";
 import { pool } from "../db.js";
 
-function slugify(text){
-return text
-.toLowerCase()
-.trim()
-.replace(/[^a-z0-9\s-]/g,"")
-.replace(/\s+/g,"-")
-.replace(/-+/g,"-");
-}
-
 export function createInternalRouter(){
 
 const r = express.Router();
@@ -56,90 +47,6 @@ error:"MASTER_FETCH_FAILED"
 
 });
 
-/*
-MASTER METRICS
-*/
-r.get("/masters/:slug/metrics", async (req,res)=>{
-
-const { slug } = req.params;
-
-try{
-
-const master = await pool.query(
-`SELECT id FROM masters WHERE slug=$1`,
-[slug]
-);
-
-if(!master.rows.length){
-return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
-}
-
-const masterId = master.rows[0].id;
-
-const bookingsToday = await pool.query(`
-SELECT COUNT(*)::int AS v
-FROM bookings
-WHERE master_id=$1
-AND DATE(start_at)=CURRENT_DATE
-AND status NOT IN ('cancelled','canceled')
-`,[masterId]);
-
-const bookingsWeek = await pool.query(`
-SELECT COUNT(*)::int AS v
-FROM bookings
-WHERE master_id=$1
-AND start_at >= NOW() - INTERVAL '7 days'
-AND status NOT IN ('cancelled','canceled')
-`,[masterId]);
-
-const clientsTotal = await pool.query(`
-SELECT COUNT(DISTINCT client_id)::int AS v
-FROM bookings
-WHERE master_id=$1
-AND client_id IS NOT NULL
-`,[masterId]);
-
-const revenueToday = await pool.query(`
-SELECT COALESCE(SUM(p.amount),0)::int AS v
-FROM payments p
-JOIN bookings b ON b.id=p.booking_id
-WHERE b.master_id=$1
-AND p.status='confirmed'
-AND DATE(b.start_at)=CURRENT_DATE
-`,[masterId]);
-
-const revenueMonth = await pool.query(`
-SELECT COALESCE(SUM(p.amount),0)::int AS v
-FROM payments p
-JOIN bookings b ON b.id=p.booking_id
-WHERE b.master_id=$1
-AND p.status='confirmed'
-AND b.start_at >= date_trunc('month',NOW())
-`,[masterId]);
-
-res.json({
-ok:true,
-metrics:{
-bookings_today:bookingsToday.rows[0].v,
-bookings_week:bookingsWeek.rows[0].v,
-clients_total:clientsTotal.rows[0].v,
-revenue_today:revenueToday.rows[0].v,
-revenue_month:revenueMonth.rows[0].v
-}
-});
-
-}catch(err){
-
-console.error("MASTER_METRICS_ERROR", err);
-
-res.status(500).json({
-ok:false,
-error:"MASTER_METRICS_FAILED"
-});
-
-}
-
-});
 
 /*
 MASTER BOOKINGS
@@ -193,6 +100,7 @@ error:"MASTER_BOOKINGS_FETCH_FAILED"
 
 });
 
+
 /*
 MASTER QUICK BOOKING CREATE
 */
@@ -207,6 +115,7 @@ try{
 
 await db.query("BEGIN");
 
+/* validate */
 if(!start_at){
 await db.query("ROLLBACK");
 return res.status(400).json({ok:false,error:"START_AT_REQUIRED"});
@@ -237,7 +146,11 @@ return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 
 const masterId = master.rows[0].id;
 
-/* service + salon resolution */
+
+/*
+RESOLVE SALON THROUGH SERVICE
+(главный фикс)
+*/
 const serviceLink = await db.query(`
 SELECT sms.salon_id, s.slug
 FROM salon_master_services sms
@@ -259,6 +172,7 @@ return res.status(400).json({ok:false,error:"SERVICE_INACTIVE"});
 const salonId = serviceLink.rows[0].salon_id;
 const salonSlug = serviceLink.rows[0].slug;
 
+
 /* client */
 const safeName = String(client_name || "").trim() || "client";
 const safePhone = String(phone || "").trim() || null;
@@ -266,6 +180,7 @@ const safePhone = String(phone || "").trim() || null;
 let clientId = null;
 
 if(safePhone){
+
 const existingClient = await db.query(
 `SELECT id
 FROM clients
@@ -277,9 +192,11 @@ LIMIT 1`,
 if(existingClient.rows.length){
 clientId = existingClient.rows[0].id;
 }
+
 }
 
 if(!clientId){
+
 const createdClient = await db.query(`
 INSERT INTO clients(
 salon_id,
@@ -295,15 +212,20 @@ safePhone
 ]);
 
 clientId = createdClient.rows[0].id;
+
 }
 
-/* slot */
+
+/*
+SLOT LOGIC
+reuse slot if exists
+*/
 const end = new Date(start.getTime() + 30 * 60000);
 
 let slotId = null;
 
 const existingSlot = await db.query(`
-SELECT id, status
+SELECT id
 FROM calendar_slots
 WHERE master_id=$1
 AND start_at=$2
@@ -327,12 +249,15 @@ LIMIT 1
 `,[slotId]);
 
 if(existingBooking.rows.length){
+
 await db.query("ROLLBACK");
+
 return res.status(409).json({
 ok:false,
 error:"BOOKING_ALREADY_EXISTS_FOR_SLOT",
 slot_id:slotId
 });
+
 }
 
 }else{
@@ -360,7 +285,9 @@ slotId = slot.rows[0].id;
 
 }
 
+
 /* booking */
+
 const requestId = crypto.randomUUID();
 
 const booking = await db.query(`
@@ -403,13 +330,19 @@ booking:booking.rows[0]
 
 try{
 await db.query("ROLLBACK");
-}catch(_rollbackErr){}
+}catch(e){}
 
-console.error("MASTER_QUICK_BOOKING_CREATE_ERROR",err);
+console.error("BOOKING_ENGINE_ERROR",err);
 
 res.status(500).json({
 ok:false,
-error:"BOOKING_CREATE_FAILED"
+error:"BOOKING_CREATE_FAILED",
+db_error:{
+message:err?.message,
+detail:err?.detail,
+where:err?.where,
+code:err?.code
+}
 });
 
 }finally{
@@ -420,9 +353,8 @@ db.release();
 
 });
 
-/* ===========================
-SALON API
-=========================== */
+
+/* SALON METRICS */
 
 r.get("/salons/:slug/metrics", async (req,res)=>{
 
