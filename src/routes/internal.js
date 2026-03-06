@@ -237,34 +237,27 @@ return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 
 const masterId = master.rows[0].id;
 
-/* salon */
-const salon = await db.query(`
-SELECT s.id,s.slug
-FROM salons s
-JOIN master_salon ms ON ms.salon_id=s.id
-WHERE ms.master_id=$1
-ORDER BY s.id
+/* service + salon resolution */
+const serviceLink = await db.query(`
+SELECT sms.salon_id, s.slug
+FROM salon_master_services sms
+JOIN salons s ON s.id=sms.salon_id
+WHERE sms.master_id=$1
+AND sms.service_pk=$2
+AND sms.active=true
 LIMIT 1
-`,[masterId]);
+`,[
+masterId,
+service_id
+]);
 
-if(!salon.rows.length){
+if(!serviceLink.rows.length){
 await db.query("ROLLBACK");
-return res.status(404).json({ok:false,error:"SALON_NOT_FOUND_FOR_MASTER"});
+return res.status(400).json({ok:false,error:"SERVICE_INACTIVE"});
 }
 
-const salonId = salon.rows[0].id;
-const salonSlug = salon.rows[0].slug;
-
-/* service */
-const service = await db.query(
-`SELECT id FROM services_v2 WHERE id=$1`,
-[service_id]
-);
-
-if(!service.rows.length){
-await db.query("ROLLBACK");
-return res.status(400).json({ok:false,error:"SERVICE_NOT_FOUND"});
-}
+const salonId = serviceLink.rows[0].salon_id;
+const salonSlug = serviceLink.rows[0].slug;
 
 /* client */
 const safeName = String(client_name || "").trim() || "client";
@@ -326,22 +319,21 @@ if(existingSlot.rows.length){
 
 slotId = existingSlot.rows[0].id;
 
-const status = String(existingSlot.rows[0].status || "").toLowerCase();
+const existingBooking = await db.query(`
+SELECT id
+FROM bookings
+WHERE calendar_slot_id=$1
+LIMIT 1
+`,[slotId]);
 
-if(status !== "cancelled"){
+if(existingBooking.rows.length){
 await db.query("ROLLBACK");
 return res.status(409).json({
 ok:false,
-error:"SLOT_ALREADY_EXISTS",
+error:"BOOKING_ALREADY_EXISTS_FOR_SLOT",
 slot_id:slotId
 });
 }
-
-await db.query(`
-UPDATE calendar_slots
-SET status='reserved'
-WHERE id=$1
-`,[slotId]);
 
 }else{
 
@@ -369,23 +361,6 @@ slotId = slot.rows[0].id;
 }
 
 /* booking */
-const existingBooking = await db.query(`
-SELECT id
-FROM bookings
-WHERE calendar_slot_id=$1
-LIMIT 1
-`,[slotId]);
-
-if(existingBooking.rows.length){
-await db.query("ROLLBACK");
-return res.status(409).json({
-ok:false,
-error:"BOOKING_ALREADY_EXISTS_FOR_SLOT",
-slot_id:slotId,
-booking_id:existingBooking.rows[0].id
-});
-}
-
 const requestId = crypto.randomUUID();
 
 const booking = await db.query(`
@@ -428,34 +403,13 @@ booking:booking.rows[0]
 
 try{
 await db.query("ROLLBACK");
-}catch(_rollbackErr){
-}
+}catch(_rollbackErr){}
 
-console.error("MASTER_QUICK_BOOKING_CREATE_ERROR", {
-message: err?.message,
-detail: err?.detail,
-hint: err?.hint,
-where: err?.where,
-table: err?.table,
-constraint: err?.constraint,
-code: err?.code,
-schema: err?.schema,
-body: req.body,
-slug
-});
+console.error("MASTER_QUICK_BOOKING_CREATE_ERROR",err);
 
 res.status(500).json({
 ok:false,
-error:"BOOKING_CREATE_FAILED",
-db_error:{
-message: err?.message || null,
-detail: err?.detail || null,
-hint: err?.hint || null,
-where: err?.where || null,
-table: err?.table || null,
-constraint: err?.constraint || null,
-code: err?.code || null
-}
+error:"BOOKING_CREATE_FAILED"
 });
 
 }finally{
@@ -489,53 +443,15 @@ const salonId = salon.rows[0].id;
 
 const bookingsToday = await pool.query(`
 SELECT COUNT(*)::int AS v
-FROM bookings b
-JOIN master_salon ms ON ms.master_id=b.master_id
-WHERE ms.salon_id=$1
+FROM bookings
+WHERE salon_id=$1
 AND DATE(start_at)=CURRENT_DATE
-`,[salonId]);
-
-const bookingsWeek = await pool.query(`
-SELECT COUNT(*)::int AS v
-FROM bookings b
-JOIN master_salon ms ON ms.master_id=b.master_id
-WHERE ms.salon_id=$1
-AND start_at >= NOW() - INTERVAL '7 days'
-`,[salonId]);
-
-const clientsTotal = await pool.query(`
-SELECT COUNT(DISTINCT client_id)::int AS v
-FROM bookings b
-JOIN master_salon ms ON ms.master_id=b.master_id
-WHERE ms.salon_id=$1
-`,[salonId]);
-
-const revenueToday = await pool.query(`
-SELECT COALESCE(SUM(p.amount),0)::int AS v
-FROM payments p
-JOIN bookings b ON b.id=p.booking_id
-JOIN master_salon ms ON ms.master_id=b.master_id
-WHERE ms.salon_id=$1
-AND DATE(b.start_at)=CURRENT_DATE
-`,[salonId]);
-
-const revenueMonth = await pool.query(`
-SELECT COALESCE(SUM(p.amount),0)::int AS v
-FROM payments p
-JOIN bookings b ON b.id=p.booking_id
-JOIN master_salon ms ON ms.master_id=b.master_id
-WHERE ms.salon_id=$1
-AND b.start_at >= date_trunc('month',NOW())
 `,[salonId]);
 
 res.json({
 ok:true,
 metrics:{
-bookings_today:bookingsToday.rows[0].v,
-bookings_week:bookingsWeek.rows[0].v,
-clients_total:clientsTotal.rows[0].v,
-revenue_today:revenueToday.rows[0].v,
-revenue_month:revenueMonth.rows[0].v
+bookings_today:bookingsToday.rows[0].v
 }
 });
 
