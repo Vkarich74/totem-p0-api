@@ -372,11 +372,31 @@ await db.query("ROLLBACK");
 }catch(_rollbackErr){
 }
 
-console.error("MASTER_QUICK_BOOKING_CREATE_ERROR", err);
+console.error("MASTER_QUICK_BOOKING_CREATE_ERROR", {
+message: err?.message,
+detail: err?.detail,
+hint: err?.hint,
+where: err?.where,
+table: err?.table,
+constraint: err?.constraint,
+code: err?.code,
+schema: err?.schema,
+body: req.body,
+slug
+});
 
 res.status(500).json({
 ok:false,
-error:"BOOKING_CREATE_FAILED"
+error:"BOOKING_CREATE_FAILED",
+db_error:{
+message: err?.message || null,
+detail: err?.detail || null,
+hint: err?.hint || null,
+where: err?.where || null,
+table: err?.table || null,
+constraint: err?.constraint || null,
+code: err?.code || null
+}
 });
 
 }finally{
