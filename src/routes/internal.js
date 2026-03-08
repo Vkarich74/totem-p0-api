@@ -1164,7 +1164,7 @@ amount_cents,
 reference_type,
 reference_id
 )
-VALUES($1,'debit',$2,'payment_split',$3)
+VALUES($1,'debit',$2,'payment',$3)
 `,[
 salonWalletId,
 service_price,
@@ -1179,7 +1179,7 @@ amount_cents,
 reference_type,
 reference_id
 )
-VALUES($1,'credit',$2,'payment_split',$3)
+VALUES($1,'credit',$2,'payment',$3)
 `,[
 masterWalletId,
 service_price,
