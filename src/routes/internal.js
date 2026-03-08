@@ -841,6 +841,161 @@ error:"SALON_PAYOUTS_FETCH_FAILED"
 
 });
 
+
+/* SALON WALLET */
+r.get("/salons/:slug/wallet", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id FROM salons WHERE slug=$1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+const wallet = await pool.query(`
+SELECT
+w.id,
+w.owner_type,
+w.owner_id,
+w.currency,
+w.created_at
+FROM totem_test.wallets w
+WHERE w.owner_type='salon'
+AND w.owner_id=$1
+LIMIT 1
+`,[salonId]);
+
+res.json({
+ok:true,
+wallet:wallet.rows[0] || null
+});
+
+}catch(err){
+
+console.error("SALON_WALLET_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"SALON_WALLET_FETCH_FAILED"
+});
+
+}
+
+});
+
+
+/* SALON WALLET BALANCE */
+r.get("/salons/:slug/wallet-balance", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id FROM salons WHERE slug=$1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+const balance = await pool.query(`
+SELECT
+w.id AS wallet_id,
+w.owner_type,
+w.owner_id,
+w.currency,
+COALESCE(v.computed_balance_cents,0) AS computed_balance_cents
+FROM totem_test.wallets w
+LEFT JOIN totem_test.v_wallet_balance_computed v ON v.wallet_id=w.id
+WHERE w.owner_type='salon'
+AND w.owner_id=$1
+LIMIT 1
+`,[salonId]);
+
+res.json({
+ok:true,
+balance:balance.rows[0] || null
+});
+
+}catch(err){
+
+console.error("SALON_WALLET_BALANCE_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"SALON_WALLET_BALANCE_FETCH_FAILED"
+});
+
+}
+
+});
+
+
+/* SALON LEDGER */
+r.get("/salons/:slug/ledger", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id FROM salons WHERE slug=$1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+const ledger = await pool.query(`
+SELECT
+le.id,
+le.wallet_id,
+le.direction,
+le.amount_cents,
+le.reference_type,
+le.reference_id,
+le.created_at
+FROM totem_test.ledger_entries le
+JOIN totem_test.wallets w ON w.id=le.wallet_id
+WHERE w.owner_type='salon'
+AND w.owner_id=$1
+ORDER BY le.created_at DESC
+LIMIT 100
+`,[salonId]);
+
+res.json({
+ok:true,
+ledger:ledger.rows
+});
+
+}catch(err){
+
+console.error("SALON_LEDGER_FETCH_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"SALON_LEDGER_FETCH_FAILED"
+});
+
+}
+
+});
+
 return r;
 
 }
