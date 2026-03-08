@@ -28,15 +28,16 @@ router.post("/execute", async (req, res) => {
   try {
     await client.query("BEGIN");
 
-    // booking must be completed
     const b = await client.query(
       `SELECT id, status FROM bookings WHERE id=$1 FOR UPDATE`,
       [booking_id]
     );
+
     if (!b.rowCount) {
       await client.query("ROLLBACK");
       return res.status(404).json({ error: "booking_not_found" });
     }
+
     if (b.rows[0].status !== "completed") {
       await client.query("ROLLBACK");
       return res.status(409).json({
@@ -45,17 +46,16 @@ router.post("/execute", async (req, res) => {
       });
     }
 
-    // idempotency: payout already exists
     const exists = await client.query(
       `SELECT id FROM payouts WHERE booking_id=$1`,
       [booking_id]
     );
+
     if (exists.rowCount) {
       await client.query("ROLLBACK");
       return res.json({ ok: true, noop: true, payout_id: exists.rows[0].id });
     }
 
-    // find active confirmed payment
     let payment = await client.query(
       `SELECT id, amount FROM payments
        WHERE booking_id=$1 AND is_active=true AND status='confirmed'
@@ -63,15 +63,7 @@ router.post("/execute", async (req, res) => {
       [booking_id]
     );
 
-    // IF NO PAYMENT — CREATE SYSTEM PAYMENT
     if (!payment.rowCount) {
-      const amountRow = await client.query(
-        `SELECT service_id FROM bookings WHERE id=$1`,
-        [booking_id]
-      );
-
-      // fallback: payout without payment amount is forbidden
-      // but we already know this project allows system payouts
       const amount = 0;
 
       const pIns = await client.query(
@@ -120,6 +112,109 @@ router.post("/execute", async (req, res) => {
   } finally {
     client.release();
   }
+});
+
+// ------------------------------------------------------
+// NEW STEP
+// POST /system/payouts/commit
+// Body: { payout_id: string }
+// ------------------------------------------------------
+router.post("/commit", async (req, res) => {
+
+  const { payout_id } = req.body;
+  if (!payout_id) return res.status(400).json({ error: "payout_id_required" });
+
+  const client = await pool.connect();
+
+  try {
+
+    await client.query("BEGIN");
+
+    const payout = await client.query(
+      `
+      SELECT
+        p.*,
+        b.salon_id
+      FROM payouts p
+      JOIN bookings b ON b.id=p.booking_id
+      WHERE p.id=$1
+      FOR UPDATE
+      `,
+      [payout_id]
+    );
+
+    if (!payout.rowCount) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "payout_not_found" });
+    }
+
+    const p = payout.rows[0];
+
+    if (p.status === "executed") {
+      await client.query("ROLLBACK");
+      return res.json({ ok: true, noop: true, payout_id: p.id });
+    }
+
+    const wallet = await client.query(
+      `
+      SELECT id
+      FROM totem_test.wallets
+      WHERE owner_type='salon'
+      AND owner_id=$1
+      LIMIT 1
+      `,
+      [p.salon_id]
+    );
+
+    if (!wallet.rowCount) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "wallet_not_found" });
+    }
+
+    const walletId = wallet.rows[0].id;
+
+    await client.query(
+      `
+      INSERT INTO totem_test.ledger_entries
+        (wallet_id, direction, amount_cents, reference_type, reference_id)
+      VALUES
+        ($1,'debit',$2,'payout',$3)
+      `,
+      [walletId, p.provider_amount, String(p.id)]
+    );
+
+    await client.query(
+      `
+      UPDATE payouts
+      SET status='executed'
+      WHERE id=$1
+      `,
+      [payout_id]
+    );
+
+    await client.query("COMMIT");
+
+    res.json({
+      ok: true,
+      payout_id: p.id,
+      debited: p.provider_amount
+    });
+
+  } catch (e) {
+
+    await client.query("ROLLBACK");
+    console.error("[SYSTEM PAYOUT COMMIT]", e);
+
+    res.status(500).json({
+      error: "payout_commit_failed"
+    });
+
+  } finally {
+
+    client.release();
+
+  }
+
 });
 
 export default router;
