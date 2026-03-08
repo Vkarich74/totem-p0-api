@@ -23,10 +23,11 @@ router.post("/flow", async (req, res) => {
 
   try {
     await client.connect();
+    await client.query("BEGIN");
 
     const provider = marketplace?.enabled ? "marketplace" : "direct";
 
-    // Insert active pending payment (NO currency column)
+    // create payment
     const ins = await client.query(
       `
       INSERT INTO payments (booking_id, provider, amount, status, is_active)
@@ -38,9 +39,67 @@ router.post("/flow", async (req, res) => {
 
     const p = ins.rows[0];
 
+    // find salon wallet
+    const salonWallet = await client.query(
+      `
+      SELECT w.id
+      FROM totem_test.wallets w
+      JOIN bookings b ON b.salon_id = w.owner_id
+      WHERE b.id = $1
+      AND w.owner_type = 'salon'
+      LIMIT 1
+      `,
+      [booking_id]
+    );
+
+    if (!salonWallet.rows.length) {
+      throw new Error("SALON_WALLET_NOT_FOUND");
+    }
+
+    const salonWalletId = salonWallet.rows[0].id;
+
+    // find system wallet
+    const systemWallet = await client.query(
+      `
+      SELECT id
+      FROM totem_test.system_wallets
+      LIMIT 1
+      `
+    );
+
+    if (!systemWallet.rows.length) {
+      throw new Error("SYSTEM_WALLET_NOT_FOUND");
+    }
+
+    const systemWalletId = systemWallet.rows[0].id;
+
+    const amountCents = service_price;
+
+    // debit system wallet
+    await client.query(
+      `
+      INSERT INTO totem_test.ledger_entries
+      (wallet_id, direction, amount_cents, reference_type, reference_id)
+      VALUES ($1, 'debit', $2, 'payment', $3)
+      `,
+      [systemWalletId, amountCents, p.id]
+    );
+
+    // credit salon wallet
+    await client.query(
+      `
+      INSERT INTO totem_test.ledger_entries
+      (wallet_id, direction, amount_cents, reference_type, reference_id)
+      VALUES ($1, 'credit', $2, 'payment', $3)
+      `,
+      [salonWalletId, amountCents, p.id]
+    );
+
+    await client.query("COMMIT");
+
     return res.json({
       ok: true,
-      build: "p5.2-flowfix-1",
+      build: "p5.3-ledger",
       flow: {
         booking_id: p.booking_id,
         intent: {
@@ -61,8 +120,11 @@ router.post("/flow", async (req, res) => {
         }
       }
     });
+
   } catch (e) {
-    // Postgres unique violation -> active payment exists
+
+    try { await client.query("ROLLBACK"); } catch (_) {}
+
     if (e && e.code === "23505") {
       try {
         const r = await client.query(
@@ -83,7 +145,6 @@ router.post("/flow", async (req, res) => {
       } catch (_) {}
     }
 
-    // Minimal diagnostic (no secrets)
     console.error("payments_flow_error", {
       code: e?.code,
       message: e?.message
@@ -93,6 +154,7 @@ router.post("/flow", async (req, res) => {
       error: "internal_error",
       pg_code: e?.code || null
     });
+
   } finally {
     await client.end();
   }
