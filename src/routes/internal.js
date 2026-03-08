@@ -1442,7 +1442,7 @@ const masterId = master.rows[0].id;
 const payouts = await pool.query(`
 SELECT
 p.id,
-p.amount,
+p.amount_cents AS amount,
 p.status,
 p.created_at
 FROM payouts p
@@ -1450,7 +1450,8 @@ JOIN totem_test.wallets w ON w.id=p.wallet_id
 WHERE w.owner_type='master'
 AND w.owner_id=$1
 ORDER BY p.created_at DESC
-LIMIT 50`,[masterId]);
+LIMIT 50
+`,[masterId]);
 
 res.json({
 ok:true,
@@ -1469,7 +1470,6 @@ error:"MASTER_PAYOUTS_FETCH_FAILED"
 }
 
 });
-
 return r;
 
 }
