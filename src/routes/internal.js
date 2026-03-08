@@ -662,6 +662,155 @@ error:"SALON_METRICS_FAILED"
 
 });
 
+
+/* SALON PAYMENTS */
+r.get("/salons/:slug/payments", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id FROM salons WHERE slug=$1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+const payments = await pool.query(`
+SELECT
+id,
+amount,
+method,
+status,
+created_at
+FROM payments
+WHERE salon_id=$1
+ORDER BY created_at DESC
+LIMIT 100
+`,[salonId]);
+
+res.json({
+ok:true,
+payments:payments.rows
+});
+
+}catch(err){
+
+console.error("SALON_PAYMENTS_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"SALON_PAYMENTS_FETCH_FAILED"
+});
+
+}
+
+});
+
+
+/* SALON SETTLEMENTS */
+r.get("/salons/:slug/settlements", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id FROM salons WHERE slug=$1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+const settlements = await pool.query(`
+SELECT
+id,
+period_start,
+period_end,
+amount,
+status
+FROM settlement_periods
+WHERE salon_id=$1
+ORDER BY period_start DESC
+LIMIT 50
+`,[salonId]);
+
+res.json({
+ok:true,
+settlements:settlements.rows
+});
+
+}catch(err){
+
+console.error("SALON_SETTLEMENTS_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"SALON_SETTLEMENTS_FETCH_FAILED"
+});
+
+}
+
+});
+
+
+/* SALON PAYOUTS */
+r.get("/salons/:slug/payouts", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id FROM salons WHERE slug=$1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+const payouts = await pool.query(`
+SELECT
+id,
+amount,
+status,
+created_at
+FROM payouts
+WHERE salon_id=$1
+ORDER BY created_at DESC
+LIMIT 50
+`,[salonId]);
+
+res.json({
+ok:true,
+payouts:payouts.rows
+});
+
+}catch(err){
+
+console.error("SALON_PAYOUTS_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"SALON_PAYOUTS_FETCH_FAILED"
+});
+
+}
+
+});
+
 return r;
 
 }
