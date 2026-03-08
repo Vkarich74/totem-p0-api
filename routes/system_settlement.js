@@ -28,35 +28,87 @@ router.post("/settle", async (req, res) => {
   try {
     await client.query("BEGIN");
 
-    // lock payout
+    // lock payout + resolve salon
     const p = await client.query(
-      `SELECT * FROM payouts WHERE id=$1 FOR UPDATE`,
+      `
+      SELECT
+        p.*,
+        b.salon_id
+      FROM payouts p
+      LEFT JOIN bookings b ON b.id = p.booking_id
+      WHERE p.id = $1
+      FOR UPDATE
+      `,
       [payout_id]
     );
+
     if (!p.rowCount) {
       await client.query("ROLLBACK");
       return res.status(404).json({ error: "payout_not_found" });
     }
 
-    if (p.rows[0].status === "paid") {
+    const payout = p.rows[0];
+
+    if (!payout.salon_id) {
       await client.query("ROLLBACK");
-      return res.json({ ok: true, noop: true });
+      return res.status(400).json({ error: "salon_id_not_resolved" });
     }
 
-    // get or create open settlement period
+    if (
+      payout.status === "paid" &&
+      payout.settlement_period_id &&
+      payout.payout_batch_id
+    ) {
+      await client.query("ROLLBACK");
+      return res.json({
+        ok: true,
+        noop: true,
+        payout_id: payout.id,
+        period_id: payout.settlement_period_id,
+        batch_id: payout.payout_batch_id,
+        salon_id: payout.salon_id,
+      });
+    }
+
+    if (payout.settlement_period_id || payout.payout_batch_id) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({
+        error: "payout_already_attached",
+        payout_id: payout.id,
+        settlement_period_id: payout.settlement_period_id,
+        payout_batch_id: payout.payout_batch_id,
+      });
+    }
+
+    // get or create open settlement period for this salon
     let period = await client.query(
-      `SELECT * FROM settlement_periods WHERE status='open' LIMIT 1 FOR UPDATE`
+      `
+      SELECT *
+      FROM settlement_periods
+      WHERE salon_id = $1
+        AND status = 'open'
+        AND is_archived = false
+      LIMIT 1
+      FOR UPDATE
+      `,
+      [payout.salon_id]
     );
 
     if (!period.rowCount) {
       const today = new Date().toISOString().slice(0, 10);
       const ins = await client.query(
         `
-        INSERT INTO settlement_periods (period_start, period_end, status)
-        VALUES ($1, $1, 'open')
+        INSERT INTO settlement_periods (
+          period_start,
+          period_end,
+          status,
+          salon_id,
+          is_archived
+        )
+        VALUES ($1, $1, 'open', $2, false)
         RETURNING *
         `,
-        [today]
+        [today, payout.salon_id]
       );
       period = { rows: [ins.rows[0]], rowCount: 1 };
     }
@@ -65,7 +117,12 @@ router.post("/settle", async (req, res) => {
 
     // get or create batch for this period
     let batch = await client.query(
-      `SELECT * FROM settlement_payout_batches WHERE settlement_period_id=$1 FOR UPDATE`,
+      `
+      SELECT *
+      FROM settlement_payout_batches
+      WHERE settlement_period_id = $1
+      FOR UPDATE
+      `,
       [periodId]
     );
 
@@ -73,11 +130,18 @@ router.post("/settle", async (req, res) => {
       const ins = await client.query(
         `
         INSERT INTO settlement_payout_batches
-          (settlement_period_id, total_gross, total_platform_fee, total_provider_amount, status)
-        VALUES ($1, 0, 0, 0, 'ready')
+          (
+            settlement_period_id,
+            total_gross,
+            total_platform_fee,
+            total_provider_amount,
+            status,
+            salon_id
+          )
+        VALUES ($1, 0, 0, 0, 'ready', $2)
         RETURNING *
         `,
-        [periodId]
+        [periodId, payout.salon_id]
       );
       batch = { rows: [ins.rows[0]], rowCount: 1 };
     }
@@ -85,7 +149,7 @@ router.post("/settle", async (req, res) => {
     const batchId = batch.rows[0].id;
 
     // attach payout to period & batch and mark paid
-    await client.query(
+    const upd = await client.query(
       `
       UPDATE payouts
       SET
@@ -93,9 +157,17 @@ router.post("/settle", async (req, res) => {
         settlement_period_id=$2,
         payout_batch_id=$3
       WHERE id=$1
+        AND settlement_period_id IS NULL
+        AND payout_batch_id IS NULL
+      RETURNING id
       `,
       [payout_id, periodId, batchId]
     );
+
+    if (!upd.rowCount) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "payout_attach_conflict" });
+    }
 
     // update batch totals
     await client.query(
@@ -109,16 +181,35 @@ router.post("/settle", async (req, res) => {
       `,
       [
         batchId,
-        p.rows[0].gross_amount,
-        p.rows[0].platform_fee,
-        p.rows[0].provider_amount,
+        Number(payout.gross_amount || 0),
+        Number(payout.platform_fee || 0),
+        Number(payout.provider_amount || 0),
       ]
     );
 
+    // keep rolling period current
+    await client.query(
+      `
+      UPDATE settlement_periods
+      SET period_end = GREATEST(period_end, CURRENT_DATE)
+      WHERE id = $1
+      `,
+      [periodId]
+    );
+
     await client.query("COMMIT");
-    return res.json({ ok: true, batch_id: batchId, period_id: periodId });
+    return res.json({
+      ok: true,
+      batch_id: batchId,
+      period_id: periodId,
+      payout_id: payout.id,
+      salon_id: payout.salon_id,
+      rolling: true,
+    });
   } catch (e) {
-    await client.query("ROLLBACK");
+    try {
+      await client.query("ROLLBACK");
+    } catch (rollbackError) {}
     console.error("[SYSTEM SETTLEMENT]", e);
     return res.status(500).json({ error: "internal_error" });
   } finally {
