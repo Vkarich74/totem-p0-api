@@ -1257,9 +1257,6 @@ error:"RECONCILIATION_REPORT_FAILED"
 });
 
 
-return r;
-
-
 /*
 MASTER WALLET
 */
@@ -1421,5 +1418,7 @@ error:"MASTER_LEDGER_FETCH_FAILED"
 
 });
 
+
+return r;
 
 }
