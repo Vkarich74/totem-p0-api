@@ -996,6 +996,163 @@ error:"SALON_LEDGER_FETCH_FAILED"
 
 });
 
+
+/* PAYMENT FLOW */
+r.post("/payments/flow", async (req,res)=>{
+
+const { booking_id, service_price } = req.body;
+
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+if(!booking_id || !service_price){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"INVALID_INPUT"});
+}
+
+const bookingCheck = await db.query(`
+SELECT
+b.id,
+b.salon_id
+FROM bookings b
+WHERE b.id=$1
+LIMIT 1
+`,[
+booking_id
+]);
+
+if(!bookingCheck.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"BOOKING_NOT_FOUND"});
+}
+
+const activePayment = await db.query(`
+SELECT id
+FROM payments
+WHERE booking_id=$1
+AND is_active=true
+LIMIT 1
+`,[
+booking_id
+]);
+
+if(activePayment.rows.length){
+await db.query("ROLLBACK");
+return res.status(409).json({
+ok:false,
+error:"ACTIVE_PAYMENT_EXISTS",
+payment_id:activePayment.rows[0].id
+});
+}
+
+const payment = await db.query(`
+INSERT INTO payments(
+booking_id,
+provider,
+amount,
+status,
+is_active
+)
+VALUES($1,'direct',$2,'confirmed',true)
+RETURNING id,booking_id,amount,status,provider,created_at
+`,[
+booking_id,
+service_price
+]);
+
+const paymentId = payment.rows[0].id;
+const salonId = bookingCheck.rows[0].salon_id;
+
+const wallet = await db.query(`
+SELECT
+w.id
+FROM totem_test.wallets w
+WHERE w.owner_type='salon'
+AND w.owner_id=$1
+LIMIT 1
+`,[
+salonId
+]);
+
+if(!wallet.rows.length){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"SALON_WALLET_NOT_FOUND"});
+}
+
+const salonWallet = wallet.rows[0].id;
+
+const systemWallet = await db.query(`
+SELECT wallet_id
+FROM totem_test.system_wallets
+LIMIT 1
+`);
+
+if(!systemWallet.rows.length){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"SYSTEM_WALLET_NOT_FOUND"});
+}
+
+const systemWalletId = systemWallet.rows[0].wallet_id;
+
+await db.query(`
+INSERT INTO totem_test.ledger_entries(
+wallet_id,
+direction,
+amount_cents,
+reference_type,
+reference_id
+)
+VALUES($1,'debit',$2,'payment',$3)
+`,[
+systemWalletId,
+service_price,
+String(paymentId)
+]);
+
+await db.query(`
+INSERT INTO totem_test.ledger_entries(
+wallet_id,
+direction,
+amount_cents,
+reference_type,
+reference_id
+)
+VALUES($1,'credit',$2,'payment',$3)
+`,[
+salonWallet,
+service_price,
+String(paymentId)
+]);
+
+await db.query("COMMIT");
+
+res.json({
+ok:true,
+payment:payment.rows[0]
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+console.error("PAYMENT_FLOW_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"PAYMENT_FLOW_FAILED"
+});
+
+}finally{
+
+db.release();
+
+}
+
+});
+
 return r;
 
 }
