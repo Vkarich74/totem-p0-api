@@ -737,10 +737,12 @@ SELECT
 sp.id,
 sp.period_start,
 sp.period_end,
-sp.amount,
-sp.status
+sp.status,
+sp.closed_at,
+sp.created_at
 FROM settlement_periods sp
-LEFT JOIN bookings b ON b.salon_id=$1
+WHERE sp.salon_id=$1
+AND sp.is_archived=false
 ORDER BY sp.period_start DESC
 LIMIT 50
 `,[salonId]);
