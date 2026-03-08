@@ -1419,6 +1419,59 @@ error:"MASTER_LEDGER_FETCH_FAILED"
 });
 
 
+/*
+MASTER PAYOUTS
+*/
+r.get("/masters/:slug/payouts", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const master = await pool.query(
+`SELECT id FROM masters WHERE slug=$1`,
+[slug]
+);
+
+if(!master.rows.length){
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const masterId = master.rows[0].id;
+
+const payouts = await pool.query(`
+SELECT
+p.id,
+p.amount,
+p.status,
+p.created_at
+FROM payouts p
+JOIN totem_test.wallets w ON w.id=p.wallet_id
+WHERE w.owner_type='master'
+AND w.owner_id=$1
+ORDER BY p.created_at DESC
+LIMIT 50`,[masterId]);
+
+res.json({
+ok:true,
+payouts:payouts.rows
+});
+
+}catch(err){
+
+console.error("MASTER_PAYOUTS_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"MASTER_PAYOUTS_FETCH_FAILED"
+});
+
+}
+
+});
+
 return r;
 
 }
+
+
