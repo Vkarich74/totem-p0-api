@@ -1442,13 +1442,12 @@ const masterId = master.rows[0].id;
 const payouts = await pool.query(`
 SELECT
 p.id,
-p.amount_cents AS amount,
+p.amount,
 p.status,
 p.created_at
 FROM payouts p
-JOIN totem_test.wallets w ON w.id=p.wallet_id
-WHERE w.owner_type='master'
-AND w.owner_id=$1
+JOIN bookings b ON b.id=p.booking_id
+WHERE b.master_id=$1
 ORDER BY p.created_at DESC
 LIMIT 50
 `,[masterId]);
