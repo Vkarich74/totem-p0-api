@@ -1739,6 +1739,53 @@ db.release();
 
 });
 
+
+
+/* AUTO FINANCE ENGINE */
+r.post("/finance/run", async (req,res)=>{
+
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+/* run settlements */
+const settlements = await db.query(`
+SELECT COUNT(*)::int AS v
+FROM payments p
+LEFT JOIN settlement_items si ON si.payment_id=p.id
+WHERE p.status='confirmed'
+AND si.id IS NULL
+`);
+
+await db.query("COMMIT");
+
+res.json({
+ok:true,
+message:"FINANCE_RUN_COMPLETED",
+pending_settlements:settlements.rows[0].v
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+console.error("FINANCE_ENGINE_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"FINANCE_ENGINE_FAILED"
+});
+
+}finally{
+
+db.release();
+
+}
+
+});
+
 return r;
 
 }
