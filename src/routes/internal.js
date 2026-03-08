@@ -786,13 +786,14 @@ const salonId = salon.rows[0].id;
 
 const payouts = await pool.query(`
 SELECT
-id,
-amount,
-status,
-created_at
-FROM payouts
-WHERE salon_id=$1
-ORDER BY created_at DESC
+p.id,
+p.amount,
+p.status,
+p.created_at
+FROM payouts p
+JOIN bookings b ON b.id=p.booking_id
+WHERE b.salon_id=$1
+ORDER BY p.created_at DESC
 LIMIT 50
 `,[salonId]);
 
