@@ -1663,6 +1663,82 @@ error:"MASTER_PAYOUTS_FETCH_FAILED"
 }
 
 });
+
+/* PAYOUT PROCESSOR */
+r.post("/payouts/run", async (req,res)=>{
+
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+const payouts = await db.query(`
+SELECT id,booking_id,amount
+FROM payouts
+WHERE status='created'
+ORDER BY id ASC
+LIMIT 500
+`);
+
+if(!payouts.rows.length){
+
+await db.query("ROLLBACK");
+
+return res.json({
+ok:true,
+payouts_processed:0,
+message:"NO_PAYOUTS"
+});
+
+}
+
+let processed = 0;
+
+for(const p of payouts.rows){
+
+await db.query(`
+UPDATE payouts
+SET status='processing'
+WHERE id=$1
+`,[p.id]);
+
+await db.query(`
+UPDATE payouts
+SET status='paid'
+WHERE id=$1
+`,[p.id]);
+
+processed += 1;
+
+}
+
+await db.query("COMMIT");
+
+res.json({
+ok:true,
+payouts_processed:processed
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+console.error("PAYOUT_PROCESSOR_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"PAYOUT_PROCESSOR_FAILED"
+});
+
+}finally{
+
+db.release();
+
+}
+
+});
+
 return r;
 
 }
