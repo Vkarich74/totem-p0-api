@@ -1175,8 +1175,11 @@ b.salon_id
 FROM payments p
 JOIN bookings b ON b.id=p.booking_id
 LEFT JOIN settlement_items si ON si.payment_id=p.id
+LEFT JOIN payouts po ON po.booking_id=b.id
 WHERE p.status='confirmed'
 AND si.id IS NULL
+AND po.id IS NULL
+ORDER BY p.id ASC
 LIMIT 500
 `);
 
@@ -1186,39 +1189,80 @@ await db.query("ROLLBACK");
 
 return res.json({
 ok:true,
-message:"NO_PAYMENTS_FOR_SETTLEMENT"
+message:"NO_PAYMENTS_FOR_SETTLEMENT",
+payments_processed:0
 });
 
 }
 
-const salonId = payments.rows[0].salon_id;
-
-const period = await db.query(`
-INSERT INTO settlement_periods(
-salon_id,
-period_start,
-period_end,
-status,
-created_at
-)
-VALUES(
-$1,
-NOW() - INTERVAL '7 days',
-NOW(),
-'open',
-NOW()
-)
-RETURNING id
-`,[
-salonId
-]);
-
-const settlementId = period.rows[0].id;
+const periodCache = new Map();
+let paymentsProcessed = 0;
 
 for(const p of payments.rows){
 
-const masterShare = Math.floor(p.amount * 0.7);
-const platformShare = p.amount - masterShare;
+let settlementId = periodCache.get(p.salon_id);
+
+if(!settlementId){
+
+const existingOpenPeriod = await db.query(`
+SELECT id
+FROM settlement_periods
+WHERE salon_id=$1
+AND status='open'
+AND is_archived=false
+ORDER BY id DESC
+LIMIT 1
+`,[
+p.salon_id
+]);
+
+if(existingOpenPeriod.rows.length){
+
+settlementId = existingOpenPeriod.rows[0].id;
+
+}else{
+
+const createdPeriod = await db.query(`
+INSERT INTO settlement_periods(
+period_start,
+period_end,
+status,
+created_at,
+salon_id,
+is_archived
+)
+VALUES(
+CURRENT_DATE,
+CURRENT_DATE,
+'open',
+NOW(),
+$1,
+false
+)
+RETURNING id
+`,[
+p.salon_id
+]);
+
+settlementId = createdPeriod.rows[0].id;
+
+}
+
+periodCache.set(p.salon_id, settlementId);
+
+}
+
+const payoutExists = await db.query(`
+SELECT id
+FROM payouts
+WHERE booking_id=$1
+LIMIT 1
+`,[
+p.booking_id
+]);
+
+const platformFee = Math.floor(p.amount * 0.30);
+const providerAmount = p.amount - platformFee;
 
 await db.query(`
 INSERT INTO settlement_items(
@@ -1238,24 +1282,40 @@ p.payment_id,
 p.booking_id,
 p.master_id,
 p.amount,
-masterShare,
-platformShare
+providerAmount,
+platformFee
 ]);
+
+if(!payoutExists.rows.length){
 
 await db.query(`
 INSERT INTO payouts(
-master_id,
 booking_id,
 amount,
 status,
-created_at
+created_at,
+payment_id,
+settlement_period_id,
+gross_amount,
+take_rate_bps,
+platform_fee,
+provider_amount
 )
-VALUES($1,$2,$3,'pending',NOW())
+VALUES($1,$2,'created',NOW(),$3,$4,$5,$6,$7,$8)
 `,[
-p.master_id,
 p.booking_id,
-masterShare
+providerAmount,
+p.payment_id,
+settlementId,
+p.amount,
+3000,
+platformFee,
+providerAmount
 ]);
+
+}
+
+paymentsProcessed += 1;
 
 }
 
@@ -1263,8 +1323,9 @@ await db.query("COMMIT");
 
 res.json({
 ok:true,
-settlement_id:settlementId,
-payments_processed:payments.rows.length
+payments_processed:paymentsProcessed,
+settlements_opened:periodCache.size,
+settlement_ids:Array.from(periodCache.values())
 });
 
 }catch(err){
