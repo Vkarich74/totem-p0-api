@@ -115,7 +115,6 @@ router.post("/execute", async (req, res) => {
 });
 
 // ------------------------------------------------------
-// NEW STEP
 // POST /system/payouts/commit
 // Body: { payout_id: string }
 // ------------------------------------------------------
@@ -172,6 +171,29 @@ router.post("/commit", async (req, res) => {
     }
 
     const walletId = wallet.rows[0].id;
+
+    // WALLET BALANCE CHECK
+    const balance = await client.query(
+      `
+      SELECT computed_balance_cents
+      FROM totem_test.v_wallet_balance_computed
+      WHERE wallet_id=$1
+      `,
+      [walletId]
+    );
+
+    const currentBalance = balance.rowCount
+      ? Number(balance.rows[0].computed_balance_cents)
+      : 0;
+
+    if (currentBalance < Number(p.provider_amount)) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({
+        error: "INSUFFICIENT_WALLET_BALANCE",
+        balance: currentBalance,
+        required: p.provider_amount
+      });
+    }
 
     await client.query(
       `
