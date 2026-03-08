@@ -1153,6 +1153,52 @@ db.release();
 
 });
 
+
+/* PLATFORM FINANCE REPORT */
+r.get("/reports/platform/finance", async (req,res)=>{
+
+try{
+
+const revenue = await pool.query(`
+SELECT COALESCE(SUM(amount),0)::int AS total_revenue
+FROM payments
+WHERE status='confirmed'
+`);
+
+const payouts = await pool.query(`
+SELECT COALESCE(SUM(amount),0)::int AS total_payouts
+FROM payouts
+WHERE status='executed'
+`);
+
+const wallets = await pool.query(`
+SELECT COUNT(*)::int AS wallets_total
+FROM totem_test.wallets
+`);
+
+res.json({
+ok:true,
+platform_finance:{
+revenue_total:revenue.rows[0].total_revenue,
+payouts_total:payouts.rows[0].total_payouts,
+wallets_total:wallets.rows[0].wallets_total
+}
+});
+
+}catch(err){
+
+console.error("PLATFORM_FINANCE_REPORT_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"PLATFORM_FINANCE_REPORT_FAILED"
+});
+
+}
+
+});
+
+
 return r;
 
 }
