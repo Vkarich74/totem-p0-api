@@ -663,7 +663,7 @@ error:"SALON_METRICS_FAILED"
 });
 
 
-/* SALON PAYMENTS */
+/* SALON PAYMENTS (FIXED) */
 r.get("/salons/:slug/payments", async (req,res)=>{
 
 const { slug } = req.params;
@@ -683,14 +683,15 @@ const salonId = salon.rows[0].id;
 
 const payments = await pool.query(`
 SELECT
-id,
-amount,
-method,
-status,
-created_at
-FROM payments
-WHERE salon_id=$1
-ORDER BY created_at DESC
+p.id,
+p.amount,
+p.provider,
+p.status,
+p.created_at
+FROM payments p
+JOIN bookings b ON b.id=p.booking_id
+WHERE b.salon_id=$1
+ORDER BY p.created_at DESC
 LIMIT 100
 `,[salonId]);
 
