@@ -1009,7 +1009,7 @@ try{
 await db.query("BEGIN");
 const amount = parseInt(service_price,10);
 
-if(!booking_id || !service_price){
+if(!booking_id || !service_price || Number.isNaN(amount)){
 await db.query("ROLLBACK");
 return res.status(400).json({ok:false,error:"INVALID_INPUT"});
 }
@@ -1017,8 +1017,7 @@ return res.status(400).json({ok:false,error:"INVALID_INPUT"});
 const bookingCheck = await db.query(`
 SELECT
 b.id,
-b.salon_id,
-b.master_id
+b.salon_id
 FROM bookings b
 WHERE b.id=$1
 LIMIT 1
@@ -1032,7 +1031,6 @@ return res.status(404).json({ok:false,error:"BOOKING_NOT_FOUND"});
 }
 
 const salonId = bookingCheck.rows[0].salon_id;
-const masterId = bookingCheck.rows[0].master_id;
 
 const activePayment = await db.query(`
 SELECT id
@@ -1065,50 +1063,28 @@ VALUES($1,'direct',$2,'confirmed',true)
 RETURNING id,booking_id,amount,status,provider,created_at
 `,[
 booking_id,
-service_price
+amount
 ]);
 
 const paymentId = payment.rows[0].id;
 
-/* SALON WALLET */
-
-const salonWallet = await db.query(`
-SELECT id
-FROM totem_test.wallets
-WHERE owner_type='salon'
-AND owner_id=$1
+const wallet = await db.query(`
+SELECT
+w.id
+FROM totem_test.wallets w
+WHERE w.owner_type='salon'
+AND w.owner_id=$1
 LIMIT 1
 `,[
 salonId
 ]);
 
-if(!salonWallet.rows.length){
+if(!wallet.rows.length){
 await db.query("ROLLBACK");
 return res.status(400).json({ok:false,error:"SALON_WALLET_NOT_FOUND"});
 }
 
-const salonWalletId = salonWallet.rows[0].id;
-
-/* MASTER WALLET */
-
-const masterWallet = await db.query(`
-SELECT id
-FROM totem_test.wallets
-WHERE owner_type='master'
-AND owner_id=$1
-LIMIT 1
-`,[
-masterId
-]);
-
-if(!masterWallet.rows.length){
-await db.query("ROLLBACK");
-return res.status(400).json({ok:false,error:"MASTER_WALLET_NOT_FOUND"});
-}
-
-const masterWalletId = masterWallet.rows[0].id;
-
-/* SYSTEM WALLET */
+const salonWallet = wallet.rows[0].id;
 
 const systemWallet = await db.query(`
 SELECT wallet_id
@@ -1122,8 +1098,6 @@ return res.status(400).json({ok:false,error:"SYSTEM_WALLET_NOT_FOUND"});
 }
 
 const systemWalletId = systemWallet.rows[0].wallet_id;
-
-/* SYSTEM → SALON */
 
 await db.query(`
 INSERT INTO totem_test.ledger_entries(
@@ -1150,39 +1124,7 @@ reference_id
 )
 VALUES($1,'credit',$2,'payment',$3)
 `,[
-salonWalletId,
-amount,
-String(paymentId)
-]);
-
-/* SALON → MASTER */
-
-await db.query(`
-INSERT INTO totem_test.ledger_entries(
-wallet_id,
-direction,
-amount_cents,
-reference_type,
-reference_id
-)
-VALUES($1,'debit',$2,'payment',$3)
-`,[
-salonWalletId,
-amount,
-String(paymentId)
-]);
-
-await db.query(`
-INSERT INTO totem_test.ledger_entries(
-wallet_id,
-direction,
-amount_cents,
-reference_type,
-reference_id
-)
-VALUES($1,'credit',$2,'payment',$3)
-`,[
-masterWalletId,
+salonWallet,
 amount,
 String(paymentId)
 ]);
@@ -1530,7 +1472,4 @@ error:"MASTER_PAYOUTS_FETCH_FAILED"
 
 });
 return r;
-
-}
-
 
