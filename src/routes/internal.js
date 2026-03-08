@@ -734,14 +734,14 @@ const salonId = salon.rows[0].id;
 
 const settlements = await pool.query(`
 SELECT
-id,
-period_start,
-period_end,
-amount,
-status
-FROM settlement_periods
-WHERE salon_id=$1
-ORDER BY period_start DESC
+sp.id,
+sp.period_start,
+sp.period_end,
+sp.amount,
+sp.status
+FROM settlement_periods sp
+LEFT JOIN bookings b ON b.salon_id=$1
+ORDER BY sp.period_start DESC
 LIMIT 50
 `,[salonId]);
 
