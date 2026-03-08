@@ -11,6 +11,7 @@ import pool from './db/index.js';
 import os from 'os';
 import { runQueueWorker } from './jobs/queueWorker.js';
 import { runFinanceWorker } from './jobs/financeWorker.js';
+import { runReconciliationWorker } from './jobs/reconciliationWorker.js';
 
 const LOCK_KEY = 'async_worker';
 const LOCK_TTL_SECONDS = 120;
@@ -57,8 +58,11 @@ export async function runSchedulerOnce() {
     // EXISTING WORKER
     await runQueueWorker();
 
-    // NEW FINANCE ORCHESTRATOR
+    // FINANCE PIPELINE
     await runFinanceWorker();
+
+    // RECONCILIATION CHECKS
+    await runReconciliationWorker();
 
   } catch (err) {
 
