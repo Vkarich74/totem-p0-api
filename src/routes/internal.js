@@ -1199,6 +1199,64 @@ error:"PLATFORM_FINANCE_REPORT_FAILED"
 });
 
 
+/* PLATFORM LEDGER REPORT */
+r.get("/reports/platform/ledger", async (req,res)=>{
+
+try{
+
+const ledger = await pool.query(`
+SELECT *
+FROM totem_test.v_ledger_global_balance
+`);
+
+res.json({
+ok:true,
+ledger:ledger.rows
+});
+
+}catch(err){
+
+console.error("PLATFORM_LEDGER_REPORT_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"PLATFORM_LEDGER_REPORT_FAILED"
+});
+
+}
+
+});
+
+
+/* PLATFORM RECONCILIATION REPORT */
+r.get("/reports/platform/reconciliation", async (req,res)=>{
+
+try{
+
+const summary = await pool.query(`
+SELECT *
+FROM totem_test.v_reconciliation_summary
+`);
+
+res.json({
+ok:true,
+reconciliation:summary.rows
+});
+
+}catch(err){
+
+console.error("RECONCILIATION_REPORT_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"RECONCILIATION_REPORT_FAILED"
+});
+
+}
+
+});
+
+
 return r;
 
 }
