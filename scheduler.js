@@ -10,6 +10,7 @@
 import pool from './db/index.js';
 import os from 'os';
 import { runQueueWorker } from './jobs/queueWorker.js';
+import { runFinanceWorker } from './jobs/financeWorker.js';
 
 const LOCK_KEY = 'async_worker';
 const LOCK_TTL_SECONDS = 120;
@@ -43,28 +44,40 @@ async function releaseLock(client) {
 
 export async function runSchedulerOnce() {
   let client;
+
   try {
+
     client = await pool.connect();
 
     const acquired = await acquireLock(client);
     if (!acquired) {
-      // another instance is running
       return;
     }
 
+    // EXISTING WORKER
     await runQueueWorker();
+
+    // NEW FINANCE ORCHESTRATOR
+    await runFinanceWorker();
+
   } catch (err) {
+
     console.error('[SCHEDULER_ERROR]', err);
+
   } finally {
+
     try {
       if (client) await releaseLock(client);
     } catch (_) {}
+
     if (client) client.release();
+
   }
 }
 
 // Auto-run only in prod
 if (process.env.NODE_ENV === 'production') {
+
   runSchedulerOnce()
     .then(() => {
       // no-op
@@ -72,4 +85,5 @@ if (process.env.NODE_ENV === 'production') {
     .catch((err) => {
       console.error('[SCHEDULER_FATAL]', err);
     });
+
 }
