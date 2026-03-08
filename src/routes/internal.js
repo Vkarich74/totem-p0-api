@@ -1007,6 +1007,7 @@ const db = await pool.connect();
 try{
 
 await db.query("BEGIN");
+const amount = parseInt(service_price,10);
 
 if(!booking_id || !service_price){
 await db.query("ROLLBACK");
@@ -1135,7 +1136,7 @@ reference_id
 VALUES($1,'debit',$2,'payment',$3)
 `,[
 systemWalletId,
-service_price,
+amount,
 String(paymentId)
 ]);
 
@@ -1150,7 +1151,7 @@ reference_id
 VALUES($1,'credit',$2,'payment',$3)
 `,[
 salonWalletId,
-service_price,
+amount,
 String(paymentId)
 ]);
 
@@ -1167,7 +1168,7 @@ reference_id
 VALUES($1,'debit',$2,'payment',$3)
 `,[
 salonWalletId,
-service_price,
+amount,
 String(paymentId)
 ]);
 
@@ -1182,7 +1183,7 @@ reference_id
 VALUES($1,'credit',$2,'payment',$3)
 `,[
 masterWalletId,
-service_price,
+amount,
 String(paymentId)
 ]);
 
