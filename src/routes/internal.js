@@ -1156,6 +1156,137 @@ db.release();
 });
 
 
+/* SETTLEMENT ENGINE */
+r.post("/settlements/run", async (req,res)=>{
+
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+const payments = await db.query(`
+SELECT
+p.id AS payment_id,
+p.amount,
+b.id AS booking_id,
+b.master_id,
+b.salon_id
+FROM payments p
+JOIN bookings b ON b.id=p.booking_id
+LEFT JOIN settlement_items si ON si.payment_id=p.id
+WHERE p.status='confirmed'
+AND si.id IS NULL
+LIMIT 500
+`);
+
+if(!payments.rows.length){
+
+await db.query("ROLLBACK");
+
+return res.json({
+ok:true,
+message:"NO_PAYMENTS_FOR_SETTLEMENT"
+});
+
+}
+
+const salonId = payments.rows[0].salon_id;
+
+const period = await db.query(`
+INSERT INTO settlement_periods(
+salon_id,
+period_start,
+period_end,
+status,
+created_at
+)
+VALUES(
+$1,
+NOW() - INTERVAL '7 days',
+NOW(),
+'open',
+NOW()
+)
+RETURNING id
+`,[
+salonId
+]);
+
+const settlementId = period.rows[0].id;
+
+for(const p of payments.rows){
+
+const masterShare = Math.floor(p.amount * 0.7);
+const platformShare = p.amount - masterShare;
+
+await db.query(`
+INSERT INTO settlement_items(
+settlement_id,
+payment_id,
+booking_id,
+master_id,
+amount_total,
+amount_master,
+amount_platform,
+created_at
+)
+VALUES($1,$2,$3,$4,$5,$6,$7,NOW())
+`,[
+settlementId,
+p.payment_id,
+p.booking_id,
+p.master_id,
+p.amount,
+masterShare,
+platformShare
+]);
+
+await db.query(`
+INSERT INTO payouts(
+master_id,
+booking_id,
+amount,
+status,
+created_at
+)
+VALUES($1,$2,$3,'pending',NOW())
+`,[
+p.master_id,
+p.booking_id,
+masterShare
+]);
+
+}
+
+await db.query("COMMIT");
+
+res.json({
+ok:true,
+settlement_id:settlementId,
+payments_processed:payments.rows.length
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+console.error("SETTLEMENT_ENGINE_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"SETTLEMENT_ENGINE_FAILED"
+});
+
+}finally{
+
+db.release();
+
+}
+
+});
+
+
 /* PLATFORM FINANCE REPORT */
 r.get("/reports/platform/finance", async (req,res)=>{
 
