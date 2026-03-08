@@ -1016,7 +1016,8 @@ return res.status(400).json({ok:false,error:"INVALID_INPUT"});
 const bookingCheck = await db.query(`
 SELECT
 b.id,
-b.salon_id
+b.salon_id,
+b.master_id
 FROM bookings b
 WHERE b.id=$1
 LIMIT 1
@@ -1028,6 +1029,9 @@ if(!bookingCheck.rows.length){
 await db.query("ROLLBACK");
 return res.status(404).json({ok:false,error:"BOOKING_NOT_FOUND"});
 }
+
+const salonId = bookingCheck.rows[0].salon_id;
+const masterId = bookingCheck.rows[0].master_id;
 
 const activePayment = await db.query(`
 SELECT id
@@ -1064,25 +1068,46 @@ service_price
 ]);
 
 const paymentId = payment.rows[0].id;
-const salonId = bookingCheck.rows[0].salon_id;
 
-const wallet = await db.query(`
-SELECT
-w.id
-FROM totem_test.wallets w
-WHERE w.owner_type='salon'
-AND w.owner_id=$1
+/* SALON WALLET */
+
+const salonWallet = await db.query(`
+SELECT id
+FROM totem_test.wallets
+WHERE owner_type='salon'
+AND owner_id=$1
 LIMIT 1
 `,[
 salonId
 ]);
 
-if(!wallet.rows.length){
+if(!salonWallet.rows.length){
 await db.query("ROLLBACK");
 return res.status(400).json({ok:false,error:"SALON_WALLET_NOT_FOUND"});
 }
 
-const salonWallet = wallet.rows[0].id;
+const salonWalletId = salonWallet.rows[0].id;
+
+/* MASTER WALLET */
+
+const masterWallet = await db.query(`
+SELECT id
+FROM totem_test.wallets
+WHERE owner_type='master'
+AND owner_id=$1
+LIMIT 1
+`,[
+masterId
+]);
+
+if(!masterWallet.rows.length){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"MASTER_WALLET_NOT_FOUND"});
+}
+
+const masterWalletId = masterWallet.rows[0].id;
+
+/* SYSTEM WALLET */
 
 const systemWallet = await db.query(`
 SELECT wallet_id
@@ -1096,6 +1121,8 @@ return res.status(400).json({ok:false,error:"SYSTEM_WALLET_NOT_FOUND"});
 }
 
 const systemWalletId = systemWallet.rows[0].wallet_id;
+
+/* SYSTEM → SALON */
 
 await db.query(`
 INSERT INTO totem_test.ledger_entries(
@@ -1122,7 +1149,39 @@ reference_id
 )
 VALUES($1,'credit',$2,'payment',$3)
 `,[
-salonWallet,
+salonWalletId,
+service_price,
+String(paymentId)
+]);
+
+/* SALON → MASTER */
+
+await db.query(`
+INSERT INTO totem_test.ledger_entries(
+wallet_id,
+direction,
+amount_cents,
+reference_type,
+reference_id
+)
+VALUES($1,'debit',$2,'payment_split',$3)
+`,[
+salonWalletId,
+service_price,
+String(paymentId)
+]);
+
+await db.query(`
+INSERT INTO totem_test.ledger_entries(
+wallet_id,
+direction,
+amount_cents,
+reference_type,
+reference_id
+)
+VALUES($1,'credit',$2,'payment_split',$3)
+`,[
+masterWalletId,
 service_price,
 String(paymentId)
 ]);
