@@ -102,6 +102,33 @@ app.use(
   })
 );
 
+
+/* ================= AUTO FINANCE LOOP ================= */
+
+async function runFinanceLoop() {
+  try {
+
+    const res = await fetch("https://api.totemv.com/internal/finance/run", {
+      method: "POST"
+    });
+
+    const txt = await res.text();
+    console.log("FINANCE_LOOP_EXECUTED", txt);
+
+  } catch (err) {
+
+    console.error("FINANCE_LOOP_FAILED", err);
+
+  }
+}
+
+/* run every 5 minutes */
+setInterval(runFinanceLoop, 300000);
+
+/* first run after startup delay */
+setTimeout(runFinanceLoop, 15000);
+
+
 /* ================= START ================= */
 
 const PORT = process.env.PORT || 8080;
