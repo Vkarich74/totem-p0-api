@@ -1637,8 +1637,8 @@ const masterId = master.rows[0].id;
 const settlements = await pool.query(`
 SELECT
 sp.id,
-sp.period_start,
-sp.period_end,
+sp.period_start AS start_date,
+sp.period_end AS end_date,
 sp.status,
 sp.created_at,
 SUM(si.amount_master)::int AS amount_cents,
