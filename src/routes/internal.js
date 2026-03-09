@@ -1613,6 +1613,62 @@ error:"MASTER_LEDGER_FETCH_FAILED"
 });
 
 
+
+/*
+MASTER SETTLEMENTS
+*/
+r.get("/masters/:slug/settlements", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const master = await pool.query(
+`SELECT id FROM masters WHERE slug=$1`,
+[slug]
+);
+
+if(!master.rows.length){
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const masterId = master.rows[0].id;
+
+const settlements = await pool.query(`
+SELECT
+sp.id,
+sp.period_start,
+sp.period_end,
+sp.status,
+sp.created_at,
+SUM(si.amount_master)::int AS amount_cents,
+COUNT(si.id)::int AS items
+FROM settlement_periods sp
+JOIN settlement_items si ON si.settlement_id=sp.id
+WHERE si.master_id=$1
+GROUP BY sp.id
+ORDER BY sp.period_start DESC
+LIMIT 50
+`,[masterId]);
+
+res.json({
+ok:true,
+periods:settlements.rows
+});
+
+}catch(err){
+
+console.error("MASTER_SETTLEMENTS_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"MASTER_SETTLEMENTS_FETCH_FAILED"
+});
+
+}
+
+});
+
 /*
 MASTER PAYOUTS
 */
