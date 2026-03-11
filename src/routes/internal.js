@@ -1842,6 +1842,250 @@ db.release();
 
 });
 
+/* ============================= */
+/* CONTRACT ENGINE               */
+/* ============================= */
+
+/* CREATE CONTRACT */
+r.post("/contracts", async (req,res)=>{
+
+const {
+salon_id,
+master_id,
+terms_json,
+effective_from
+} = req.body;
+
+try{
+
+if(!salon_id || !master_id){
+return res.status(400).json({ok:false,error:"INVALID_CONTRACT_INPUT"});
+}
+
+const existing = await pool.query(`
+SELECT id
+FROM contracts
+WHERE salon_id=$1
+AND master_id=$2
+AND status='active'
+LIMIT 1
+`,[
+salon_id,
+master_id
+]);
+
+if(existing.rows.length){
+return res.status(409).json({
+ok:false,
+error:"ACTIVE_CONTRACT_EXISTS",
+contract_id:existing.rows[0].id
+});
+}
+
+const contract = await pool.query(`
+INSERT INTO contracts(
+salon_id,
+master_id,
+status,
+version,
+terms_json,
+effective_from,
+created_at
+)
+VALUES(
+$1,$2,'pending',1,$3,$4,NOW()
+)
+RETURNING *
+`,[
+salon_id,
+master_id,
+terms_json || {},
+effective_from || new Date()
+]);
+
+res.json({
+ok:true,
+contract:contract.rows[0]
+});
+
+}catch(err){
+
+console.error("CONTRACT_CREATE_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"CONTRACT_CREATE_FAILED"
+});
+
+}
+
+});
+
+
+/* CONTRACTS BY SALON */
+r.get("/contracts/salon/:slug", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id FROM salons WHERE slug=$1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+const contracts = await pool.query(`
+SELECT *
+FROM contracts
+WHERE salon_id=$1
+AND archived_at IS NULL
+ORDER BY created_at DESC
+`,[salonId]);
+
+res.json({
+ok:true,
+contracts:contracts.rows
+});
+
+}catch(err){
+
+console.error("CONTRACTS_FETCH_SALON_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"CONTRACTS_FETCH_FAILED"
+});
+
+}
+
+});
+
+
+/* CONTRACTS BY MASTER */
+r.get("/contracts/master/:slug", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const master = await pool.query(
+`SELECT id FROM masters WHERE slug=$1`,
+[slug]
+);
+
+if(!master.rows.length){
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const masterId = master.rows[0].id;
+
+const contracts = await pool.query(`
+SELECT *
+FROM contracts
+WHERE master_id=$1
+AND archived_at IS NULL
+ORDER BY created_at DESC
+`,[masterId]);
+
+res.json({
+ok:true,
+contracts:contracts.rows
+});
+
+}catch(err){
+
+console.error("CONTRACTS_FETCH_MASTER_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"CONTRACTS_FETCH_FAILED"
+});
+
+}
+
+});
+
+
+/* ACCEPT CONTRACT */
+r.post("/contracts/:id/accept", async (req,res)=>{
+
+const { id } = req.params;
+
+try{
+
+const contract = await pool.query(`
+UPDATE contracts
+SET status='active'
+WHERE id=$1
+RETURNING *
+`,[id]);
+
+if(!contract.rows.length){
+return res.status(404).json({ok:false,error:"CONTRACT_NOT_FOUND"});
+}
+
+res.json({
+ok:true,
+contract:contract.rows[0]
+});
+
+}catch(err){
+
+console.error("CONTRACT_ACCEPT_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"CONTRACT_ACCEPT_FAILED"
+});
+
+}
+
+});
+
+
+/* ARCHIVE CONTRACT */
+r.post("/contracts/:id/archive", async (req,res)=>{
+
+const { id } = req.params;
+
+try{
+
+const contract = await pool.query(`
+UPDATE contracts
+SET status='archived',
+archived_at=NOW()
+WHERE id=$1
+RETURNING *
+`,[id]);
+
+if(!contract.rows.length){
+return res.status(404).json({ok:false,error:"CONTRACT_NOT_FOUND"});
+}
+
+res.json({
+ok:true,
+contract:contract.rows[0]
+});
+
+}catch(err){
+
+console.error("CONTRACT_ARCHIVE_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"CONTRACT_ARCHIVE_FAILED"
+});
+
+}
+
+});
+
 return r;
 
 }
