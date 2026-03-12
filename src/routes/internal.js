@@ -714,9 +714,11 @@ p.id,
 p.amount,
 p.provider,
 p.status,
-p.created_at
+p.created_at,
+c.name AS client_name
 FROM payments p
 JOIN bookings b ON b.id=p.booking_id
+LEFT JOIN clients c ON c.id=b.client_id
 WHERE b.salon_id=$1
 ORDER BY p.created_at DESC
 LIMIT 100
@@ -917,7 +919,7 @@ w.id AS wallet_id,
 w.owner_type,
 w.owner_id,
 w.currency,
-COALESCE(v.computed_balance_cents,0) AS balance
+COALESCE(v.computed_balance_cents,0)::int AS balance
 FROM totem_test.wallets w
 LEFT JOIN totem_test.v_wallet_balance_computed v ON v.wallet_id=w.id
 WHERE w.owner_type='salon'
@@ -1609,7 +1611,7 @@ w.id AS wallet_id,
 w.owner_type,
 w.owner_id,
 w.currency,
-COALESCE(v.computed_balance_cents,0) AS balance
+COALESCE(v.computed_balance_cents,0)::int AS balance
 FROM totem_test.wallets w
 LEFT JOIN totem_test.v_wallet_balance_computed v
 ON v.wallet_id=w.id
