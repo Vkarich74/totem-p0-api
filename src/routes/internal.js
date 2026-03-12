@@ -971,7 +971,7 @@ SELECT
 le.id,
 le.wallet_id,
 le.direction,
-le.amount_cents::int AS amount,
+COALESCE(le.amount_cents,0)::int AS amount,
 le.reference_type,
 le.reference_id,
 le.created_at
@@ -1668,7 +1668,7 @@ SELECT
 le.id,
 le.wallet_id,
 le.direction,
-le.amount_cents::int AS amount,
+COALESCE(le.amount_cents,0)::int AS amount,
 le.reference_type,
 le.reference_id,
 le.created_at
