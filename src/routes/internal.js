@@ -1182,7 +1182,8 @@ AND si.id IS NULL
 AND po.id IS NULL
 ORDER BY p.id ASC
 LIMIT 500
-FOR UPDATE OF p SKIP LOCKED`);
+FOR UPDATE OF p SKIP LOCKED
+`);
 
 if(!payments.rows.length){
 
@@ -1201,8 +1202,6 @@ let paymentsProcessed = 0;
 
 for(const p of payments.rows){
 
-/* GET ACTIVE CONTRACT */
-
 const contract = await db.query(`
 SELECT terms_json
 FROM contracts
@@ -1217,7 +1216,7 @@ p.master_id
 ]);
 
 if(!contract.rows.length){
-continue;
+throw new Error(`ACTIVE_CONTRACT_NOT_FOUND salon_id=${p.salon_id} master_id=${p.master_id}`);
 }
 
 const terms = contract.rows[0].terms_json || {};
@@ -1227,14 +1226,12 @@ const salonPercent = parseInt(terms.salon_percent || 0,10);
 const platformPercent = parseInt(terms.platform_percent || 0,10);
 
 if(masterPercent + salonPercent + platformPercent !== 100){
-continue;
+throw new Error(`INVALID_CONTRACT_SPLIT salon_id=${p.salon_id} master_id=${p.master_id}`);
 }
 
 const masterAmount = Math.floor(p.amount * masterPercent / 100);
 const salonAmount = Math.floor(p.amount * salonPercent / 100);
 const platformAmount = p.amount - masterAmount - salonAmount;
-
-/* GET SETTLEMENT PERIOD */
 
 let settlementId = periodCache.get(p.salon_id);
 
@@ -1288,8 +1285,6 @@ periodCache.set(p.salon_id, settlementId);
 
 }
 
-/* CREATE SETTLEMENT ITEM */
-
 await db.query(`
 INSERT INTO settlement_items(
 settlement_id,
@@ -1312,9 +1307,35 @@ masterAmount,
 platformAmount
 ]);
 
-/* CREATE PAYOUT */
+const salonWallet = await db.query(`
+SELECT id
+FROM totem_test.wallets
+WHERE owner_type='salon'
+AND owner_id=$1
+LIMIT 1
+`,[
+p.salon_id
+]);
 
-await db.query(`
+if(!salonWallet.rows.length){
+throw new Error(`SALON_WALLET_NOT_FOUND salon_id=${p.salon_id}`);
+}
+
+const masterWallet = await db.query(`
+SELECT id
+FROM totem_test.wallets
+WHERE owner_type='master'
+AND owner_id=$1
+LIMIT 1
+`,[
+p.master_id
+]);
+
+if(!masterWallet.rows.length){
+throw new Error(`MASTER_WALLET_NOT_FOUND master_id=${p.master_id}`);
+}
+
+const payout = await db.query(`
 INSERT INTO payouts(
 booking_id,
 amount,
@@ -1328,15 +1349,48 @@ platform_fee,
 provider_amount
 )
 VALUES($1,$2,'created',NOW(),$3,$4,$5,$6,$7,$8)
+RETURNING id
 `,[
 p.booking_id,
 masterAmount,
 p.payment_id,
 settlementId,
 p.amount,
-platformPercent*100,
+platformPercent * 100,
 platformAmount,
 masterAmount
+]);
+
+const payoutId = payout.rows[0].id;
+
+await db.query(`
+INSERT INTO totem_test.ledger_entries(
+wallet_id,
+direction,
+amount_cents,
+reference_type,
+reference_id
+)
+VALUES($1,'debit',$2,'payout',$3)
+`,[
+salonWallet.rows[0].id,
+masterAmount,
+String(payoutId)
+]);
+
+await db.query(`
+INSERT INTO totem_test.ledger_entries(
+wallet_id,
+direction,
+amount_cents,
+reference_type,
+reference_id
+)
+VALUES($1,'credit',$2,'payout',$3)
+`,[
+masterWallet.rows[0].id,
+masterAmount,
+String(payoutId)
 ]);
 
 paymentsProcessed += 1;
