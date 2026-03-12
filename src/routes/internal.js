@@ -2116,6 +2116,7 @@ error:"CONTRACT_ARCHIVE_FAILED"
 r.post("/payments/xpay/create", async (req,res)=>{
 
 const { booking_id, amount } = req.body;
+const amountValue = parseInt(amount,10);
 
 try{
 
@@ -2145,7 +2146,7 @@ VALUES($1,'xpay',$2,'pending',true)
 RETURNING id
 `,[
 booking_id,
-amount
+amountValue
 ]);
 
 res.json({
