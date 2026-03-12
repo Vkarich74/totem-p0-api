@@ -1200,6 +1200,41 @@ let paymentsProcessed = 0;
 
 for(const p of payments.rows){
 
+/* GET ACTIVE CONTRACT */
+
+const contract = await db.query(`
+SELECT terms_json
+FROM contracts
+WHERE salon_id=$1
+AND master_id=$2
+AND status='active'
+ORDER BY version DESC
+LIMIT 1
+`,[
+p.salon_id,
+p.master_id
+]);
+
+if(!contract.rows.length){
+continue;
+}
+
+const terms = contract.rows[0].terms_json || {};
+
+const masterPercent = parseInt(terms.master_percent || 0,10);
+const salonPercent = parseInt(terms.salon_percent || 0,10);
+const platformPercent = parseInt(terms.platform_percent || 0,10);
+
+if(masterPercent + salonPercent + platformPercent !== 100){
+continue;
+}
+
+const masterAmount = Math.floor(p.amount * masterPercent / 100);
+const salonAmount = Math.floor(p.amount * salonPercent / 100);
+const platformAmount = p.amount - masterAmount - salonAmount;
+
+/* GET SETTLEMENT PERIOD */
+
 let settlementId = periodCache.get(p.salon_id);
 
 if(!settlementId){
@@ -1252,17 +1287,7 @@ periodCache.set(p.salon_id, settlementId);
 
 }
 
-const payoutExists = await db.query(`
-SELECT id
-FROM payouts
-WHERE booking_id=$1
-LIMIT 1
-`,[
-p.booking_id
-]);
-
-const platformFee = Math.floor(p.amount * 0.30);
-const providerAmount = p.amount - platformFee;
+/* CREATE SETTLEMENT ITEM */
 
 await db.query(`
 INSERT INTO settlement_items(
@@ -1282,11 +1307,11 @@ p.payment_id,
 p.booking_id,
 p.master_id,
 p.amount,
-providerAmount,
-platformFee
+masterAmount,
+platformAmount
 ]);
 
-if(!payoutExists.rows.length){
+/* CREATE PAYOUT */
 
 await db.query(`
 INSERT INTO payouts(
@@ -1304,16 +1329,14 @@ provider_amount
 VALUES($1,$2,'created',NOW(),$3,$4,$5,$6,$7,$8)
 `,[
 p.booking_id,
-providerAmount,
+masterAmount,
 p.payment_id,
 settlementId,
 p.amount,
-3000,
-platformFee,
-providerAmount
+platformPercent*100,
+platformAmount,
+masterAmount
 ]);
-
-}
 
 paymentsProcessed += 1;
 
