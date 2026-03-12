@@ -917,7 +917,7 @@ w.id AS wallet_id,
 w.owner_type,
 w.owner_id,
 w.currency,
-COALESCE(v.computed_balance_cents,0) AS computed_balance_cents
+COALESCE(v.computed_balance_cents,0) AS balance
 FROM totem_test.wallets w
 LEFT JOIN totem_test.v_wallet_balance_computed v ON v.wallet_id=w.id
 WHERE w.owner_type='salon'
@@ -967,7 +967,7 @@ SELECT
 le.id,
 le.wallet_id,
 le.direction,
-le.amount_cents,
+le.amount_cents AS amount,
 le.reference_type,
 le.reference_id,
 le.created_at
@@ -1607,7 +1607,7 @@ w.id AS wallet_id,
 w.owner_type,
 w.owner_id,
 w.currency,
-COALESCE(v.computed_balance_cents,0) AS computed_balance_cents
+COALESCE(v.computed_balance_cents,0) AS balance
 FROM totem_test.wallets w
 LEFT JOIN totem_test.v_wallet_balance_computed v
 ON v.wallet_id=w.id
@@ -1660,7 +1660,7 @@ SELECT
 le.id,
 le.wallet_id,
 le.direction,
-le.amount_cents,
+le.amount_cents AS amount,
 le.reference_type,
 le.reference_id,
 le.created_at
@@ -1719,7 +1719,7 @@ sp.period_start AS start_date,
 sp.period_end AS end_date,
 sp.status,
 sp.created_at,
-SUM(si.amount_master)::int AS amount_cents,
+SUM(si.amount_master)::int AS amount,
 COUNT(si.id)::int AS items
 FROM settlement_periods sp
 JOIN settlement_items si ON si.settlement_id=sp.id
