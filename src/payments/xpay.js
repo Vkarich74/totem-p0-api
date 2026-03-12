@@ -1,4 +1,5 @@
 import fetch from "node-fetch";
+import crypto from "crypto";
 
 /*
 XPAY CONFIG
@@ -119,8 +120,6 @@ export function xpayVerifyWebhook(signature, payload, secret){
 if(!signature || !secret){
 return false;
 }
-
-const crypto = await import("crypto");
 
 const hmac = crypto
 .createHmac("sha256", secret)
