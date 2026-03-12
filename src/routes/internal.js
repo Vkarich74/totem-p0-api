@@ -967,7 +967,7 @@ SELECT
 le.id,
 le.wallet_id,
 le.direction,
-le.amount_cents AS amount,
+le.amount_cents / 100 AS amount,
 le.reference_type,
 le.reference_id,
 le.created_at
@@ -1008,7 +1008,9 @@ const db = await pool.connect();
 try{
 
 await db.query("BEGIN");
+
 const amount = parseInt(service_price,10);
+const amountCents = amount * 100;
 
 if(!booking_id || !service_price || Number.isNaN(amount)){
 await db.query("ROLLBACK");
@@ -1111,7 +1113,7 @@ reference_id
 VALUES($1,'debit',$2,'payment',$3)
 `,[
 systemWalletId,
-amount,
+amountCents,
 String(paymentId)
 ]);
 
@@ -1126,7 +1128,7 @@ reference_id
 VALUES($1,'credit',$2,'payment',$3)
 `,[
 salonWallet,
-amount,
+amountCents,
 String(paymentId)
 ]);
 
