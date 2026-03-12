@@ -2030,13 +2030,14 @@ const contracts = await pool.query(`
 SELECT
 c.id,
 c.master_id,
-m.slug AS master_slug,
+COALESCE(m.slug, c.master_id::text) AS master_slug,
 c.status,
 c.version,
 c.terms_json,
+COALESCE((c.terms_json->>'master_percent')::int, 0) AS share_percent,
 c.created_at
 FROM contracts c
-JOIN masters m ON m.id = c.master_id
+LEFT JOIN masters m ON m.id::text = c.master_id::text
 WHERE c.salon_id=$1
 ORDER BY c.created_at DESC
 `,[salonId]);
@@ -2058,6 +2059,7 @@ error:"SALON_CONTRACTS_FETCH_FAILED"
 }
 
 });
+
 
 /* CONTRACTS BY MASTER */
 r.get("/contracts/master/:slug", async (req,res)=>{
