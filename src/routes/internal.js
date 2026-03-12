@@ -2030,11 +2030,13 @@ const contracts = await pool.query(`
 SELECT
 c.id,
 c.master_id,
+m.slug AS master_slug,
 c.status,
 c.version,
 c.terms_json,
 c.created_at
 FROM contracts c
+JOIN masters m ON m.id = c.master_id
 WHERE c.salon_id=$1
 ORDER BY c.created_at DESC
 `,[salonId]);
