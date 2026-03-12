@@ -2030,15 +2030,12 @@ const contracts = await pool.query(`
 SELECT
 c.id,
 c.master_id,
-m.slug AS master_slug,
 c.status,
 c.version,
 c.terms_json,
 c.created_at
 FROM contracts c
-JOIN masters m ON m.id=c.master_id
 WHERE c.salon_id=$1
-AND c.archived_at IS NULL
 ORDER BY c.created_at DESC
 `,[salonId]);
 
@@ -2059,7 +2056,6 @@ error:"SALON_CONTRACTS_FETCH_FAILED"
 }
 
 });
-
 
 /* CONTRACTS BY MASTER */
 r.get("/contracts/master/:slug", async (req,res)=>{
