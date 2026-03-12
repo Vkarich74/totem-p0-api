@@ -1358,7 +1358,7 @@ settlementId,
 p.amount,
 platformPercent * 100,
 platformAmount,
-masterAmount
+masterAmount + salonAmount
 ]);
 
 const payoutId = payout.rows[0].id;
