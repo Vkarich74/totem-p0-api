@@ -1181,7 +1181,7 @@ AND si.id IS NULL
 AND po.id IS NULL
 ORDER BY p.id ASC
 LIMIT 500
-FOR UPDATE SKIP LOCKED`);
+FOR UPDATE OF p SKIP LOCKED`);
 
 if(!payments.rows.length){
 
