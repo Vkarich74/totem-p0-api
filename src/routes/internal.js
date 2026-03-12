@@ -2060,6 +2060,93 @@ error:"SALON_CONTRACTS_FETCH_FAILED"
 
 });
 
+/* CREATE CONTRACT FROM SALON SLUG (CABINET API) */
+r.post("/salons/:slug/contracts", async (req,res)=>{
+
+const { slug } = req.params;
+
+const {
+master_id,
+terms_json,
+effective_from
+} = req.body;
+
+try{
+
+const salon = await pool.query(
+`SELECT id FROM salons WHERE slug=$1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+if(!master_id){
+return res.status(400).json({ok:false,error:"MASTER_ID_REQUIRED"});
+}
+
+const existing = await pool.query(`
+SELECT id
+FROM contracts
+WHERE salon_id=$1
+AND master_id=$2
+AND status='active'
+LIMIT 1
+`,[
+salonId,
+master_id
+]);
+
+if(existing.rows.length){
+return res.status(409).json({
+ok:false,
+error:"ACTIVE_CONTRACT_EXISTS",
+contract_id:existing.rows[0].id
+});
+}
+
+const contract = await pool.query(`
+INSERT INTO contracts(
+salon_id,
+master_id,
+status,
+version,
+terms_json,
+effective_from,
+created_at
+)
+VALUES(
+$1,$2,'pending',1,$3,$4,NOW()
+)
+RETURNING *
+`,[
+salonId,
+master_id,
+terms_json || {},
+effective_from || new Date()
+]);
+
+res.json({
+ok:true,
+contract:contract.rows[0]
+});
+
+}catch(err){
+
+console.error("SALON_CONTRACT_CREATE_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"SALON_CONTRACT_CREATE_FAILED"
+});
+
+}
+
+});
+
 
 /* CONTRACTS BY MASTER */
 r.get("/contracts/master/:slug", async (req,res)=>{
