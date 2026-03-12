@@ -2197,26 +2197,61 @@ error:"CONTRACTS_FETCH_FAILED"
 r.post("/contracts/:id/accept", async (req,res)=>{
 
 const { id } = req.params;
+const db = await pool.connect();
 
 try{
 
-const contract = await pool.query(`
+await db.query("BEGIN");
+
+const contract = await db.query(`
+SELECT *
+FROM contracts
+WHERE id=$1
+LIMIT 1
+FOR UPDATE
+`,[id]);
+
+if(!contract.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"CONTRACT_NOT_FOUND"});
+}
+
+const salonId = contract.rows[0].salon_id;
+const masterId = contract.rows[0].master_id;
+
+/* deactivate previous active contract */
+
+await db.query(`
+UPDATE contracts
+SET status='archived',
+archived_at=NOW()
+WHERE salon_id=$1
+AND master_id=$2
+AND status='active'
+`,[
+salonId,
+masterId
+]);
+
+/* activate new contract */
+
+const activated = await db.query(`
 UPDATE contracts
 SET status='active'
 WHERE id=$1
 RETURNING *
 `,[id]);
 
-if(!contract.rows.length){
-return res.status(404).json({ok:false,error:"CONTRACT_NOT_FOUND"});
-}
+await db.query("COMMIT");
 
 res.json({
 ok:true,
-contract:contract.rows[0]
+contract:activated.rows[0]
 });
 
 }catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
 
 console.error("CONTRACT_ACCEPT_ERROR",err);
 
@@ -2224,6 +2259,10 @@ res.status(500).json({
 ok:false,
 error:"CONTRACT_ACCEPT_FAILED"
 });
+
+}finally{
+
+db.release();
 
 }
 
