@@ -1624,7 +1624,9 @@ LIMIT 1
 
 res.json({
 ok:true,
-balance:balance.rows[0] || null
+wallet_id: balance.rows[0]?.wallet_id || null,
+balance: balance.rows[0]?.balance || 0,
+currency: balance.rows[0]?.currency || "KGS"
 });
 
 }catch(err){
