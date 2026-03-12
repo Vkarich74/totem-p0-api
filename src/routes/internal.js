@@ -2109,6 +2109,184 @@ error:"CONTRACT_ARCHIVE_FAILED"
 
 });
 
+/* ============================= */
+/* XPAY QR ENGINE                */
+/* ============================= */
+
+r.post("/payments/xpay/create", async (req,res)=>{
+
+const { booking_id, amount } = req.body;
+
+try{
+
+if(!booking_id || !amount){
+return res.status(400).json({ok:false,error:"INVALID_INPUT"});
+}
+
+const booking = await pool.query(`
+SELECT id
+FROM bookings
+WHERE id=$1
+`,[booking_id]);
+
+if(!booking.rows.length){
+return res.status(404).json({ok:false,error:"BOOKING_NOT_FOUND"});
+}
+
+const payment = await pool.query(`
+INSERT INTO payments(
+booking_id,
+provider,
+amount,
+status,
+is_active
+)
+VALUES($1,'xpay',$2,'pending',true)
+RETURNING id
+`,[
+booking_id,
+amount
+]);
+
+res.json({
+ok:true,
+payment_id:payment.rows[0].id,
+message:"XPAY_QR_CREATED"
+});
+
+}catch(err){
+
+console.error("XPAY_CREATE_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"XPAY_CREATE_FAILED"
+});
+
+}
+
+});
+
+
+r.post("/payments/xpay/confirm", async (req,res)=>{
+
+const { payment_id } = req.body;
+
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+const payment = await db.query(`
+SELECT booking_id,amount
+FROM payments
+WHERE id=$1
+AND status='pending'
+`,[payment_id]);
+
+if(!payment.rows.length){
+
+await db.query("ROLLBACK");
+
+return res.status(404).json({
+ok:false,
+error:"PAYMENT_NOT_FOUND"
+});
+
+}
+
+const bookingId = payment.rows[0].booking_id;
+const amount = payment.rows[0].amount;
+
+await db.query(`
+UPDATE payments
+SET status='confirmed'
+WHERE id=$1
+`,[payment_id]);
+
+const booking = await db.query(`
+SELECT salon_id
+FROM bookings
+WHERE id=$1
+`,[bookingId]);
+
+const salonId = booking.rows[0].salon_id;
+
+const wallet = await db.query(`
+SELECT id
+FROM totem_test.wallets
+WHERE owner_type='salon'
+AND owner_id=$1
+LIMIT 1
+`,[salonId]);
+
+const salonWallet = wallet.rows[0].id;
+
+const systemWallet = await db.query(`
+SELECT wallet_id
+FROM totem_test.system_wallets
+LIMIT 1
+`);
+
+const systemWalletId = systemWallet.rows[0].wallet_id;
+
+await db.query(`
+INSERT INTO totem_test.ledger_entries(
+wallet_id,
+direction,
+amount_cents,
+reference_type,
+reference_id
+)
+VALUES($1,'debit',$2,'payment',$3)
+`,[
+systemWalletId,
+amount,
+String(payment_id)
+]);
+
+await db.query(`
+INSERT INTO totem_test.ledger_entries(
+wallet_id,
+direction,
+amount_cents,
+reference_type,
+reference_id
+)
+VALUES($1,'credit',$2,'payment',$3)
+`,[
+salonWallet,
+amount,
+String(payment_id)
+]);
+
+await db.query("COMMIT");
+
+res.json({
+ok:true,
+payment_confirmed:true
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+console.error("XPAY_CONFIRM_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"XPAY_CONFIRM_FAILED"
+});
+
+}finally{
+
+db.release();
+
+}
+
+});
+
 return r;
 
 }
