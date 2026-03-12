@@ -1,6 +1,7 @@
 import express from "express";
 import crypto from "crypto";
 import { pool } from "../db.js";
+import { xpayCreateQR, xpayCheckStatus } from "../payments/xpay.js";
 
 export function createInternalRouter(){
 
@@ -2149,10 +2150,19 @@ booking_id,
 amountValue
 ]);
 
+const paymentId = payment.rows[0].id;
+
+const qr = await xpayCreateQR({
+payment_id:paymentId,
+amount:amountValue
+});
+
 res.json({
 ok:true,
-payment_id:payment.rows[0].id,
-message:"XPAY_QR_CREATED"
+payment_id:paymentId,
+transaction_id:qr.transaction_id,
+qr_code:qr.qr_code,
+qr_image:qr.qr_image
 });
 
 }catch(err){
@@ -2169,120 +2179,31 @@ error:"XPAY_CREATE_FAILED"
 });
 
 
-r.post("/payments/xpay/confirm", async (req,res)=>{
+r.post("/payments/xpay/status", async (req,res)=>{
 
-const { payment_id } = req.body;
-
-const db = await pool.connect();
+const { transaction_id } = req.body;
 
 try{
 
-await db.query("BEGIN");
-
-const payment = await db.query(`
-SELECT booking_id,amount
-FROM payments
-WHERE id=$1
-AND status='pending'
-`,[payment_id]);
-
-if(!payment.rows.length){
-
-await db.query("ROLLBACK");
-
-return res.status(404).json({
-ok:false,
-error:"PAYMENT_NOT_FOUND"
-});
-
+if(!transaction_id){
+return res.status(400).json({ok:false,error:"TRANSACTION_ID_REQUIRED"});
 }
 
-const bookingId = payment.rows[0].booking_id;
-const amount = payment.rows[0].amount;
-
-await db.query(`
-UPDATE payments
-SET status='confirmed'
-WHERE id=$1
-`,[payment_id]);
-
-const booking = await db.query(`
-SELECT salon_id
-FROM bookings
-WHERE id=$1
-`,[bookingId]);
-
-const salonId = booking.rows[0].salon_id;
-
-const wallet = await db.query(`
-SELECT id
-FROM totem_test.wallets
-WHERE owner_type='salon'
-AND owner_id=$1
-LIMIT 1
-`,[salonId]);
-
-const salonWallet = wallet.rows[0].id;
-
-const systemWallet = await db.query(`
-SELECT wallet_id
-FROM totem_test.system_wallets
-LIMIT 1
-`);
-
-const systemWalletId = systemWallet.rows[0].wallet_id;
-
-await db.query(`
-INSERT INTO totem_test.ledger_entries(
-wallet_id,
-direction,
-amount_cents,
-reference_type,
-reference_id
-)
-VALUES($1,'debit',$2,'payment',$3)
-`,[
-systemWalletId,
-amount,
-String(payment_id)
-]);
-
-await db.query(`
-INSERT INTO totem_test.ledger_entries(
-wallet_id,
-direction,
-amount_cents,
-reference_type,
-reference_id
-)
-VALUES($1,'credit',$2,'payment',$3)
-`,[
-salonWallet,
-amount,
-String(payment_id)
-]);
-
-await db.query("COMMIT");
+const status = await xpayCheckStatus(transaction_id);
 
 res.json({
 ok:true,
-payment_confirmed:true
+status
 });
 
 }catch(err){
 
-try{ await db.query("ROLLBACK"); }catch(e){}
-
-console.error("XPAY_CONFIRM_ERROR",err);
+console.error("XPAY_STATUS_ERROR",err);
 
 res.status(500).json({
 ok:false,
-error:"XPAY_CONFIRM_FAILED"
+error:"XPAY_STATUS_FAILED"
 });
-
-}finally{
-
-db.release();
 
 }
 
