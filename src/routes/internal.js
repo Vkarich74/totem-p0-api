@@ -2008,8 +2008,8 @@ error:"CONTRACT_CREATE_FAILED"
 });
 
 
-/* CONTRACTS BY SALON */
-r.get("/contracts/salon/:slug", async (req,res)=>{
+/* SALON CONTRACTS (ALIAS FOR UI) */
+r.get("/salons/:slug/contracts", async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -2027,11 +2027,19 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 const salonId = salon.rows[0].id;
 
 const contracts = await pool.query(`
-SELECT *
-FROM contracts
-WHERE salon_id=$1
-AND archived_at IS NULL
-ORDER BY created_at DESC
+SELECT
+c.id,
+c.master_id,
+m.slug AS master_slug,
+c.status,
+c.version,
+c.terms_json,
+c.created_at
+FROM contracts c
+JOIN masters m ON m.id=c.master_id
+WHERE c.salon_id=$1
+AND c.archived_at IS NULL
+ORDER BY c.created_at DESC
 `,[salonId]);
 
 res.json({
@@ -2041,11 +2049,11 @@ contracts:contracts.rows
 
 }catch(err){
 
-console.error("CONTRACTS_FETCH_SALON_ERROR",err);
+console.error("SALON_CONTRACTS_FETCH_ERROR",err);
 
 res.status(500).json({
 ok:false,
-error:"CONTRACTS_FETCH_FAILED"
+error:"SALON_CONTRACTS_FETCH_FAILED"
 });
 
 }
