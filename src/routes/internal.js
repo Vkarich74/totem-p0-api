@@ -917,7 +917,7 @@ w.id AS wallet_id,
 w.owner_type,
 w.owner_id,
 w.currency,
-COALESCE(v.computed_balance_cents,0) AS balance
+COALESCE(v.computed_balance_cents,0) / 100 AS balance
 FROM totem_test.wallets w
 LEFT JOIN totem_test.v_wallet_balance_computed v ON v.wallet_id=w.id
 WHERE w.owner_type='salon'
@@ -1607,7 +1607,7 @@ w.id AS wallet_id,
 w.owner_type,
 w.owner_id,
 w.currency,
-COALESCE(v.computed_balance_cents,0) AS balance
+COALESCE(v.computed_balance_cents,0) / 100 AS balance
 FROM totem_test.wallets w
 LEFT JOIN totem_test.v_wallet_balance_computed v
 ON v.wallet_id=w.id
@@ -1660,7 +1660,7 @@ SELECT
 le.id,
 le.wallet_id,
 le.direction,
-le.amount_cents AS amount,
+le.amount_cents / 100 AS amount,
 le.reference_type,
 le.reference_id,
 le.created_at
