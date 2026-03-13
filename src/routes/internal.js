@@ -2306,6 +2306,118 @@ error:"CONTRACT_ARCHIVE_FAILED"
 
 });
 
+/* SALON WITHDRAW */
+r.post("/salons/:slug/withdraw", async (req,res)=>{
+
+const { slug } = req.params;
+const { amount, destination } = req.body;
+
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+const value = parseInt(amount,10);
+
+if(!value || value <= 0){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"INVALID_AMOUNT"});
+}
+
+const salon = await db.query(`
+SELECT id
+FROM salons
+WHERE slug=$1
+`,[slug]);
+
+if(!salon.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+const wallet = await db.query(`
+SELECT id
+FROM totem_test.wallets
+WHERE owner_type='salon'
+AND owner_id=$1
+LIMIT 1
+`,[salonId]);
+
+if(!wallet.rows.length){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"SALON_WALLET_NOT_FOUND"});
+}
+
+const walletId = wallet.rows[0].id;
+
+const balance = await db.query(`
+SELECT COALESCE(v.computed_balance_cents,0)::int AS balance
+FROM totem_test.v_wallet_balance_computed v
+WHERE v.wallet_id=$1
+`,[walletId]);
+
+const currentBalance = balance.rows[0]?.balance || 0;
+
+if(value > currentBalance){
+await db.query("ROLLBACK");
+return res.status(400).json({
+ok:false,
+error:"INSUFFICIENT_FUNDS",
+balance:currentBalance
+});
+}
+
+/* ledger debit */
+
+const withdrawId = crypto.randomUUID();
+
+await db.query(`
+INSERT INTO totem_test.ledger_entries(
+wallet_id,
+direction,
+amount_cents,
+reference_type,
+reference_id
+)
+VALUES($1,'debit',$2,'withdraw',$3)
+`,[
+walletId,
+value,
+withdrawId
+]);
+
+await db.query("COMMIT");
+
+res.json({
+ok:true,
+withdraw_id:withdrawId,
+amount:value,
+destination:destination || null
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+console.error("SALON_WITHDRAW_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"SALON_WITHDRAW_FAILED"
+});
+
+}finally{
+
+db.release();
+
+}
+
+});
+
+
 /* ============================= */
 /* XPAY QR ENGINE                */
 /* ============================= */
