@@ -2370,32 +2370,38 @@ balance:currentBalance
 });
 }
 
-try {
+/* ledger double-entry withdraw */
 
-  // ВСЁ ТЕЛО withdraw (включая double-entry)
+const withdrawId = crypto.randomUUID();
 
-  await db.query("COMMIT");
+const systemWallet = await db.query(`
+SELECT wallet_id
+FROM totem_test.system_wallets
+LIMIT 1
+`);
 
-  return res.json({
-    ok: true,
-    withdraw_id: withdrawId,
-    amount
-  });
-
-} catch (e) {
-
-  await db.query("ROLLBACK");
-
-  console.error("SALON_WITHDRAW_ERROR", e);
-
-  return res.status(500).json({
-    ok: false,
-    error: "SALON_WITHDRAW_FAILED"
-  });
-
+if(!systemWallet.rows.length){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"SYSTEM_WALLET_NOT_FOUND"});
 }
 
-/* system -> credit */
+const systemWalletId = systemWallet.rows[0].wallet_id;
+
+await db.query(`
+INSERT INTO totem_test.ledger_entries(
+wallet_id,
+direction,
+amount_cents,
+reference_type,
+reference_id
+)
+VALUES($1,'debit',$2,'payout',$3)
+`,[
+walletId,
+value,
+withdrawId
+]);
+
 await db.query(`
 INSERT INTO totem_test.ledger_entries(
 wallet_id,
@@ -2410,6 +2416,34 @@ systemWalletId,
 value,
 withdrawId
 ]);
+
+await db.query("COMMIT");
+
+return res.json({
+ok:true,
+withdraw_id:withdrawId,
+amount:value,
+destination:destination || null
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+console.error("SALON_WITHDRAW_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"SALON_WITHDRAW_FAILED"
+});
+
+}finally{
+
+db.release();
+
+}
+
+});
 
 
 /* ============================= */
