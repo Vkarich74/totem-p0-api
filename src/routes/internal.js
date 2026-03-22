@@ -1209,20 +1209,24 @@ let paymentsProcessed = 0;
 for(const p of payments.rows){
 
 const contract = await db.query(`
-SELECT terms_json
+SELECT
+id,
+terms_json
 FROM contracts
 WHERE salon_id=$1
 AND master_id=$2
 AND status='active'
-ORDER BY version DESC
+AND archived_at IS NULL
+ORDER BY version DESC, created_at DESC
 LIMIT 1
+FOR UPDATE
 `,[
 p.salon_id,
 p.master_id
 ]);
 
 if(!contract.rows.length){
-throw new Error(`ACTIVE_CONTRACT_NOT_FOUND salon_id=${p.salon_id} master_id=${p.master_id}`);
+throw new Error(`CONTRACT_REQUIRED salon_id=${p.salon_id} master_id=${p.master_id} booking_id=${p.booking_id} payment_id=${p.payment_id}`);
 }
 
 const terms = contract.rows[0].terms_json || {};
@@ -1446,7 +1450,7 @@ WHERE status='confirmed'
 const payouts = await pool.query(`
 SELECT COALESCE(SUM(amount),0)::int AS total_payouts
 FROM payouts
-WHERE status='executed'
+WHERE status IN ('paid','executed')
 `);
 
 const wallets = await pool.query(`
@@ -1699,7 +1703,6 @@ error:"MASTER_LEDGER_FETCH_FAILED"
 });
 
 
-
 /*
 MASTER SETTLEMENTS
 */
@@ -1816,11 +1819,18 @@ try{
 await db.query("BEGIN");
 
 const payouts = await db.query(`
-SELECT id,booking_id,amount
-FROM payouts
-WHERE status='created'
-ORDER BY id ASC
+SELECT
+p.id,
+p.booking_id,
+p.amount,
+b.master_id,
+b.salon_id
+FROM payouts p
+JOIN bookings b ON b.id=p.booking_id
+WHERE p.status='created'
+ORDER BY p.id ASC
 LIMIT 500
+FOR UPDATE OF p SKIP LOCKED
 `);
 
 if(!payouts.rows.length){
@@ -1838,6 +1848,25 @@ message:"NO_PAYOUTS"
 let processed = 0;
 
 for(const p of payouts.rows){
+
+const contract = await db.query(`
+SELECT id
+FROM contracts
+WHERE salon_id=$1
+AND master_id=$2
+AND status='active'
+AND archived_at IS NULL
+ORDER BY version DESC, created_at DESC
+LIMIT 1
+FOR UPDATE
+`,[
+p.salon_id,
+p.master_id
+]);
+
+if(!contract.rows.length){
+throw new Error(`CONTRACT_REQUIRED salon_id=${p.salon_id} master_id=${p.master_id} booking_id=${p.booking_id} payout_id=${p.id}`);
+}
 
 await db.query(`
 UPDATE payouts
@@ -1880,7 +1909,6 @@ db.release();
 }
 
 });
-
 
 
 /* AUTO FINANCE ENGINE */
