@@ -2075,20 +2075,8 @@ UPDATE public.withdraws
 SET status='processing',
 updated_at=NOW()
 WHERE id=$1
+AND status='pending'
 `,[w.id]);
-
-const externalRef = w.external_ref || `withdraw-${w.id}`;
-
-await db.query(`
-UPDATE public.withdraws
-SET status='completed',
-external_ref=$2,
-updated_at=NOW()
-WHERE id=$1
-`,[
-w.id,
-externalRef
-]);
 
 processed += 1;
 withdrawIds.push(w.id);
@@ -2112,6 +2100,158 @@ console.error("WITHDRAW_PROCESSOR_ERROR",err);
 res.status(500).json({
 ok:false,
 error:"WITHDRAW_PROCESSOR_FAILED"
+});
+
+}finally{
+
+db.release();
+
+}
+
+});
+
+/* WITHDRAW COMPLETE */
+r.post("/withdraws/:id/complete", async (req,res)=>{
+
+const { id } = req.params;
+const { external_ref } = req.body;
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+const withdraw = await db.query(`
+SELECT
+id,
+status,
+external_ref
+FROM public.withdraws
+WHERE id=$1
+LIMIT 1
+FOR UPDATE
+`,[id]);
+
+if(!withdraw.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"WITHDRAW_NOT_FOUND"});
+}
+
+if(withdraw.rows[0].status !== 'processing'){
+await db.query("ROLLBACK");
+return res.status(409).json({
+ok:false,
+error:"WITHDRAW_STATUS_INVALID",
+status:withdraw.rows[0].status
+});
+}
+
+const finalExternalRef = String(external_ref || withdraw.rows[0].external_ref || `withdraw-${id}`).trim();
+
+const completed = await db.query(`
+UPDATE public.withdraws
+SET status='completed',
+external_ref=$2,
+updated_at=NOW()
+WHERE id=$1
+RETURNING *
+`,[
+id,
+finalExternalRef
+]);
+
+await db.query("COMMIT");
+
+return res.json({
+ok:true,
+withdraw:completed.rows[0]
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+console.error("WITHDRAW_COMPLETE_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"WITHDRAW_COMPLETE_FAILED"
+});
+
+}finally{
+
+db.release();
+
+}
+
+});
+
+/* WITHDRAW FAIL */
+r.post("/withdraws/:id/fail", async (req,res)=>{
+
+const { id } = req.params;
+const { external_ref } = req.body;
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+const withdraw = await db.query(`
+SELECT
+id,
+status,
+external_ref
+FROM public.withdraws
+WHERE id=$1
+LIMIT 1
+FOR UPDATE
+`,[id]);
+
+if(!withdraw.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"WITHDRAW_NOT_FOUND"});
+}
+
+if(withdraw.rows[0].status !== 'processing'){
+await db.query("ROLLBACK");
+return res.status(409).json({
+ok:false,
+error:"WITHDRAW_STATUS_INVALID",
+status:withdraw.rows[0].status
+});
+}
+
+const finalExternalRef = String(external_ref || withdraw.rows[0].external_ref || '').trim() || null;
+
+const failed = await db.query(`
+UPDATE public.withdraws
+SET status='failed',
+external_ref=$2,
+updated_at=NOW()
+WHERE id=$1
+RETURNING *
+`,[
+id,
+finalExternalRef
+]);
+
+await db.query("COMMIT");
+
+return res.json({
+ok:true,
+withdraw:failed.rows[0]
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+console.error("WITHDRAW_FAIL_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"WITHDRAW_FAIL_FAILED"
 });
 
 }finally{
