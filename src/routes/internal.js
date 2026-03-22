@@ -1002,6 +1002,62 @@ error:"SALON_LEDGER_FETCH_FAILED"
 });
 
 
+/* SALON WITHDRAWS */
+r.get("/salons/:slug/withdraws", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id FROM salons WHERE slug=$1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+const withdraws = await pool.query(`
+SELECT
+w.id,
+w.owner_type,
+w.owner_id,
+w.wallet_id,
+w.amount,
+w.status,
+w.destination,
+w.external_ref,
+w.created_at,
+w.updated_at
+FROM public.withdraws w
+WHERE w.owner_type='salon'
+AND w.owner_id=$1
+ORDER BY w.created_at DESC
+LIMIT 100
+`,[salonId]);
+
+res.json({
+ok:true,
+withdraws:withdraws.rows
+});
+
+}catch(err){
+
+console.error("SALON_WITHDRAWS_FETCH_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"SALON_WITHDRAWS_FETCH_FAILED"
+});
+
+}
+
+});
+
+
 /* PAYMENT FLOW */
 r.post("/payments/flow", async (req,res)=>{
 
@@ -1813,6 +1869,7 @@ error:"MASTER_PAYOUTS_FETCH_FAILED"
 ARCHITECTURE CONTRACT (CRITICAL)
 
 Payout ledger is written ONLY by backend (this processor).
+Withdraw ledger is written ONLY by backend withdraw routes/processors.
 
 Database trigger:
 trg_bridge_payout_paid_to_wallet_ledger
@@ -1972,6 +2029,100 @@ db.release();
 
 });
 
+
+/* WITHDRAW PROCESSOR */
+r.post("/withdraws/run", async (req,res)=>{
+
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+const withdraws = await db.query(`
+SELECT
+w.id,
+w.owner_type,
+w.owner_id,
+w.wallet_id,
+w.amount,
+w.destination,
+w.external_ref,
+w.status
+FROM public.withdraws w
+WHERE w.status='pending'
+ORDER BY w.created_at ASC
+LIMIT 500
+FOR UPDATE SKIP LOCKED
+`);
+
+if(!withdraws.rows.length){
+await db.query("ROLLBACK");
+return res.json({
+ok:true,
+withdraws_processed:0,
+message:"NO_WITHDRAWS"
+});
+}
+
+let processed = 0;
+const withdrawIds = [];
+
+for(const w of withdraws.rows){
+
+await db.query(`
+UPDATE public.withdraws
+SET status='processing',
+updated_at=NOW()
+WHERE id=$1
+`,[w.id]);
+
+const externalRef = w.external_ref || `withdraw-${w.id}`;
+
+await db.query(`
+UPDATE public.withdraws
+SET status='completed',
+external_ref=$2,
+updated_at=NOW()
+WHERE id=$1
+`,[
+w.id,
+externalRef
+]);
+
+processed += 1;
+withdrawIds.push(w.id);
+
+}
+
+await db.query("COMMIT");
+
+res.json({
+ok:true,
+withdraws_processed:processed,
+withdraw_ids:withdrawIds
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+console.error("WITHDRAW_PROCESSOR_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"WITHDRAW_PROCESSOR_FAILED"
+});
+
+}finally{
+
+db.release();
+
+}
+
+});
+
+
 /* AUTO FINANCE ENGINE */
 r.post("/finance/run", async (req,res)=>{
 
@@ -1990,12 +2141,19 @@ WHERE p.status='confirmed'
 AND si.id IS NULL
 `);
 
+const withdraws = await db.query(`
+SELECT COUNT(*)::int AS v
+FROM public.withdraws
+WHERE status='pending'
+`);
+
 await db.query("COMMIT");
 
 res.json({
 ok:true,
 message:"FINANCE_RUN_COMPLETED",
-pending_settlements:settlements.rows[0].v
+pending_settlements:settlements.rows[0].v,
+pending_withdraws:withdraws.rows[0].v
 });
 
 }catch(err){
