@@ -1877,16 +1877,22 @@ AND reference_id=$1
 
 const cnt = ledgerCheck.rows[0].cnt;
 
-if(cnt < 2){
+if(cnt !== 2){
 
 const salonWallet = await db.query(`
-SELECT id FROM totem_test.wallets
-WHERE owner_type='salon' AND owner_id=$1 LIMIT 1
+SELECT id
+FROM totem_test.wallets
+WHERE owner_type='salon'
+AND owner_id=$1
+LIMIT 1
 `,[p.salon_id]);
 
 const masterWallet = await db.query(`
-SELECT id FROM totem_test.wallets
-WHERE owner_type='master' AND owner_id=$1 LIMIT 1
+SELECT id
+FROM totem_test.wallets
+WHERE owner_type='master'
+AND owner_id=$1
+LIMIT 1
 `,[p.master_id]);
 
 if(!salonWallet.rows.length){
@@ -1899,23 +1905,35 @@ throw new Error(`MASTER_WALLET_NOT_FOUND master_id=${p.master_id}`);
 
 await db.query(`
 DELETE FROM totem_test.ledger_entries
-WHERE reference_type='payout' AND reference_id=$1
+WHERE reference_type='payout'
+AND reference_id=$1
 `,[String(p.id)]);
 
 await db.query(`
-INSERT INTO totem_test.ledger_entries(wallet_id,direction,amount_cents,reference_type,reference_id)
-VALUES($1,'debit',$2,'payout',$3)
-`,[salonWallet.rows[0].id,p.amount,String(p.id)]);
-
-await db.query(`
-INSERT INTO totem_test.ledger_entries(wallet_id,direction,amount_cents,reference_type,reference_id)
-VALUES($1,'credit',$2,'payout',$3)
-`,[masterWallet.rows[0].id,p.amount,String(p.id)]);
+INSERT INTO totem_test.ledger_entries(
+wallet_id,
+direction,
+amount_cents,
+reference_type,
+reference_id
+)
+VALUES
+($1,'debit',$3,'payout',$5),
+($2,'credit',$4,'payout',$5)
+`,[
+salonWallet.rows[0].id,
+masterWallet.rows[0].id,
+p.amount,
+p.amount,
+String(p.id)
+]);
 
 }
 
 await db.query(`
-UPDATE payouts SET status='paid' WHERE id=$1
+UPDATE payouts
+SET status='paid'
+WHERE id=$1
 `,[p.id]);
 
 processed += 1;
@@ -1924,7 +1942,10 @@ processed += 1;
 
 await db.query("COMMIT");
 
-res.json({ok:true,payouts_processed:processed});
+res.json({
+ok:true,
+payouts_processed:processed
+});
 
 }catch(err){
 
@@ -1932,7 +1953,10 @@ try{ await db.query("ROLLBACK"); }catch(e){}
 
 console.error("PAYOUT_PROCESSOR_ERROR",err);
 
-res.status(500).json({ok:false,error:"PAYOUT_PROCESSOR_FAILED"});
+res.status(500).json({
+ok:false,
+error:"PAYOUT_PROCESSOR_FAILED"
+});
 
 }finally{
 
