@@ -2370,39 +2370,30 @@ balance:currentBalance
 });
 }
 
-/* ledger double-entry withdraw */
+try {
 
-const withdrawId = crypto.randomUUID();
+  // ВСЁ ТЕЛО withdraw (включая double-entry)
 
-/* system wallet (куда уходит вывод) */
-const systemWallet = await db.query(`
-SELECT wallet_id
-FROM totem_test.system_wallets
-LIMIT 1
-`);
+  await db.query("COMMIT");
 
-if(!systemWallet.rows.length){
-await db.query("ROLLBACK");
-return res.status(400).json({ok:false,error:"SYSTEM_WALLET_NOT_FOUND"});
+  return res.json({
+    ok: true,
+    withdraw_id: withdrawId,
+    amount
+  });
+
+} catch (e) {
+
+  await db.query("ROLLBACK");
+
+  console.error("SALON_WITHDRAW_ERROR", e);
+
+  return res.status(500).json({
+    ok: false,
+    error: "SALON_WITHDRAW_FAILED"
+  });
+
 }
-
-const systemWalletId = systemWallet.rows[0].wallet_id;
-
-/* salon -> debit */
-await db.query(`
-INSERT INTO totem_test.ledger_entries(
-wallet_id,
-direction,
-amount_cents,
-reference_type,
-reference_id
-)
-VALUES($1,'debit',$2,'payout',$3)
-`,[
-walletId,
-value,
-withdrawId
-]);
 
 /* system -> credit */
 await db.query(`
