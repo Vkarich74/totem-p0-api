@@ -2263,6 +2263,77 @@ db.release();
 
 });
 
+/* WITHDRAW RETRY */
+r.post("/withdraws/:id/retry", async (req,res)=>{
+
+const { id } = req.params;
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+const withdraw = await db.query(`
+SELECT
+id,
+status
+FROM public.withdraws
+WHERE id=$1
+LIMIT 1
+FOR UPDATE
+`,[id]);
+
+if(!withdraw.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"WITHDRAW_NOT_FOUND"});
+}
+
+if(withdraw.rows[0].status !== 'failed'){
+await db.query("ROLLBACK");
+return res.status(409).json({
+ok:false,
+error:"WITHDRAW_RETRY_INVALID_STATUS",
+status:withdraw.rows[0].status
+});
+}
+
+const retried = await db.query(`
+UPDATE public.withdraws
+SET
+status='pending',
+external_ref=NULL,
+updated_at=NOW()
+WHERE id=$1
+AND status='failed'
+RETURNING *
+`,[id]);
+
+await db.query("COMMIT");
+
+return res.json({
+ok:true,
+withdraw:retried.rows[0]
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+console.error("WITHDRAW_RETRY_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"WITHDRAW_RETRY_FAILED"
+});
+
+}finally{
+
+db.release();
+
+}
+
+});
+
 
 /* AUTO FINANCE ENGINE */
 r.post("/finance/run", async (req,res)=>{
