@@ -3029,6 +3029,99 @@ error:"CONTRACT_CREATE_FAILED"
 
 });
 
+/* WITHDRAW TIMELINE (AUDIT) */
+r.get("/withdraws/:id/timeline", async (req,res)=>{
+
+const { id } = req.params;
+
+try{
+
+const withdraw = await pool.query(`
+SELECT
+id,
+status,
+amount,
+external_ref,
+created_at,
+updated_at
+FROM public.withdraws
+WHERE id=$1
+LIMIT 1
+`,[id]);
+
+if(!withdraw.rows.length){
+return res.status(404).json({ok:false,error:"WITHDRAW_NOT_FOUND"});
+}
+
+const w = withdraw.rows[0];
+
+/* simple timeline reconstruction */
+const timeline = [];
+
+timeline.push({
+event:"created",
+status:"pending",
+at:w.created_at
+});
+
+if(w.updated_at && w.updated_at !== w.created_at){
+
+if(w.status === 'processing'){
+timeline.push({
+event:"processing",
+status:"processing",
+at:w.updated_at
+});
+}
+
+if(w.status === 'completed'){
+timeline.push({
+event:"processing",
+status:"processing",
+at:w.updated_at
+});
+timeline.push({
+event:"completed",
+status:"completed",
+at:w.updated_at,
+external_ref:w.external_ref
+});
+}
+
+if(w.status === 'failed'){
+timeline.push({
+event:"processing",
+status:"processing",
+at:w.updated_at
+});
+timeline.push({
+event:"failed",
+status:"failed",
+at:w.updated_at
+});
+}
+
+}
+
+return res.json({
+ok:true,
+withdraw_id:id,
+timeline
+});
+
+}catch(err){
+
+console.error("WITHDRAW_TIMELINE_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"WITHDRAW_TIMELINE_FAILED"
+});
+
+}
+
+});
+
 return r;
 
 }
