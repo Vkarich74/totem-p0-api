@@ -2150,10 +2150,11 @@ const finalExternalRef = String(external_ref || withdraw.rows[0].external_ref ||
 
 const completed = await db.query(`
 UPDATE public.withdraws
-SET status='processing',
+SET status='completed',
 external_ref=$2,
 updated_at=NOW()
 WHERE id=$1
+AND status='processing'
 RETURNING *
 `,[
 id,
