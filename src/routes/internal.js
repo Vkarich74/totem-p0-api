@@ -1868,17 +1868,6 @@ if(!contract.rows.length){
 throw new Error(`CONTRACT_REQUIRED salon_id=${p.salon_id} master_id=${p.master_id} booking_id=${p.booking_id} payout_id=${p.id}`);
 }
 
-const ledgerCheck = await db.query(`
-SELECT COUNT(*)::int AS cnt
-FROM totem_test.ledger_entries
-WHERE reference_type='payout'
-AND reference_id=$1
-`,[String(p.id)]);
-
-const cnt = ledgerCheck.rows[0].cnt;
-
-if(cnt !== 2){
-
 const salonWallet = await db.query(`
 SELECT id
 FROM totem_test.wallets
@@ -1903,6 +1892,7 @@ if(!masterWallet.rows.length){
 throw new Error(`MASTER_WALLET_NOT_FOUND master_id=${p.master_id}`);
 }
 
+/* force exact payout ledger state */
 await db.query(`
 DELETE FROM totem_test.ledger_entries
 WHERE reference_type='payout'
@@ -1927,8 +1917,6 @@ p.amount,
 p.amount,
 String(p.id)
 ]);
-
-}
 
 await db.query(`
 UPDATE payouts
@@ -1965,7 +1953,6 @@ db.release();
 }
 
 });
-
 
 /* AUTO FINANCE ENGINE */
 r.post("/finance/run", async (req,res)=>{
