@@ -2462,9 +2462,26 @@ balance:currentBalance
 });
 }
 
-/* ledger double-entry withdraw */
+const withdraw = await db.query(`
+INSERT INTO public.withdraws(
+owner_type,
+owner_id,
+wallet_id,
+amount,
+status,
+destination
+)
+VALUES($1,$2,$3,$4,'pending',$5)
+RETURNING id
+`,[
+'salon',
+salonId,
+walletId,
+value,
+destination || null
+]);
 
-const withdrawId = crypto.randomUUID();
+const withdrawId = withdraw.rows[0].id;
 
 const systemWallet = await db.query(`
 SELECT wallet_id
@@ -2487,7 +2504,7 @@ amount_cents,
 reference_type,
 reference_id
 )
-VALUES($1,'debit',$2,'payout',$3)
+VALUES($1,'debit',$2,'withdraw',$3)
 `,[
 walletId,
 value,
@@ -2502,7 +2519,7 @@ amount_cents,
 reference_type,
 reference_id
 )
-VALUES($1,'credit',$2,'payout',$3)
+VALUES($1,'credit',$2,'withdraw',$3)
 `,[
 systemWalletId,
 value,
@@ -2515,7 +2532,8 @@ return res.json({
 ok:true,
 withdraw_id:withdrawId,
 amount:value,
-destination:destination || null
+destination:destination || null,
+status:'pending'
 });
 
 }catch(err){
