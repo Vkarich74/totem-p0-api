@@ -2256,16 +2256,19 @@ archived_at=NOW()
 WHERE salon_id=$1
 AND master_id=$2
 AND status='active'
+AND id<>$3
 `,[
 salonId,
-masterId
+masterId,
+id
 ]);
 
 /* activate new contract */
 
 const activated = await db.query(`
 UPDATE contracts
-SET status='active'
+SET status='active',
+archived_at=NULL
 WHERE id=$1
 RETURNING *
 `,[id]);
