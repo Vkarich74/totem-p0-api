@@ -499,11 +499,19 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 const salonId = salon.rows[0].id;
 
 const masters = await pool.query(`
-SELECT m.id,m.name,m.slug
+SELECT
+m.id,
+m.name,
+m.slug,
+ms.status,
+ms.activated_at,
+ms.fired_at,
+ms.updated_at
 FROM masters m
 JOIN master_salon ms ON ms.master_id=m.id
 WHERE ms.salon_id=$1
-AND ms.status='active'
+AND ms.status IN ('active','pending','fired')
+ORDER BY m.id ASC
 `,[salonId]);
 
 res.json({
