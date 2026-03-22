@@ -3122,6 +3122,57 @@ error:"WITHDRAW_TIMELINE_FAILED"
 
 });
 
+/* WITHDRAW DASHBOARD (AGGREGATES) */
+r.get("/salons/:slug/withdraws/summary", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id FROM salons WHERE slug=$1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+const summary = await pool.query(`
+SELECT
+COUNT(*) FILTER (WHERE status='pending')::int AS pending_count,
+COUNT(*) FILTER (WHERE status='processing')::int AS processing_count,
+COUNT(*) FILTER (WHERE status='completed')::int AS completed_count,
+COUNT(*) FILTER (WHERE status='failed')::int AS failed_count,
+COALESCE(SUM(amount) FILTER (WHERE status='pending'),0)::int AS pending_amount,
+COALESCE(SUM(amount) FILTER (WHERE status='processing'),0)::int AS processing_amount,
+COALESCE(SUM(amount) FILTER (WHERE status='completed'),0)::int AS completed_amount,
+COALESCE(SUM(amount) FILTER (WHERE status='failed'),0)::int AS failed_amount
+FROM public.withdraws
+WHERE owner_type='salon'
+AND owner_id=$1
+`,[salonId]);
+
+return res.json({
+ok:true,
+summary:summary.rows[0]
+});
+
+}catch(err){
+
+console.error("WITHDRAW_SUMMARY_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"WITHDRAW_SUMMARY_FAILED"
+});
+
+}
+
+});
+
 return r;
 
 }
