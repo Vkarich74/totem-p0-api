@@ -3605,6 +3605,74 @@ db.release();
 
 });
 
+/* FINANCE STATUS (CONTROL PANEL) */
+r.get("/finance/status", async (req,res)=>{
+
+try{
+
+/* settlements pending */
+const settlementsPending = await pool.query(`
+SELECT COUNT(*)::int AS v
+FROM payments p
+LEFT JOIN settlement_items si ON si.payment_id=p.id
+LEFT JOIN payouts po ON po.booking_id=p.booking_id
+WHERE p.status='confirmed'
+AND si.id IS NULL
+AND po.id IS NULL
+`);
+
+/* payouts pending */
+const payoutsPending = await pool.query(`
+SELECT COUNT(*)::int AS v
+FROM payouts
+WHERE status='created'
+`);
+
+/* withdraws pending */
+const withdrawsPending = await pool.query(`
+SELECT COUNT(*)::int AS v
+FROM public.withdraws
+WHERE status='pending'
+`);
+
+/* withdraws processing */
+const withdrawsProcessing = await pool.query(`
+SELECT COUNT(*)::int AS v
+FROM public.withdraws
+WHERE status='processing'
+`);
+
+/* withdraws failed */
+const withdrawsFailed = await pool.query(`
+SELECT COUNT(*)::int AS v
+FROM public.withdraws
+WHERE status='failed'
+`);
+
+return res.json({
+ok:true,
+status:{
+settlements_pending:settlementsPending.rows[0].v,
+payouts_pending:payoutsPending.rows[0].v,
+withdraws_pending:withdrawsPending.rows[0].v,
+withdraws_processing:withdrawsProcessing.rows[0].v,
+withdraws_failed:withdrawsFailed.rows[0].v
+}
+});
+
+}catch(err){
+
+console.error("FINANCE_STATUS_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"FINANCE_STATUS_FAILED"
+});
+
+}
+
+});
+
 return r;
 
 }
