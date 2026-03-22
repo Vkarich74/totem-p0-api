@@ -503,6 +503,7 @@ SELECT m.id,m.name,m.slug
 FROM masters m
 JOIN master_salon ms ON ms.master_id=m.id
 WHERE ms.salon_id=$1
+AND ms.status='active'
 `,[salonId]);
 
 res.json({
@@ -518,6 +519,188 @@ res.status(500).json({
 ok:false,
 error:"SALON_MASTERS_FETCH_FAILED"
 });
+
+}
+
+});
+
+
+/* TERMINATE SALON MASTER */
+r.post("/salons/:slug/masters/:masterId/terminate", async (req,res)=>{
+
+const { slug, masterId } = req.params;
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+const salon = await db.query(
+`SELECT id,name,slug
+FROM salons
+WHERE slug=$1
+LIMIT 1`,
+[slug]
+);
+
+if(!salon.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+const master = await db.query(
+`SELECT id,name,slug
+FROM masters
+WHERE id=$1
+LIMIT 1`,
+[masterId]
+);
+
+if(!master.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const relation = await db.query(`
+SELECT
+id,
+status,
+fired_at
+FROM master_salon
+WHERE salon_id=$1
+AND master_id=$2
+LIMIT 1
+FOR UPDATE
+`,[
+salonId,
+masterId
+]);
+
+if(!relation.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"MASTER_SALON_LINK_NOT_FOUND"});
+}
+
+const contractsArchived = await db.query(`
+UPDATE contracts
+SET
+status='archived',
+archived_at=NOW(),
+effective_to=COALESCE(effective_to, NOW())
+WHERE salon_id=$1
+AND master_id=$2
+AND status IN ('active','pending')
+RETURNING id
+`,[
+String(salonId),
+String(masterId)
+]);
+
+const relationUpdated = await db.query(`
+UPDATE master_salon
+SET
+status='fired',
+fired_at=COALESCE(fired_at, NOW()),
+updated_at=NOW()
+WHERE id=$1
+RETURNING id,status,fired_at,updated_at
+`,[relation.rows[0].id]);
+
+const calendarCanceled = await db.query(`
+UPDATE master_calendar
+SET
+status='canceled',
+updated_at=NOW()
+WHERE salon_id=$1
+AND master_id=$2
+AND start_at > NOW()
+AND status='reserved'
+RETURNING id
+`,[
+String(salonId),
+String(masterId)
+]);
+
+const bookingsCanceled = await db.query(`
+UPDATE bookings
+SET
+status='canceled',
+canceled_at=NOW(),
+cancel_reason='master_terminated'
+WHERE salon_id=$1
+AND master_id=$2
+AND start_at > NOW()
+AND status='reserved'
+RETURNING id
+`,[
+salonId,
+masterId
+]);
+
+const masterServicesDisabled = await db.query(`
+UPDATE master_services_v2
+SET active=false
+WHERE salon_id=$1
+AND master_id=$2
+AND active=true
+RETURNING id
+`,[
+salonId,
+masterId
+]);
+
+const salonMasterServicesDisabled = await db.query(`
+UPDATE salon_master_services
+SET active=false
+WHERE salon_id=$1
+AND master_id=$2
+AND active=true
+RETURNING id
+`,[
+salonId,
+masterId
+]);
+
+await db.query("COMMIT");
+
+return res.json({
+ok:true,
+termination:{
+salon:{
+id:salon.rows[0].id,
+name:salon.rows[0].name,
+slug:salon.rows[0].slug
+},
+master:{
+id:master.rows[0].id,
+name:master.rows[0].name,
+slug:master.rows[0].slug
+},
+master_salon:relationUpdated.rows[0],
+contracts_archived:contractsArchived.rowCount,
+future_calendar_canceled:calendarCanceled.rowCount,
+future_bookings_canceled:bookingsCanceled.rowCount,
+master_services_disabled:masterServicesDisabled.rowCount,
+salon_master_services_disabled:salonMasterServicesDisabled.rowCount
+}
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+console.error("SALON_MASTER_TERMINATE_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"SALON_MASTER_TERMINATE_FAILED"
+});
+
+}finally{
+
+db.release();
 
 }
 
