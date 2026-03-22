@@ -1809,6 +1809,24 @@ error:"MASTER_PAYOUTS_FETCH_FAILED"
 
 });
 
+/*
+ARCHITECTURE CONTRACT (CRITICAL)
+
+Payout ledger is written ONLY by backend (this processor).
+
+Database trigger:
+trg_bridge_payout_paid_to_wallet_ledger
+MUST remain DISABLED.
+
+Reason:
+Prevent duplicate ledger entries (double-write conflict)
+which breaks enforce_ledger_double_entry_row() invariant.
+
+If this trigger is enabled -> system will break.
+
+DO NOT CHANGE WITHOUT FULL FINANCE REFACTOR.
+*/
+
 /* PAYOUT PROCESSOR */
 r.post("/payouts/run", async (req,res)=>{
 
