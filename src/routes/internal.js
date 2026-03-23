@@ -137,7 +137,8 @@ const masterId = master.rows[0].id;
 const services = await pool.query(`
 SELECT
 sms.id,
-sms.service_pk AS service_id,
+sms.service_pk,
+s.service_id AS catalog_service_id,
 s.name,
 sms.price,
 sms.duration_min,
@@ -279,7 +280,7 @@ return res.json({
 ok:true,
 service:{
 id:linked.rows[0].id,
-service_id:linked.rows[0].service_id,
+service_pk:linked.rows[0].service_id,
 catalog_service_id:service.rows[0].service_id,
 name:service.rows[0].name,
 price:linked.rows[0].price,
@@ -416,7 +417,7 @@ return res.json({
 ok:true,
 service:{
 id:updated.rows[0].id,
-service_id:updated.rows[0].service_id,
+service_pk:updated.rows[0].service_id,
 name:nextName,
 price:updated.rows[0].price,
 duration_min:updated.rows[0].duration_min,
