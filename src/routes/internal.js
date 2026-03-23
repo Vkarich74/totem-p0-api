@@ -3916,6 +3916,94 @@ error:"FINANCE_STATUS_FAILED"
 
 });
 
+/*
+CREATE MASTER SERVICE (CRITICAL)
+*/
+r.post("/masters/:slug/services", async (req,res)=>{
+
+const { slug } = req.params;
+const { name, price, duration_min } = req.body;
+
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+if(!name){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"NAME_REQUIRED"});
+}
+
+const master = await db.query(
+`SELECT id FROM masters WHERE slug=$1`,
+[slug]
+);
+
+if(!master.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const masterId = master.rows[0].id;
+
+/* 1. create service (catalog) */
+const service = await db.query(`
+INSERT INTO services(
+name
+)
+VALUES($1)
+RETURNING id
+`,[
+name
+]);
+
+const serviceId = service.rows[0].id;
+
+/* 2. link to master */
+const sms = await db.query(`
+INSERT INTO salon_master_services(
+master_id,
+service_pk,
+price,
+duration_min,
+active
+)
+VALUES($1,$2,$3,$4,true)
+RETURNING *
+`,[
+masterId,
+serviceId,
+price || 0,
+duration_min || 30
+]);
+
+await db.query("COMMIT");
+
+res.json({
+ok:true,
+service:sms.rows[0]
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+console.error("MASTER_SERVICE_CREATE_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"MASTER_SERVICE_CREATE_FAILED"
+});
+
+}finally{
+
+db.release();
+
+}
+
+});
+
 return r;
 
 }
