@@ -228,15 +228,26 @@ return res.status(400).json({ok:false,error:"MASTER_ACTIVE_SALON_REQUIRED"});
 
 const salonId = relation.rows[0].salon_id;
 
+const nextServiceId = await db.query(`
+SELECT COALESCE(MAX(service_id),0)+1 AS next_service_id
+FROM services
+`);
+
+const serviceCode = Number(nextServiceId.rows[0]?.next_service_id || 1);
+
 const service = await db.query(`
 INSERT INTO services(
+service_id,
 name
 )
-VALUES($1)
-RETURNING id,name
-`,[safeName]);
+VALUES($1,$2)
+RETURNING id,service_id,name
+`,[
+serviceCode,
+safeName
+]);
 
-const serviceId = service.rows[0].id;
+const servicePk = service.rows[0].id;
 
 const linked = await db.query(`
 INSERT INTO salon_master_services(
@@ -252,7 +263,7 @@ RETURNING id,service_pk AS service_id,price,duration_min,active
 `,[
 salonId,
 masterId,
-serviceId,
+servicePk,
 safePrice,
 safeDuration
 ]);
@@ -264,6 +275,7 @@ ok:true,
 service:{
 id:linked.rows[0].id,
 service_id:linked.rows[0].service_id,
+catalog_service_id:service.rows[0].service_id,
 name:service.rows[0].name,
 price:linked.rows[0].price,
 duration_min:linked.rows[0].duration_min,
