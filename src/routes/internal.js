@@ -229,11 +229,12 @@ return res.status(400).json({ok:false,error:"MASTER_ACTIVE_SALON_REQUIRED"});
 const salonId = relation.rows[0].salon_id;
 
 const nextServiceId = await db.query(`
-SELECT COALESCE(MAX(service_id),0)+1 AS next_service_id
+SELECT COALESCE(MAX(service_id::int),0)+1 AS next_service_id
 FROM services
+WHERE service_id ~ '^[0-9]+$'
 `);
 
-const serviceCode = Number(nextServiceId.rows[0]?.next_service_id || 1);
+const serviceCode = String(nextServiceId.rows[0]?.next_service_id || 1);
 
 const service = await db.query(`
 INSERT INTO services(
