@@ -239,13 +239,17 @@ const serviceCode = String(nextServiceId.rows[0]?.next_service_id || 1);
 const service = await db.query(`
 INSERT INTO services(
 service_id,
-name
+name,
+duration_min,
+price
 )
-VALUES($1,$2)
-RETURNING id,service_id,name
+VALUES($1,$2,$3,$4)
+RETURNING id,service_id,name,duration_min,price
 `,[
 serviceCode,
-safeName
+safeName,
+safeDuration,
+safePrice
 ]);
 
 const servicePk = service.rows[0].id;
@@ -528,7 +532,6 @@ db.release();
 }
 
 });
-
 
 /*
 MASTER BOOKINGS
@@ -860,7 +863,6 @@ db.release();
 
 });
 
-
 /* SALON ROOT */
 r.get("/salons/:slug", async (req,res)=>{
 
@@ -894,7 +896,6 @@ error:"SALON_FETCH_FAILED"
 }
 
 });
-
 
 /* SALON MASTERS */
 r.get("/salons/:slug/masters", async (req,res)=>{
@@ -947,7 +948,6 @@ error:"SALON_MASTERS_FETCH_FAILED"
 }
 
 });
-
 
 /* TERMINATE SALON MASTER */
 r.post("/salons/:slug/masters/:masterId/terminate", async (req,res)=>{
@@ -1130,7 +1130,6 @@ db.release();
 
 });
 
-
 /* SALON CLIENTS */
 r.get("/salons/:slug/clients", async (req,res)=>{
 
@@ -1173,7 +1172,6 @@ error:"SALON_CLIENTS_FETCH_FAILED"
 }
 
 });
-
 
 /* SALON BOOKINGS */
 r.get("/salons/:slug/bookings", async (req,res)=>{
@@ -1223,7 +1221,6 @@ error:"SALON_BOOKINGS_FETCH_FAILED"
 }
 
 });
-
 
 /* SALON METRICS */
 r.get("/salons/:slug/metrics", async (req,res)=>{
@@ -1296,7 +1293,6 @@ error:"SALON_METRICS_FAILED"
 
 });
 
-
 /* SALON PAYMENTS (FIXED) */
 r.get("/salons/:slug/payments", async (req,res)=>{
 
@@ -1349,7 +1345,6 @@ error:"SALON_PAYMENTS_FETCH_FAILED"
 
 });
 
-
 /* SALON SETTLEMENTS */
 r.get("/salons/:slug/settlements", async (req,res)=>{
 
@@ -1401,7 +1396,6 @@ error:"SALON_SETTLEMENTS_FETCH_FAILED"
 
 });
 
-
 /* SALON PAYOUTS */
 r.get("/salons/:slug/payouts", async (req,res)=>{
 
@@ -1451,7 +1445,6 @@ error:"SALON_PAYOUTS_FETCH_FAILED"
 
 });
 
-
 /* SALON WALLET */
 r.get("/salons/:slug/wallet", async (req,res)=>{
 
@@ -1500,7 +1493,6 @@ error:"SALON_WALLET_FETCH_FAILED"
 }
 
 });
-
 
 /* SALON WALLET BALANCE */
 r.get("/salons/:slug/wallet-balance", async (req,res)=>{
@@ -1554,7 +1546,6 @@ error:"SALON_WALLET_BALANCE_FETCH_FAILED"
 
 });
 
-
 /* SALON LEDGER */
 r.get("/salons/:slug/ledger", async (req,res)=>{
 
@@ -1607,7 +1598,6 @@ error:"SALON_LEDGER_FETCH_FAILED"
 }
 
 });
-
 
 /* SALON WITHDRAWS */
 r.get("/salons/:slug/withdraws", async (req,res)=>{
@@ -1663,7 +1653,6 @@ error:"SALON_WITHDRAWS_FETCH_FAILED"
 }
 
 });
-
 
 /* PAYMENT FLOW */
 r.post("/payments/flow", async (req,res)=>{
@@ -1824,7 +1813,6 @@ db.release();
 }
 
 });
-
 
 /* SETTLEMENT ENGINE */
 r.post("/settlements/run", async (req,res)=>{
@@ -2098,7 +2086,6 @@ db.release();
 
 });
 
-
 /* PLATFORM FINANCE REPORT */
 r.get("/reports/platform/finance", async (req,res)=>{
 
@@ -2143,7 +2130,6 @@ error:"PLATFORM_FINANCE_REPORT_FAILED"
 
 });
 
-
 /* PLATFORM LEDGER REPORT */
 r.get("/reports/platform/ledger", async (req,res)=>{
 
@@ -2172,7 +2158,6 @@ error:"PLATFORM_LEDGER_REPORT_FAILED"
 
 });
 
-
 /* PLATFORM RECONCILIATION REPORT */
 r.get("/reports/platform/reconciliation", async (req,res)=>{
 
@@ -2200,7 +2185,6 @@ error:"RECONCILIATION_REPORT_FAILED"
 }
 
 });
-
 
 /*
 MASTER WALLET
@@ -2252,7 +2236,6 @@ error:"MASTER_WALLET_FETCH_FAILED"
 }
 
 });
-
 
 /*
 MASTER WALLET BALANCE
@@ -2309,7 +2292,6 @@ error:"MASTER_WALLET_BALANCE_FETCH_FAILED"
 
 });
 
-
 /*
 MASTER LEDGER
 */
@@ -2364,7 +2346,6 @@ error:"MASTER_LEDGER_FETCH_FAILED"
 }
 
 });
-
 
 /*
 MASTER SETTLEMENTS
@@ -2635,7 +2616,6 @@ db.release();
 }
 
 });
-
 
 /* WITHDRAW PROCESSOR */
 r.post("/withdraws/run", async (req,res)=>{
@@ -2941,7 +2921,6 @@ db.release();
 
 });
 
-
 /* AUTO FINANCE ENGINE */
 r.post("/finance/run", async (req,res)=>{
 
@@ -3072,7 +3051,6 @@ error:"CONTRACT_CREATE_FAILED"
 }
 
 });
-
 
 /* SALON CONTRACTS (ALIAS FOR UI) */
 r.get("/salons/:slug/contracts", async (req,res)=>{
@@ -3213,7 +3191,6 @@ error:"SALON_CONTRACT_CREATE_FAILED"
 
 });
 
-
 /* CONTRACTS BY MASTER */
 r.get("/contracts/master/:slug", async (req,res)=>{
 
@@ -3257,7 +3234,6 @@ error:"CONTRACTS_FETCH_FAILED"
 }
 
 });
-
 
 /* ACCEPT CONTRACT */
 r.post("/contracts/:id/accept", async (req,res)=>{
@@ -3336,7 +3312,6 @@ db.release();
 }
 
 });
-
 
 /* ARCHIVE CONTRACT */
 r.post("/contracts/:id/archive", async (req,res)=>{
@@ -3531,7 +3506,6 @@ db.release();
 }
 
 });
-
 
 /* ============================= */
 /* XPAY QR ENGINE                */
