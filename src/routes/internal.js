@@ -949,6 +949,256 @@ error:"SALON_MASTERS_FETCH_FAILED"
 
 });
 
+
+/* SALON SERVICES */
+r.get("/salons/:slug/services", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id FROM salons WHERE slug=$1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+const services = await pool.query(`
+SELECT
+sms.id,
+sms.salon_id,
+sms.master_id,
+m.slug AS master_slug,
+m.name AS master_name,
+sms.service_pk,
+s.service_id AS catalog_service_id,
+s.name,
+sms.price,
+sms.duration_min,
+sms.active
+FROM salon_master_services sms
+JOIN services s ON s.id=sms.service_pk
+LEFT JOIN masters m ON m.id=sms.master_id
+WHERE sms.salon_id=$1
+ORDER BY sms.id DESC
+`,[salonId]);
+
+return res.json({
+ok:true,
+services:services.rows
+});
+
+}catch(err){
+
+console.error("SALON_SERVICES_FETCH_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"SALON_SERVICES_FETCH_FAILED"
+});
+
+}
+
+});
+
+/* SALON TAKE MASTER SERVICE */
+r.post("/salons/:slug/services", async (req,res)=>{
+
+const { slug } = req.params;
+const { master_id, service_pk, price, duration_min, active } = req.body;
+
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+const salon = await db.query(
+`SELECT id FROM salons WHERE slug=$1`,
+[slug]
+);
+
+if(!salon.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+const safeMasterId = Number(master_id);
+const safeServicePk = Number(service_pk);
+const safeActive = typeof active === "boolean" ? active : true;
+
+if(!Number.isInteger(safeMasterId) || safeMasterId <= 0){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"MASTER_ID_REQUIRED"});
+}
+
+if(!Number.isInteger(safeServicePk) || safeServicePk <= 0){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"SERVICE_PK_REQUIRED"});
+}
+
+const relation = await db.query(`
+SELECT
+ms.master_id,
+m.slug AS master_slug,
+m.name AS master_name
+FROM master_salon ms
+JOIN masters m ON m.id=ms.master_id
+WHERE ms.salon_id=$1
+AND ms.master_id=$2
+AND ms.status='active'
+ORDER BY ms.activated_at DESC NULLS LAST, ms.id DESC
+LIMIT 1
+`,[
+salonId,
+safeMasterId
+]);
+
+if(!relation.rows.length){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"MASTER_NOT_ACTIVE_IN_SALON"});
+}
+
+const service = await db.query(`
+SELECT
+id,
+service_id,
+name,
+duration_min,
+price
+FROM services
+WHERE id=$1
+LIMIT 1
+`,[safeServicePk]);
+
+if(!service.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"SERVICE_NOT_FOUND"});
+}
+
+const existing = await db.query(`
+SELECT
+sms.id,
+sms.active
+FROM salon_master_services sms
+WHERE sms.salon_id=$1
+AND sms.master_id=$2
+AND sms.service_pk=$3
+LIMIT 1
+FOR UPDATE
+`,[
+salonId,
+safeMasterId,
+safeServicePk
+]);
+
+const nextPrice =
+  price === undefined ? Number(service.rows[0].price) : Number(price);
+
+const nextDuration =
+  duration_min === undefined ? Number(service.rows[0].duration_min) : Number(duration_min);
+
+if(!Number.isFinite(nextPrice) || nextPrice < 0){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"PRICE_INVALID"});
+}
+
+if(!Number.isFinite(nextDuration) || nextDuration <= 0){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"DURATION_INVALID"});
+}
+
+let linked;
+
+if(existing.rows.length){
+
+linked = await db.query(`
+UPDATE salon_master_services
+SET
+price=$4,
+duration_min=$5,
+active=$6
+WHERE id=$1
+RETURNING id,salon_id,master_id,service_pk,price,duration_min,active
+`,[
+existing.rows[0].id,
+salonId,
+safeMasterId,
+nextPrice,
+nextDuration,
+safeActive
+]);
+
+}else{
+
+linked = await db.query(`
+INSERT INTO salon_master_services(
+salon_id,
+master_id,
+service_pk,
+price,
+duration_min,
+active
+)
+VALUES($1,$2,$3,$4,$5,$6)
+RETURNING id,salon_id,master_id,service_pk,price,duration_min,active
+`,[
+salonId,
+safeMasterId,
+safeServicePk,
+nextPrice,
+nextDuration,
+safeActive
+]);
+
+}
+
+await db.query("COMMIT");
+
+return res.json({
+ok:true,
+service:{
+id:linked.rows[0].id,
+salon_id:linked.rows[0].salon_id,
+master_id:linked.rows[0].master_id,
+master_slug:relation.rows[0].master_slug,
+master_name:relation.rows[0].master_name,
+service_pk:linked.rows[0].service_pk,
+catalog_service_id:service.rows[0].service_id,
+name:service.rows[0].name,
+price:linked.rows[0].price,
+duration_min:linked.rows[0].duration_min,
+active:linked.rows[0].active
+}
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+console.error("SALON_SERVICE_TAKE_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"SALON_SERVICE_TAKE_FAILED"
+});
+
+}finally{
+
+db.release();
+
+}
+
+});
+
+
 /* TERMINATE SALON MASTER */
 r.post("/salons/:slug/masters/:masterId/terminate", async (req,res)=>{
 
