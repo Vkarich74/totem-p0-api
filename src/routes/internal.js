@@ -166,6 +166,357 @@ error:"MASTER_SERVICES_FETCH_FAILED"
 
 });
 
+
+/*
+CREATE MASTER SERVICE
+*/
+r.post("/masters/:slug/services", async (req,res)=>{
+
+const { slug } = req.params;
+const { name, price, duration_min } = req.body;
+
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+const safeName = String(name || "").trim();
+const safePrice = Number(price);
+const safeDuration = Number(duration_min);
+
+if(!safeName){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"NAME_REQUIRED"});
+}
+
+if(!Number.isFinite(safePrice) || safePrice < 0){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"PRICE_INVALID"});
+}
+
+if(!Number.isFinite(safeDuration) || safeDuration <= 0){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"DURATION_INVALID"});
+}
+
+const master = await db.query(
+`SELECT id FROM masters WHERE slug=$1`,
+[slug]
+);
+
+if(!master.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const masterId = master.rows[0].id;
+
+const relation = await db.query(`
+SELECT salon_id
+FROM master_salon
+WHERE master_id=$1
+AND status='active'
+ORDER BY activated_at DESC NULLS LAST, id DESC
+LIMIT 1
+`,[masterId]);
+
+if(!relation.rows.length){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"MASTER_ACTIVE_SALON_REQUIRED"});
+}
+
+const salonId = relation.rows[0].salon_id;
+
+const service = await db.query(`
+INSERT INTO services(
+name
+)
+VALUES($1)
+RETURNING id,name
+`,[safeName]);
+
+const serviceId = service.rows[0].id;
+
+const linked = await db.query(`
+INSERT INTO salon_master_services(
+salon_id,
+master_id,
+service_pk,
+price,
+duration_min,
+active
+)
+VALUES($1,$2,$3,$4,$5,true)
+RETURNING id,service_pk AS service_id,price,duration_min,active
+`,[
+salonId,
+masterId,
+serviceId,
+safePrice,
+safeDuration
+]);
+
+await db.query("COMMIT");
+
+return res.json({
+ok:true,
+service:{
+id:linked.rows[0].id,
+service_id:linked.rows[0].service_id,
+name:service.rows[0].name,
+price:linked.rows[0].price,
+duration_min:linked.rows[0].duration_min,
+active:linked.rows[0].active
+}
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+console.error("MASTER_SERVICE_CREATE_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"MASTER_SERVICE_CREATE_FAILED"
+});
+
+}finally{
+
+db.release();
+
+}
+
+});
+
+/*
+UPDATE MASTER SERVICE
+*/
+r.patch("/masters/:slug/services/:id", async (req,res)=>{
+
+const { slug, id } = req.params;
+const { name, price, duration_min, active } = req.body;
+
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+const master = await db.query(
+`SELECT id FROM masters WHERE slug=$1`,
+[slug]
+);
+
+if(!master.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const masterId = master.rows[0].id;
+
+const existing = await db.query(`
+SELECT
+sms.id,
+sms.service_pk,
+sms.price,
+sms.duration_min,
+sms.active,
+s.name
+FROM salon_master_services sms
+JOIN services s ON s.id=sms.service_pk
+WHERE sms.id=$1
+AND sms.master_id=$2
+LIMIT 1
+FOR UPDATE
+`,[
+id,
+masterId
+]);
+
+if(!existing.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"MASTER_SERVICE_NOT_FOUND"});
+}
+
+const current = existing.rows[0];
+
+const nextName =
+  typeof name === "string" ? String(name).trim() : current.name;
+
+const nextPrice =
+  price === undefined ? Number(current.price) : Number(price);
+
+const nextDuration =
+  duration_min === undefined ? Number(current.duration_min) : Number(duration_min);
+
+const nextActive =
+  typeof active === "boolean" ? active : current.active;
+
+if(!nextName){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"NAME_REQUIRED"});
+}
+
+if(!Number.isFinite(nextPrice) || nextPrice < 0){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"PRICE_INVALID"});
+}
+
+if(!Number.isFinite(nextDuration) || nextDuration <= 0){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"DURATION_INVALID"});
+}
+
+await db.query(`
+UPDATE services
+SET name=$2
+WHERE id=$1
+`,[
+current.service_pk,
+nextName
+]);
+
+const updated = await db.query(`
+UPDATE salon_master_services
+SET
+price=$2,
+duration_min=$3,
+active=$4
+WHERE id=$1
+RETURNING id,service_pk AS service_id,price,duration_min,active
+`,[
+id,
+nextPrice,
+nextDuration,
+nextActive
+]);
+
+await db.query("COMMIT");
+
+return res.json({
+ok:true,
+service:{
+id:updated.rows[0].id,
+service_id:updated.rows[0].service_id,
+name:nextName,
+price:updated.rows[0].price,
+duration_min:updated.rows[0].duration_min,
+active:updated.rows[0].active
+}
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+console.error("MASTER_SERVICE_UPDATE_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"MASTER_SERVICE_UPDATE_FAILED"
+});
+
+}finally{
+
+db.release();
+
+}
+
+});
+
+/*
+DELETE MASTER SERVICE
+*/
+r.delete("/masters/:slug/services/:id", async (req,res)=>{
+
+const { slug, id } = req.params;
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+const master = await db.query(
+`SELECT id FROM masters WHERE slug=$1`,
+[slug]
+);
+
+if(!master.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const masterId = master.rows[0].id;
+
+const existing = await db.query(`
+SELECT
+sms.id,
+sms.service_pk
+FROM salon_master_services sms
+WHERE sms.id=$1
+AND sms.master_id=$2
+LIMIT 1
+FOR UPDATE
+`,[
+id,
+masterId
+]);
+
+if(!existing.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"MASTER_SERVICE_NOT_FOUND"});
+}
+
+const servicePk = existing.rows[0].service_pk;
+
+await db.query(`
+DELETE FROM salon_master_services
+WHERE id=$1
+`,[id]);
+
+const serviceLinks = await db.query(`
+SELECT COUNT(*)::int AS v
+FROM salon_master_services
+WHERE service_pk=$1
+`,[servicePk]);
+
+if((serviceLinks.rows[0]?.v || 0) === 0){
+await db.query(`
+DELETE FROM services
+WHERE id=$1
+`,[servicePk]);
+}
+
+await db.query("COMMIT");
+
+return res.json({
+ok:true,
+deleted:true,
+id:Number(id)
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+console.error("MASTER_SERVICE_DELETE_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"MASTER_SERVICE_DELETE_FAILED"
+});
+
+}finally{
+
+db.release();
+
+}
+
+});
+
+
 /*
 MASTER BOOKINGS
 */
@@ -3911,94 +4262,6 @@ return res.status(500).json({
 ok:false,
 error:"FINANCE_STATUS_FAILED"
 });
-
-}
-
-});
-
-/*
-CREATE MASTER SERVICE (CRITICAL)
-*/
-r.post("/masters/:slug/services", async (req,res)=>{
-
-const { slug } = req.params;
-const { name, price, duration_min } = req.body;
-
-const db = await pool.connect();
-
-try{
-
-await db.query("BEGIN");
-
-if(!name){
-await db.query("ROLLBACK");
-return res.status(400).json({ok:false,error:"NAME_REQUIRED"});
-}
-
-const master = await db.query(
-`SELECT id FROM masters WHERE slug=$1`,
-[slug]
-);
-
-if(!master.rows.length){
-await db.query("ROLLBACK");
-return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
-}
-
-const masterId = master.rows[0].id;
-
-/* 1. create service (catalog) */
-const service = await db.query(`
-INSERT INTO services(
-name
-)
-VALUES($1)
-RETURNING id
-`,[
-name
-]);
-
-const serviceId = service.rows[0].id;
-
-/* 2. link to master */
-const sms = await db.query(`
-INSERT INTO salon_master_services(
-master_id,
-service_pk,
-price,
-duration_min,
-active
-)
-VALUES($1,$2,$3,$4,true)
-RETURNING *
-`,[
-masterId,
-serviceId,
-price || 0,
-duration_min || 30
-]);
-
-await db.query("COMMIT");
-
-res.json({
-ok:true,
-service:sms.rows[0]
-});
-
-}catch(err){
-
-try{ await db.query("ROLLBACK"); }catch(e){}
-
-console.error("MASTER_SERVICE_CREATE_ERROR",err);
-
-res.status(500).json({
-ok:false,
-error:"MASTER_SERVICE_CREATE_FAILED"
-});
-
-}finally{
-
-db.release();
 
 }
 
