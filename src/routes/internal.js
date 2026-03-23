@@ -172,6 +172,57 @@ error:"MASTER_SERVICES_FETCH_FAILED"
 });
 
 
+// 
+r.get("/masters/:slug/services", async (req, res) => {
+
+  const { slug } = req.params;
+
+  try {
+
+    const master = await pool.query(
+      `SELECT id FROM masters WHERE slug=$1`,
+      [slug]
+    );
+
+    if (!master.rows.length) {
+      return res.status(404).json({ ok: false, error: "MASTER_NOT_FOUND" });
+    }
+
+    const masterId = master.rows[0].id;
+
+    const services = await pool.query(`
+      SELECT
+        sms.id,
+        sms.service_pk AS service_id,
+        s.name,
+        sms.price,
+        sms.duration_min,
+        sms.active
+      FROM salon_master_services sms
+      JOIN services s ON s.id = sms.service_pk
+      WHERE sms.master_id = $1
+      ORDER BY sms.id DESC
+    `, [masterId]);
+
+    res.json({
+      ok: true,
+      services: services.rows
+    });
+
+  } catch (err) {
+
+    console.error("MASTER_SERVICES_FETCH_ERROR", err);
+
+    res.status(500).json({
+      ok: false,
+      error: "MASTER_SERVICES_FETCH_FAILED"
+    });
+
+  }
+
+});
+
+
 // MASTER BOOKINGS
 */
 r.get("/masters/:slug/bookings", async (req,res)=>{
