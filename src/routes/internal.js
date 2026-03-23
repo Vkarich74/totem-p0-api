@@ -683,11 +683,12 @@ const serviceLink = await db.query(`
 SELECT
 sms.salon_id,
 sms.price,
+sms.service_pk,
 s.slug
 FROM salon_master_services sms
 JOIN salons s ON s.id=sms.salon_id
 WHERE sms.master_id=$1
-AND sms.service_pk=$2
+AND sms.id=$2
 AND sms.active=true
 LIMIT 1
 `,[
@@ -702,6 +703,7 @@ return res.status(400).json({ok:false,error:"SERVICE_INACTIVE"});
 
 const salonId = serviceLink.rows[0].salon_id;
 const salonSlug = serviceLink.rows[0].slug;
+const servicePk = Number(serviceLink.rows[0].service_pk);
 const priceSnapshot = Number(serviceLink.rows[0].price);
 
 const safeName = String(client_name || "").trim() || "client";
@@ -837,7 +839,7 @@ end,
 requestId,
 slotId,
 clientId,
-service_id,
+servicePk,
 priceSnapshot
 ]);
 
