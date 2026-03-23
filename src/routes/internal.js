@@ -950,6 +950,136 @@ error:"SALON_MASTERS_FETCH_FAILED"
 });
 
 
+
+/* ACTIVATE SALON MASTER */
+r.post("/salons/:slug/masters/:masterId/activate", async (req,res)=>{
+
+const { slug, masterId } = req.params;
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+const salon = await db.query(
+`SELECT id,name,slug
+FROM salons
+WHERE slug=$1
+LIMIT 1`,
+[slug]
+);
+
+if(!salon.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+const master = await db.query(
+`SELECT id,name,slug
+FROM masters
+WHERE id=$1
+LIMIT 1`,
+[masterId]
+);
+
+if(!master.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const existing = await db.query(`
+SELECT
+id,
+status,
+activated_at,
+fired_at,
+updated_at
+FROM master_salon
+WHERE salon_id=$1
+AND master_id=$2
+ORDER BY id DESC
+LIMIT 1
+FOR UPDATE
+`,[
+salonId,
+masterId
+]);
+
+let relation;
+
+if(existing.rows.length){
+
+relation = await db.query(`
+UPDATE master_salon
+SET
+status='active',
+activated_at=COALESCE(activated_at, NOW()),
+fired_at=NULL,
+updated_at=NOW()
+WHERE id=$1
+RETURNING id,salon_id,master_id,status,activated_at,fired_at,updated_at
+`,[existing.rows[0].id]);
+
+}else{
+
+relation = await db.query(`
+INSERT INTO master_salon(
+salon_id,
+master_id,
+status,
+activated_at,
+updated_at
+)
+VALUES($1,$2,'active',NOW(),NOW())
+RETURNING id,salon_id,master_id,status,activated_at,fired_at,updated_at
+`,[
+salonId,
+masterId
+]);
+
+}
+
+await db.query("COMMIT");
+
+return res.json({
+ok:true,
+link:{
+id:relation.rows[0].id,
+salon_id:relation.rows[0].salon_id,
+salon_slug:salon.rows[0].slug,
+salon_name:salon.rows[0].name,
+master_id:relation.rows[0].master_id,
+master_slug:master.rows[0].slug,
+master_name:master.rows[0].name,
+status:relation.rows[0].status,
+activated_at:relation.rows[0].activated_at,
+fired_at:relation.rows[0].fired_at,
+updated_at:relation.rows[0].updated_at
+}
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+console.error("SALON_MASTER_ACTIVATE_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"SALON_MASTER_ACTIVATE_FAILED"
+});
+
+}finally{
+
+db.release();
+
+}
+
+});
+
+
 /* SALON SERVICES */
 r.get("/salons/:slug/services", async (req,res)=>{
 
