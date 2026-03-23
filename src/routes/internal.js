@@ -680,7 +680,10 @@ return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 const masterId = master.rows[0].id;
 
 const serviceLink = await db.query(`
-SELECT sms.salon_id, s.slug
+SELECT
+sms.salon_id,
+sms.price,
+s.slug
 FROM salon_master_services sms
 JOIN salons s ON s.id=sms.salon_id
 WHERE sms.master_id=$1
@@ -699,6 +702,7 @@ return res.status(400).json({ok:false,error:"SERVICE_INACTIVE"});
 
 const salonId = serviceLink.rows[0].salon_id;
 const salonSlug = serviceLink.rows[0].slug;
+const priceSnapshot = Number(serviceLink.rows[0].price);
 
 const safeName = String(client_name || "").trim() || "client";
 const safePhone = String(phone || "").trim() || null;
@@ -834,7 +838,7 @@ requestId,
 slotId,
 clientId,
 service_id,
-null
+priceSnapshot
 ]);
 
 await db.query("COMMIT");
