@@ -2,15 +2,28 @@ import express from "express";
 import crypto from "crypto";
 import { pool } from "../db.js";
 import { xpayCreateQR, xpayCheckStatus } from "../payments/xpay.js";
+import { rateLimit } from "../middleware/rateLimit.js";
 
 export function createInternalRouter(){
 
 const r = express.Router();
 
+
+const internalReadRateLimit = (req, res, next) => {
+const redis = req.app?.locals?.redis ?? null;
+return rateLimit({
+windowMs: 60_000,
+max: 60,
+keyPrefix: "internal-read",
+redis
+})(req, res, next);
+};
+
+
 /*
 GET MASTER BY SLUG
 */
-r.get("/masters/:slug", async (req,res)=>{
+r.get("/masters/:slug", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -52,7 +65,7 @@ error:"MASTER_FETCH_FAILED"
 /*
 MASTER METRICS
 */
-r.get("/masters/:slug/metrics", async (req,res)=>{
+r.get("/masters/:slug/metrics", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -117,7 +130,7 @@ error:"MASTER_METRICS_FAILED"
 /*
 MASTER SERVICES
 */
-r.get("/masters/:slug/services", async (req,res)=>{
+r.get("/masters/:slug/services", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -537,7 +550,7 @@ db.release();
 /*
 MASTER BOOKINGS
 */
-r.get("/masters/:slug/bookings", async (req,res)=>{
+r.get("/masters/:slug/bookings", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -590,7 +603,7 @@ error:"MASTER_BOOKINGS_FETCH_FAILED"
 /*
 MASTER CLIENTS
 */
-r.get("/masters/:slug/clients", async (req,res)=>{
+r.get("/masters/:slug/clients", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -871,7 +884,7 @@ db.release();
 });
 
 /* SALON ROOT */
-r.get("/salons/:slug", async (req,res)=>{
+r.get("/salons/:slug", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -905,7 +918,7 @@ error:"SALON_FETCH_FAILED"
 });
 
 /* SALON MASTERS */
-r.get("/salons/:slug/masters", async (req,res)=>{
+r.get("/salons/:slug/masters", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -1088,7 +1101,7 @@ db.release();
 
 
 /* SALON SERVICES */
-r.get("/salons/:slug/services", async (req,res)=>{
+r.get("/salons/:slug/services", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -1518,7 +1531,7 @@ db.release();
 });
 
 /* SALON CLIENTS */
-r.get("/salons/:slug/clients", async (req,res)=>{
+r.get("/salons/:slug/clients", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -1561,7 +1574,7 @@ error:"SALON_CLIENTS_FETCH_FAILED"
 });
 
 /* SALON BOOKINGS */
-r.get("/salons/:slug/bookings", async (req,res)=>{
+r.get("/salons/:slug/bookings", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -1610,7 +1623,7 @@ error:"SALON_BOOKINGS_FETCH_FAILED"
 });
 
 /* SALON METRICS */
-r.get("/salons/:slug/metrics", async (req,res)=>{
+r.get("/salons/:slug/metrics", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -1681,7 +1694,7 @@ error:"SALON_METRICS_FAILED"
 });
 
 /* SALON PAYMENTS (FIXED) */
-r.get("/salons/:slug/payments", async (req,res)=>{
+r.get("/salons/:slug/payments", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -1733,7 +1746,7 @@ error:"SALON_PAYMENTS_FETCH_FAILED"
 });
 
 /* SALON SETTLEMENTS */
-r.get("/salons/:slug/settlements", async (req,res)=>{
+r.get("/salons/:slug/settlements", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -1784,7 +1797,7 @@ error:"SALON_SETTLEMENTS_FETCH_FAILED"
 });
 
 /* SALON PAYOUTS */
-r.get("/salons/:slug/payouts", async (req,res)=>{
+r.get("/salons/:slug/payouts", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -1833,7 +1846,7 @@ error:"SALON_PAYOUTS_FETCH_FAILED"
 });
 
 /* SALON WALLET */
-r.get("/salons/:slug/wallet", async (req,res)=>{
+r.get("/salons/:slug/wallet", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -1882,7 +1895,7 @@ error:"SALON_WALLET_FETCH_FAILED"
 });
 
 /* SALON WALLET BALANCE */
-r.get("/salons/:slug/wallet-balance", async (req,res)=>{
+r.get("/salons/:slug/wallet-balance", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -1934,7 +1947,7 @@ error:"SALON_WALLET_BALANCE_FETCH_FAILED"
 });
 
 /* SALON LEDGER */
-r.get("/salons/:slug/ledger", async (req,res)=>{
+r.get("/salons/:slug/ledger", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -1987,7 +2000,7 @@ error:"SALON_LEDGER_FETCH_FAILED"
 });
 
 /* SALON WITHDRAWS */
-r.get("/salons/:slug/withdraws", async (req,res)=>{
+r.get("/salons/:slug/withdraws", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -2474,7 +2487,7 @@ db.release();
 });
 
 /* PLATFORM FINANCE REPORT */
-r.get("/reports/platform/finance", async (req,res)=>{
+r.get("/reports/platform/finance", internalReadRateLimit, async (req,res)=>{
 
 try{
 
@@ -2518,7 +2531,7 @@ error:"PLATFORM_FINANCE_REPORT_FAILED"
 });
 
 /* PLATFORM LEDGER REPORT */
-r.get("/reports/platform/ledger", async (req,res)=>{
+r.get("/reports/platform/ledger", internalReadRateLimit, async (req,res)=>{
 
 try{
 
@@ -2546,7 +2559,7 @@ error:"PLATFORM_LEDGER_REPORT_FAILED"
 });
 
 /* PLATFORM RECONCILIATION REPORT */
-r.get("/reports/platform/reconciliation", async (req,res)=>{
+r.get("/reports/platform/reconciliation", internalReadRateLimit, async (req,res)=>{
 
 try{
 
@@ -2576,7 +2589,7 @@ error:"RECONCILIATION_REPORT_FAILED"
 /*
 MASTER WALLET
 */
-r.get("/masters/:slug/wallet", async (req,res)=>{
+r.get("/masters/:slug/wallet", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -2627,7 +2640,7 @@ error:"MASTER_WALLET_FETCH_FAILED"
 /*
 MASTER WALLET BALANCE
 */
-r.get("/masters/:slug/wallet-balance", async (req,res)=>{
+r.get("/masters/:slug/wallet-balance", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -2682,7 +2695,7 @@ error:"MASTER_WALLET_BALANCE_FETCH_FAILED"
 /*
 MASTER LEDGER
 */
-r.get("/masters/:slug/ledger", async (req,res)=>{
+r.get("/masters/:slug/ledger", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -2737,7 +2750,7 @@ error:"MASTER_LEDGER_FETCH_FAILED"
 /*
 MASTER SETTLEMENTS
 */
-r.get("/masters/:slug/settlements", async (req,res)=>{
+r.get("/masters/:slug/settlements", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -2792,7 +2805,7 @@ error:"MASTER_SETTLEMENTS_FETCH_FAILED"
 /*
 MASTER PAYOUTS
 */
-r.get("/masters/:slug/payouts", async (req,res)=>{
+r.get("/masters/:slug/payouts", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -3579,7 +3592,7 @@ error:"SALON_CONTRACT_CREATE_FAILED"
 });
 
 /* CONTRACTS BY MASTER */
-r.get("/contracts/master/:slug", async (req,res)=>{
+r.get("/contracts/master/:slug", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -4069,7 +4082,7 @@ error:"CONTRACT_CREATE_FAILED"
 });
 
 /* WITHDRAW TIMELINE (AUDIT) */
-r.get("/withdraws/:id/timeline", async (req,res)=>{
+r.get("/withdraws/:id/timeline", internalReadRateLimit, async (req,res)=>{
 
 const { id } = req.params;
 
@@ -4162,7 +4175,7 @@ error:"WITHDRAW_TIMELINE_FAILED"
 });
 
 /* WITHDRAW DASHBOARD (AGGREGATES) */
-r.get("/salons/:slug/withdraws/summary", async (req,res)=>{
+r.get("/salons/:slug/withdraws/summary", internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -4574,7 +4587,7 @@ db.release();
 });
 
 /* FINANCE STATUS (CONTROL PANEL) */
-r.get("/finance/status", async (req,res)=>{
+r.get("/finance/status", internalReadRateLimit, async (req,res)=>{
 
 try{
 
