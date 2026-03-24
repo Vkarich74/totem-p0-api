@@ -21,7 +21,7 @@ function getIp(req) {
 function isRedisUsable(redis) {
   if (!redis) return false;
   const s = String(redis.status || "").toLowerCase();
-  return s === "ready" || s === "connect";
+  return s === "ready" || s === "connecting";
 }
 
 export function rateLimit(options = {}) {
