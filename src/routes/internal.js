@@ -4,20 +4,22 @@ import { pool } from "../db.js";
 import { xpayCreateQR, xpayCheckStatus } from "../payments/xpay.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 
-export function createInternalRouter(){
+export function createInternalRouter({ rlInternal } = {}){
 
 const r = express.Router();
 
 
-const internalReadRateLimit = (req, res, next) => {
-const redis = req.app?.locals?.redis ?? null;
-return rateLimit({
-windowMs: 60_000,
-max: 60,
-keyPrefix: "internal-read",
-redis
-})(req, res, next);
-};
+const internalReadRateLimit =
+  rlInternal ||
+  ((req, res, next) => {
+    const redis = req.app?.locals?.redis ?? null;
+    return rateLimit({
+      windowMs: 60_000,
+      max: 60,
+      keyPrefix: "internal-read",
+      redis,
+    })(req, res, next);
+  });
 
 
 /*

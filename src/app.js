@@ -45,6 +45,7 @@ if (process.env.REDIS_URL) {
 
 const app = express();
 app.set("trust proxy", 1);
+app.locals.redis = redis;
 
 /* ================= CORS ================= */
 
