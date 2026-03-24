@@ -10,9 +10,7 @@ const r = express.Router();
 
 
 const internalReadRateLimit = (req, res, next) => {
-import { redis as globalRedis } from "../redis.js";
-
-const redis = req.app?.locals?.redis ?? globalRedis ?? null;
+const redis = req.app?.locals?.redis ?? null;
 return rateLimit({
 windowMs: 60_000,
 max: 60,
