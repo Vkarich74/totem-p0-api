@@ -1,6 +1,8 @@
 // src/middleware/rateLimit.js
-// Simple in-memory rate limiter (fixed window) for public endpoints.
-// Note: per-instance (Railway multi-replica will have per-replica limits). This is acceptable as a safety baseline.
+// Simple rate limiter with Redis support and in-memory fallback.
+// - Redis mode: shared across Railway replicas
+// - Memory mode: local fallback if Redis is unavailable
+// Fail-open on limiter/storage errors.
 
 function nowMs() {
   return Date.now();
@@ -16,10 +18,22 @@ function getIp(req) {
   return req.ip || "unknown";
 }
 
+function isRedisUsable(redis) {
+  if (!redis) return false;
+  const s = String(redis.status || "").toLowerCase();
+  return s === "ready" || s === "connect";
+}
+
 export function rateLimit(options = {}) {
-  const windowMs = clampInt(Number(options.windowMs ?? 60_000), 1_000, 60 * 60 * 1000);
+  const windowMs = clampInt(
+    Number(options.windowMs ?? 60_000),
+    1_000,
+    60 * 60 * 1000
+  );
+
   const max = clampInt(Number(options.max ?? 60), 1, 100_000);
   const keyPrefix = String(options.keyPrefix ?? "rl");
+  const redis = options.redis ?? null;
 
   const keyFn =
     typeof options.keyFn === "function"
@@ -29,6 +43,8 @@ export function rateLimit(options = {}) {
           const slug = req.params?.slug ? String(req.params.slug) : "";
           return `${keyPrefix}:${ip}${slug ? `:${slug}` : ""}`;
         };
+
+  /* ================= MEMORY FALLBACK ================= */
 
   const store = new Map(); // key -> { windowStart:number, count:number }
   const maxKeys = clampInt(Number(options.maxKeys ?? 50_000), 1_000, 500_000);
@@ -48,11 +64,13 @@ export function rateLimit(options = {}) {
       const entries = Array.from(store.entries());
       entries.sort((a, b) => a[1].windowStart - b[1].windowStart);
       const toDrop = store.size - maxKeys;
-      for (let i = 0; i < toDrop; i++) store.delete(entries[i][0]);
+      for (let i = 0; i < toDrop; i++) {
+        store.delete(entries[i][0]);
+      }
     }
   }
 
-  return function rateLimitMiddleware(req, res, next) {
+  function memoryRateLimit(req, res, next) {
     try {
       const key = keyFn(req);
       const t = nowMs();
@@ -82,7 +100,7 @@ export function rateLimit(options = {}) {
           ok: false,
           error: "RATE_LIMITED",
           request_id: req.request_id ?? null,
-          retry_after_ms: retryAfterMs
+          retry_after_ms: retryAfterMs,
         });
       }
 
@@ -90,8 +108,66 @@ export function rateLimit(options = {}) {
       return next();
     } catch (err) {
       // Fail-open: do not block traffic on limiter errors.
-      console.error("RATE_LIMIT_ERROR", err?.message ?? String(err));
+      console.error("RATE_LIMIT_MEMORY_ERROR", err?.message ?? String(err));
       return next();
     }
+  }
+
+  /* ================= REDIS MODE ================= */
+
+  async function redisRateLimit(req, res, next) {
+    try {
+      const key = keyFn(req);
+      const redisKey = `${keyPrefix}:${key}`;
+      const t = nowMs();
+
+      const multi = redis.multi();
+      multi.incr(redisKey);
+      multi.pttl(redisKey);
+
+      const result = await multi.exec();
+
+      const count = Number(result?.[0]?.[1] ?? 0);
+      let ttlMs = Number(result?.[1]?.[1] ?? -2);
+
+      if (count === 1 || ttlMs < 0) {
+        await redis.pexpire(redisKey, windowMs);
+        ttlMs = windowMs;
+      }
+
+      const remaining = Math.max(0, max - count);
+      const resetAt = t + Math.max(0, ttlMs);
+
+      res.setHeader("X-RateLimit-Limit", String(max));
+      res.setHeader("X-RateLimit-Remaining", String(remaining));
+      res.setHeader("X-RateLimit-Reset", String(Math.ceil(resetAt / 1000)));
+
+      if (count > max) {
+        const retryAfterMs = Math.max(0, ttlMs);
+        res.setHeader("Retry-After", String(Math.ceil(retryAfterMs / 1000)));
+
+        return res.status(429).json({
+          ok: false,
+          error: "RATE_LIMITED",
+          request_id: req.request_id ?? null,
+          retry_after_ms: retryAfterMs,
+        });
+      }
+
+      return next();
+    } catch (err) {
+      console.error("RATE_LIMIT_REDIS_ERROR", err?.message ?? String(err));
+      return memoryRateLimit(req, res, next);
+    }
+  }
+
+  /* ================= FINAL MIDDLEWARE ================= */
+
+  return function rateLimitMiddleware(req, res, next) {
+    if (isRedisUsable(redis)) {
+      return redisRateLimit(req, res, next);
+    }
+
+    return memoryRateLimit(req, res, next);
   };
 }
