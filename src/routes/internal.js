@@ -28,8 +28,8 @@ async function getOrCreateSystemWallet(db){
 const systemWallet = await db.query(`
 SELECT wallet_id
 FROM totem_test.system_wallets
-LIMIT 1
 FOR UPDATE
+LIMIT 1
 `);
 
 if(systemWallet.rows.length){
@@ -41,8 +41,8 @@ SELECT id
 FROM totem_test.wallets
 WHERE owner_type='system'
 AND owner_id=0
-LIMIT 1
 FOR UPDATE
+LIMIT 1
 `);
 
 let walletId = existingWallet.rows[0]?.id || null;
@@ -443,8 +443,8 @@ FROM salon_master_services sms
 JOIN services s ON s.id=sms.service_pk
 WHERE sms.id=$1
 AND sms.master_id=$2
-LIMIT 1
 FOR UPDATE
+LIMIT 1
 `,[
 id,
 masterId
@@ -572,8 +572,8 @@ sms.service_pk
 FROM salon_master_services sms
 WHERE sms.id=$1
 AND sms.master_id=$2
-LIMIT 1
 FOR UPDATE
+LIMIT 1
 `,[
 id,
 masterId
@@ -1104,8 +1104,8 @@ FROM master_salon
 WHERE salon_id=$1
 AND master_id=$2
 ORDER BY id DESC
-LIMIT 1
 FOR UPDATE
+LIMIT 1
 `,[
 salonId,
 masterId
@@ -1325,8 +1325,8 @@ FROM salon_master_services sms
 WHERE sms.salon_id=$1
 AND sms.master_id=$2
 AND sms.service_pk=$3
-LIMIT 1
 FOR UPDATE
+LIMIT 1
 `,[
 salonId,
 safeMasterId,
@@ -1479,8 +1479,8 @@ fired_at
 FROM master_salon
 WHERE salon_id=$1
 AND master_id=$2
-LIMIT 1
 FOR UPDATE
+LIMIT 1
 `,[
 salonId,
 masterId
@@ -2164,8 +2164,8 @@ b.salon_id,
 b.status
 FROM bookings b
 WHERE b.id=$1
-LIMIT 1
 FOR UPDATE
+LIMIT 1
 `,[
 booking_id
 ]);
@@ -2182,8 +2182,8 @@ SELECT id, booking_id, amount, status, provider, created_at
 FROM payments
 WHERE booking_id=$1
 AND is_active=true
-LIMIT 1
 FOR UPDATE
+LIMIT 1
 `,[
 booking_id
 ]);
@@ -2303,8 +2303,8 @@ WHERE p.status='confirmed'
 AND si.id IS NULL
 AND po.id IS NULL
 ORDER BY p.id ASC
-LIMIT 500
 FOR UPDATE OF p SKIP LOCKED
+LIMIT 500
 `);
 
 if(!payments.rows.length){
@@ -2334,8 +2334,8 @@ AND master_id=$2
 AND status='active'
 AND archived_at IS NULL
 ORDER BY version DESC, created_at DESC
-LIMIT 1
 FOR UPDATE
+LIMIT 1
 `,[
 p.salon_id,
 p.master_id
@@ -2924,8 +2924,8 @@ FROM payouts p
 JOIN bookings b ON b.id=p.booking_id
 WHERE p.status='created'
 ORDER BY p.id ASC
-LIMIT 500
 FOR UPDATE OF p SKIP LOCKED
+LIMIT 500
 `);
 
 if(!payouts.rows.length){
@@ -2952,8 +2952,8 @@ AND master_id=$2
 AND status='active'
 AND archived_at IS NULL
 ORDER BY version DESC, created_at DESC
-LIMIT 1
 FOR UPDATE
+LIMIT 1
 `,[
 p.salon_id,
 p.master_id
@@ -3076,8 +3076,8 @@ w.status
 FROM public.withdraws w
 WHERE w.status='pending'
 ORDER BY w.created_at ASC
-LIMIT 500
 FOR UPDATE SKIP LOCKED
+LIMIT 500
 `);
 
 if(!withdraws.rows.length){
@@ -3152,8 +3152,8 @@ status,
 external_ref
 FROM public.withdraws
 WHERE id=$1
-LIMIT 1
 FOR UPDATE
+LIMIT 1
 `,[id]);
 
 if(!withdraw.rows.length){
@@ -3229,8 +3229,8 @@ status,
 external_ref
 FROM public.withdraws
 WHERE id=$1
-LIMIT 1
 FOR UPDATE
+LIMIT 1
 `,[id]);
 
 if(!withdraw.rows.length){
@@ -3303,8 +3303,8 @@ id,
 status
 FROM public.withdraws
 WHERE id=$1
-LIMIT 1
 FOR UPDATE
+LIMIT 1
 `,[id]);
 
 if(!withdraw.rows.length){
@@ -3686,8 +3686,8 @@ const contract = await db.query(`
 SELECT *
 FROM contracts
 WHERE id=$1
-LIMIT 1
 FOR UPDATE
+LIMIT 1
 `,[id]);
 
 if(!contract.rows.length){
@@ -4336,8 +4336,8 @@ WHERE p.status='confirmed'
 AND si.id IS NULL
 AND po.id IS NULL
 ORDER BY p.id ASC
-LIMIT 500
 FOR UPDATE OF p SKIP LOCKED
+LIMIT 500
 `);
 
 const periodCache = new Map();
@@ -4354,8 +4354,8 @@ AND master_id=$2
 AND status='active'
 AND archived_at IS NULL
 ORDER BY version DESC, created_at DESC
-LIMIT 1
 FOR UPDATE
+LIMIT 1
 `,[
 p.salon_id,
 p.master_id
@@ -4504,8 +4504,8 @@ FROM payouts p
 JOIN bookings b ON b.id=p.booking_id
 WHERE p.status='created'
 ORDER BY p.id ASC
-LIMIT 500
 FOR UPDATE OF p SKIP LOCKED
+LIMIT 500
 `);
 
 for(const p of payouts.rows){
@@ -4588,8 +4588,8 @@ w.id
 FROM public.withdraws w
 WHERE w.status='pending'
 ORDER BY w.created_at ASC
-LIMIT 500
 FOR UPDATE SKIP LOCKED
+LIMIT 500
 `);
 
 for(const w of withdraws.rows){
