@@ -2220,7 +2220,7 @@ const systemWalletId = await getSystemWalletId(db);
 /* force exact payment ledger state */
 await db.query(`
 DELETE FROM totem_test.ledger_entries
-WHERE reference_type IN ('payment','payment_system')
+WHERE reference_type='payment'
 AND reference_id=$1
 `,[String(paymentId)]);
 
@@ -2234,7 +2234,7 @@ reference_id,
 purpose
 )
 VALUES
-($1,'debit',$3,'payment_system',$4,'main'),
+($1,'debit',$3,'payment',$4,'main'),
 ($2,'credit',$3,'payment',$4,'main')
 `,[
 systemWalletId,
