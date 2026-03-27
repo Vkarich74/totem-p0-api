@@ -24,18 +24,57 @@ const internalReadRateLimit =
 
 const XPAY_RELEASE_ENABLED = String(process.env.XPAY_RELEASE_ENABLED || "false").toLowerCase() === "true";
 
-async function getSystemWalletId(db){
+async function getOrCreateSystemWallet(db){
 const systemWallet = await db.query(`
 SELECT wallet_id
 FROM totem_test.system_wallets
 LIMIT 1
+FOR UPDATE
 `);
 
-if(!systemWallet.rows.length){
-throw new Error("SYSTEM_WALLET_NOT_FOUND");
+if(systemWallet.rows.length){
+return systemWallet.rows[0].wallet_id;
 }
 
-return systemWallet.rows[0].wallet_id;
+const existingWallet = await db.query(`
+SELECT id
+FROM totem_test.wallets
+WHERE owner_type='system'
+AND owner_id=0
+LIMIT 1
+FOR UPDATE
+`);
+
+let walletId = existingWallet.rows[0]?.id || null;
+
+if(!walletId){
+const createdWallet = await db.query(`
+INSERT INTO totem_test.wallets(
+owner_type,
+owner_id
+)
+VALUES('system',0)
+RETURNING id
+`);
+
+walletId = createdWallet.rows[0].id;
+}
+
+await db.query(`
+INSERT INTO totem_test.system_wallets(wallet_id)
+SELECT $1
+WHERE NOT EXISTS (
+SELECT 1
+FROM totem_test.system_wallets
+WHERE wallet_id=$1
+)
+`,[walletId]);
+
+return walletId;
+}
+
+async function getSystemWalletId(db){
+return getOrCreateSystemWallet(db);
 }
 
 async function getSalonWalletId(db, salonId){
@@ -2941,10 +2980,12 @@ if(!masterWallet.rows.length){
 throw new Error(`MASTER_WALLET_NOT_FOUND master_id=${p.master_id}`);
 }
 
+const systemWalletId = await getOrCreateSystemWallet(db);
+
 /* force exact payout ledger state */
 await db.query(`
 DELETE FROM totem_test.ledger_entries
-WHERE reference_type='payout'
+WHERE reference_type IN ('payout','payout_reserve')
 AND reference_id=$1
 `,[String(p.id)]);
 
@@ -2957,10 +2998,13 @@ reference_type,
 reference_id
 )
 VALUES
-($1,'debit',$3,'payout',$5),
-($2,'credit',$4,'payout',$5)
+($1,'debit',$5,'payout_reserve',$6),
+($2,'credit',$5,'payout_reserve',$6),
+($2,'debit',$5,'payout',$6),
+($3,'credit',$5,'payout',$6)
 `,[
 salonWallet.rows[0].id,
+systemWalletId,
 masterWallet.rows[0].id,
 p.amount,
 p.amount,
@@ -4483,9 +4527,11 @@ if(!masterWallet.rows.length){
 throw new Error(`MASTER_WALLET_NOT_FOUND master_id=${p.master_id}`);
 }
 
+const systemWalletId = await getOrCreateSystemWallet(db);
+
 await db.query(`
 DELETE FROM totem_test.ledger_entries
-WHERE reference_type='payout'
+WHERE reference_type IN ('payout','payout_reserve')
 AND reference_id=$1
 `,[String(p.id)]);
 
@@ -4498,10 +4544,13 @@ reference_type,
 reference_id
 )
 VALUES
-($1,'debit',$3,'payout',$5),
-($2,'credit',$4,'payout',$5)
+($1,'debit',$5,'payout_reserve',$6),
+($2,'credit',$5,'payout_reserve',$6),
+($2,'debit',$5,'payout',$6),
+($3,'credit',$5,'payout',$6)
 `,[
 salonWallet.rows[0].id,
+systemWalletId,
 masterWallet.rows[0].id,
 p.amount,
 p.amount,
