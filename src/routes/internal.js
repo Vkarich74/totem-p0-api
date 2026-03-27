@@ -2217,6 +2217,13 @@ const paymentId = payment.rows[0].id;
 const salonWallet = await getSalonWalletId(db, salonId);
 const systemWalletId = await getSystemWalletId(db);
 
+/* force exact payment ledger state */
+await db.query(`
+DELETE FROM totem_test.ledger_entries
+WHERE reference_type IN ('payment','payment_system')
+AND reference_id=$1
+`,[String(paymentId)]);
+
 await db.query(`
 INSERT INTO totem_test.ledger_entries(
 wallet_id,
@@ -2227,7 +2234,7 @@ reference_id,
 purpose
 )
 VALUES
-($1,'debit',$3,'payment',$4,'main'),
+($1,'debit',$3,'payment_system',$4,'main'),
 ($2,'credit',$3,'payment',$4,'main')
 `,[
 systemWalletId,
@@ -2985,7 +2992,7 @@ const systemWalletId = await getOrCreateSystemWallet(db);
 /* force exact payout ledger state */
 await db.query(`
 DELETE FROM totem_test.ledger_entries
-WHERE reference_type IN ('payout','payout_reserve')
+WHERE reference_type IN ('payout','payout_system')
 AND reference_id=$1
 `,[String(p.id)]);
 
@@ -2998,9 +3005,9 @@ reference_type,
 reference_id
 )
 VALUES
-($1,'debit',$5,'payout_reserve',$6),
-($2,'credit',$5,'payout_reserve',$6),
-($2,'debit',$5,'payout',$6),
+($1,'debit',$5,'payout',$6),
+($2,'credit',$5,'payout_system',$6),
+($2,'debit',$5,'payout_system',$6),
 ($3,'credit',$5,'payout',$6)
 `,[
 salonWallet.rows[0].id,
@@ -4531,7 +4538,7 @@ const systemWalletId = await getOrCreateSystemWallet(db);
 
 await db.query(`
 DELETE FROM totem_test.ledger_entries
-WHERE reference_type IN ('payout','payout_reserve')
+WHERE reference_type IN ('payout','payout_system')
 AND reference_id=$1
 `,[String(p.id)]);
 
@@ -4544,9 +4551,9 @@ reference_type,
 reference_id
 )
 VALUES
-($1,'debit',$5,'payout_reserve',$6),
-($2,'credit',$5,'payout_reserve',$6),
-($2,'debit',$5,'payout',$6),
+($1,'debit',$5,'payout',$6),
+($2,'credit',$5,'payout_system',$6),
+($2,'debit',$5,'payout_system',$6),
 ($3,'credit',$5,'payout',$6)
 `,[
 salonWallet.rows[0].id,
