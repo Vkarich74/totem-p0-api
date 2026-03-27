@@ -51,9 +51,10 @@ if(!walletId){
 const createdWallet = await db.query(`
 INSERT INTO totem_test.wallets(
 owner_type,
-owner_id
+owner_id,
+currency
 )
-VALUES('system',0)
+VALUES('system',0,'KGS')
 RETURNING id
 `);
 
