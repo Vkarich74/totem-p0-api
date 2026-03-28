@@ -22,6 +22,14 @@ export default function buildFinanceEngineRouter(pool){
     FINANCE_ENGINE_LOCK = false;
   }
 
+  function buildSubscriptionReferenceId(subscription){
+    const chargeBase = subscription.next_charge_at
+      ? new Date(subscription.next_charge_at).toISOString()
+      : new Date().toISOString();
+
+    return `subscription:${subscription.id}:${chargeBase}`;
+  }
+
   /* =========================
      BILLING ENGINE (NEW LAYER)
      ========================= */
@@ -69,9 +77,59 @@ export default function buildFinanceEngineRouter(pool){
       `,[walletId]);
 
       const currentBalance = balance.rows[0].v;
-      const amount = s.amount;
+      const amount = Number(s.amount || 0);
+      const nextChargeAt = s.next_charge_at ? new Date(s.next_charge_at) : null;
+      const graceUntil = s.grace_until ? new Date(s.grace_until) : null;
+      const needCharge = !!nextChargeAt && nextChargeAt <= now;
+      const chargeReferenceId = buildSubscriptionReferenceId(s);
 
-      const needCharge = s.next_charge_at && new Date(s.next_charge_at) <= now;
+      /* =========================
+         BLOCKED → ACTIVE (AUTO RECOVERY)
+         ========================= */
+
+      if(s.subscription_status === "blocked"){
+
+        if(currentBalance >= amount){
+
+          await db.query(`
+            INSERT INTO totem_test.ledger_entries(
+              wallet_id,
+              direction,
+              amount_cents,
+              reference_type,
+              reference_id
+            )
+            VALUES
+            ($1,'debit',$2::int,'subscription',$3),
+            ((SELECT wallet_id FROM totem_test.system_wallets LIMIT 1),'credit',$2::int,'subscription',$3)
+            ON CONFLICT DO NOTHING
+          `,[
+            walletId,
+            amount,
+            chargeReferenceId
+          ]);
+
+          await db.query(`
+            UPDATE public.billing_subscriptions
+            SET
+              subscription_status='active',
+              current_period_start=NOW(),
+              current_period_end=NOW() + (subscription_period_days || ' days')::interval,
+              next_charge_at=NOW() + (subscription_period_days || ' days')::interval,
+              last_charge_at=NOW(),
+              last_charge_status='success',
+              blocked_at=NULL,
+              grace_until=NULL,
+              updated_at=NOW()
+            WHERE id=$1
+          `,[s.id]);
+
+          activated += 1;
+          charged += 1;
+        }
+
+        continue;
+      }
 
       /* =========================
          CHARGE ATTEMPT
@@ -96,7 +154,7 @@ export default function buildFinanceEngineRouter(pool){
           `,[
             walletId,
             amount,
-            String(s.id)
+            chargeReferenceId
           ]);
 
           await db.query(`
@@ -116,98 +174,42 @@ export default function buildFinanceEngineRouter(pool){
 
           charged += 1;
           activated += 1;
-
-        }else{
-
-          if(s.subscription_status === 'active'){
-
-            await db.query(`
-              UPDATE public.billing_subscriptions
-              SET
-                subscription_status='grace',
-                grace_until=NOW() + (grace_period_days || ' days')::interval,
-                last_charge_status='failed',
-                updated_at=NOW()
-              WHERE id=$1
-            `,[s.id]);
-
-            movedToGrace += 1;
-
-          }
-
+          continue;
         }
 
+        if(s.subscription_status === "active"){
+
+          await db.query(`
+            UPDATE public.billing_subscriptions
+            SET
+              subscription_status='grace',
+              grace_until=NOW() + (grace_period_days || ' days')::interval,
+              last_charge_status='failed',
+              updated_at=NOW()
+            WHERE id=$1
+          `,[s.id]);
+
+          movedToGrace += 1;
+          continue;
+        }
       }
 
       /* =========================
          GRACE → BLOCKED
          ========================= */
 
-      if(s.subscription_status === 'grace' && s.grace_until){
+      if(s.subscription_status === "grace" && graceUntil && graceUntil <= now){
 
-        if(new Date(s.grace_until) <= now){
+        await db.query(`
+          UPDATE public.billing_subscriptions
+          SET
+            subscription_status='blocked',
+            blocked_at=NOW(),
+            updated_at=NOW()
+          WHERE id=$1
+        `,[s.id]);
 
-          await db.query(`
-            UPDATE public.billing_subscriptions
-            SET
-              subscription_status='blocked',
-              blocked_at=NOW(),
-              updated_at=NOW()
-            WHERE id=$1
-          `,[s.id]);
-
-          blocked += 1;
-
-        }
-
-      }
-
-      /* =========================
-         BLOCKED → ACTIVE (AUTO RECOVERY)
-         ========================= */
-
-      if(s.subscription_status === 'blocked'){
-
-        if(currentBalance >= amount){
-
-          await db.query(`
-            INSERT INTO totem_test.ledger_entries(
-              wallet_id,
-              direction,
-              amount_cents,
-              reference_type,
-              reference_id
-            )
-            VALUES
-            ($1,'debit',$2::int,'subscription',$3),
-            ((SELECT wallet_id FROM totem_test.system_wallets LIMIT 1),'credit',$2::int,'subscription',$3)
-            ON CONFLICT DO NOTHING
-          `,[
-            walletId,
-            amount,
-            String(s.id)
-          ]);
-
-          await db.query(`
-            UPDATE public.billing_subscriptions
-            SET
-              subscription_status='active',
-              current_period_start=NOW(),
-              current_period_end=NOW() + (subscription_period_days || ' days')::interval,
-              next_charge_at=NOW() + (subscription_period_days || ' days')::interval,
-              last_charge_at=NOW(),
-              last_charge_status='success',
-              blocked_at=NULL,
-              grace_until=NULL,
-              updated_at=NOW()
-            WHERE id=$1
-          `,[s.id]);
-
-          activated += 1;
-          charged += 1;
-
-        }
-
+        blocked += 1;
       }
 
     }
@@ -359,7 +361,7 @@ export default function buildFinanceEngineRouter(pool){
 
         for(const p of payments.rows){
 
-          if(p.booking_status !== 'completed'){
+          if(p.booking_status !== "completed"){
             throw new Error(`INVALID_BOOKING_STATUS booking_id=${p.booking_id}`);
           }
 
@@ -374,7 +376,7 @@ export default function buildFinanceEngineRouter(pool){
           `,[p.salon_id,p.master_id]);
 
           if(!contract.rows.length){
-            throw new Error(`CONTRACT_REQUIRED`);
+            throw new Error("CONTRACT_REQUIRED");
           }
 
           const terms = contract.rows[0].terms_json || {};
@@ -449,7 +451,7 @@ export default function buildFinanceEngineRouter(pool){
             masterAmount + salonAmount
           ]);
 
-          settlementsProcessed++;
+          settlementsProcessed += 1;
 
         }
 
