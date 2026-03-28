@@ -1,10 +1,37 @@
 import express from "express";
 
+let FINANCE_ENGINE_LOCK = false;
+
 export default function buildFinanceEngineRouter(pool){
   const r = express.Router();
 
+  function checkInternalToken(req){
+    const token = req.headers["x-internal-token"];
+    return token && token === process.env.INTERNAL_TOKEN;
+  }
+
+  async function acquireLock(){
+    if(FINANCE_ENGINE_LOCK){
+      return false;
+    }
+    FINANCE_ENGINE_LOCK = true;
+    return true;
+  }
+
+  function releaseLock(){
+    FINANCE_ENGINE_LOCK = false;
+  }
+
   /* AUTO FINANCE ENGINE */
   r.post("/finance/run", async (req,res)=>{
+
+  if(!checkInternalToken(req)){
+    return res.status(403).json({ ok:false, error:"FORBIDDEN" });
+  }
+
+  if(!(await acquireLock())){
+    return res.status(429).json({ ok:false, error:"ENGINE_ALREADY_RUNNING" });
+  }
 
   const db = await pool.connect();
 
@@ -12,7 +39,6 @@ export default function buildFinanceEngineRouter(pool){
 
   await db.query("BEGIN");
 
-  /* run settlements */
   const settlements = await db.query(`
   SELECT COUNT(*)::int AS v
   FROM payments p
@@ -50,6 +76,7 @@ export default function buildFinanceEngineRouter(pool){
   }finally{
 
   db.release();
+  releaseLock();
 
   }
 
@@ -58,13 +85,20 @@ export default function buildFinanceEngineRouter(pool){
   /* AUTO FINANCE FULL ENGINE */
   r.post("/finance/run/full", async (req,res)=>{
 
+  if(!checkInternalToken(req)){
+    return res.status(403).json({ ok:false, error:"FORBIDDEN" });
+  }
+
+  if(!(await acquireLock())){
+    return res.status(429).json({ ok:false, error:"ENGINE_ALREADY_RUNNING" });
+  }
+
   const db = await pool.connect();
 
   try{
 
   await db.query("BEGIN");
 
-  /* 1. settlements pending */
   const settlementsPending = await db.query(`
   SELECT COUNT(*)::int AS v
   FROM payments p
@@ -77,7 +111,6 @@ export default function buildFinanceEngineRouter(pool){
 
   const settlementsPendingCount = settlementsPending.rows[0].v;
 
-  /* 2. payouts pending */
   const payoutsPending = await db.query(`
   SELECT COUNT(*)::int AS v
   FROM payouts
@@ -86,7 +119,6 @@ export default function buildFinanceEngineRouter(pool){
 
   const payoutsPendingCount = payoutsPending.rows[0].v;
 
-  /* 3. withdraws pending */
   const withdrawsPending = await db.query(`
   SELECT COUNT(*)::int AS v
   FROM public.withdraws
@@ -95,7 +127,6 @@ export default function buildFinanceEngineRouter(pool){
 
   const withdrawsPendingCount = withdrawsPending.rows[0].v;
 
-  /* run settlements */
   let settlementsProcessed = 0;
 
   if(settlementsPendingCount > 0){
@@ -272,7 +303,6 @@ export default function buildFinanceEngineRouter(pool){
 
   }
 
-  /* run payouts */
   let payoutsProcessed = 0;
 
   if(payoutsPendingCount > 0){
@@ -359,7 +389,6 @@ export default function buildFinanceEngineRouter(pool){
 
   }
 
-  /* run withdraws */
   let withdrawsProcessed = 0;
   const withdrawIds = [];
 
@@ -420,6 +449,7 @@ export default function buildFinanceEngineRouter(pool){
   }finally{
 
   db.release();
+  releaseLock();
 
   }
 

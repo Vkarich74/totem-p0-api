@@ -146,7 +146,7 @@ app.use(
 
 async function runFinanceLoop() {
   try {
-    const res = await fetch("https://api.totemv.com/internal/finance/run", {
+    const res = await fetch("https://totem-p0-api-production.up.railway.app/internal/finance/run/full", {
       method: "POST",
     });
 
