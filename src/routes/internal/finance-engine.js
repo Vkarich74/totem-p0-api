@@ -92,6 +92,7 @@ export default function buildFinanceEngineRouter(pool){
             VALUES
             ($1,'debit',$2::int,'subscription',$3),
             ((SELECT wallet_id FROM totem_test.system_wallets LIMIT 1),'credit',$2::int,'subscription',$3)
+            ON CONFLICT DO NOTHING
           `,[
             walletId,
             amount,
@@ -180,6 +181,7 @@ export default function buildFinanceEngineRouter(pool){
             VALUES
             ($1,'debit',$2::int,'subscription',$3),
             ((SELECT wallet_id FROM totem_test.system_wallets LIMIT 1),'credit',$2::int,'subscription',$3)
+            ON CONFLICT DO NOTHING
           `,[
             walletId,
             amount,
