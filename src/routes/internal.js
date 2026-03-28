@@ -9,6 +9,7 @@ import buildSettlementsRouter from "./internal/settlements.js";
 import buildContractsRouter from "./internal/contracts.js";
 import buildWithdrawsRouter from "./internal/withdraws.js";
 import buildXpayRouter from "./internal/xpay.js";
+import buildContractAliasRouter from "./internal/contract-alias.js";
 
 export function createInternalRouter({ rlInternal } = {}){
 
@@ -136,6 +137,9 @@ const xpayRouter = buildXpayRouter({
 });
 
 r.use(xpayRouter);
+
+const contractAliasRouter = buildContractAliasRouter(pool);
+r.use(contractAliasRouter);
 
 /*
 GET MASTER BY SLUG
@@ -2937,85 +2941,7 @@ pending_withdraws:withdraws.rows[0].v
 
 }catch(err){
 
-try{ await db.query("ROLLBACK"); }catch(e){}
-
-console.error("FINANCE_ENGINE_ERROR",err);
-
-res.status(500).json({
-ok:false,
-error:"FINANCE_ENGINE_FAILED"
-});
-
-}finally{
-
-db.release();
-
-}
-
-});
-
-
-
-/* CREATE CONTRACT ALIAS (UI COMPATIBILITY) */
-r.post("/contracts/create", async (req,res)=>{
-
-const {
-salon_id,
-master_id,
-terms_json,
-effective_from
-} = req.body;
-
-try{
-
-if(!salon_id || !master_id){
-return res.status(400).json({ok:false,error:"INVALID_CONTRACT_INPUT"});
-}
-
-const existing = await pool.query(`
-SELECT id
-FROM contracts
-WHERE salon_id=$1
-AND master_id=$2
-AND status='active'
-LIMIT 1
-`,[
-salon_id,
-master_id
-]);
-
-if(existing.rows.length){
-return res.status(409).json({
-ok:false,
-error:"ACTIVE_CONTRACT_EXISTS",
-contract_id:existing.rows[0].id
-});
-}
-
-const contract = await pool.query(`
-INSERT INTO contracts(
-salon_id,
-master_id,
-status,
-version,
-terms_json,
-effective_from,
-created_at
-)
-VALUES(
-$1,$2,'pending',1,$3,$4,NOW()
-)
-RETURNING *
-`,[
-salon_id,
-master_id,
-terms_json || {},
-effective_from || new Date()
-]);
-
-res.json({
-ok:true,
-contract:contract.rows[0]
+try{ await db.query("ROLLBACK"); }caows[0]
 });
 
 }catch(err){
