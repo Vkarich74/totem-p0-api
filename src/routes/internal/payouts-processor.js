@@ -19,7 +19,8 @@ p.id,
 p.booking_id,
 p.amount,
 b.master_id,
-b.salon_id
+b.salon_id,
+b.status as booking_status
 FROM payouts p
 JOIN bookings b ON b.id=p.booking_id
 WHERE p.status='created'
@@ -43,6 +44,11 @@ message:"NO_PAYOUTS"
 let processed = 0;
 
 for(const p of payouts.rows){
+
+/* 🔒 HARD CHECK — BOOKING MUST BE COMPLETED */
+if(p.booking_status !== 'completed'){
+throw new Error(`INVALID_BOOKING_STATUS booking_id=${p.booking_id} status=${p.booking_status}`);
+}
 
 const contract = await db.query(`
 SELECT id
