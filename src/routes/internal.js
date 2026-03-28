@@ -1,6 +1,7 @@
 import express from "express";
 import crypto from "crypto";
 import { pool } from "../db.js";
+import { xpayCreateQR, xpayCheckStatus } from "../payments/xpay.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import buildReportsRouter from "./internal/reports.js";
 import buildPaymentsRouter from "./internal/payments.js";
