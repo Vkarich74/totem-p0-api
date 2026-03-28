@@ -5,6 +5,71 @@ export default function buildMastersRouter(pool, internalReadRateLimit){
 
 const r = express.Router();
 
+async function getMasterBillingAccess(dbOrPool, masterId){
+const billing = await dbOrPool.query(`
+SELECT
+id,
+owner_type,
+owner_id,
+billing_model,
+subscription_status,
+subscription_period_days,
+amount,
+currency,
+wallet_only,
+current_period_start,
+current_period_end,
+grace_period_days,
+grace_until,
+last_charge_at,
+next_charge_at,
+last_charge_status,
+blocked_at,
+created_at,
+updated_at
+FROM public.billing_subscriptions
+WHERE owner_type='master'
+AND owner_id=$1
+LIMIT 1
+`,[masterId]);
+
+if(!billing.rows.length){
+return {
+exists:false,
+subscription_status:"active",
+access_state:"active",
+can_write:true,
+can_withdraw:true,
+billing:null
+};
+}
+
+const row = billing.rows[0];
+const status = row.subscription_status || "active";
+
+return {
+exists:true,
+subscription_status:status,
+access_state:status,
+can_write:status !== "blocked",
+can_withdraw:status === "active",
+billing:row
+};
+}
+
+async function ensureMasterWriteAllowed(db, masterId){
+const access = await getMasterBillingAccess(db, masterId);
+
+if(!access.can_write){
+const err = new Error("BILLING_BLOCKED");
+err.code = "BILLING_BLOCKED";
+err.access = access;
+throw err;
+}
+
+return access;
+}
+
 /*
 GET MASTER BY SLUG
 */
@@ -28,9 +93,12 @@ if(!master.rows.length){
 return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 }
 
+const billing_access = await getMasterBillingAccess(pool, master.rows[0].id);
+
 res.json({
 ok:true,
-master:master.rows[0]
+master:master.rows[0],
+billing_access
 });
 
 }catch(err){
@@ -88,13 +156,16 @@ SELECT client_id FROM bookings WHERE master_id=$1
 )
 `,[masterId]);
 
+const billing_access = await getMasterBillingAccess(pool, masterId);
+
 res.json({
 ok:true,
 metrics:{
 bookings_today:bookingsToday.rows[0].v,
 bookings_week:bookingsWeek.rows[0].v,
 clients_total:clientsTotal.rows[0].v
-}
+},
+billing_access
 });
 
 }catch(err){
@@ -145,9 +216,12 @@ WHERE sms.master_id=$1
 ORDER BY sms.id DESC
 `,[masterId]);
 
+const billing_access = await getMasterBillingAccess(pool, masterId);
+
 res.json({
 ok:true,
-services:services.rows
+services:services.rows,
+billing_access
 });
 
 }catch(err){
@@ -207,6 +281,8 @@ return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 }
 
 const masterId = master.rows[0].id;
+
+const billing_access = await ensureMasterWriteAllowed(db, masterId);
 
 const relation = await db.query(`
 SELECT salon_id
@@ -281,12 +357,28 @@ name:service.rows[0].name,
 price:linked.rows[0].price,
 duration_min:linked.rows[0].duration_min,
 active:linked.rows[0].active
-}
+},
+billing_access
 });
 
 }catch(err){
 
 try{ await db.query("ROLLBACK"); }catch(e){}
+
+if(err.code === "BILLING_BLOCKED"){
+return res.status(403).json({
+ok:false,
+error:"BILLING_BLOCKED",
+billing_access:{
+exists:err.access.exists,
+subscription_status:err.access.subscription_status,
+access_state:err.access.access_state,
+can_write:err.access.can_write,
+can_withdraw:err.access.can_withdraw,
+billing:err.access.billing
+}
+});
+}
 
 console.error("MASTER_SERVICE_CREATE_ERROR",err);
 
@@ -328,6 +420,8 @@ return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 }
 
 const masterId = master.rows[0].id;
+
+const billing_access = await ensureMasterWriteAllowed(db, masterId);
 
 const existing = await db.query(`
 SELECT
@@ -417,12 +511,28 @@ name:nextName,
 price:updated.rows[0].price,
 duration_min:updated.rows[0].duration_min,
 active:updated.rows[0].active
-}
+},
+billing_access
 });
 
 }catch(err){
 
 try{ await db.query("ROLLBACK"); }catch(e){}
+
+if(err.code === "BILLING_BLOCKED"){
+return res.status(403).json({
+ok:false,
+error:"BILLING_BLOCKED",
+billing_access:{
+exists:err.access.exists,
+subscription_status:err.access.subscription_status,
+access_state:err.access.access_state,
+can_write:err.access.can_write,
+can_withdraw:err.access.can_withdraw,
+billing:err.access.billing
+}
+});
+}
 
 console.error("MASTER_SERVICE_UPDATE_ERROR",err);
 
@@ -462,6 +572,8 @@ return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 }
 
 const masterId = master.rows[0].id;
+
+const billing_access = await ensureMasterWriteAllowed(db, masterId);
 
 const existing = await db.query(`
 SELECT
@@ -507,12 +619,28 @@ await db.query("COMMIT");
 return res.json({
 ok:true,
 deleted:true,
-id:Number(id)
+id:Number(id),
+billing_access
 });
 
 }catch(err){
 
 try{ await db.query("ROLLBACK"); }catch(e){}
+
+if(err.code === "BILLING_BLOCKED"){
+return res.status(403).json({
+ok:false,
+error:"BILLING_BLOCKED",
+billing_access:{
+exists:err.access.exists,
+subscription_status:err.access.subscription_status,
+access_state:err.access.access_state,
+can_write:err.access.can_write,
+can_withdraw:err.access.can_withdraw,
+billing:err.access.billing
+}
+});
+}
 
 console.error("MASTER_SERVICE_DELETE_ERROR",err);
 
@@ -563,9 +691,12 @@ WHERE b.master_id=$1
 ORDER BY b.start_at DESC
 `,[masterId]);
 
+const billing_access = await getMasterBillingAccess(pool, masterId);
+
 res.json({
 ok:true,
-bookings:bookings.rows
+bookings:bookings.rows,
+billing_access
 });
 
 }catch(err){
@@ -612,9 +743,12 @@ WHERE b.master_id=$1
 ORDER BY c.id DESC
 `,[masterId]);
 
+const billing_access = await getMasterBillingAccess(pool, masterId);
+
 res.json({
 ok:true,
-clients:clients.rows
+clients:clients.rows,
+billing_access
 });
 
 }catch(err){
@@ -672,6 +806,8 @@ return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 }
 
 const masterId = master.rows[0].id;
+
+const billing_access = await ensureMasterWriteAllowed(db, masterId);
 
 const serviceLink = await db.query(`
 SELECT
@@ -841,12 +977,28 @@ await db.query("COMMIT");
 
 res.json({
 ok:true,
-booking:booking.rows[0]
+booking:booking.rows[0],
+billing_access
 });
 
 }catch(err){
 
 try{ await db.query("ROLLBACK"); }catch(e){}
+
+if(err.code === "BILLING_BLOCKED"){
+return res.status(403).json({
+ok:false,
+error:"BILLING_BLOCKED",
+billing_access:{
+exists:err.access.exists,
+subscription_status:err.access.subscription_status,
+access_state:err.access.access_state,
+can_write:err.access.can_write,
+can_withdraw:err.access.can_withdraw,
+billing:err.access.billing
+}
+});
+}
 
 console.error("BOOKING_ENGINE_ERROR",err);
 
