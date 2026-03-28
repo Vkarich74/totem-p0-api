@@ -144,10 +144,11 @@ booking_id,
 master_id,
 amount_total,
 amount_master,
+amount_salon,
 amount_platform,
 created_at
 )
-VALUES($1,$2,$3,$4,$5,$6,$7,NOW())
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,NOW())
 `,[
 settlementId,
 p.payment_id,
@@ -155,6 +156,7 @@ p.booking_id,
 p.master_id,
 p.amount,
 masterAmount,
+salonAmount,
 platformAmount
 ]);
 
