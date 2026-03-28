@@ -12,6 +12,8 @@ try{
 
 await db.query("BEGIN");
 
+/* === STEP 1: pending → processing (как было) === */
+
 const withdraws = await db.query(`
 SELECT
 w.id,
@@ -28,15 +30,6 @@ ORDER BY w.created_at ASC
 FOR UPDATE SKIP LOCKED
 LIMIT 500
 `);
-
-if(!withdraws.rows.length){
-await db.query("ROLLBACK");
-return res.json({
-ok:true,
-withdraws_processed:0,
-message:"NO_WITHDRAWS"
-});
-}
 
 let processed = 0;
 const withdrawIds = [];
@@ -56,11 +49,53 @@ withdrawIds.push(w.id);
 
 }
 
+/* === STEP 2: ДОБАВЛЕНО → processing → completed === */
+
+const processing = await db.query(`
+SELECT id
+FROM public.withdraws
+WHERE status='processing'
+ORDER BY updated_at ASC
+FOR UPDATE SKIP LOCKED
+LIMIT 500
+`);
+
+let completedAuto = 0;
+
+for(const w of processing.rows){
+
+await db.query(`
+UPDATE public.withdraws
+SET status='completed',
+external_ref=$2,
+updated_at=NOW()
+WHERE id=$1
+AND status='processing'
+`,[
+w.id,
+`auto-${w.id}`
+]);
+
+completedAuto += 1;
+
+}
+
+/* если вообще ничего не было */
+if(processed === 0 && completedAuto === 0){
+await db.query("ROLLBACK");
+return res.json({
+ok:true,
+withdraws_processed:0,
+message:"NO_WITHDRAWS"
+});
+}
+
 await db.query("COMMIT");
 
 res.json({
 ok:true,
 withdraws_processed:processed,
+completed_auto:completedAuto,
 withdraw_ids:withdrawIds
 });
 
