@@ -10,6 +10,7 @@ import buildContractsRouter from "./internal/contracts.js";
 import buildWithdrawsRouter from "./internal/withdraws.js";
 import buildXpayRouter from "./internal/xpay.js";
 import buildContractAliasRouter from "./internal/contract-alias.js";
+import buildPayoutsProcessorRouter from "./internal/payouts-processor.js";
 
 export function createInternalRouter({ rlInternal } = {}){
 
@@ -140,6 +141,9 @@ r.use(xpayRouter);
 
 const contractAliasRouter = buildContractAliasRouter(pool);
 r.use(contractAliasRouter);
+
+const payoutsProcessorRouter = buildPayoutsProcessorRouter(pool, getOrCreateSystemWallet);
+r.use(payoutsProcessorRouter);
 
 /*
 GET MASTER BY SLUG
@@ -2452,156 +2456,6 @@ If this trigger is enabled -> system will break.
 DO NOT CHANGE WITHOUT FULL FINANCE REFACTOR.
 */
 
-/* PAYOUT PROCESSOR */
-r.post("/payouts/run", async (req,res)=>{
-
-const db = await pool.connect();
-
-try{
-
-await db.query("BEGIN");
-
-const payouts = await db.query(`
-SELECT
-p.id,
-p.booking_id,
-p.amount,
-b.master_id,
-b.salon_id
-FROM payouts p
-JOIN bookings b ON b.id=p.booking_id
-WHERE p.status='created'
-ORDER BY p.id ASC
-FOR UPDATE OF p SKIP LOCKED
-LIMIT 500
-`);
-
-if(!payouts.rows.length){
-
-await db.query("ROLLBACK");
-
-return res.json({
-ok:true,
-payouts_processed:0,
-message:"NO_PAYOUTS"
-});
-
-}
-
-let processed = 0;
-
-for(const p of payouts.rows){
-
-const contract = await db.query(`
-SELECT id
-FROM contracts
-WHERE salon_id=$1
-AND master_id=$2
-AND status='active'
-AND archived_at IS NULL
-ORDER BY version DESC, created_at DESC
-FOR UPDATE
-LIMIT 1
-`,[
-p.salon_id,
-p.master_id
-]);
-
-if(!contract.rows.length){
-throw new Error(`CONTRACT_REQUIRED salon_id=${p.salon_id} master_id=${p.master_id} booking_id=${p.booking_id} payout_id=${p.id}`);
-}
-
-const salonWallet = await db.query(`
-SELECT id
-FROM totem_test.wallets
-WHERE owner_type='salon'
-AND owner_id=$1
-LIMIT 1
-`,[p.salon_id]);
-
-const masterWallet = await db.query(`
-SELECT id
-FROM totem_test.wallets
-WHERE owner_type='master'
-AND owner_id=$1
-LIMIT 1
-`,[p.master_id]);
-
-if(!salonWallet.rows.length){
-throw new Error(`SALON_WALLET_NOT_FOUND salon_id=${p.salon_id}`);
-}
-
-if(!masterWallet.rows.length){
-throw new Error(`MASTER_WALLET_NOT_FOUND master_id=${p.master_id}`);
-}
-
-const systemWalletId = await getOrCreateSystemWallet(db);
-
-/* force exact payout ledger state */
-await db.query(`
-DELETE FROM totem_test.ledger_entries
-WHERE reference_type IN ('payout','payout_system')
-AND reference_id=$1
-`,[String(p.id)]);
-
-await db.query(`
-INSERT INTO totem_test.ledger_entries(
-wallet_id,
-direction,
-amount_cents,
-reference_type,
-reference_id
-)
-VALUES
-($1,'debit',$5,'payout',$6),
-($2,'credit',$5,'payout_system',$6),
-($2,'debit',$5,'payout_system',$6),
-($3,'credit',$5,'payout',$6)
-`,[
-salonWallet.rows[0].id,
-systemWalletId,
-masterWallet.rows[0].id,
-p.amount,
-p.amount,
-String(p.id)
-]);
-
-await db.query(`
-UPDATE payouts
-SET status='paid'
-WHERE id=$1
-`,[p.id]);
-
-processed += 1;
-
-}
-
-await db.query("COMMIT");
-
-res.json({
-ok:true,
-payouts_processed:processed
-});
-
-}catch(err){
-
-try{ await db.query("ROLLBACK"); }catch(e){}
-
-console.error("PAYOUT_PROCESSOR_ERROR",err);
-
-res.status(500).json({
-ok:false,
-error:"PAYOUT_PROCESSOR_FAILED"
-});
-
-}finally{
-
-db.release();
-
-}
-
-});
-
 /* WITHDRAW PROCESSOR */
 r.post("/withdraws/run", async (req,res)=>{
 
@@ -2941,23 +2795,22 @@ pending_withdraws:withdraws.rows[0].v
 
 }catch(err){
 
-try{ await db.query("ROLLBACK"); }caows[0]
-});
+try{ await db.query("ROLLBACK"); }catch(e){}
 
-}catch(err){
-
-console.error("CONTRACT_CREATE_ALIAS_ERROR",err);
+console.error("FINANCE_ENGINE_ERROR",err);
 
 res.status(500).json({
 ok:false,
-error:"CONTRACT_CREATE_FAILED"
+error:"FINANCE_ENGINE_FAILED"
 });
+
+}finally{
+
+db.release();
 
 }
 
 });
-
-
 
 
 
@@ -3219,11 +3072,9 @@ if(!masterWallet.rows.length){
 throw new Error(`MASTER_WALLET_NOT_FOUND master_id=${p.master_id}`);
 }
 
-const systemWalletId = await getOrCreateSystemWallet(db);
-
 await db.query(`
 DELETE FROM totem_test.ledger_entries
-WHERE reference_type IN ('payout','payout_system')
+WHERE reference_type='payout'
 AND reference_id=$1
 `,[String(p.id)]);
 
@@ -3236,15 +3087,11 @@ reference_type,
 reference_id
 )
 VALUES
-($1,'debit',$5,'payout',$6),
-($2,'credit',$5,'payout_system',$6),
-($2,'debit',$5,'payout_system',$6),
-($3,'credit',$5,'payout',$6)
+($1,'debit',$3::int,'payout',$4),
+($2,'credit',$3::int,'payout',$4)
 `,[
 salonWallet.rows[0].id,
-systemWalletId,
 masterWallet.rows[0].id,
-p.amount,
 p.amount,
 String(p.id)
 ]);
