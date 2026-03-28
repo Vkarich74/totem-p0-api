@@ -90,11 +90,10 @@ export default function buildFinanceEngineRouter(pool){
               reference_id
             )
             VALUES
-            ($1,'debit',$3::int,'subscription',$4),
-            ((SELECT id FROM totem_test.system_wallets LIMIT 1),'credit',$3::int,'subscription',$4)
+            ($1,'debit',$2::int,'subscription',$3),
+            ((SELECT wallet_id FROM totem_test.system_wallets LIMIT 1),'credit',$2::int,'subscription',$3)
           `,[
             walletId,
-            null,
             amount,
             String(s.id)
           ]);
@@ -179,11 +178,10 @@ export default function buildFinanceEngineRouter(pool){
               reference_id
             )
             VALUES
-            ($1,'debit',$3::int,'subscription',$4),
-            ((SELECT id FROM totem_test.system_wallets LIMIT 1),'credit',$3::int,'subscription',$4)
+            ($1,'debit',$2::int,'subscription',$3),
+            ((SELECT wallet_id FROM totem_test.system_wallets LIMIT 1),'credit',$2::int,'subscription',$3)
           `,[
             walletId,
-            null,
             amount,
             String(s.id)
           ]);
