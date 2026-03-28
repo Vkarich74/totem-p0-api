@@ -4,7 +4,46 @@ export default function buildWithdrawsRouter(pool, internalReadRateLimit){
 
 const r = express.Router();
 
-/* SALON WITHDRAW */
+/*
+SALON BILLING ACCESS HELPER
+*/
+async function getSalonBillingAccess(dbOrPool, salonId){
+
+const billing = await dbOrPool.query(`
+SELECT *
+FROM public.billing_subscriptions
+WHERE owner_type='salon'
+AND owner_id=$1
+LIMIT 1
+`,[salonId]);
+
+if(!billing.rows.length){
+return {
+exists:false,
+subscription_status:"active",
+access_state:"active",
+can_write:true,
+can_withdraw:true,
+billing:null
+};
+}
+
+const row = billing.rows[0];
+const status = row.subscription_status || "active";
+
+return {
+exists:true,
+subscription_status:status,
+access_state:status,
+can_write:status !== "blocked",
+can_withdraw:status === "active",
+billing:row
+};
+}
+
+/*
+SALON WITHDRAW
+*/
 r.post("/salons/:slug/withdraw", async (req,res)=>{
 
 const { slug } = req.params;
@@ -35,6 +74,18 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 }
 
 const salonId = salon.rows[0].id;
+
+/* 🔴 BILLING CHECK */
+const billing_access = await getSalonBillingAccess(db, salonId);
+
+if(!billing_access.can_withdraw){
+await db.query("ROLLBACK");
+return res.status(402).json({
+ok:false,
+error:"SALON_WITHDRAW_BLOCKED",
+billing_access
+});
+}
 
 const wallet = await db.query(`
 SELECT id
@@ -139,7 +190,8 @@ ok:true,
 withdraw_id:withdrawId,
 amount:value,
 destination:destination || null,
-status:'pending'
+status:'pending',
+billing_access
 });
 
 }catch(err){
@@ -187,7 +239,6 @@ return res.status(404).json({ok:false,error:"WITHDRAW_NOT_FOUND"});
 
 const w = withdraw.rows[0];
 
-/* simple timeline reconstruction */
 const timeline = [];
 
 timeline.push({
