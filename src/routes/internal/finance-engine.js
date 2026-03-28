@@ -106,7 +106,8 @@ export default function buildFinanceEngineRouter(pool){
   p.amount,
   b.id AS booking_id,
   b.master_id,
-  b.salon_id
+  b.salon_id,
+  b.status as booking_status
   FROM payments p
   JOIN bookings b ON b.id=p.booking_id
   LEFT JOIN settlement_items si ON si.payment_id=p.id
@@ -122,6 +123,10 @@ export default function buildFinanceEngineRouter(pool){
   const periodCache = new Map();
 
   for(const p of payments.rows){
+
+  if(p.booking_status !== 'completed'){
+  throw new Error(`INVALID_BOOKING_STATUS booking_id=${p.booking_id} status=${p.booking_status}`);
+  }
 
   const contract = await db.query(`
   SELECT
@@ -278,7 +283,8 @@ export default function buildFinanceEngineRouter(pool){
   p.booking_id,
   p.amount,
   b.master_id,
-  b.salon_id
+  b.salon_id,
+  b.status as booking_status
   FROM payouts p
   JOIN bookings b ON b.id=p.booking_id
   WHERE p.status='created'
@@ -288,6 +294,10 @@ export default function buildFinanceEngineRouter(pool){
   `);
 
   for(const p of payouts.rows){
+
+  if(p.booking_status !== 'completed'){
+  throw new Error(`INVALID_BOOKING_STATUS booking_id=${p.booking_id} status=${p.booking_status}`);
+  }
 
   const salonWallet = await db.query(`
   SELECT id
