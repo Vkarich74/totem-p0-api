@@ -4,6 +4,71 @@ export default function buildSalonsRouter(pool, internalReadRateLimit){
 
 const r = express.Router();
 
+async function getSalonBillingAccess(db, salonId){
+const billing = await db.query(`
+SELECT
+id,
+owner_type,
+owner_id,
+billing_model,
+subscription_status,
+subscription_period_days,
+amount,
+currency,
+wallet_only,
+current_period_start,
+current_period_end,
+grace_period_days,
+grace_until,
+last_charge_at,
+next_charge_at,
+last_charge_status,
+blocked_at,
+created_at,
+updated_at
+FROM public.billing_subscriptions
+WHERE owner_type='salon'
+AND owner_id=$1
+LIMIT 1
+`,[salonId]);
+
+if(!billing.rows.length){
+return {
+exists:false,
+subscription_status:"active",
+access_state:"active",
+can_write:true,
+can_withdraw:true,
+billing:null
+};
+}
+
+const row = billing.rows[0];
+const status = row.subscription_status || "active";
+
+return {
+exists:true,
+subscription_status:status,
+access_state:status,
+can_write:status !== "blocked",
+can_withdraw:status === "active",
+billing:row
+};
+}
+
+async function ensureSalonWriteAllowed(db, salonId){
+const access = await getSalonBillingAccess(db, salonId);
+
+if(!access.can_write){
+const err = new Error("BILLING_BLOCKED");
+err.code = "BILLING_BLOCKED";
+err.access = access;
+throw err;
+}
+
+return access;
+}
+
 /* SALON ROOT */
 r.get("/salons/:slug", internalReadRateLimit, async (req,res)=>{
 
@@ -20,9 +85,19 @@ if(!salon.rows.length){
 return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 }
 
+const access = await getSalonBillingAccess(pool, salon.rows[0].id);
+
 res.json({
 ok:true,
-salon:salon.rows[0]
+salon:salon.rows[0],
+billing_access:{
+exists:access.exists,
+subscription_status:access.subscription_status,
+access_state:access.access_state,
+can_write:access.can_write,
+can_withdraw:access.can_withdraw,
+billing:access.billing
+}
 });
 
 }catch(err){
@@ -115,6 +190,8 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 
 const salonId = salon.rows[0].id;
 
+const access = await ensureSalonWriteAllowed(db, salonId);
+
 const master = await db.query(
 `SELECT id,name,slug
 FROM masters
@@ -196,12 +273,35 @@ status:relation.rows[0].status,
 activated_at:relation.rows[0].activated_at,
 fired_at:relation.rows[0].fired_at,
 updated_at:relation.rows[0].updated_at
+},
+billing_access:{
+exists:access.exists,
+subscription_status:access.subscription_status,
+access_state:access.access_state,
+can_write:access.can_write,
+can_withdraw:access.can_withdraw,
+billing:access.billing
 }
 });
 
 }catch(err){
 
 try{ await db.query("ROLLBACK"); }catch(e){}
+
+if(err.code === "BILLING_BLOCKED"){
+return res.status(403).json({
+ok:false,
+error:"BILLING_BLOCKED",
+billing_access:{
+exists:err.access.exists,
+subscription_status:err.access.subscription_status,
+access_state:err.access.access_state,
+can_write:err.access.can_write,
+can_withdraw:err.access.can_withdraw,
+billing:err.access.billing
+}
+});
+}
 
 console.error("SALON_MASTER_ACTIVATE_ERROR",err);
 
@@ -297,6 +397,8 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 }
 
 const salonId = salon.rows[0].id;
+
+const access = await ensureSalonWriteAllowed(db, salonId);
 
 const safeMasterId = Number(master_id);
 const safeServicePk = Number(service_pk);
@@ -444,12 +546,35 @@ name:service.rows[0].name,
 price:linked.rows[0].price,
 duration_min:linked.rows[0].duration_min,
 active:linked.rows[0].active
+},
+billing_access:{
+exists:access.exists,
+subscription_status:access.subscription_status,
+access_state:access.access_state,
+can_write:access.can_write,
+can_withdraw:access.can_withdraw,
+billing:access.billing
 }
 });
 
 }catch(err){
 
 try{ await db.query("ROLLBACK"); }catch(e){}
+
+if(err.code === "BILLING_BLOCKED"){
+return res.status(403).json({
+ok:false,
+error:"BILLING_BLOCKED",
+billing_access:{
+exists:err.access.exists,
+subscription_status:err.access.subscription_status,
+access_state:err.access.access_state,
+can_write:err.access.can_write,
+can_withdraw:err.access.can_withdraw,
+billing:err.access.billing
+}
+});
+}
 
 console.error("SALON_SERVICE_TAKE_ERROR",err);
 
@@ -490,6 +615,8 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 }
 
 const salonId = salon.rows[0].id;
+
+const access = await ensureSalonWriteAllowed(db, salonId);
 
 const master = await db.query(
 `SELECT id,name,slug
@@ -625,12 +752,35 @@ future_calendar_canceled:calendarCanceled.rowCount,
 future_bookings_canceled:bookingsCanceled.rowCount,
 master_services_disabled:masterServicesDisabled.rowCount,
 salon_master_services_disabled:salonMasterServicesDisabled.rowCount
+},
+billing_access:{
+exists:access.exists,
+subscription_status:access.subscription_status,
+access_state:access.access_state,
+can_write:access.can_write,
+can_withdraw:access.can_withdraw,
+billing:access.billing
 }
 });
 
 }catch(err){
 
 try{ await db.query("ROLLBACK"); }catch(e){}
+
+if(err.code === "BILLING_BLOCKED"){
+return res.status(403).json({
+ok:false,
+error:"BILLING_BLOCKED",
+billing_access:{
+exists:err.access.exists,
+subscription_status:err.access.subscription_status,
+access_state:err.access.access_state,
+can_write:err.access.can_write,
+can_withdraw:err.access.can_withdraw,
+billing:err.access.billing
+}
+});
+}
 
 console.error("SALON_MASTER_TERMINATE_ERROR",err);
 
@@ -993,9 +1143,19 @@ AND w.owner_id=$1
 LIMIT 1
 `,[salonId]);
 
+const access = await getSalonBillingAccess(pool, salonId);
+
 res.json({
 ok:true,
-wallet:wallet.rows[0] || null
+wallet:wallet.rows[0] || null,
+billing_access:{
+exists:access.exists,
+subscription_status:access.subscription_status,
+access_state:access.access_state,
+can_write:access.can_write,
+can_withdraw:access.can_withdraw,
+billing:access.billing
+}
 });
 
 }catch(err){
@@ -1043,11 +1203,21 @@ AND w.owner_id=$1
 LIMIT 1
 `,[salonId]);
 
+const access = await getSalonBillingAccess(pool, salonId);
+
 res.json({
 ok:true,
 wallet_id: balance.rows[0]?.wallet_id || null,
 balance: balance.rows[0]?.balance || 0,
-currency: balance.rows[0]?.currency || "KGS"
+currency: balance.rows[0]?.currency || "KGS",
+billing_access:{
+exists:access.exists,
+subscription_status:access.subscription_status,
+access_state:access.access_state,
+can_write:access.can_write,
+can_withdraw:access.can_withdraw,
+billing:access.billing
+}
 });
 
 }catch(err){
@@ -1153,9 +1323,19 @@ ORDER BY w.created_at DESC
 LIMIT 100
 `,[salonId]);
 
+const access = await getSalonBillingAccess(pool, salonId);
+
 res.json({
 ok:true,
-withdraws:withdraws.rows
+withdraws:withdraws.rows,
+billing_access:{
+exists:access.exists,
+subscription_status:access.subscription_status,
+access_state:access.access_state,
+can_write:access.can_write,
+can_withdraw:access.can_withdraw,
+billing:access.billing
+}
 });
 
 }catch(err){
