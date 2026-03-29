@@ -6,8 +6,28 @@ export default function buildFinanceEngineRouter(pool){
   const r = express.Router();
 
   function checkInternalToken(req){
-    const token = req.headers["x-internal-token"];
-    return token && token === process.env.INTERNAL_TOKEN;
+    const authHeader = req.headers?.authorization || "";
+    const authMatch = authHeader.match(/^Bearer\s+(.+)$/i);
+    const bearerToken = authMatch ? authMatch[1].trim() : "";
+
+    const legacyHeaderToken = String(req.headers["x-internal-token"] || "").trim();
+
+    const expectedApiToken = String(process.env.INTERNAL_API_TOKEN || "").trim();
+    const expectedLegacyToken = String(process.env.INTERNAL_TOKEN || "").trim();
+
+    if(expectedApiToken && bearerToken && bearerToken === expectedApiToken){
+      return true;
+    }
+
+    if(expectedLegacyToken && legacyHeaderToken && legacyHeaderToken === expectedLegacyToken){
+      return true;
+    }
+
+    if(expectedLegacyToken && bearerToken && bearerToken === expectedLegacyToken){
+      return true;
+    }
+
+    return false;
   }
 
   async function acquireLock(){
