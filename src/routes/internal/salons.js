@@ -45,13 +45,16 @@ billing:null
 
 const row = billing.rows[0];
 const status = row.subscription_status || "active";
+const accessState = resolveBillingAccessState(row);
+const canWrite = accessState === "active" || accessState === "grace";
+const canWithdraw = accessState === "active";
 
 return {
 exists:true,
 subscription_status:status,
-access_state:status,
-can_write:status !== "blocked",
-can_withdraw:status === "active",
+access_state:accessState,
+can_write:canWrite,
+can_withdraw:canWithdraw,
 billing:row
 };
 }
@@ -62,7 +65,14 @@ const access = await getSalonBillingAccess(db, salonId);
 if(!access.can_write){
 const err = new Error("BILLING_BLOCKED");
 err.code = "BILLING_BLOCKED";
-err.access = access;
+err.access = {
+exists:access.exists,
+subscription_status:access.subscription_status,
+access_state:access.access_state,
+can_write:access.can_write,
+can_withdraw:access.can_withdraw,
+billing:access.billing
+};
 throw err;
 }
 
