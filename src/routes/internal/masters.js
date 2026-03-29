@@ -70,6 +70,44 @@ throw err;
 return access;
 }
 
+async function getMasterBySlug(dbOrPool, slug){
+const master = await dbOrPool.query(`
+SELECT
+m.id,
+m.name,
+m.slug,
+m.user_id
+FROM masters m
+WHERE m.slug=$1
+LIMIT 1
+`,[slug]);
+
+if(!master.rows.length){
+return null;
+}
+
+return master.rows[0];
+}
+
+async function getMasterWalletRow(dbOrPool, masterId){
+const wallet = await dbOrPool.query(`
+SELECT
+w.id,
+w.balance,
+w.currency
+FROM totem_test.wallets w
+WHERE w.owner_type='master'
+AND w.owner_id=$1
+LIMIT 1
+`,[masterId]);
+
+if(!wallet.rows.length){
+return null;
+}
+
+return wallet.rows[0];
+}
+
 /*
 GET MASTER BY SLUG
 */
