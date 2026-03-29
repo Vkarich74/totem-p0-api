@@ -158,7 +158,6 @@ r.use(withdrawsProcessorRouter);
 const mastersRouter = buildMastersRouter(pool, internalReadRateLimit);
 r.use(mastersRouter);
 
-
 const salonsRouter = buildSalonsRouter(pool, internalReadRateLimit);
 r.use(salonsRouter);
 
@@ -286,6 +285,7 @@ const balance = await getWalletBalanceById(db, walletId);
 
 if(balance < amount){
 const graceDays = Number(billing.grace_period_days || 0);
+
 await db.query(`
 UPDATE public.billing_subscriptions
 SET
@@ -296,6 +296,7 @@ ELSE NULL
 END,
 updated_at=NOW()
 WHERE id=$1
+AND subscription_status='active'
 `,[
 billing.id,
 graceDays
@@ -369,7 +370,7 @@ amount,
 String(billing.id)
 ]);
 
-await db.query(`
+const billingUpdate = await db.query(`
 UPDATE public.billing_subscriptions
 SET
 last_charge_at=NOW(),
@@ -380,7 +381,13 @@ current_period_end=COALESCE(next_charge_at, NOW()) + (COALESCE(subscription_peri
 next_charge_at=COALESCE(next_charge_at, NOW()) + (COALESCE(subscription_period_days,30) || ' days')::interval,
 updated_at=NOW()
 WHERE id=$1
+AND subscription_status='active'
+RETURNING id
 `,[billing.id]);
+
+if(!billingUpdate.rows.length){
+throw new Error("BILLING_STATUS_CHANGED_DURING_AUTO_CHARGE");
+}
 
 charged++;
 results.push({
