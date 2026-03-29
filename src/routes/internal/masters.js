@@ -165,26 +165,8 @@ LIMIT 1
 return Number(balance.rows[0]?.balance || 0);
 }
 
-/*
-MASTER SUBSCRIPTION MANUAL CHARGE
-*/
-r.post("/masters/:slug/subscription/charge", async (req,res)=>{
-
-const { slug } = req.params;
-const db = await pool.connect();
-
-try{
-
-await db.query("BEGIN");
-
-const master = await getMasterBySlug(db, slug);
-
-if(!master){
-await db.query("ROLLBACK");
-return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
-}
-
-const subscription = await db.query(`
+async function ensureMasterBillingSubscription(db, masterId){
+const existing = await db.query(`
 SELECT
 id,
 owner_type,
@@ -210,14 +192,98 @@ WHERE owner_type='master'
 AND owner_id=$1
 FOR UPDATE
 LIMIT 1
-`,[master.id]);
+`,[masterId]);
 
-if(!subscription.rows.length){
-await db.query("ROLLBACK");
-return res.status(404).json({ok:false,error:"BILLING_NOT_FOUND"});
+if(existing.rows.length){
+return existing.rows[0];
 }
 
-const billing = subscription.rows[0];
+const created = await db.query(`
+INSERT INTO public.billing_subscriptions(
+owner_type,
+owner_id,
+billing_model,
+subscription_status,
+subscription_period_days,
+amount,
+currency,
+wallet_only,
+current_period_start,
+current_period_end,
+grace_period_days,
+grace_until,
+last_charge_at,
+next_charge_at,
+last_charge_status,
+blocked_at,
+created_at,
+updated_at
+)
+VALUES(
+'master',
+$1,
+'subscription',
+'active',
+30,
+1000,
+'KGS',
+true,
+NULL,
+NULL,
+3,
+NULL,
+NULL,
+NULL,
+NULL,
+NULL,
+NOW(),
+NOW()
+)
+RETURNING
+id,
+owner_type,
+owner_id,
+billing_model,
+subscription_status,
+subscription_period_days,
+amount,
+currency,
+wallet_only,
+current_period_start,
+current_period_end,
+grace_period_days,
+grace_until,
+last_charge_at,
+next_charge_at,
+last_charge_status,
+blocked_at,
+created_at,
+updated_at
+`,[masterId]);
+
+return created.rows[0];
+}
+
+/*
+MASTER SUBSCRIPTION MANUAL CHARGE
+*/
+r.post("/masters/:slug/subscription/charge", async (req,res)=>{
+
+const { slug } = req.params;
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+const master = await getMasterBySlug(db, slug);
+
+if(!master){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const billing = await ensureMasterBillingSubscription(db, master.id);
 
 if(billing.subscription_status !== "active"){
 await db.query("ROLLBACK");
