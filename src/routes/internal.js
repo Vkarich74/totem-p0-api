@@ -15,6 +15,7 @@ import buildFinanceEngineRouter from "./internal/finance-engine.js";
 import buildWithdrawsProcessorRouter from "./internal/withdraws-processor.js";
 import buildMastersRouter from "./internal/masters.js";
 import buildSalonsRouter from "./internal/salons.js";
+import buildOneTimeChargeRouter from "./internal/one-time-charge.js";
 
 export function createInternalRouter({ rlInternal } = {}){
 
@@ -188,6 +189,13 @@ LIMIT 1
 
 return Number(balance.rows[0]?.balance || 0);
 }
+
+const oneTimeChargeRouter = buildOneTimeChargeRouter({
+  pool,
+  getOrCreateSystemWallet,
+  getWalletBalanceById
+});
+r.use(oneTimeChargeRouter);
 
 async function getDueBillingSubscriptions(db){
 const due = await db.query(`
