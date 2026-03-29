@@ -93,9 +93,12 @@ async function getMasterWalletRow(dbOrPool, masterId){
 const wallet = await dbOrPool.query(`
 SELECT
 w.id,
-w.balance,
-w.currency
+w.owner_type,
+w.owner_id,
+w.currency,
+COALESCE(v.computed_balance_cents,0)::int AS balance
 FROM totem_test.wallets w
+LEFT JOIN totem_test.v_wallet_balance_computed v ON v.wallet_id=w.id
 WHERE w.owner_type='master'
 AND w.owner_id=$1
 LIMIT 1
@@ -1112,25 +1115,22 @@ if(!master){
 return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 }
 
-const wallet = await getMasterWalletRow(pool, master.id);
-
-if(!wallet){
-return res.status(404).json({ok:false,error:"MASTER_WALLET_NOT_FOUND"});
-}
-
 const ledger = await pool.query(`
 SELECT
-id,
-wallet_id,
-direction,
-amount,
-reference_type,
-reference_id,
-created_at
-FROM totem_test.wallet_ledger
-WHERE wallet_id=$1
-ORDER BY created_at DESC, id DESC
-`,[wallet.id]);
+le.id,
+le.wallet_id,
+le.direction,
+COALESCE(le.amount_cents,0)::int AS amount,
+le.reference_type,
+le.reference_id,
+le.created_at
+FROM totem_test.ledger_entries le
+JOIN totem_test.wallets w ON w.id=le.wallet_id
+WHERE w.owner_type='master'
+AND w.owner_id=$1
+ORDER BY le.created_at DESC
+LIMIT 100
+`,[master.id]);
 
 const billing_access = await getMasterBillingAccess(pool, master.id);
 
@@ -1170,15 +1170,17 @@ return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 
 const settlements = await pool.query(`
 SELECT
-id,
-period_start,
-period_end,
-status,
-closed_at,
-created_at
-FROM totem_test.settlements
-WHERE master_id=$1
-ORDER BY created_at DESC, id DESC
+sp.id,
+sp.period_start,
+sp.period_end,
+sp.status,
+sp.closed_at,
+sp.created_at
+FROM settlement_periods sp
+WHERE sp.master_id=$1
+AND sp.is_archived=false
+ORDER BY sp.period_start DESC
+LIMIT 50
 `,[master.id]);
 
 const billing_access = await getMasterBillingAccess(pool, master.id);
@@ -1219,13 +1221,14 @@ return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 
 const payouts = await pool.query(`
 SELECT
-id,
-amount,
-status,
-created_at
-FROM totem_test.payouts
-WHERE master_id=$1
-ORDER BY created_at DESC, id DESC
+p.id,
+p.amount,
+p.status,
+p.created_at
+FROM payouts p
+WHERE p.master_id=$1
+ORDER BY p.created_at DESC
+LIMIT 50
 `,[master.id]);
 
 const billing_access = await getMasterBillingAccess(pool, master.id);
