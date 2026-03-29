@@ -5,58 +5,8 @@ export default function buildSalonsRouter(pool, internalReadRateLimit){
 const r = express.Router();
 
 async function getSalonBillingAccess(db, salonId){
-const billing = await db.query(`
-SELECT
-id,
-owner_type,
-owner_id,
-billing_model,
-subscription_status,
-subscription_period_days,
-amount,
-currency,
-wallet_only,
-current_period_start,
-current_period_end,
-grace_period_days,
-grace_until,
-last_charge_at,
-next_charge_at,
-last_charge_status,
-blocked_at,
-created_at,
-updated_at
-FROM public.billing_subscriptions
-WHERE owner_type='salon'
-AND owner_id=$1
-LIMIT 1
-`,[salonId]);
-
-if(!billing.rows.length){
-return {
-exists:false,
-subscription_status:"active",
-access_state:"active",
-can_write:true,
-can_withdraw:true,
-billing:null
-};
-}
-
-const row = billing.rows[0];
-const status = row.subscription_status || "active";
-const accessState = resolveBillingAccessState(row);
-const canWrite = accessState === "active" || accessState === "grace";
-const canWithdraw = accessState === "active";
-
-return {
-exists:true,
-subscription_status:status,
-access_state:accessState,
-can_write:canWrite,
-can_withdraw:canWithdraw,
-billing:row
-};
+const billing = await getSalonBillingRow(db, salonId, false);
+return buildBillingAccessPayload(billing);
 }
 
 async function ensureSalonWriteAllowed(db, salonId){
@@ -152,6 +102,66 @@ return null;
 return salon.rows[0];
 }
 
+
+function buildBillingAccessPayload(billing){
+if(!billing){
+return {
+exists:false,
+subscription_status:"active",
+access_state:"active",
+can_write:true,
+can_withdraw:true,
+billing:null
+};
+}
+
+const status = billing.subscription_status || "active";
+const accessState = resolveBillingAccessState(billing);
+const canWrite = accessState === "active" || accessState === "grace";
+const canWithdraw = accessState === "active";
+
+return {
+exists:true,
+subscription_status:status,
+access_state:accessState,
+can_write:canWrite,
+can_withdraw:canWithdraw,
+billing
+};
+}
+
+async function getSalonBillingRow(dbOrPool, salonId, forUpdate=false){
+const query = `
+SELECT
+id,
+owner_type,
+owner_id,
+billing_model,
+subscription_status,
+subscription_period_days,
+amount,
+currency,
+wallet_only,
+current_period_start,
+current_period_end,
+grace_period_days,
+grace_until,
+last_charge_at,
+next_charge_at,
+last_charge_status,
+blocked_at,
+created_at,
+updated_at
+FROM public.billing_subscriptions
+WHERE owner_type='salon'
+AND owner_id=$1
+${forUpdate ? "FOR UPDATE" : ""}
+LIMIT 1
+`;
+const billing = await dbOrPool.query(query,[salonId]);
+return billing.rows[0] || null;
+}
+
 function resolveBillingAccessState(billing){
 if(!billing){
 return "active";
@@ -200,40 +210,12 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 
 const salonId = salon.rows[0].id;
 
-const subscription = await db.query(`
-SELECT
-id,
-owner_type,
-owner_id,
-billing_model,
-subscription_status,
-subscription_period_days,
-amount,
-currency,
-wallet_only,
-current_period_start,
-current_period_end,
-grace_period_days,
-grace_until,
-last_charge_at,
-next_charge_at,
-last_charge_status,
-blocked_at,
-created_at,
-updated_at
-FROM public.billing_subscriptions
-WHERE owner_type='salon'
-AND owner_id=$1
-FOR UPDATE
-LIMIT 1
-`,[salonId]);
+const billing = await getSalonBillingRow(db, salonId, true);
 
-if(!subscription.rows.length){
+if(!billing){
 await db.query("ROLLBACK");
 return res.status(404).json({ok:false,error:"BILLING_NOT_FOUND"});
 }
-
-const billing = subscription.rows[0];
 
 if(billing.subscription_status !== "active"){
 await db.query("ROLLBACK");
@@ -430,35 +412,9 @@ await db.query("ROLLBACK");
 return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 }
 
-const billing = await db.query(`
-SELECT
-id,
-owner_type,
-owner_id,
-billing_model,
-subscription_status,
-subscription_period_days,
-amount,
-currency,
-wallet_only,
-current_period_start,
-current_period_end,
-grace_period_days,
-grace_until,
-last_charge_at,
-next_charge_at,
-last_charge_status,
-blocked_at,
-created_at,
-updated_at
-FROM public.billing_subscriptions
-WHERE owner_type='salon'
-AND owner_id=$1
-FOR UPDATE
-LIMIT 1
-`,[salon.id]);
+const billing = await getSalonBillingRow(db, salon.id, true);
 
-if(!billing.rows.length){
+if(!billing){
 await db.query("ROLLBACK");
 return res.status(404).json({ok:false,error:"BILLING_NOT_FOUND"});
 }
@@ -470,7 +426,7 @@ blocked_at=NOW(),
 subscription_status='blocked',
 updated_at=NOW()
 WHERE id=$1
-`,[billing.rows[0].id]);
+`,[billing.id]);
 
 await db.query("COMMIT");
 
@@ -524,35 +480,9 @@ await db.query("ROLLBACK");
 return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 }
 
-const billing = await db.query(`
-SELECT
-id,
-owner_type,
-owner_id,
-billing_model,
-subscription_status,
-subscription_period_days,
-amount,
-currency,
-wallet_only,
-current_period_start,
-current_period_end,
-grace_period_days,
-grace_until,
-last_charge_at,
-next_charge_at,
-last_charge_status,
-blocked_at,
-created_at,
-updated_at
-FROM public.billing_subscriptions
-WHERE owner_type='salon'
-AND owner_id=$1
-FOR UPDATE
-LIMIT 1
-`,[salon.id]);
+const billing = await getSalonBillingRow(db, salon.id, true);
 
-if(!billing.rows.length){
+if(!billing){
 await db.query("ROLLBACK");
 return res.status(404).json({ok:false,error:"BILLING_NOT_FOUND"});
 }
@@ -564,7 +494,7 @@ blocked_at=NULL,
 subscription_status='active',
 updated_at=NOW()
 WHERE id=$1
-`,[billing.rows[0].id]);
+`,[billing.id]);
 
 await db.query("COMMIT");
 
