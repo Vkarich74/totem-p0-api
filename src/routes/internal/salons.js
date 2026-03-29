@@ -89,6 +89,41 @@ throw err;
 return wallet.rows[0].id;
 }
 
+async function getSalonWalletRowForCharge(db, salonId){
+const wallet = await db.query(`
+SELECT
+id,
+owner_type,
+owner_id,
+currency
+FROM totem_test.wallets
+WHERE owner_type='salon'
+AND owner_id=$1
+FOR UPDATE
+LIMIT 1
+`,[salonId]);
+
+if(!wallet.rows.length){
+const err = new Error("SALON_WALLET_NOT_FOUND");
+err.code = "SALON_WALLET_NOT_FOUND";
+throw err;
+}
+
+return wallet.rows[0];
+}
+
+async function getWalletBalanceById(db, walletId){
+const balance = await db.query(`
+SELECT
+COALESCE(computed_balance_cents,0)::int AS balance
+FROM totem_test.v_wallet_balance_computed
+WHERE wallet_id=$1
+LIMIT 1
+`,[walletId]);
+
+return Number(balance.rows[0]?.balance || 0);
+}
+
 /* SALON SUBSCRIPTION MANUAL CHARGE */
 r.post("/salons/:slug/subscription/charge", async (req,res)=>{
 
@@ -160,25 +195,9 @@ await db.query("ROLLBACK");
 return res.status(400).json({ok:false,error:"SUBSCRIPTION_AMOUNT_INVALID"});
 }
 
-const salonWallet = await db.query(`
-SELECT
-w.id,
-COALESCE(v.computed_balance_cents,0)::int AS balance
-FROM totem_test.wallets w
-LEFT JOIN totem_test.v_wallet_balance_computed v ON v.wallet_id=w.id
-WHERE w.owner_type='salon'
-AND w.owner_id=$1
-FOR UPDATE
-LIMIT 1
-`,[salonId]);
-
-if(!salonWallet.rows.length){
-await db.query("ROLLBACK");
-return res.status(404).json({ok:false,error:"SALON_WALLET_NOT_FOUND"});
-}
-
-const salonWalletId = salonWallet.rows[0].id;
-const salonBalance = Number(salonWallet.rows[0].balance || 0);
+const salonWallet = await getSalonWalletRowForCharge(db, salonId);
+const salonWalletId = salonWallet.id;
+const salonBalance = await getWalletBalanceById(db, salonWalletId);
 
 if(salonBalance < amount){
 await db.query("ROLLBACK");
@@ -190,26 +209,14 @@ amount
 });
 }
 
-if(billing.next_charge_at){
-const duplicateCharge = await db.query(`
-SELECT id
-FROM totem_test.ledger_entries
-WHERE wallet_id=$1
-AND direction='debit'
-AND reference_type='subscription'
-AND reference_id=$2
-AND created_at >= $3 - INTERVAL '5 minutes'
-LIMIT 1
-`,[
-salonWalletId,
-String(billing.id),
-billing.next_charge_at
-]);
-
-if(duplicateCharge.rows.length){
+if(billing.next_charge_at && new Date(billing.next_charge_at).getTime() > Date.now()){
 await db.query("ROLLBACK");
-return res.status(409).json({ok:false,error:"SUBSCRIPTION_ALREADY_CHARGED_FOR_PERIOD"});
-}
+return res.status(409).json({
+ok:false,
+error:"SUBSCRIPTION_ALREADY_ACTIVE_FOR_CURRENT_PERIOD",
+next_charge_at:billing.next_charge_at,
+last_charge_at:billing.last_charge_at
+});
 }
 
 const systemWalletId = await getSystemWalletId(db);
@@ -289,6 +296,13 @@ if(err.code === "SYSTEM_WALLET_NOT_FOUND"){
 return res.status(500).json({
 ok:false,
 error:"SYSTEM_WALLET_NOT_FOUND"
+});
+}
+
+if(err.code === "SALON_WALLET_NOT_FOUND"){
+return res.status(404).json({
+ok:false,
+error:"SALON_WALLET_NOT_FOUND"
 });
 }
 
