@@ -1053,6 +1053,202 @@ db.release();
 
 });
 
+/*
+MASTER WALLET BALANCE
+*/
+r.get("/masters/:slug/wallet-balance", internalReadRateLimit, async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const master = await getMasterBySlug(pool, slug);
+
+if(!master){
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const wallet = await getMasterWalletRow(pool, master.id);
+
+if(!wallet){
+return res.status(404).json({ok:false,error:"MASTER_WALLET_NOT_FOUND"});
+}
+
+const billing_access = await getMasterBillingAccess(pool, master.id);
+
+return res.json({
+ok:true,
+wallet_id:wallet.id,
+balance:Number(wallet.balance || 0),
+currency:wallet.currency || "KGS",
+billing_access
+});
+
+}catch(err){
+
+console.error("MASTER_WALLET_BALANCE_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"MASTER_WALLET_BALANCE_FAILED"
+});
+
+}
+
+});
+
+/*
+MASTER LEDGER
+*/
+r.get("/masters/:slug/ledger", internalReadRateLimit, async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const master = await getMasterBySlug(pool, slug);
+
+if(!master){
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const wallet = await getMasterWalletRow(pool, master.id);
+
+if(!wallet){
+return res.status(404).json({ok:false,error:"MASTER_WALLET_NOT_FOUND"});
+}
+
+const ledger = await pool.query(`
+SELECT
+id,
+wallet_id,
+direction,
+amount,
+reference_type,
+reference_id,
+created_at
+FROM totem_test.wallet_ledger
+WHERE wallet_id=$1
+ORDER BY created_at DESC, id DESC
+`,[wallet.id]);
+
+const billing_access = await getMasterBillingAccess(pool, master.id);
+
+return res.json({
+ok:true,
+ledger:ledger.rows,
+billing_access
+});
+
+}catch(err){
+
+console.error("MASTER_LEDGER_FETCH_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"MASTER_LEDGER_FETCH_FAILED"
+});
+
+}
+
+});
+
+/*
+MASTER SETTLEMENTS
+*/
+r.get("/masters/:slug/settlements", internalReadRateLimit, async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const master = await getMasterBySlug(pool, slug);
+
+if(!master){
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const settlements = await pool.query(`
+SELECT
+id,
+period_start,
+period_end,
+status,
+closed_at,
+created_at
+FROM totem_test.settlements
+WHERE master_id=$1
+ORDER BY created_at DESC, id DESC
+`,[master.id]);
+
+const billing_access = await getMasterBillingAccess(pool, master.id);
+
+return res.json({
+ok:true,
+settlements:settlements.rows,
+billing_access
+});
+
+}catch(err){
+
+console.error("MASTER_SETTLEMENTS_FETCH_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"MASTER_SETTLEMENTS_FETCH_FAILED"
+});
+
+}
+
+});
+
+/*
+MASTER PAYOUTS
+*/
+r.get("/masters/:slug/payouts", internalReadRateLimit, async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const master = await getMasterBySlug(pool, slug);
+
+if(!master){
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const payouts = await pool.query(`
+SELECT
+id,
+amount,
+status,
+created_at
+FROM totem_test.payouts
+WHERE master_id=$1
+ORDER BY created_at DESC, id DESC
+`,[master.id]);
+
+const billing_access = await getMasterBillingAccess(pool, master.id);
+
+return res.json({
+ok:true,
+payouts:payouts.rows,
+billing_access
+});
+
+}catch(err){
+
+console.error("MASTER_PAYOUTS_FETCH_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"MASTER_PAYOUTS_FETCH_FAILED"
+});
+
+}
+
+});
+
 return r;
 
 }
