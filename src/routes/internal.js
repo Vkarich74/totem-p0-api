@@ -33,6 +33,7 @@ const internalReadRateLimit =
   });
 
 const reportsRouter = buildReportsRouter(pool, internalReadRateLimit);
+
 r.use(reportsRouter);
 
 async function getOrCreateSystemWallet(db){
@@ -124,9 +125,11 @@ const paymentsRouter = buildPaymentsRouter({
 r.use(paymentsRouter);
 
 const settlementsRouter = buildSettlementsRouter(pool);
+
 r.use(settlementsRouter);
 
 const contractsRouter = buildContractsRouter(pool, internalReadRateLimit);
+
 r.use(contractsRouter);
 
 const withdrawsRouter = buildWithdrawsRouter(pool, internalReadRateLimit);
@@ -137,6 +140,7 @@ const xpayRouter = buildXpayRouter({
   xpayCreateQR,
   xpayCheckStatus,
 });
+
 r.use(xpayRouter);
 
 const contractAliasRouter = buildContractAliasRouter(pool);
@@ -154,111 +158,269 @@ r.use(withdrawsProcessorRouter);
 const mastersRouter = buildMastersRouter(pool, internalReadRateLimit);
 r.use(mastersRouter);
 
+
 const salonsRouter = buildSalonsRouter(pool, internalReadRateLimit);
 r.use(salonsRouter);
 
-/* =========================
-   AUTO-CHARGE (MANUAL RUN)
-   ========================= */
+async function getBillingWalletId(db, ownerType, ownerId){
+const wallet = await db.query(`
+SELECT id
+FROM totem_test.wallets
+WHERE owner_type=$1
+AND owner_id=$2
+LIMIT 1
+`,[ownerType, ownerId]);
 
-r.post("/internal/billing/auto-charge/run", async (req, res) => {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
+if(!wallet.rows.length){
+return null;
+}
 
-    const due = await client.query(`
-      SELECT *
-      FROM totem_test.billing
-      WHERE subscription_status='active'
-      AND next_charge_at <= NOW()
-      FOR UPDATE
-    `);
+return wallet.rows[0].id;
+}
 
-    let charged = 0;
+async function getWalletBalanceById(db, walletId){
+const balance = await db.query(`
+SELECT
+COALESCE(computed_balance_cents,0)::int AS balance
+FROM totem_test.v_wallet_balance_computed
+WHERE wallet_id=$1
+LIMIT 1
+`,[walletId]);
 
-    for(const b of due.rows){
+return Number(balance.rows[0]?.balance || 0);
+}
 
-      // wallet lookup
-      const wallet = await client.query(`
-        SELECT id
-        FROM totem_test.wallets
-        WHERE owner_type=$1 AND owner_id=$2
-        LIMIT 1
-      `,[b.owner_type, b.owner_id]);
+async function getDueBillingSubscriptions(db){
+const due = await db.query(`
+SELECT
+id,
+owner_type,
+owner_id,
+billing_model,
+subscription_status,
+subscription_period_days,
+amount,
+currency,
+wallet_only,
+current_period_start,
+current_period_end,
+grace_period_days,
+grace_until,
+last_charge_at,
+next_charge_at,
+last_charge_status,
+blocked_at,
+created_at,
+updated_at
+FROM public.billing_subscriptions
+WHERE owner_type IN ('salon','master')
+AND billing_model='subscription'
+AND subscription_status='active'
+AND wallet_only=true
+AND next_charge_at IS NOT NULL
+AND next_charge_at <= NOW()
+FOR UPDATE
+`);
 
-      if(!wallet.rows.length){
-        continue;
-      }
+return due.rows;
+}
 
-      const walletId = wallet.rows[0].id;
+async function runBillingAutoCharge(db){
+const due = await getDueBillingSubscriptions(db);
+const systemWalletId = await getOrCreateSystemWallet(db);
 
-      // баланс
-      const balance = await client.query(`
-        SELECT COALESCE(SUM(
-          CASE
-            WHEN direction='debit' THEN amount
-            WHEN direction='credit' THEN -amount
-          END
-        ),0) as balance
-        FROM totem_test.ledger
-        WHERE wallet_id=$1
-      `,[walletId]);
+let processed = 0;
+let charged = 0;
+let skipped_no_wallet = 0;
+let skipped_insufficient_balance = 0;
+let skipped_invalid_amount = 0;
+let skipped_not_due = 0;
+const results = [];
 
-      const currentBalance = Number(balance.rows[0].balance || 0);
+for(const billing of due){
+processed++;
 
-      if(currentBalance < b.amount){
-        continue;
-      }
+const ownerType = String(billing.owner_type || "");
+const ownerId = Number(billing.owner_id);
+const amount = Number(billing.amount || 0);
 
-      const systemWalletId = await getOrCreateSystemWallet(client);
+if(!Number.isFinite(amount) || amount <= 0){
+skipped_invalid_amount++;
+results.push({
+billing_id:String(billing.id),
+owner_type:ownerType,
+owner_id:ownerId,
+ok:false,
+error:"SUBSCRIPTION_AMOUNT_INVALID"
+});
+continue;
+}
 
-      // двойная запись
-      await client.query(`
-        INSERT INTO totem_test.ledger(
-          wallet_id,
-          direction,
-          amount,
-          currency,
-          reference_type,
-          reference_id
-        )
-        VALUES
-        ($1,'credit',$3,'KGS','subscription',$4),
-        ($2,'debit',$3,'KGS','subscription',$4)
-      `,[walletId, systemWalletId, b.amount, b.id]);
+if(billing.next_charge_at && new Date(billing.next_charge_at).getTime() > Date.now()){
+skipped_not_due++;
+results.push({
+billing_id:String(billing.id),
+owner_type:ownerType,
+owner_id:ownerId,
+ok:false,
+error:"SUBSCRIPTION_NOT_DUE"
+});
+continue;
+}
 
-      // обновление периода
-      await client.query(`
-        UPDATE totem_test.billing
-        SET
-          current_period_start = NOW(),
-          current_period_end = NOW() + (subscription_period_days || ' days')::interval,
-          next_charge_at = NOW() + (subscription_period_days || ' days')::interval,
-          last_charge_at = NOW(),
-          last_charge_status = 'success'
-        WHERE id=$1
-      `,[b.id]);
+const walletId = await getBillingWalletId(db, ownerType, ownerId);
 
-      charged++;
-    }
+if(!walletId){
+skipped_no_wallet++;
+results.push({
+billing_id:String(billing.id),
+owner_type:ownerType,
+owner_id:ownerId,
+ok:false,
+error:(ownerType === "salon" ? "SALON_WALLET_NOT_FOUND" : "MASTER_WALLET_NOT_FOUND")
+});
+continue;
+}
 
-    await client.query("COMMIT");
+const balance = await getWalletBalanceById(db, walletId);
 
-    res.json({
-      ok: true,
-      charged
-    });
+if(balance < amount){
+const graceDays = Number(billing.grace_period_days || 0);
+await db.query(`
+UPDATE public.billing_subscriptions
+SET
+last_charge_status='failed',
+grace_until=CASE
+WHEN $2 > 0 THEN NOW() + ($2 || ' days')::interval
+ELSE NULL
+END,
+updated_at=NOW()
+WHERE id=$1
+`,[
+billing.id,
+graceDays
+]);
 
-  } catch (e) {
-    await client.query("ROLLBACK");
-    res.status(500).json({
-      ok:false,
-      error:"AUTO_CHARGE_FAILED",
-      details:e.message
-    });
-  } finally {
-    client.release();
-  }
+skipped_insufficient_balance++;
+results.push({
+billing_id:String(billing.id),
+owner_type:ownerType,
+owner_id:ownerId,
+ok:false,
+error:"INSUFFICIENT_WALLET_BALANCE",
+balance,
+amount
+});
+continue;
+}
+
+await db.query(`
+INSERT INTO totem_test.ledger_entries(
+wallet_id,
+direction,
+amount_cents,
+reference_type,
+reference_id,
+created_at
+)
+VALUES($1,'debit',$2,'subscription',$3,NOW())
+`,[
+walletId,
+amount,
+String(billing.id)
+]);
+
+await db.query(`
+INSERT INTO totem_test.ledger_entries(
+wallet_id,
+direction,
+amount_cents,
+reference_type,
+reference_id,
+created_at
+)
+VALUES($1,'credit',$2,'subscription',$3,NOW())
+`,[
+systemWalletId,
+amount,
+String(billing.id)
+]);
+
+await db.query(`
+UPDATE public.billing_subscriptions
+SET
+last_charge_at=NOW(),
+last_charge_status='success',
+grace_until=NULL,
+current_period_start=COALESCE(next_charge_at, NOW()),
+current_period_end=COALESCE(next_charge_at, NOW()) + (COALESCE(subscription_period_days,30) || ' days')::interval,
+next_charge_at=COALESCE(next_charge_at, NOW()) + (COALESCE(subscription_period_days,30) || ' days')::interval,
+updated_at=NOW()
+WHERE id=$1
+`,[billing.id]);
+
+charged++;
+results.push({
+billing_id:String(billing.id),
+owner_type:ownerType,
+owner_id:ownerId,
+ok:true,
+charged:true,
+amount
+});
+}
+
+return {
+processed,
+charged,
+skipped_no_wallet,
+skipped_insufficient_balance,
+skipped_invalid_amount,
+skipped_not_due,
+results
+};
+}
+
+r.post("/billing/auto-charge/run", async (req,res)=>{
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+const summary = await runBillingAutoCharge(db);
+
+await db.query("COMMIT");
+
+return res.json({
+ok:true,
+engine:"billing_auto_charge_manual",
+processed:summary.processed,
+charged:summary.charged,
+skipped_no_wallet:summary.skipped_no_wallet,
+skipped_insufficient_balance:summary.skipped_insufficient_balance,
+skipped_invalid_amount:summary.skipped_invalid_amount,
+skipped_not_due:summary.skipped_not_due,
+results:summary.results
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+console.error("BILLING_AUTO_CHARGE_RUN_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"BILLING_AUTO_CHARGE_RUN_FAILED"
+});
+
+}finally{
+
+db.release();
+
+}
+
 });
 
 /*
@@ -270,6 +432,14 @@ Withdraw ledger is written ONLY by backend withdraw routes/processors.
 Database trigger:
 trg_bridge_payout_paid_to_wallet_ledger
 MUST remain DISABLED.
+
+Reason:
+Prevent duplicate ledger entries (double-write conflict)
+which breaks enforce_ledger_double_entry_row() invariant.
+
+If this trigger is enabled -> system will break.
+
+DO NOT CHANGE WITHOUT FULL FINANCE REFACTOR.
 */
 
 return r;
