@@ -314,6 +314,29 @@ amount
 continue;
 }
 
+// idempotency check (prevent duplicate subscription charge)
+const exists = await db.query(`
+SELECT 1
+FROM totem_test.ledger_entries
+WHERE wallet_id=$1
+AND reference_type='subscription'
+AND reference_id=$2
+AND direction='debit'
+LIMIT 1
+`,[walletId, String(billing.id)]);
+
+if(exists.rows.length){
+results.push({
+billing_id:String(billing.id),
+owner_type:ownerType,
+owner_id:ownerId,
+ok:true,
+skipped:true,
+reason:"ALREADY_CHARGED"
+});
+continue;
+}
+
 await db.query(`
 INSERT INTO totem_test.ledger_entries(
 wallet_id,
