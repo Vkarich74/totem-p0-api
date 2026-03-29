@@ -111,6 +111,245 @@ return null;
 return wallet.rows[0];
 }
 
+
+async function getSystemWalletId(db){
+const wallet = await db.query(`
+SELECT id
+FROM totem_test.wallets
+WHERE owner_type='system'
+ORDER BY id ASC
+LIMIT 1
+`);
+
+if(!wallet.rows.length){
+const err = new Error("SYSTEM_WALLET_NOT_FOUND");
+err.code = "SYSTEM_WALLET_NOT_FOUND";
+throw err;
+}
+
+return wallet.rows[0].id;
+}
+
+async function getMasterWalletRowForCharge(db, masterId){
+const wallet = await db.query(`
+SELECT
+id,
+owner_type,
+owner_id,
+currency
+FROM totem_test.wallets
+WHERE owner_type='master'
+AND owner_id=$1
+FOR UPDATE
+LIMIT 1
+`,[masterId]);
+
+if(!wallet.rows.length){
+const err = new Error("MASTER_WALLET_NOT_FOUND");
+err.code = "MASTER_WALLET_NOT_FOUND";
+throw err;
+}
+
+return wallet.rows[0];
+}
+
+async function getWalletBalanceById(db, walletId){
+const balance = await db.query(`
+SELECT
+COALESCE(computed_balance_cents,0)::int AS balance
+FROM totem_test.v_wallet_balance_computed
+WHERE wallet_id=$1
+LIMIT 1
+`,[walletId]);
+
+return Number(balance.rows[0]?.balance || 0);
+}
+
+/*
+MASTER SUBSCRIPTION MANUAL CHARGE
+*/
+r.post("/masters/:slug/subscription/charge", async (req,res)=>{
+
+const { slug } = req.params;
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+const master = await getMasterBySlug(db, slug);
+
+if(!master){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const subscription = await db.query(`
+SELECT
+id,
+owner_type,
+owner_id,
+billing_model,
+subscription_status,
+subscription_period_days,
+amount,
+currency,
+wallet_only,
+current_period_start,
+current_period_end,
+grace_period_days,
+grace_until,
+last_charge_at,
+next_charge_at,
+last_charge_status,
+blocked_at,
+created_at,
+updated_at
+FROM public.billing_subscriptions
+WHERE owner_type='master'
+AND owner_id=$1
+FOR UPDATE
+LIMIT 1
+`,[master.id]);
+
+if(!subscription.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"BILLING_NOT_FOUND"});
+}
+
+const billing = subscription.rows[0];
+
+if(billing.subscription_status !== "active"){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"SUBSCRIPTION_NOT_ACTIVE"});
+}
+
+const amount = Number(billing.amount);
+if(!Number.isFinite(amount) || amount <= 0){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"SUBSCRIPTION_AMOUNT_INVALID"});
+}
+
+const masterWallet = await getMasterWalletRowForCharge(db, master.id);
+const masterWalletId = masterWallet.id;
+const masterBalance = await getWalletBalanceById(db, masterWalletId);
+
+if(masterBalance < amount){
+await db.query("ROLLBACK");
+return res.status(400).json({
+ok:false,
+error:"INSUFFICIENT_WALLET_BALANCE",
+balance:masterBalance,
+amount
+});
+}
+
+if(billing.next_charge_at && new Date(billing.next_charge_at).getTime() > Date.now()){
+await db.query("ROLLBACK");
+return res.status(409).json({
+ok:false,
+error:"SUBSCRIPTION_ALREADY_ACTIVE_FOR_CURRENT_PERIOD",
+next_charge_at:billing.next_charge_at,
+last_charge_at:billing.last_charge_at
+});
+}
+
+const systemWalletId = await getSystemWalletId(db);
+
+await db.query(`
+INSERT INTO totem_test.ledger_entries(
+wallet_id,
+direction,
+amount_cents,
+reference_type,
+reference_id,
+created_at
+)
+VALUES($1,'debit',$2,'subscription',$3,NOW())
+`,[
+masterWalletId,
+amount,
+String(billing.id)
+]);
+
+await db.query(`
+INSERT INTO totem_test.ledger_entries(
+wallet_id,
+direction,
+amount_cents,
+reference_type,
+reference_id,
+created_at
+)
+VALUES($1,'credit',$2,'subscription',$3,NOW())
+`,[
+systemWalletId,
+amount,
+String(billing.id)
+]);
+
+await db.query(`
+UPDATE public.billing_subscriptions
+SET
+last_charge_at=NOW(),
+last_charge_status='success',
+current_period_start=COALESCE(next_charge_at, NOW()),
+current_period_end=COALESCE(next_charge_at, NOW()) + (COALESCE(subscription_period_days,30) || ' days')::interval,
+next_charge_at=COALESCE(next_charge_at, NOW()) + (COALESCE(subscription_period_days,30) || ' days')::interval,
+updated_at=NOW()
+WHERE id=$1
+`,[billing.id]);
+
+await db.query("COMMIT");
+
+const billing_access = await getMasterBillingAccess(pool, master.id);
+
+return res.json({
+ok:true,
+charged:true,
+owner_type:"master",
+owner_id:master.id,
+amount,
+currency:billing.currency || "KGS",
+reference_type:"subscription",
+reference_id:String(billing.id),
+billing_access
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+if(err.code === "SYSTEM_WALLET_NOT_FOUND"){
+return res.status(500).json({
+ok:false,
+error:"SYSTEM_WALLET_NOT_FOUND"
+});
+}
+
+if(err.code === "MASTER_WALLET_NOT_FOUND"){
+return res.status(404).json({
+ok:false,
+error:"MASTER_WALLET_NOT_FOUND"
+});
+}
+
+console.error("MASTER_SUBSCRIPTION_CHARGE_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"MASTER_SUBSCRIPTION_CHARGE_FAILED"
+});
+
+}finally{
+
+db.release();
+
+}
+
+});
+
+
 /*
 GET MASTER BY SLUG
 */
