@@ -33,7 +33,6 @@ const internalReadRateLimit =
   });
 
 const reportsRouter = buildReportsRouter(pool, internalReadRateLimit);
-
 r.use(reportsRouter);
 
 async function getOrCreateSystemWallet(db){
@@ -125,11 +124,9 @@ const paymentsRouter = buildPaymentsRouter({
 r.use(paymentsRouter);
 
 const settlementsRouter = buildSettlementsRouter(pool);
-
 r.use(settlementsRouter);
 
 const contractsRouter = buildContractsRouter(pool, internalReadRateLimit);
-
 r.use(contractsRouter);
 
 const withdrawsRouter = buildWithdrawsRouter(pool, internalReadRateLimit);
@@ -140,7 +137,6 @@ const xpayRouter = buildXpayRouter({
   xpayCreateQR,
   xpayCheckStatus,
 });
-
 r.use(xpayRouter);
 
 const contractAliasRouter = buildContractAliasRouter(pool);
@@ -161,6 +157,110 @@ r.use(mastersRouter);
 const salonsRouter = buildSalonsRouter(pool, internalReadRateLimit);
 r.use(salonsRouter);
 
+/* =========================
+   AUTO-CHARGE (MANUAL RUN)
+   ========================= */
+
+r.post("/internal/billing/auto-charge/run", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const due = await client.query(`
+      SELECT *
+      FROM totem_test.billing
+      WHERE subscription_status='active'
+      AND next_charge_at <= NOW()
+      FOR UPDATE
+    `);
+
+    let charged = 0;
+
+    for(const b of due.rows){
+
+      // wallet lookup
+      const wallet = await client.query(`
+        SELECT id
+        FROM totem_test.wallets
+        WHERE owner_type=$1 AND owner_id=$2
+        LIMIT 1
+      `,[b.owner_type, b.owner_id]);
+
+      if(!wallet.rows.length){
+        continue;
+      }
+
+      const walletId = wallet.rows[0].id;
+
+      // баланс
+      const balance = await client.query(`
+        SELECT COALESCE(SUM(
+          CASE
+            WHEN direction='debit' THEN amount
+            WHEN direction='credit' THEN -amount
+          END
+        ),0) as balance
+        FROM totem_test.ledger
+        WHERE wallet_id=$1
+      `,[walletId]);
+
+      const currentBalance = Number(balance.rows[0].balance || 0);
+
+      if(currentBalance < b.amount){
+        continue;
+      }
+
+      const systemWalletId = await getOrCreateSystemWallet(client);
+
+      // двойная запись
+      await client.query(`
+        INSERT INTO totem_test.ledger(
+          wallet_id,
+          direction,
+          amount,
+          currency,
+          reference_type,
+          reference_id
+        )
+        VALUES
+        ($1,'credit',$3,'KGS','subscription',$4),
+        ($2,'debit',$3,'KGS','subscription',$4)
+      `,[walletId, systemWalletId, b.amount, b.id]);
+
+      // обновление периода
+      await client.query(`
+        UPDATE totem_test.billing
+        SET
+          current_period_start = NOW(),
+          current_period_end = NOW() + (subscription_period_days || ' days')::interval,
+          next_charge_at = NOW() + (subscription_period_days || ' days')::interval,
+          last_charge_at = NOW(),
+          last_charge_status = 'success'
+        WHERE id=$1
+      `,[b.id]);
+
+      charged++;
+    }
+
+    await client.query("COMMIT");
+
+    res.json({
+      ok: true,
+      charged
+    });
+
+  } catch (e) {
+    await client.query("ROLLBACK");
+    res.status(500).json({
+      ok:false,
+      error:"AUTO_CHARGE_FAILED",
+      details:e.message
+    });
+  } finally {
+    client.release();
+  }
+});
+
 /*
 ARCHITECTURE CONTRACT (CRITICAL)
 
@@ -170,14 +270,6 @@ Withdraw ledger is written ONLY by backend withdraw routes/processors.
 Database trigger:
 trg_bridge_payout_paid_to_wallet_ledger
 MUST remain DISABLED.
-
-Reason:
-Prevent duplicate ledger entries (double-write conflict)
-which breaks enforce_ledger_double_entry_row() invariant.
-
-If this trigger is enabled -> system will break.
-
-DO NOT CHANGE WITHOUT FULL FINANCE REFACTOR.
 */
 
 return r;
