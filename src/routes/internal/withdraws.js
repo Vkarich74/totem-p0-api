@@ -31,12 +31,32 @@ billing:null
 const row = billing.rows[0];
 const status = row.subscription_status || "active";
 
+/* 🔴 НОРМАЛИЗАЦИЯ СОСТОЯНИЙ */
+let access_state = status;
+let can_write = true;
+let can_withdraw = true;
+
+if(status === "grace"){
+can_write = true;
+can_withdraw = false;
+}
+
+if(status === "overdue"){
+can_write = false;
+can_withdraw = false;
+}
+
+if(status === "blocked"){
+can_write = false;
+can_withdraw = false;
+}
+
 return {
 exists:true,
 subscription_status:status,
-access_state:status,
-can_write:status !== "blocked",
-can_withdraw:status === "active",
+access_state,
+can_write,
+can_withdraw,
 billing:row
 };
 }
@@ -78,6 +98,17 @@ const salonId = salon.rows[0].id;
 /* 🔴 BILLING CHECK */
 const billing_access = await getSalonBillingAccess(db, salonId);
 
+/* 🔴 ГЛОБАЛЬНЫЙ WRITE BLOCK (КРИТИЧНО) */
+if(!billing_access.can_write){
+await db.query("ROLLBACK");
+return res.status(402).json({
+ok:false,
+error:"BILLING_BLOCKED",
+billing_access
+});
+}
+
+/* 🔴 WITHDRAW CHECK */
 if(!billing_access.can_withdraw){
 await db.query("ROLLBACK");
 return res.status(402).json({
