@@ -1169,17 +1169,19 @@ return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 }
 
 const settlements = await pool.query(`
-SELECT
+SELECT DISTINCT ON (sp.id)
 sp.id,
 sp.period_start,
 sp.period_end,
 sp.status,
 sp.closed_at,
 sp.created_at
-FROM settlement_periods sp LEFT JOIN payouts p ON p.settlement_period_id=sp.id LEFT JOIN bookings b ON b.id=p.booking_id
+FROM settlement_periods sp
+LEFT JOIN payouts p ON p.settlement_period_id=sp.id
+LEFT JOIN bookings b ON b.id=p.booking_id
 WHERE b.master_id=$1
 AND sp.is_archived=false
-ORDER BY sp.period_start DESC
+ORDER BY sp.id, sp.period_start DESC, sp.created_at DESC
 LIMIT 50
 `,[master.id]);
 
