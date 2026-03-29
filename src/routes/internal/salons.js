@@ -377,7 +377,7 @@ owner_id:salon.id,
 owner_slug:salon.slug,
 exists:access.exists,
 subscription_status:access.subscription_status,
-access_state:access.billing ? resolveBillingAccessState(access.billing) : access.access_state,
+access_state:access.access_state,
 can_write:access.can_write,
 can_withdraw:access.can_withdraw,
 billing:access.billing
