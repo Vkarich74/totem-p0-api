@@ -1176,8 +1176,8 @@ sp.period_end,
 sp.status,
 sp.closed_at,
 sp.created_at
-FROM settlement_periods sp
-WHERE sp.master_id=$1
+FROM settlement_periods sp LEFT JOIN payouts p ON p.settlement_period_id=sp.id LEFT JOIN bookings b ON b.id=p.booking_id
+WHERE b.master_id=$1
 AND sp.is_archived=false
 ORDER BY sp.period_start DESC
 LIMIT 50
@@ -1225,8 +1225,8 @@ p.id,
 p.amount,
 p.status,
 p.created_at
-FROM payouts p
-WHERE p.master_id=$1
+FROM payouts p LEFT JOIN bookings b ON b.id=p.booking_id
+WHERE b.master_id=$1
 ORDER BY p.created_at DESC
 LIMIT 50
 `,[master.id]);
