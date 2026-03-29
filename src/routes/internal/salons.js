@@ -69,6 +69,244 @@ throw err;
 return access;
 }
 
+
+
+async function getSystemWalletId(db){
+const wallet = await db.query(`
+SELECT id
+FROM totem_test.wallets
+WHERE owner_type='system'
+ORDER BY id ASC
+LIMIT 1
+`);
+
+if(!wallet.rows.length){
+const err = new Error("SYSTEM_WALLET_NOT_FOUND");
+err.code = "SYSTEM_WALLET_NOT_FOUND";
+throw err;
+}
+
+return wallet.rows[0].id;
+}
+
+/* SALON SUBSCRIPTION MANUAL CHARGE */
+r.post("/salons/:slug/subscription/charge", async (req,res)=>{
+
+const { slug } = req.params;
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+const salon = await db.query(
+`SELECT id,name,slug
+FROM salons
+WHERE slug=$1
+LIMIT 1`,
+[slug]
+);
+
+if(!salon.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+const subscription = await db.query(`
+SELECT
+id,
+owner_type,
+owner_id,
+billing_model,
+subscription_status,
+subscription_period_days,
+amount,
+currency,
+wallet_only,
+current_period_start,
+current_period_end,
+grace_period_days,
+grace_until,
+last_charge_at,
+next_charge_at,
+last_charge_status,
+blocked_at,
+created_at,
+updated_at
+FROM public.billing_subscriptions
+WHERE owner_type='salon'
+AND owner_id=$1
+FOR UPDATE
+LIMIT 1
+`,[salonId]);
+
+if(!subscription.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"BILLING_NOT_FOUND"});
+}
+
+const billing = subscription.rows[0];
+
+if(billing.subscription_status !== "active"){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"SUBSCRIPTION_NOT_ACTIVE"});
+}
+
+const amount = Number(billing.amount);
+if(!Number.isFinite(amount) || amount <= 0){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:"SUBSCRIPTION_AMOUNT_INVALID"});
+}
+
+const salonWallet = await db.query(`
+SELECT
+w.id,
+COALESCE(v.computed_balance_cents,0)::int AS balance
+FROM totem_test.wallets w
+LEFT JOIN totem_test.v_wallet_balance_computed v ON v.wallet_id=w.id
+WHERE w.owner_type='salon'
+AND w.owner_id=$1
+FOR UPDATE
+LIMIT 1
+`,[salonId]);
+
+if(!salonWallet.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"SALON_WALLET_NOT_FOUND"});
+}
+
+const salonWalletId = salonWallet.rows[0].id;
+const salonBalance = Number(salonWallet.rows[0].balance || 0);
+
+if(salonBalance < amount){
+await db.query("ROLLBACK");
+return res.status(400).json({
+ok:false,
+error:"INSUFFICIENT_WALLET_BALANCE",
+balance:salonBalance,
+amount
+});
+}
+
+if(billing.next_charge_at){
+const duplicateCharge = await db.query(`
+SELECT id
+FROM totem_test.ledger_entries
+WHERE wallet_id=$1
+AND direction='debit'
+AND reference_type='subscription'
+AND reference_id=$2
+AND created_at >= $3 - INTERVAL '5 minutes'
+LIMIT 1
+`,[
+salonWalletId,
+String(billing.id),
+billing.next_charge_at
+]);
+
+if(duplicateCharge.rows.length){
+await db.query("ROLLBACK");
+return res.status(409).json({ok:false,error:"SUBSCRIPTION_ALREADY_CHARGED_FOR_PERIOD"});
+}
+}
+
+const systemWalletId = await getSystemWalletId(db);
+
+await db.query(`
+INSERT INTO totem_test.ledger_entries(
+wallet_id,
+direction,
+amount_cents,
+reference_type,
+reference_id,
+created_at
+)
+VALUES($1,'debit',$2,'subscription',$3,NOW())
+`,[
+salonWalletId,
+amount,
+String(billing.id)
+]);
+
+await db.query(`
+INSERT INTO totem_test.ledger_entries(
+wallet_id,
+direction,
+amount_cents,
+reference_type,
+reference_id,
+created_at
+)
+VALUES($1,'credit',$2,'subscription',$3,NOW())
+`,[
+systemWalletId,
+amount,
+String(billing.id)
+]);
+
+await db.query(`
+UPDATE public.billing_subscriptions
+SET
+last_charge_at=NOW(),
+last_charge_status='success',
+current_period_start=COALESCE(next_charge_at, NOW()),
+current_period_end=COALESCE(next_charge_at, NOW()) + (COALESCE(subscription_period_days,30) || ' days')::interval,
+next_charge_at=COALESCE(next_charge_at, NOW()) + (COALESCE(subscription_period_days,30) || ' days')::interval,
+updated_at=NOW()
+WHERE id=$1
+`,[billing.id]);
+
+await db.query("COMMIT");
+
+const access = await getSalonBillingAccess(pool, salonId);
+
+return res.json({
+ok:true,
+charged:true,
+owner_type:"salon",
+owner_id:salonId,
+amount,
+currency:billing.currency || "KGS",
+reference_type:"subscription",
+reference_id:String(billing.id),
+billing_access:{
+exists:access.exists,
+subscription_status:access.subscription_status,
+access_state:access.access_state,
+can_write:access.can_write,
+can_withdraw:access.can_withdraw,
+billing:access.billing
+}
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+if(err.code === "SYSTEM_WALLET_NOT_FOUND"){
+return res.status(500).json({
+ok:false,
+error:"SYSTEM_WALLET_NOT_FOUND"
+});
+}
+
+console.error("SALON_SUBSCRIPTION_CHARGE_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"SALON_SUBSCRIPTION_CHARGE_FAILED"
+});
+
+}finally{
+
+db.release();
+
+}
+
+});
+
 /* SALON ROOT */
 r.get("/salons/:slug", internalReadRateLimit, async (req,res)=>{
 
