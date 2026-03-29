@@ -144,11 +144,22 @@ app.use(
 
 /* ================= AUTO FINANCE LOOP ================= */
 
+const INTERNAL_API_TOKEN =
+  process.env.INTERNAL_API_TOKEN ||
+  "9f3c7a8e2b6d4c1f9a8e7d6c5b4a3928172635445566778899aabbccddeeff00";
+
 async function runFinanceLoop() {
   try {
-    const res = await fetch("https://totem-p0-api-production.up.railway.app/internal/finance/run/full", {
-      method: "POST",
-    });
+    const res = await fetch(
+      "https://totem-p0-api-production.up.railway.app/internal/finance/run/full",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${INTERNAL_API_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
 
     const txt = await res.text();
     console.log("FINANCE_LOOP_EXECUTED", txt);
