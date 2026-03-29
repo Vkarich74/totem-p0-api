@@ -264,6 +264,29 @@ updated_at
 return created.rows[0];
 }
 
+function resolveBillingAccessState(billing){
+if(!billing){
+return "active";
+}
+
+if(billing.blocked_at){
+return "blocked";
+}
+
+const now = Date.now();
+const nextChargeAt = billing.next_charge_at ? new Date(billing.next_charge_at).getTime() : null;
+const graceUntil = billing.grace_until ? new Date(billing.grace_until).getTime() : null;
+
+if(nextChargeAt && nextChargeAt < now){
+if(graceUntil && graceUntil >= now){
+return "grace";
+}
+return "overdue";
+}
+
+return billing.subscription_status || "active";
+}
+
 /*
 MASTER SUBSCRIPTION MANUAL CHARGE
 */
@@ -405,6 +428,177 @@ console.error("MASTER_SUBSCRIPTION_CHARGE_ERROR",err);
 return res.status(500).json({
 ok:false,
 error:"MASTER_SUBSCRIPTION_CHARGE_FAILED"
+});
+
+}finally{
+
+db.release();
+
+}
+
+});
+
+
+
+/*
+MASTER BILLING
+*/
+r.get("/masters/:slug/billing", internalReadRateLimit, async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const master = await getMasterBySlug(pool, slug);
+
+if(!master){
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const access = await getMasterBillingAccess(pool, master.id);
+
+return res.json({
+ok:true,
+owner_type:"master",
+owner_id:master.id,
+owner_slug:master.slug,
+exists:access.exists,
+subscription_status:access.subscription_status,
+access_state:access.billing ? resolveBillingAccessState(access.billing) : access.access_state,
+can_write:access.can_write,
+can_withdraw:access.can_withdraw,
+billing:access.billing
+});
+
+}catch(err){
+
+console.error("MASTER_BILLING_FETCH_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"MASTER_BILLING_FETCH_FAILED"
+});
+
+}
+
+});
+
+r.post("/masters/:slug/billing/block", async (req,res)=>{
+
+const { slug } = req.params;
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+const master = await getMasterBySlug(db, slug);
+
+if(!master){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const billing = await ensureMasterBillingSubscription(db, master.id);
+
+await db.query(`
+UPDATE public.billing_subscriptions
+SET
+blocked_at=NOW(),
+subscription_status='blocked',
+updated_at=NOW()
+WHERE id=$1
+`,[billing.id]);
+
+await db.query("COMMIT");
+
+const access = await getMasterBillingAccess(pool, master.id);
+
+return res.json({
+ok:true,
+blocked:true,
+billing_access:{
+exists:access.exists,
+subscription_status:access.subscription_status,
+access_state:resolveBillingAccessState(access.billing),
+can_write:access.can_write,
+can_withdraw:access.can_withdraw,
+billing:access.billing
+}
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+console.error("MASTER_BILLING_BLOCK_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"MASTER_BILLING_BLOCK_FAILED"
+});
+
+}finally{
+
+db.release();
+
+}
+
+});
+
+r.post("/masters/:slug/billing/unblock", async (req,res)=>{
+
+const { slug } = req.params;
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+const master = await getMasterBySlug(db, slug);
+
+if(!master){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const billing = await ensureMasterBillingSubscription(db, master.id);
+
+await db.query(`
+UPDATE public.billing_subscriptions
+SET
+blocked_at=NULL,
+subscription_status='active',
+updated_at=NOW()
+WHERE id=$1
+`,[billing.id]);
+
+await db.query("COMMIT");
+
+const access = await getMasterBillingAccess(pool, master.id);
+
+return res.json({
+ok:true,
+blocked:false,
+billing_access:{
+exists:access.exists,
+subscription_status:access.subscription_status,
+access_state:resolveBillingAccessState(access.billing),
+can_write:access.can_write,
+can_withdraw:access.can_withdraw,
+billing:access.billing
+}
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+console.error("MASTER_BILLING_UNBLOCK_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"MASTER_BILLING_UNBLOCK_FAILED"
 });
 
 }finally{
