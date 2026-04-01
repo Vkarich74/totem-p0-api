@@ -39,7 +39,6 @@ const r = express.Router();
 /* CONTRACT ENGINE               */
 /* ============================= */
 
-/* CREATE CONTRACT */
 async function createContract({ db, salonId, master_id, terms_json, effective_from }){
 
 if(!master_id){
@@ -89,7 +88,7 @@ return contract.rows[0];
 
 }
 
-/* BASE CREATE (DIRECT) */
+/* CREATE */
 r.post("/contracts", async (req,res)=>{
 
 const {
@@ -236,7 +235,7 @@ error:"SALON_CONTRACT_CREATE_FAILED"
 
 });
 
-/* ACCEPT CONTRACT */
+/* ACCEPT */
 r.post("/contracts/:id/accept", async (req,res)=>{
 
 const { id } = req.params;
@@ -303,7 +302,7 @@ db.release();
 
 });
 
-/* ARCHIVE CONTRACT */
+/* ARCHIVE */
 r.post("/contracts/:id/archive", async (req,res)=>{
 
 const { id } = req.params;
@@ -331,6 +330,94 @@ console.error("CONTRACT_ARCHIVE_ERROR",err);
 res.status(500).json({
 ok:false,
 error:"CONTRACT_ARCHIVE_FAILED"
+});
+
+}
+
+});
+
+/* ============================= */
+/* MASTER CONTRACTS (FIX)        */
+/* ============================= */
+
+/* ACTIVE CONTRACT FOR MASTER */
+r.get("/contracts/master/:slug/active", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const master = await pool.query(
+`SELECT id FROM masters WHERE slug=$1`,
+[slug]
+);
+
+if(!master.rows.length){
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const contract = await pool.query(`
+SELECT *
+FROM contracts
+WHERE master_id=$1
+AND status='active'
+ORDER BY created_at DESC
+LIMIT 1
+`,[master.rows[0].id]);
+
+res.json({
+ok:true,
+contract: contract.rows[0] || null
+});
+
+}catch(err){
+
+console.error("MASTER_ACTIVE_CONTRACT_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"MASTER_ACTIVE_CONTRACT_FAILED"
+});
+
+}
+
+});
+
+/* CONTRACT HISTORY FOR MASTER */
+r.get("/contracts/master/:slug/history", async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const master = await pool.query(
+`SELECT id FROM masters WHERE slug=$1`,
+[slug]
+);
+
+if(!master.rows.length){
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const contracts = await pool.query(`
+SELECT *
+FROM contracts
+WHERE master_id=$1
+ORDER BY created_at DESC
+`,[master.rows[0].id]);
+
+res.json({
+ok:true,
+contracts: contracts.rows
+});
+
+}catch(err){
+
+console.error("MASTER_CONTRACT_HISTORY_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"MASTER_CONTRACT_HISTORY_FAILED"
 });
 
 }
