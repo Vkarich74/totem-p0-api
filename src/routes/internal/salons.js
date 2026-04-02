@@ -1378,36 +1378,41 @@ WHERE salon_id=$1
 AND DATE(start_at)=CURRENT_DATE
 `,[salonId]);
 
-const revenueToday = await pool.query(`
-SELECT COALESCE(SUM(p.amount),0)::int AS v
-FROM payments p
-JOIN bookings b ON b.id=p.booking_id
-WHERE b.salon_id=$1
-AND DATE(p.created_at)=CURRENT_DATE
-`,[salonId]);
-
-const revenueMonth = await pool.query(`
-SELECT COALESCE(SUM(p.amount),0)::int AS v
-FROM payments p
-JOIN bookings b ON b.id=p.booking_id
-WHERE b.salon_id=$1
-AND DATE_TRUNC('month', p.created_at)=DATE_TRUNC('month', NOW())
-`,[salonId]);
-
-const paymentsTotal = await pool.query(`
-SELECT COUNT(*)::int AS v
-FROM payments p
-JOIN bookings b ON b.id=p.booking_id
-WHERE b.salon_id=$1
+const revenueMetrics = await pool.query(`
+SELECT
+COALESCE(
+SUM(le.amount_cents) FILTER (
+WHERE le.direction='credit'
+AND le.reference_type='payment'
+AND DATE(le.created_at)=CURRENT_DATE
+),
+0
+)::int AS revenue_today,
+COALESCE(
+SUM(le.amount_cents) FILTER (
+WHERE le.direction='credit'
+AND le.reference_type='payment'
+AND DATE_TRUNC('month', le.created_at)=DATE_TRUNC('month', NOW())
+),
+0
+)::int AS revenue_month,
+COUNT(*) FILTER (
+WHERE le.direction='credit'
+AND le.reference_type='payment'
+)::int AS payments_total
+FROM totem_test.ledger_entries le
+JOIN totem_test.wallets w ON w.id=le.wallet_id
+WHERE w.owner_type='salon'
+AND w.owner_id=$1
 `,[salonId]);
 
 res.json({
 ok:true,
 metrics:{
 bookings_today:bookingsToday.rows[0].v,
-revenue_today:revenueToday.rows[0].v,
-revenue_month:revenueMonth.rows[0].v,
-payments_total:paymentsTotal.rows[0].v
+revenue_today:revenueMetrics.rows[0].revenue_today,
+revenue_month:revenueMetrics.rows[0].revenue_month,
+payments_total:revenueMetrics.rows[0].payments_total
 }
 });
 
