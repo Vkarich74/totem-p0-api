@@ -8,6 +8,7 @@ import crypto from "crypto";
 import Redis from "ioredis";
 
 import { resolveTenant } from "./middleware/resolveTenant.js";
+import { resolveAuth } from "./middleware/resolveAuth.js";
 import { rateLimit } from "./middleware/rateLimit.js";
 
 import { createPublicRouter } from "./routes/public.js";
@@ -137,6 +138,7 @@ app.use(
 
 app.use(
   "/internal",
+  resolveAuth,
   createInternalRouter({
     rlInternal,
   })
