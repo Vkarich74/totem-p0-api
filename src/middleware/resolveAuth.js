@@ -43,7 +43,7 @@ async function buildIdentity(userId){
     const masterRes = await client.query(
       `SELECT id
        FROM masters
-       WHERE owner_id = $1
+       WHERE user_id = $1
        ORDER BY id ASC`,
       [userId]
     );
