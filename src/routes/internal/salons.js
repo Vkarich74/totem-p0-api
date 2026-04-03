@@ -1378,37 +1378,82 @@ WHERE salon_id=$1
 AND DATE(start_at)=CURRENT_DATE
 `,[salonId]);
 
+const bookingsWeek = await pool.query(`
+SELECT COUNT(*)::int AS v
+FROM bookings
+WHERE salon_id=$1
+AND DATE(start_at) >= CURRENT_DATE - INTERVAL '6 days'
+`,[salonId]);
+
+const clientsTotal = await pool.query(`
+SELECT COUNT(*)::int AS v
+FROM clients
+WHERE salon_id=$1
+`,[salonId]);
+
+const mastersActive = await pool.query(`
+SELECT COUNT(*)::int AS v
+FROM master_salon
+WHERE salon_id=$1
+AND status='active'
+`,[salonId]);
+
 const revenueToday = await pool.query(`
-SELECT COALESCE(SUM(p.amount),0)::int AS v
-FROM payments p
-JOIN bookings b ON b.id=p.booking_id
-WHERE b.salon_id=$1
-AND DATE(p.created_at)=CURRENT_DATE
+SELECT COALESCE(SUM(COALESCE(le.amount_cents,0)),0)::int AS v
+FROM totem_test.ledger_entries le
+JOIN totem_test.wallets w ON w.id=le.wallet_id
+WHERE w.owner_type='salon'
+AND w.owner_id=$1
+AND le.direction='credit'
+AND le.reference_type='payment'
+AND DATE(le.created_at)=CURRENT_DATE
 `,[salonId]);
 
 const revenueMonth = await pool.query(`
-SELECT COALESCE(SUM(p.amount),0)::int AS v
-FROM payments p
-JOIN bookings b ON b.id=p.booking_id
-WHERE b.salon_id=$1
-AND DATE_TRUNC('month', p.created_at)=DATE_TRUNC('month', NOW())
+SELECT COALESCE(SUM(COALESCE(le.amount_cents,0)),0)::int AS v
+FROM totem_test.ledger_entries le
+JOIN totem_test.wallets w ON w.id=le.wallet_id
+WHERE w.owner_type='salon'
+AND w.owner_id=$1
+AND le.direction='credit'
+AND le.reference_type='payment'
+AND le.created_at >= CURRENT_DATE - INTERVAL '29 days'
 `,[salonId]);
 
 const paymentsTotal = await pool.query(`
 SELECT COUNT(*)::int AS v
-FROM payments p
-JOIN bookings b ON b.id=p.booking_id
-WHERE b.salon_id=$1
+FROM totem_test.ledger_entries le
+JOIN totem_test.wallets w ON w.id=le.wallet_id
+WHERE w.owner_type='salon'
+AND w.owner_id=$1
+AND le.direction='credit'
+AND le.reference_type='payment'
 `,[salonId]);
 
 res.json({
 ok:true,
 metrics:{
 bookings_today:bookingsToday.rows[0].v,
+bookings_week:bookingsWeek.rows[0].v,
+clients_total:clientsTotal.rows[0].v,
+masters_active:mastersActive.rows[0].v,
 revenue_today:revenueToday.rows[0].v,
 revenue_month:revenueMonth.rows[0].v,
 payments_total:paymentsTotal.rows[0].v
 }
+});
+
+}catch(err){
+
+console.error("SALON_METRICS_ERROR", err);
+
+res.status(500).json({
+ok:false,
+error:"SALON_METRICS_FAILED"
+});
+
+}
+
 });
 
 }catch(err){
