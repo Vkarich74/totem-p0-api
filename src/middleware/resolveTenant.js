@@ -28,28 +28,55 @@ export async function resolveTenant(req, res, next) {
 
     const pool = getPool();
 
-    const result = await pool.query(
+    // 1. salon
+    const salonResult = await pool.query(
       "SELECT id, slug FROM salons WHERE slug = $1 LIMIT 1",
       [slug]
     );
 
-    if (result.rowCount === 0) {
+    if (salonResult.rowCount === 0) {
       return res.status(404).json({
         ok: false,
         error: "TENANT_NOT_FOUND"
       });
     }
 
-    const salon = result.rows[0];
+    const salon = salonResult.rows[0];
 
+    // 2. billing_subscriptions (Единственный источник истины)
+    const billingResult = await pool.query(
+      `
+      SELECT subscription_status
+      FROM billing_subscriptions
+      WHERE owner_type = 'salon'
+        AND owner_id = $1
+      LIMIT 1
+      `,
+      [salon.id]
+    );
+
+    let billingAccess = null;
+
+    if (billingResult.rowCount > 0) {
+      const row = billingResult.rows[0];
+
+      billingAccess = {
+        subscription_status: row.subscription_status
+      };
+    }
+
+    // 3. tenant
     req.tenant = {
       salon_id: salon.id,
-      slug: salon.slug
+      slug: salon.slug,
+      owner_type: "salon",
+      owner_id: salon.id,
+      billing_access: billingAccess
     };
 
     next();
   } catch (err) {
-    console.error("TENANT_RESOLVE_ERROR", err.message);
+    console.error("TENANT_RESOLVE_ERROR", err);
 
     return res.status(500).json({
       ok: false,

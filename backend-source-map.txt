@@ -1,0 +1,410 @@
+﻿TOTEM BACKEND SOURCE MAP
+Generated: 2026-04-03 11:52:42
+
+=== TREE: src ===
+src\app.js
+src\db.js
+src\db\pool.js
+src\jobs\expireReserved.js
+src\middleware\rateLimit.js
+src\middleware\requireAuth.js
+src\middleware\requireRole.js
+src\middleware\resolveAuth.js
+src\middleware\resolveTenant.js
+src\payments\index.ts
+src\payments\payments.flags.ts
+src\payments\payments.README.md
+src\payments\PaymentService.ts
+src\payments\PaymentTypes.ts
+src\payments\providers\ProviderAdapter.ts
+src\payments\providers\ProviderRegistry.ts
+src\payments\providers\providers.README.md
+src\payments\providers\stripe.adapter.ts
+src\payments\webhooks\payments.webhook.ts
+src\payments\wire.runtime.ts
+src\payments\xpay.js
+src\routes\auth.resolve.ts
+src\routes\bookings\bookings.routes.ts
+src\routes\bookings\cancelBooking.ts
+src\routes\calendar.js
+src\routes\completeBooking.js
+src\routes\confirmBooking.js
+src\routes\confirmBooking.js.bak
+src\routes\internal.js
+src\routes\internal\contract-alias.js
+src\routes\internal\contracts.js
+src\routes\internal\finance-engine.js
+src\routes\internal\masters.js
+src\routes\internal\one-time-charge.js
+src\routes\internal\one-time-charge-history.js
+src\routes\internal\payments.js
+src\routes\internal\payouts-processor.js
+src\routes\internal\reports.js
+src\routes\internal\salons.js
+src\routes\internal\settlements.js
+src\routes\internal\withdraws.js
+src\routes\internal\withdraws-processor.js
+src\routes\internal\xpay.js
+src\routes\public.js
+src\routes\publicAvailability.js
+src\routes\publicCreateBooking.js
+src\routes\publicLifecycle.js
+
+=== TREE: root config files ===
+.env
+index.js
+package.json
+PAYMENTS_DOMAIN.md
+
+=== SEARCH: express.Router ===
+[src\routes\calendar.js:5] const router = express.Router();
+[src\routes\internal.js:23] const r = express.Router();
+[src\routes\public.js:15] const r = express.Router();
+[src\routes\internal\contract-alias.js:5] const r = express.Router();
+[src\routes\internal\contracts.js:36] const r = express.Router();
+[src\routes\internal\finance-engine.js:6] const r = express.Router();
+[src\routes\internal\masters.js:6] const r = express.Router();
+[src\routes\internal\payouts-processor.js:5] const r = express.Router();
+[src\routes\internal\reports.js:5] const r = express.Router();
+[src\routes\internal\salons.js:5] const r = express.Router();
+[src\routes\internal\settlements.js:5] const r = express.Router();
+[src\routes\internal\withdraws-processor.js:4] const r = express.Router();
+[src\routes\internal\withdraws.js:5] const r = express.Router();
+[src\routes\internal\xpay.js:4] const r = express.Router();
+
+=== SEARCH: router.get( ===
+[src\routes\calendar.js:49] router.get("/master/:master_id", async (req, res) => {
+
+=== SEARCH: router.post( ===
+[src\routes\calendar.js:7] router.post("/reserve", async (req, res) => {
+[src\routes\bookings\bookings.routes.ts:3] router.post("/:id/cancel", cancelBooking);
+
+=== SEARCH: router.patch( ===
+
+=== SEARCH: router.put( ===
+
+=== SEARCH: router.delete( ===
+
+=== SEARCH: app.use( ===
+[src\app.js:60] app.use(
+[src\app.js:71] app.use(express.json());
+[src\app.js:72] app.use(cookieParser());
+[src\app.js:76] app.use((req, res, next) => {
+[src\app.js:129] app.use(
+[src\app.js:138] app.use(
+
+=== SEARCH: createSalon ===
+
+=== SEARCH: createMaster ===
+
+=== SEARCH: slug ===
+[src\app.js:107] `availability:${req.ip}:${req.params?.slug ?? "na"}:${req.params?.master_id ?? "na"}`,
+[src\app.js:115] keyFn: (req) => `booking_create:${req.ip}:${req.params?.slug ?? "na"}`,
+[src\middleware\rateLimit.js:43] const slug = req.params?.slug ? String(req.params.slug) : "";
+[src\middleware\rateLimit.js:44] return `${keyPrefix}:${ip}${slug ? `:${slug}` : ""}`;
+[src\middleware\resolveAuth.js:62] "SELECT id, slug FROM masters WHERE user_id = $1 LIMIT 1",
+[src\middleware\resolveAuth.js:75] AND s.slug = $2
+[src\middleware\resolveAuth.js:78] [master.id, master.slug]
+[src\middleware\resolveAuth.js:85] INSERT INTO salons (slug, name)
+[src\middleware\resolveAuth.js:87] ON CONFLICT (slug) DO NOTHING
+[src\middleware\resolveAuth.js:90] [master.slug, master.slug]
+[src\middleware\resolveAuth.js:99] "SELECT id FROM salons WHERE slug = $1 LIMIT 1",
+[src\middleware\resolveAuth.js:100] [master.slug]
+[src\middleware\resolveTenant.js:20] const slug = req.params.slug;
+[src\middleware\resolveTenant.js:22] if (!slug) {
+[src\middleware\resolveTenant.js:25] error: "TENANT_SLUG_REQUIRED"
+[src\middleware\resolveTenant.js:32] "SELECT id, slug FROM salons WHERE slug = $1 LIMIT 1",
+[src\middleware\resolveTenant.js:33] [slug]
+[src\middleware\resolveTenant.js:47] slug: salon.slug
+[src\routes\public.js:21] "/salons/:slug/bookings",
+[src\routes\public.js:31] "/salons/:slug/bookings/:id/lifecycle",
+[src\routes\public.js:40] "/salons/:slug/masters/:master_id/availability",
+[src\routes\public.js:49] r.get("/salons/:slug", resolveTenant, async (req, res) => {
+[src\routes\public.js:55] SELECT id, slug, name
+[src\routes\public.js:80] r.get("/salons/:slug/metrics", resolveTenant, async (req, res) => {
+[src\routes\public.js:129] r.get("/salons/:slug/bookings", resolveTenant, async (req, res) => {
+[src\routes\public.js:224] r.get("/salons/:slug/masters", async (req, res) => {
+[src\routes\public.js:226] const { slug } = req.params;
+[src\routes\public.js:232] m.slug,
+[src\routes\public.js:238] WHERE s.slug = $1
+[src\routes\public.js:241] [slug]
+[src\routes\publicCreateBooking.js:18] const { slug } = req.params;
+[src\routes\publicCreateBooking.js:58] `SELECT id, slug
+[src\routes\publicCreateBooking.js:60] WHERE slug = $1
+[src\routes\publicCreateBooking.js:62] [slug]
+[src\routes\publicCreateBooking.js:71] const salonSlug = salonRes.rows[0].slug;
+[src\routes\publicCreateBooking.js:205] (salon_id, salon_slug, master_id, start_at, end_at, status, request_id,
+[src\routes\publicCreateBooking.js:212] salonSlug,
+[src\routes\internal\contracts.js:140] r.get("/salons/:slug/contracts", async (req,res)=>{
+[src\routes\internal\contracts.js:142] const { slug } = req.params;
+[src\routes\internal\contracts.js:147] `SELECT id FROM salons WHERE slug=$1`,
+[src\routes\internal\contracts.js:148] [slug]
+[src\routes\internal\contracts.js:159] COALESCE(m.slug, c.master_id::text) AS master_slug,
+[src\routes\internal\contracts.js:187] r.post("/salons/:slug/contracts", async (req,res)=>{
+[src\routes\internal\contracts.js:189] const { slug } = req.params;
+[src\routes\internal\contracts.js:195] `SELECT id FROM salons WHERE slug=$1`,
+[src\routes\internal\contracts.js:196] [slug]
+[src\routes\internal\contracts.js:344] r.get("/contracts/master/:slug/active", async (req,res)=>{
+[src\routes\internal\contracts.js:346] const { slug } = req.params;
+[src\routes\internal\contracts.js:351] `SELECT id FROM masters WHERE slug=$1`,
+[src\routes\internal\contracts.js:352] [slug]
+[src\routes\internal\contracts.js:387] r.get("/contracts/master/:slug/history", async (req,res)=>{
+[src\routes\internal\contracts.js:389] const { slug } = req.params;
+[src\routes\internal\contracts.js:394] `SELECT id FROM masters WHERE slug=$1`,
+[src\routes\internal\contracts.js:395] [slug]
+[src\routes\internal\masters.js:83] async function getMasterBySlug(dbOrPool, slug){
+[src\routes\internal\masters.js:88] m.slug,
+[src\routes\internal\masters.js:91] WHERE m.slug=$1
+[src\routes\internal\masters.js:93] `,[slug]);
+[src\routes\internal\masters.js:303] r.post("/masters/:slug/subscription/charge", async (req,res)=>{
+[src\routes\internal\masters.js:305] const { slug } = req.params;
+[src\routes\internal\masters.js:312] const master = await getMasterBySlug(db, slug);
+[src\routes\internal\masters.js:456] r.get("/masters/:slug/billing", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\masters.js:458] const { slug } = req.params;
+[src\routes\internal\masters.js:462] const master = await getMasterBySlug(pool, slug);
+[src\routes\internal\masters.js:474] owner_slug:master.slug,
+[src\routes\internal\masters.js:496] r.post("/masters/:slug/billing/block", async (req,res)=>{
+[src\routes\internal\masters.js:498] const { slug } = req.params;
+[src\routes\internal\masters.js:505] const master = await getMasterBySlug(db, slug);
+[src\routes\internal\masters.js:559] r.post("/masters/:slug/billing/unblock", async (req,res)=>{
+[src\routes\internal\masters.js:561] const { slug } = req.params;
+[src\routes\internal\masters.js:568] const master = await getMasterBySlug(db, slug);
+[src\routes\internal\masters.js:624] GET MASTER BY SLUG
+[src\routes\internal\masters.js:626] r.get("/masters/:slug", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\masters.js:628] const { slug } = req.params;
+[src\routes\internal\masters.js:636] m.slug,
+[src\routes\internal\masters.js:639] WHERE m.slug=$1
+[src\routes\internal\masters.js:640] `,[slug]);
+[src\routes\internal\masters.js:670] r.get("/masters/:slug/metrics", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\masters.js:672] const { slug } = req.params;
+[src\routes\internal\masters.js:677] `SELECT id FROM masters WHERE slug=$1`,
+[src\routes\internal\masters.js:678] [slug]
+[src\routes\internal\masters.js:737] r.get("/masters/:slug/services", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\masters.js:739] const { slug } = req.params;
+[src\routes\internal\masters.js:744] `SELECT id FROM masters WHERE slug=$1`,
+[src\routes\internal\masters.js:745] [slug]
+[src\routes\internal\masters.js:793] r.post("/masters/:slug/services", async (req,res)=>{
+[src\routes\internal\masters.js:795] const { slug } = req.params;
+[src\routes\internal\masters.js:824] `SELECT id FROM masters WHERE slug=$1`,
+[src\routes\internal\masters.js:825] [slug]
+[src\routes\internal\masters.js:951] r.patch("/masters/:slug/services/:id", async (req,res)=>{
+[src\routes\internal\masters.js:953] const { slug, id } = req.params;
+[src\routes\internal\masters.js:963] `SELECT id FROM masters WHERE slug=$1`,
+[src\routes\internal\masters.js:964] [slug]
+[src\routes\internal\masters.js:1105] r.delete("/masters/:slug/services/:id", async (req,res)=>{
+[src\routes\internal\masters.js:1107] const { slug, id } = req.params;
+[src\routes\internal\masters.js:1115] `SELECT id FROM masters WHERE slug=$1`,
+[src\routes\internal\masters.js:1116] [slug]
+[src\routes\internal\masters.js:1213] r.get("/masters/:slug/bookings", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\masters.js:1215] const { slug } = req.params;
+[src\routes\internal\masters.js:1220] `SELECT id FROM masters WHERE slug=$1`,
+[src\routes\internal\masters.js:1221] [slug]
+[src\routes\internal\masters.js:1268] r.get("/masters/:slug/clients", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\masters.js:1270] const { slug } = req.params;
+[src\routes\internal\masters.js:1275] `SELECT id FROM masters WHERE slug=$1`,
+[src\routes\internal\masters.js:1276] [slug]
+[src\routes\internal\masters.js:1320] r.post("/masters/:slug/bookings", async (req,res)=>{
+[src\routes\internal\masters.js:1322] const { slug } = req.params;
+[src\routes\internal\masters.js:1349] `SELECT id FROM masters WHERE slug=$1`,
+[src\routes\internal\masters.js:1350] [slug]
+[src\routes\internal\masters.js:1367] s.slug
+[src\routes\internal\masters.js:1385] const salonSlug = serviceLink.rows[0].slug;
+[src\routes\internal\masters.js:1500] salon_slug,
+[src\routes\internal\masters.js:1515] salonSlug,
+[src\routes\internal\masters.js:1571] r.get("/masters/:slug/wallet-balance", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\masters.js:1573] const { slug } = req.params;
+[src\routes\internal\masters.js:1577] const master = await getMasterBySlug(pool, slug);
+[src\routes\internal\masters.js:1615] r.get("/masters/:slug/ledger", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\masters.js:1617] const { slug } = req.params;
+[src\routes\internal\masters.js:1621] const master = await getMasterBySlug(pool, slug);
+[src\routes\internal\masters.js:1668] r.get("/masters/:slug/settlements", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\masters.js:1670] const { slug } = req.params;
+[src\routes\internal\masters.js:1674] const master = await getMasterBySlug(pool, slug);
+[src\routes\internal\masters.js:1721] r.get("/masters/:slug/payouts", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\masters.js:1723] const { slug } = req.params;
+[src\routes\internal\masters.js:1727] const master = await getMasterBySlug(pool, slug);
+[src\routes\internal\salons.js:87] async function getSalonBySlug(dbOrPool, slug){
+[src\routes\internal\salons.js:92] slug
+[src\routes\internal\salons.js:94] WHERE slug=$1
+[src\routes\internal\salons.js:96] `,[slug]);
+[src\routes\internal\salons.js:189] r.post("/salons/:slug/subscription/charge", async (req,res)=>{
+[src\routes\internal\salons.js:191] const { slug } = req.params;
+[src\routes\internal\salons.js:199] `SELECT id,name,slug
+[src\routes\internal\salons.js:201] WHERE slug=$1
+[src\routes\internal\salons.js:203] [slug]
+[src\routes\internal\salons.js:359] r.get("/salons/:slug/billing", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\salons.js:361] const { slug } = req.params;
+[src\routes\internal\salons.js:365] const salon = await getSalonBySlug(pool, slug);
+[src\routes\internal\salons.js:377] owner_slug:salon.slug,
+[src\routes\internal\salons.js:399] r.post("/salons/:slug/billing/block", async (req,res)=>{
+[src\routes\internal\salons.js:401] const { slug } = req.params;
+[src\routes\internal\salons.js:408] const salon = await getSalonBySlug(db, slug);
+[src\routes\internal\salons.js:467] r.post("/salons/:slug/billing/unblock", async (req,res)=>{
+[src\routes\internal\salons.js:469] const { slug } = req.params;
+[src\routes\internal\salons.js:476] const salon = await getSalonBySlug(db, slug);
+[src\routes\internal\salons.js:537] r.get("/salons/:slug", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\salons.js:539] const { slug } = req.params;
+[src\routes\internal\salons.js:544] `SELECT id,name,slug FROM salons WHERE slug=$1`,
+[src\routes\internal\salons.js:545] [slug]
+[src\routes\internal\salons.js:581] r.get("/salons/:slug/masters", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\salons.js:583] const { slug } = req.params;
+[src\routes\internal\salons.js:588] `SELECT id FROM salons WHERE slug=$1`,
+[src\routes\internal\salons.js:589] [slug]
+[src\routes\internal\salons.js:602] m.slug,
+[src\routes\internal\salons.js:633] r.post("/salons/:slug/masters/:masterId/activate", async (req,res)=>{
+[src\routes\internal\salons.js:635] const { slug, masterId } = req.params;
+[src\routes\internal\salons.js:643] `SELECT id,name,slug
+[src\routes\internal\salons.js:645] WHERE slug=$1
+[src\routes\internal\salons.js:647] [slug]
+[src\routes\internal\salons.js:660] `SELECT id,name,slug
+[src\routes\internal\salons.js:731] salon_slug:salon.rows[0].slug,
+[src\routes\internal\salons.js:734] master_slug:master.rows[0].slug,
+[src\routes\internal\salons.js:786] r.get("/salons/:slug/services", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\salons.js:788] const { slug } = req.params;
+[src\routes\internal\salons.js:793] `SELECT id FROM salons WHERE slug=$1`,
+[src\routes\internal\salons.js:794] [slug]
+[src\routes\internal\salons.js:808] m.slug AS master_slug,
+[src\routes\internal\salons.js:842] r.post("/salons/:slug/services", async (req,res)=>{
+[src\routes\internal\salons.js:844] const { slug } = req.params;
+[src\routes\internal\salons.js:854] `SELECT id FROM salons WHERE slug=$1`,
+[src\routes\internal\salons.js:855] [slug]
+[src\routes\internal\salons.js:884] m.slug AS master_slug,
+[src\routes\internal\salons.js:1005] master_slug:relation.rows[0].master_slug,
+[src\routes\internal\salons.js:1059] r.post("/salons/:slug/masters/:masterId/terminate", async (req,res)=>{
+[src\routes\internal\salons.js:1061] const { slug, masterId } = req.params;
+[src\routes\internal\salons.js:1069] `SELECT id,name,slug
+[src\routes\internal\salons.js:1071] WHERE slug=$1
+[src\routes\internal\salons.js:1073] [slug]
+[src\routes\internal\salons.js:1086] `SELECT id,name,slug
+[src\routes\internal\salons.js:1206] slug:salon.rows[0].slug
+[src\routes\internal\salons.js:1211] slug:master.rows[0].slug
+[src\routes\internal\salons.js:1265] r.get("/salons/:slug/clients", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\salons.js:1267] const { slug } = req.params;
+[src\routes\internal\salons.js:1272] `SELECT id FROM salons WHERE slug=$1`,
+[src\routes\internal\salons.js:1273] [slug]
+[src\routes\internal\salons.js:1308] r.get("/salons/:slug/bookings", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\salons.js:1310] const { slug } = req.params;
+[src\routes\internal\salons.js:1315] `SELECT id FROM salons WHERE slug=$1`,
+[src\routes\internal\salons.js:1316] [slug]
+[src\routes\internal\salons.js:1357] r.get("/salons/:slug/metrics", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\salons.js:1359] const { slug } = req.params;
+[src\routes\internal\salons.js:1364] `SELECT id FROM salons WHERE slug=$1`,
+[src\routes\internal\salons.js:1365] [slug]
+[src\routes\internal\salons.js:1460] r.get("/salons/:slug/payments", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\salons.js:1462] const { slug } = req.params;
+[src\routes\internal\salons.js:1467] `SELECT id FROM salons WHERE slug=$1`,
+[src\routes\internal\salons.js:1468] [slug]
+[src\routes\internal\salons.js:1512] r.get("/salons/:slug/settlements", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\salons.js:1514] const { slug } = req.params;
+[src\routes\internal\salons.js:1519] `SELECT id FROM salons WHERE slug=$1`,
+[src\routes\internal\salons.js:1520] [slug]
+[src\routes\internal\salons.js:1563] r.get("/salons/:slug/payouts", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\salons.js:1565] const { slug } = req.params;
+[src\routes\internal\salons.js:1570] `SELECT id FROM salons WHERE slug=$1`,
+[src\routes\internal\salons.js:1571] [slug]
+[src\routes\internal\salons.js:1612] r.get("/salons/:slug/wallet", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\salons.js:1614] const { slug } = req.params;
+[src\routes\internal\salons.js:1619] `SELECT id FROM salons WHERE slug=$1`,
+[src\routes\internal\salons.js:1620] [slug]
+[src\routes\internal\salons.js:1671] r.get("/salons/:slug/wallet-balance", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\salons.js:1673] const { slug } = req.params;
+[src\routes\internal\salons.js:1678] `SELECT id FROM salons WHERE slug=$1`,
+[src\routes\internal\salons.js:1679] [slug]
+[src\routes\internal\salons.js:1733] r.get("/salons/:slug/ledger", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\salons.js:1735] const { slug } = req.params;
+[src\routes\internal\salons.js:1740] `SELECT id FROM salons WHERE slug=$1`,
+[src\routes\internal\salons.js:1741] [slug]
+[src\routes\internal\salons.js:1786] r.get("/salons/:slug/withdraws", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\salons.js:1788] const { slug } = req.params;
+[src\routes\internal\salons.js:1793] `SELECT id FROM salons WHERE slug=$1`,
+[src\routes\internal\salons.js:1794] [slug]
+[src\routes\internal\withdraws.js:67] r.post("/salons/:slug/withdraw", async (req,res)=>{
+[src\routes\internal\withdraws.js:69] const { slug } = req.params;
+[src\routes\internal\withdraws.js:88] WHERE slug=$1
+[src\routes\internal\withdraws.js:89] `,[slug]);
+[src\routes\internal\withdraws.js:340] r.get("/salons/:slug/withdraws/summary", internalReadRateLimit, async (req,res)=>{
+[src\routes\internal\withdraws.js:342] const { slug } = req.params;
+[src\routes\internal\withdraws.js:347] `SELECT id FROM salons WHERE slug=$1`,
+[src\routes\internal\withdraws.js:348] [slug]
+
+=== SEARCH: public/ ===
+
+=== SEARCH: internal/ ===
+[src\app.js:154] "https://totem-p0-api-production.up.railway.app/internal/finance/run/full",
+[src\routes\internal.js:6] import buildReportsRouter from "./internal/reports.js";
+[src\routes\internal.js:7] import buildPaymentsRouter from "./internal/payments.js";
+[src\routes\internal.js:8] import buildSettlementsRouter from "./internal/settlements.js";
+[src\routes\internal.js:9] import buildContractsRouter from "./internal/contracts.js";
+[src\routes\internal.js:10] import buildWithdrawsRouter from "./internal/withdraws.js";
+[src\routes\internal.js:11] import buildXpayRouter from "./internal/xpay.js";
+[src\routes\internal.js:12] import buildContractAliasRouter from "./internal/contract-alias.js";
+[src\routes\internal.js:13] import buildPayoutsProcessorRouter from "./internal/payouts-processor.js";
+[src\routes\internal.js:14] import buildFinanceEngineRouter from "./internal/finance-engine.js";
+[src\routes\internal.js:15] import buildWithdrawsProcessorRouter from "./internal/withdraws-processor.js";
+[src\routes\internal.js:16] import buildMastersRouter from "./internal/masters.js";
+[src\routes\internal.js:17] import buildSalonsRouter from "./internal/salons.js";
+[src\routes\internal.js:18] import buildOneTimeChargeRouter from "./internal/one-time-charge.js";
+[src\routes\internal.js:19] import buildOneTimeChargeHistoryRouter from "./internal/one-time-charge-history.js";
+
+=== SEARCH: onboarding ===
+
+=== SEARCH: publicToken ===
+
+=== SEARCH: auth ===
+[src\app.js:158] Authorization: `Bearer ${INTERNAL_API_TOKEN}`,
+[src\db\pool.js:11] ssl: { rejectUnauthorized: false }
+[src\middleware\requireAuth.js:1] export function requireAuth(req,res,next){
+[src\middleware\requireAuth.js:2] if(!req.auth||!req.auth.user_id||!req.auth.role){
+[src\middleware\requireAuth.js:3] return res.status(401).json({ok:false,error:'UNAUTHORIZED'});
+[src\middleware\requireRole.js:4] if(!req.auth||!req.auth.role){
+[src\middleware\requireRole.js:5] return res.status(401).json({ok:false,error:'UNAUTHORIZED'});
+[src\middleware\requireRole.js:7] if(!allowed.has(req.auth.role)){
+[src\middleware\resolveAuth.js:13] ssl: { rejectUnauthorized: false }
+[src\middleware\resolveAuth.js:19] const h = req.headers?.authorization || '';
+[src\middleware\resolveAuth.js:30] export async function resolveAuth(req,res,next){
+[src\middleware\resolveAuth.js:31] req.auth = null;
+[src\middleware\resolveAuth.js:35] console.log("=== AUTH DEBUG START ===");
+[src\middleware\resolveAuth.js:49] req.auth = { user_id, role: roleRaw, source: 'jwt' };
+[src\middleware\resolveAuth.js:50] console.log("AUTH SUCCESS");
+[src\middleware\resolveAuth.js:140] console.log("AUTH PAYLOAD INVALID");
+[src\middleware\resolveAuth.js:155] console.log("=== AUTH DEBUG END ===");
+[src\middleware\resolveTenant.js:12] ssl: { rejectUnauthorized: false }
+[src\payments\xpay.js:38] "Authorization":`Bearer ${XPAY_API_KEY}`
+[src\payments\xpay.js:86] "Authorization":`Bearer ${XPAY_API_KEY}`
+[src\routes\auth.resolve.ts:3] export const authResolveHandler = async (req: Request, res: Response) => {
+[src\routes\auth.resolve.ts:14] error: "auth_resolve_failed"
+[src\routes\completeBooking.js:8] ssl: { rejectUnauthorized: false },
+[src\routes\completeBooking.js:21] function mustInternalAuth(req) {
+[src\routes\completeBooking.js:36] const auth = mustInternalAuth(req);
+[src\routes\completeBooking.js:37] if (!auth.ok)
+[src\routes\completeBooking.js:38] return res.status(auth.code).json({ ok: false, error: auth.error });
+[src\routes\confirmBooking.js:8] ssl: { rejectUnauthorized: false },
+[src\routes\confirmBooking.js:21] function mustInternalAuth(req) {
+[src\routes\confirmBooking.js:36] const auth = mustInternalAuth(req);
+[src\routes\confirmBooking.js:37] if (!auth.ok)
+[src\routes\confirmBooking.js:38] return res.status(auth.code).json({ ok: false, error: auth.error });
+[src\routes\confirmBooking.js.bak:8] ssl: { rejectUnauthorized: false }
+[src\routes\internal\finance-engine.js:9] const authHeader = req.headers?.authorization || "";
+[src\routes\internal\finance-engine.js:10] const authMatch = authHeader.match(/^Bearer\s+(.+)$/i);
+[src\routes\internal\finance-engine.js:11] const bearerToken = authMatch ? authMatch[1].trim() : "";
+
+=== SEARCH: master_salon ===
+[src\middleware\resolveAuth.js:73] JOIN master_salon ms ON ms.salon_id = s.id
+[src\middleware\resolveAuth.js:107] INSERT INTO master_salon (master_id, salon_id, status)
+[src\routes\public.js:236] JOIN master_salon ms ON ms.master_id = m.id
+[src\routes\publicCreateBooking.js:103] FROM public.master_salon
+[src\routes\internal\masters.js:839] FROM master_salon
+[src\routes\internal\salons.js:608] JOIN master_salon ms ON ms.master_id=m.id
+[src\routes\internal\salons.js:679] FROM master_salon
+[src\routes\internal\salons.js:695] UPDATE master_salon
+[src\routes\internal\salons.js:708] INSERT INTO master_salon(
+[src\routes\internal\salons.js:886] FROM master_salon ms
+[src\routes\internal\salons.js:1103] FROM master_salon
+[src\routes\internal\salons.js:1115] return res.status(404).json({ok:false,error:"MASTER_SALON_LINK_NOT_FOUND"});
+[src\routes\internal\salons.js:1134] UPDATE master_salon
+[src\routes\internal\salons.js:1213] master_salon:relationUpdated.rows[0],
+[src\routes\internal\salons.js:1396] FROM master_salon
+
+=== SEARCH: owner_salon ===
+[src\middleware\resolveAuth.js:116] INSERT INTO owner_salon (owner_id, salon_id, status)
+
