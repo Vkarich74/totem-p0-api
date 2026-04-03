@@ -4,6 +4,134 @@ export default function buildSalonsRouter(pool, internalReadRateLimit){
 
 const r = express.Router();
 
+
+function safeInt(v){
+const n = Number(v);
+if(!Number.isInteger(n) || n <= 0){
+return null;
+}
+return n;
+}
+
+function getIdentitySalonIds(identity){
+const ids = new Set();
+
+if(Array.isArray(identity?.salons)){
+for(const item of identity.salons){
+if(item && typeof item === "object"){
+const id = safeInt(item.id ?? item.salon_id ?? item.owner_id);
+if(id){
+ids.add(id);
+}
+continue;
+}
+
+const id = safeInt(item);
+if(id){
+ids.add(id);
+}
+}
+}
+
+if(Array.isArray(identity?.ownership)){
+for(const item of identity.ownership){
+if(!item || typeof item !== "object"){
+continue;
+}
+
+const ownerType = String(item.owner_type || item.type || "").trim();
+if(ownerType !== "salon"){
+continue;
+}
+
+const id = safeInt(item.owner_id ?? item.salon_id ?? item.id);
+if(id){
+ids.add(id);
+}
+}
+}
+
+return ids;
+}
+
+function hasSalonOwnership(req, salonId){
+if(req?.auth?.role === "system"){
+return true;
+}
+
+const targetSalonId = safeInt(salonId);
+if(!targetSalonId){
+return false;
+}
+
+const identitySalonIds = getIdentitySalonIds(req?.identity);
+return identitySalonIds.has(targetSalonId);
+}
+
+
+function safeInt(v){
+const n = Number(v);
+if(!Number.isInteger(n) || n <= 0){
+return null;
+}
+return n;
+}
+
+function getIdentitySalonIds(identity){
+const ids = new Set();
+
+if(Array.isArray(identity?.salons)){
+for(const item of identity.salons){
+if(item && typeof item === "object"){
+const id = safeInt(item.id ?? item.salon_id ?? item.owner_id);
+if(id){
+ids.add(id);
+}
+continue;
+}
+
+const id = safeInt(item);
+if(id){
+ids.add(id);
+}
+}
+}
+
+if(Array.isArray(identity?.ownership)){
+for(const item of identity.ownership){
+if(!item || typeof item !== "object"){
+continue;
+}
+
+const ownerType = String(item.owner_type || item.type || "").trim();
+if(ownerType !== "salon"){
+continue;
+}
+
+const id = safeInt(item.owner_id ?? item.salon_id ?? item.id);
+if(id){
+ids.add(id);
+}
+}
+}
+
+return ids;
+}
+
+function hasSalonOwnership(req, salonId){
+if(req?.auth?.role === "system"){
+return true;
+}
+
+const targetSalonId = safeInt(salonId);
+if(!targetSalonId){
+return false;
+}
+
+const identitySalonIds = getIdentitySalonIds(req?.identity);
+return identitySalonIds.has(targetSalonId);
+}
+
 async function getSalonBillingAccess(db, salonId){
 const billing = await getSalonBillingRow(db, salonId, false);
 return buildBillingAccessPayload(billing);
@@ -210,6 +338,11 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 
 const salonId = salon.rows[0].id;
 
+if(!hasSalonOwnership(req, salonId)){
+await db.query("ROLLBACK");
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
 const billing = await getSalonBillingRow(db, salonId, true);
 
 if(!billing){
@@ -368,6 +501,10 @@ if(!salon){
 return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 }
 
+if(!hasSalonOwnership(req, salon.id)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
 const access = await getSalonBillingAccess(pool, salon.id);
 
 return res.json({
@@ -410,6 +547,16 @@ const salon = await getSalonBySlug(db, slug);
 if(!salon){
 await db.query("ROLLBACK");
 return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+if(!hasSalonOwnership(req, salon.id)){
+await db.query("ROLLBACK");
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
+if(!hasSalonOwnership(req, salon.id)){
+await db.query("ROLLBACK");
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
 }
 
 const billing = await getSalonBillingRow(db, salon.id, true);
@@ -549,6 +696,10 @@ if(!salon.rows.length){
 return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 }
 
+if(!hasSalonOwnership(req, salon.rows[0].id)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
 const access = await getSalonBillingAccess(pool, salon.rows[0].id);
 
 res.json({
@@ -594,6 +745,10 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 }
 
 const salonId = salon.rows[0].id;
+
+if(!hasSalonOwnership(req, salonId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
 
 const masters = await pool.query(`
 SELECT
@@ -653,6 +808,11 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 }
 
 const salonId = salon.rows[0].id;
+
+if(!hasSalonOwnership(req, salonId)){
+await db.query("ROLLBACK");
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
 
 const access = await ensureSalonWriteAllowed(db, salonId);
 
@@ -800,6 +960,10 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 
 const salonId = salon.rows[0].id;
 
+if(!hasSalonOwnership(req, salonId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
 const services = await pool.query(`
 SELECT
 sms.id,
@@ -861,6 +1025,11 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 }
 
 const salonId = salon.rows[0].id;
+
+if(!hasSalonOwnership(req, salonId)){
+await db.query("ROLLBACK");
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
 
 const access = await ensureSalonWriteAllowed(db, salonId);
 
@@ -1080,6 +1249,11 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 
 const salonId = salon.rows[0].id;
 
+if(!hasSalonOwnership(req, salonId)){
+await db.query("ROLLBACK");
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
 const access = await ensureSalonWriteAllowed(db, salonId);
 
 const master = await db.query(
@@ -1279,6 +1453,10 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 
 const salonId = salon.rows[0].id;
 
+if(!hasSalonOwnership(req, salonId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
 const clients = await pool.query(`
 SELECT id,name,phone
 FROM clients
@@ -1321,6 +1499,10 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 }
 
 const salonId = salon.rows[0].id;
+
+if(!hasSalonOwnership(req, salonId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
 
 const bookings = await pool.query(`
 SELECT
@@ -1370,6 +1552,10 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 }
 
 const salonId = salon.rows[0].id;
+
+if(!hasSalonOwnership(req, salonId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
 
 const bookingsToday = await pool.query(`
 SELECT COUNT(*)::int AS v
@@ -1474,6 +1660,10 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 
 const salonId = salon.rows[0].id;
 
+if(!hasSalonOwnership(req, salonId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
 const payments = await pool.query(`
 SELECT
 p.id,
@@ -1526,6 +1716,10 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 
 const salonId = salon.rows[0].id;
 
+if(!hasSalonOwnership(req, salonId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
 const settlements = await pool.query(`
 SELECT
 sp.id,
@@ -1577,6 +1771,10 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 
 const salonId = salon.rows[0].id;
 
+if(!hasSalonOwnership(req, salonId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
 const payouts = await pool.query(`
 SELECT
 p.id,
@@ -1625,6 +1823,10 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 }
 
 const salonId = salon.rows[0].id;
+
+if(!hasSalonOwnership(req, salonId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
 
 const wallet = await pool.query(`
 SELECT
@@ -1684,6 +1886,10 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 }
 
 const salonId = salon.rows[0].id;
+
+if(!hasSalonOwnership(req, salonId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
 
 const balance = await pool.query(`
 SELECT
@@ -1747,6 +1953,10 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 
 const salonId = salon.rows[0].id;
 
+if(!hasSalonOwnership(req, salonId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
 const ledger = await pool.query(`
 SELECT
 le.id,
@@ -1799,6 +2009,10 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 }
 
 const salonId = salon.rows[0].id;
+
+if(!hasSalonOwnership(req, salonId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
 
 const withdraws = await pool.query(`
 SELECT
