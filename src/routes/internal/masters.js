@@ -529,6 +529,10 @@ if(!master){
 return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 }
 
+if(!hasMasterOwnership(req, master.id)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
 const access = await getMasterBillingAccess(pool, master.id);
 
 return res.json({
@@ -752,6 +756,10 @@ return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 
 const masterId = master.rows[0].id;
 
+if(!hasMasterOwnership(req, masterId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
 const bookingsToday = await pool.query(`
 SELECT COUNT(*)::int AS v
 FROM bookings
@@ -818,6 +826,10 @@ return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 }
 
 const masterId = master.rows[0].id;
+
+if(!hasMasterOwnership(req, masterId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
 
 const services = await pool.query(`
 SELECT
@@ -1295,6 +1307,10 @@ return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 
 const masterId = master.rows[0].id;
 
+if(!hasMasterOwnership(req, masterId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
 const bookings = await pool.query(`
 SELECT
 b.id,
@@ -1349,6 +1365,10 @@ return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 }
 
 const masterId = master.rows[0].id;
+
+if(!hasMasterOwnership(req, masterId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
 
 const clients = await pool.query(`
 SELECT DISTINCT
@@ -1648,6 +1668,10 @@ if(!master){
 return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 }
 
+if(!hasMasterOwnership(req, master.id)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
 const wallet = await getMasterWalletRow(pool, master.id);
 
 if(!wallet){
@@ -1690,6 +1714,10 @@ const master = await getMasterBySlug(pool, slug);
 
 if(!master){
 return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+if(!hasMasterOwnership(req, master.id)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
 }
 
 const ledger = await pool.query(`
@@ -1745,6 +1773,10 @@ if(!master){
 return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 }
 
+if(!hasMasterOwnership(req, master.id)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
 const settlements = await pool.query(`
 SELECT DISTINCT ON (sp.id)
 sp.id,
@@ -1796,6 +1828,10 @@ const master = await getMasterBySlug(pool, slug);
 
 if(!master){
 return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+if(!hasMasterOwnership(req, master.id)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
 }
 
 const payouts = await pool.query(`
