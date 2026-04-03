@@ -1456,19 +1456,6 @@ error:"SALON_METRICS_FAILED"
 
 });
 
-}catch(err){
-
-console.error("SALON_METRICS_ERROR", err);
-
-res.status(500).json({
-ok:false,
-error:"SALON_METRICS_FAILED"
-});
-
-}
-
-});
-
 /* SALON PAYMENTS (FIXED) */
 r.get("/salons/:slug/payments", internalReadRateLimit, async (req,res)=>{
 
