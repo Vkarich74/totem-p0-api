@@ -68,70 +68,6 @@ const identitySalonIds = getIdentitySalonIds(req?.identity);
 return identitySalonIds.has(targetSalonId);
 }
 
-
-function safeInt(v){
-const n = Number(v);
-if(!Number.isInteger(n) || n <= 0){
-return null;
-}
-return n;
-}
-
-function getIdentitySalonIds(identity){
-const ids = new Set();
-
-if(Array.isArray(identity?.salons)){
-for(const item of identity.salons){
-if(item && typeof item === "object"){
-const id = safeInt(item.id ?? item.salon_id ?? item.owner_id);
-if(id){
-ids.add(id);
-}
-continue;
-}
-
-const id = safeInt(item);
-if(id){
-ids.add(id);
-}
-}
-}
-
-if(Array.isArray(identity?.ownership)){
-for(const item of identity.ownership){
-if(!item || typeof item !== "object"){
-continue;
-}
-
-const ownerType = String(item.owner_type || item.type || "").trim();
-if(ownerType !== "salon"){
-continue;
-}
-
-const id = safeInt(item.owner_id ?? item.salon_id ?? item.id);
-if(id){
-ids.add(id);
-}
-}
-}
-
-return ids;
-}
-
-function hasSalonOwnership(req, salonId){
-if(req?.auth?.role === "system"){
-return true;
-}
-
-const targetSalonId = safeInt(salonId);
-if(!targetSalonId){
-return false;
-}
-
-const identitySalonIds = getIdentitySalonIds(req?.identity);
-return identitySalonIds.has(targetSalonId);
-}
-
 async function getSalonBillingAccess(db, salonId){
 const billing = await getSalonBillingRow(db, salonId, false);
 return buildBillingAccessPayload(billing);
@@ -554,11 +490,6 @@ await db.query("ROLLBACK");
 return res.status(403).json({ok:false,error:"FORBIDDEN"});
 }
 
-if(!hasSalonOwnership(req, salon.id)){
-await db.query("ROLLBACK");
-return res.status(403).json({ok:false,error:"FORBIDDEN"});
-}
-
 const billing = await getSalonBillingRow(db, salon.id, true);
 
 if(!billing){
@@ -625,6 +556,11 @@ const salon = await getSalonBySlug(db, slug);
 if(!salon){
 await db.query("ROLLBACK");
 return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+if(!hasSalonOwnership(req, salon.id)){
+await db.query("ROLLBACK");
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
 }
 
 const billing = await getSalonBillingRow(db, salon.id, true);
