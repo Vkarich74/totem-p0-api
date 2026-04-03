@@ -43,7 +43,7 @@ async function buildIdentity(userId){
     const masterRes = await client.query(
       `SELECT id
        FROM masters
-       WHERE user_id = $1
+       WHERE owner_id = $1
        ORDER BY id ASC`,
       [userId]
     );
@@ -53,7 +53,7 @@ async function buildIdentity(userId){
     const ownerSalonRes = await client.query(
       `SELECT salon_id
        FROM owner_salon
-       WHERE user_id = $1
+       WHERE owner_id = $1
        ORDER BY salon_id ASC`,
       [userId]
     );
@@ -90,7 +90,7 @@ async function buildIdentity(userId){
       ownership.push({
         owner_type: 'salon',
         owner_id: salonId,
-        relation: 'owner_salon'
+        relation: 'owner_salon.owner_id'
       });
     }
 
