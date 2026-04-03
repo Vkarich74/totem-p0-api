@@ -3,6 +3,8 @@ import pkg from 'pg';
 
 const { Pool } = pkg;
 
+console.log('🔥 RESOLVE AUTH LOADED V3');
+
 const ALLOWED_ROLES = new Set(['owner','salon_admin','master','system']);
 
 let _pool = null;
@@ -55,7 +57,7 @@ async function buildIdentity(userId){
        FROM owner_salon
        WHERE owner_id = $1
        ORDER BY salon_id ASC`,
-      [userId]
+      [String(userId)]
     );
 
     const salonIdsFromOwner = uniqueNumberList(
