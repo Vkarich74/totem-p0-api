@@ -380,6 +380,11 @@ await db.query("ROLLBACK");
 return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 }
 
+if(!hasMasterOwnership(req, master.id)){
+await db.query("ROLLBACK");
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
 const billing = await ensureMasterBillingSubscription(db, master.id);
 
 if(billing.subscription_status !== "active"){
@@ -577,6 +582,11 @@ await db.query("ROLLBACK");
 return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 }
 
+if(!hasMasterOwnership(req, master.id)){
+await db.query("ROLLBACK");
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
 const billing = await ensureMasterBillingSubscription(db, master.id);
 
 await db.query(`
@@ -638,6 +648,11 @@ const master = await getMasterBySlug(db, slug);
 if(!master){
 await db.query("ROLLBACK");
 return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+if(!hasMasterOwnership(req, master.id)){
+await db.query("ROLLBACK");
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
 }
 
 const billing = await ensureMasterBillingSubscription(db, master.id);
@@ -912,6 +927,11 @@ return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 
 const masterId = master.rows[0].id;
 
+if(!hasMasterOwnership(req, masterId)){
+await db.query("ROLLBACK");
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
 const billing_access = await ensureMasterWriteAllowed(db, masterId);
 
 const relation = await db.query(`
@@ -1050,6 +1070,11 @@ return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 }
 
 const masterId = master.rows[0].id;
+
+if(!hasMasterOwnership(req, masterId)){
+await db.query("ROLLBACK");
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
 
 const billing_access = await ensureMasterWriteAllowed(db, masterId);
 
@@ -1202,6 +1227,11 @@ return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 }
 
 const masterId = master.rows[0].id;
+
+if(!hasMasterOwnership(req, masterId)){
+await db.query("ROLLBACK");
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
 
 const billing_access = await ensureMasterWriteAllowed(db, masterId);
 
@@ -1444,6 +1474,11 @@ return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
 }
 
 const masterId = master.rows[0].id;
+
+if(!hasMasterOwnership(req, masterId)){
+await db.query("ROLLBACK");
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
 
 const billing_access = await ensureMasterWriteAllowed(db, masterId);
 
