@@ -101,6 +101,18 @@ BACKUP_*/
 audit/migration/_reports/
 
 # -------------------------
+# Local debug JSON dumps
+# -------------------------
+bookings.json
+clients.json
+ledger.json
+masters.json
+metrics.json
+payments.json
+salon-bookings-prod.json
+salon-ledger-prod.json
+
+# -------------------------
 # Misc
 # -------------------------
 *.cmd
