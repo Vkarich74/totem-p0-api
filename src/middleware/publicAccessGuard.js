@@ -22,26 +22,34 @@ function getBillingStateFromTenant(tenant) {
   }
 }
 
-// 🆕 lifecycle derived из billing
-function resolveLifecycleFromBilling(billingState) {
-  switch (billingState) {
+function getLifecycleStateFromTenant(tenant) {
+  const rawState =
+    tenant?.lifecycle_state ||
+    tenant?.onboarding?.state ||
+    tenant?.onboarding_state ||
+    "draft";
+
+  switch (rawState) {
     case "active":
+      return "active";
     case "grace":
       return "active";
-
-    case "overdue":
-      return "suspended";
-
+    case "pending_payment":
+      return "pending_payment";
     case "blocked":
       return "blocked";
-
+    case "expired":
+      return "expired";
+    case "onboarding":
+      return "onboarding";
+    case "draft":
     default:
       return "draft";
   }
 }
 
 function buildAccessSnapshot(tenant, billingState) {
-  const lifecycleState = resolveLifecycleFromBilling(billingState);
+  const lifecycleState = getLifecycleStateFromTenant(tenant);
 
   const lifecycleOk = lifecycleState === "active";
   const billingOk = billingState === "active" || billingState === "grace";
@@ -54,10 +62,8 @@ function buildAccessSnapshot(tenant, billingState) {
     owner_type: tenant?.owner_type || "salon",
     owner_id: tenant?.owner_id || tenant?.salon_id || tenant?.master_id || null,
     slug: tenant?.slug || null,
-
-    lifecycle_state: lifecycleState, // 🆕 теперь реальный
+    lifecycle_state: lifecycleState,
     billing_state: billingState,
-
     public_visible: publicVisible,
     can_book: canBook,
     can_view_profile: publicVisible,
@@ -135,7 +141,3 @@ export function buildPublicAccessGuard(action) {
 }
 
 export default buildPublicAccessGuard;
-// LIFECYCLE DECISION ADDITIVE
-if(req.tenant?.lifecycle_state !== 'active'){
-    return res.status(404).json({ ok:false, error:{ code:'NOT_FOUND' }})
-}
