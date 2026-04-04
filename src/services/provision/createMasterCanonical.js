@@ -25,7 +25,7 @@ async function findMasterBySlug(db, slug){
   );
 
   return result.rows[0] || null;
-})
+}
 
 async function findMasterByUserId(db, userId){
   const result = await db.query(
@@ -44,6 +44,27 @@ async function findMasterByUserId(db, userId){
   );
 
   return result.rows[0] || null;
+}
+
+function buildCanonicalResponse(base){
+  return {
+    ok: base.ok ?? true,
+    flow: base.flow ?? null,
+    result: base.result ?? null,
+    errors: base.errors ?? null,
+    meta: {
+      ...(base.meta || {}),
+      owner_type: base.owner_type || "master",
+      owner_id: base.owner_id || base.result?.master?.id || null,
+      canonical_slug: base.canonical_slug || base.result?.master?.slug || null,
+      public_url: base.public_url || (base.result?.master?.slug ? `/master/${base.result.master.slug}` : null),
+      cabinet_url: base.cabinet_url || (base.result?.master?.slug ? `#/master/${base.result.master.slug}` : null),
+      lifecycle_state: base.lifecycle_state || 'draft',
+      access_state: base.access_state || 'none',
+      relation_status: base.relation_status || null,
+      readiness_flag: base.readiness_flag || 'draft'
+    }
+  };
 }
 
 function buildProvisionResult({ user, master, onboardingIdentity, onboardingTransition, meta }){
@@ -79,8 +100,17 @@ function buildProvisionResult({ user, master, onboardingIdentity, onboardingTran
       }
     },
     errors: null,
-    meta
-  };
+    meta,
+    owner_type: "master",
+    owner_id: master.id,
+    canonical_slug: master.slug,
+    public_url: `/master/${master.slug}`,
+    cabinet_url: `#/master/${master.slug}`,
+    lifecycle_state: onboardingIdentity?.state || onboardingTransition?.to_state?.toLowerCase?.() || "draft",
+    access_state: "none",
+    relation_status: null,
+    readiness_flag: "awaiting_activation"
+  });
 }
 
 export async function createMasterCanonical({ pool, payload }){
@@ -148,7 +178,15 @@ export async function createMasterCanonical({ pool, payload }){
       });
     }
 
-    const finalMasterSlug = await ensureUniqueMasterSlug(db, input.master_slug || input.name);
+    const requestedSlug = input.master_slug || input.name;
+
+    await checkSlugAvailability(db, "master", requestedSlug);
+    const reservation = await reserveSlug(db, {
+      owner_type: "master",
+      slug: requestedSlug
+    });
+
+    const finalMasterSlug = await ensureUniqueMasterSlug(db, requestedSlug);
 
     const userCreated = await db.query(
       `INSERT INTO auth_users(
@@ -239,6 +277,13 @@ export async function createMasterCanonical({ pool, payload }){
       reason: "create_master"
     });
 
+    await activateSlugReservation(db, {
+      owner_type: "master",
+      slug: finalMasterSlug,
+      owner_id: master.id,
+      reservation_id: reservation?.id || null
+    });
+
     await db.query("COMMIT");
 
     return buildProvisionResult({
@@ -263,26 +308,3 @@ export async function createMasterCanonical({ pool, payload }){
 }
 
 export default createMasterCanonical;
-
-// SLUG RESERVATION INTEGRATION
-await checkSlugAvailability()
-await reserveSlug()
-await activateSlugReservation()
-
-
-// RESPONSE NORMALIZATION ADDITIVE
-function buildCanonicalResponse(base){
-    return buildCanonicalResponse({
-        ok: true,
-        owner_type: base.owner_type || null,
-        owner_id: base.owner_id || null,
-        canonical_slug: base.slug || null,
-        public_url: base.slug ? `/public/${base.owner_type}/${base.slug}` : null,
-        cabinet_url: base.slug ? `#/${base.owner_type}/${base.slug}` : null,
-        lifecycle_state: base.lifecycle_state || 'draft',
-        access_state: base.access_state || 'none',
-        relation_status: base.relation_status || null,
-        readiness_flag: base.readiness_flag || 'draft',
-        meta: base.meta || {}
-    }
-}
