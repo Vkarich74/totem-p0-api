@@ -184,7 +184,7 @@ export default function buildEntryRouter(pool){
     }
   });
 
-  r.get("/entry/:ownerType/:slug/cabinet", requireAuth, async (req, res) => {
+  r.get("/entry/:ownerType/:slug/cabinet", async (req, res) => {
     try {
       const { ownerType, slug } = req.params;
       const baseUrl = readBaseUrl(req);
