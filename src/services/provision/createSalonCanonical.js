@@ -1,3 +1,4 @@
+import { checkSlugAvailability, reserveSlug, activateSlugReservation } from './slugReservation.js'
 import {
   buildProvisionMeta,
   createOnboardingIdentityIfNeeded,
@@ -31,7 +32,7 @@ async function findSalonBySlug(db, slug){
   );
 
   return result.rows[0] || null;
-}
+})
 
 async function findOwnerLink(db, ownerId, salonId){
   const result = await db.query(
@@ -52,7 +53,7 @@ async function findOwnerLink(db, ownerId, salonId){
 }
 
 function buildProvisionResult({ user, salon, ownerLink, defaultSalon, onboardingIdentity, onboardingTransition, meta }){
-  return {
+  return buildCanonicalResponse({
     ok: true,
     flow: "create_salon",
     result: {
@@ -267,3 +268,26 @@ export async function createSalonCanonical({ pool, payload }){
 }
 
 export default createSalonCanonical;
+
+// SLUG RESERVATION INTEGRATION
+await checkSlugAvailability()
+await reserveSlug()
+await activateSlugReservation()
+
+
+// RESPONSE NORMALIZATION ADDITIVE
+function buildCanonicalResponse(base){
+    return buildCanonicalResponse({
+        ok: true,
+        owner_type: base.owner_type || null,
+        owner_id: base.owner_id || null,
+        canonical_slug: base.slug || null,
+        public_url: base.slug ? `/public/${base.owner_type}/${base.slug}` : null,
+        cabinet_url: base.slug ? `#/${base.owner_type}/${base.slug}` : null,
+        lifecycle_state: base.lifecycle_state || 'draft',
+        access_state: base.access_state || 'none',
+        relation_status: base.relation_status || null,
+        readiness_flag: base.readiness_flag || 'draft',
+        meta: base.meta || {}
+    }
+}

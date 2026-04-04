@@ -135,3 +135,7 @@ export function buildPublicAccessGuard(action) {
 }
 
 export default buildPublicAccessGuard;
+// LIFECYCLE DECISION ADDITIVE
+if(req.tenant?.lifecycle_state !== 'active'){
+    return res.status(404).json({ ok:false, error:{ code:'NOT_FOUND' }})
+}

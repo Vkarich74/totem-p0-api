@@ -1,3 +1,4 @@
+import { checkSlugAvailability, reserveSlug, activateSlugReservation } from './slugReservation.js'
 import {
   buildProvisionMeta,
   createOnboardingIdentityIfNeeded,
@@ -24,7 +25,7 @@ async function findMasterBySlug(db, slug){
   );
 
   return result.rows[0] || null;
-}
+})
 
 async function findMasterByUserId(db, userId){
   const result = await db.query(
@@ -46,7 +47,7 @@ async function findMasterByUserId(db, userId){
 }
 
 function buildProvisionResult({ user, master, onboardingIdentity, onboardingTransition, meta }){
-  return {
+  return buildCanonicalResponse({
     ok: true,
     flow: "create_master",
     result: {
@@ -262,3 +263,26 @@ export async function createMasterCanonical({ pool, payload }){
 }
 
 export default createMasterCanonical;
+
+// SLUG RESERVATION INTEGRATION
+await checkSlugAvailability()
+await reserveSlug()
+await activateSlugReservation()
+
+
+// RESPONSE NORMALIZATION ADDITIVE
+function buildCanonicalResponse(base){
+    return buildCanonicalResponse({
+        ok: true,
+        owner_type: base.owner_type || null,
+        owner_id: base.owner_id || null,
+        canonical_slug: base.slug || null,
+        public_url: base.slug ? `/public/${base.owner_type}/${base.slug}` : null,
+        cabinet_url: base.slug ? `#/${base.owner_type}/${base.slug}` : null,
+        lifecycle_state: base.lifecycle_state || 'draft',
+        access_state: base.access_state || 'none',
+        relation_status: base.relation_status || null,
+        readiness_flag: base.readiness_flag || 'draft',
+        meta: base.meta || {}
+    }
+}

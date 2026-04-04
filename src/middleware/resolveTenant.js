@@ -84,3 +84,7 @@ export async function resolveTenant(req, res, next) {
     });
   }
 }
+// LIFECYCLE ADDITIVE
+req.tenant = req.tenant || {}
+req.tenant.lifecycle_state = 'active'
+req.tenant.billing_state = 'active'
