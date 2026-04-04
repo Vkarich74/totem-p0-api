@@ -108,9 +108,7 @@ function sendProvisionError(res, err, flow){
 export default function buildProvisionRouter(pool){
   const r = express.Router();
 
-  r.use(requireRole(["system", "owner", "salon_admin"]));
-
-  r.post("/provision/salons", async (req, res) => {
+  r.post("/provision/salons", requireRole(["system", "owner", "salon_admin"]), async (req, res) => {
     try{
       const result = await createSalonCanonical({
         pool,
@@ -124,7 +122,7 @@ export default function buildProvisionRouter(pool){
     }
   });
 
-  r.post("/provision/masters", async (req, res) => {
+  r.post("/provision/masters", requireRole(["system", "owner", "salon_admin"]), async (req, res) => {
     try{
       const result = await createMasterCanonical({
         pool,
@@ -138,7 +136,7 @@ export default function buildProvisionRouter(pool){
     }
   });
 
-  r.post("/provision/bind", async (req, res) => {
+  r.post("/provision/bind", requireRole(["system", "owner", "salon_admin"]), async (req, res) => {
     try{
       const result = await bindMasterToSalonCanonical({
         pool,
@@ -152,7 +150,7 @@ export default function buildProvisionRouter(pool){
     }
   });
 
-  r.post("/provision/bind/activate", async (req, res) => {
+  r.post("/provision/bind/activate", requireRole(["system", "owner", "salon_admin"]), async (req, res) => {
     try{
       const result = await activateMasterSalonCanonical({
         pool,
@@ -166,7 +164,7 @@ export default function buildProvisionRouter(pool){
     }
   });
 
-  r.post("/provision/bind/terminate", async (req, res) => {
+  r.post("/provision/bind/terminate", requireRole(["system", "owner", "salon_admin"]), async (req, res) => {
     try{
       const result = await terminateMasterSalonCanonical({
         pool,
