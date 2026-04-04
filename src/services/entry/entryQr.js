@@ -11,6 +11,26 @@ function normalizePositiveInteger(value, fallback) {
   return Math.max(0, Math.min(2048, Math.round(num)));
 }
 
+function validatePayload(payload){
+  const value = String(payload || "").trim();
+
+  if(!value){
+    const err = new Error("QR_PAYLOAD_EMPTY");
+    err.code = "QR_PAYLOAD_EMPTY";
+    err.status = 400;
+    throw err;
+  }
+
+  if(!value.startsWith("http")){
+    const err = new Error("QR_PAYLOAD_INVALID");
+    err.code = "QR_PAYLOAD_INVALID";
+    err.status = 400;
+    throw err;
+  }
+
+  return value;
+}
+
 export function buildQrProviderUrl(payload, options = {}) {
   const size = normalizePositiveInteger(options.size, DEFAULT_QR_IMAGE_SIZE);
   const margin = normalizePositiveInteger(options.margin, DEFAULT_QR_MARGIN);
@@ -19,13 +39,14 @@ export function buildQrProviderUrl(payload, options = {}) {
   params.set("format", "png");
   params.set("size", `${size}x${size}`);
   params.set("margin", String(margin));
-  params.set("data", String(payload || ""));
+  params.set("data", validatePayload(payload));
 
   return `https://api.qrserver.com/v1/create-qr-code/?${params.toString()}`;
 }
 
 export async function fetchQrPngBuffer(payload, options = {}) {
   const providerUrl = buildQrProviderUrl(payload, options);
+
   const response = await fetch(providerUrl, {
     method: "GET",
     headers: {
@@ -79,11 +100,18 @@ export async function buildResolvedQrImage(db, ownerType, slug, baseUrl = null, 
     };
   }
 
-  const qr = await fetchQrPngBuffer(resolved.contract.public_absolute_url, options);
+  const payload = resolved.contract.public_absolute_url;
+
+  const qr = await fetchQrPngBuffer(payload, options);
 
   return {
     resolved,
-    qr
+    qr,
+    meta: {
+      payload,
+      owner_type: resolved.contract.owner_type,
+      canonical_slug: resolved.contract.canonical_slug
+    }
   };
 }
 
