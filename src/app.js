@@ -7,12 +7,15 @@ import cookieParser from "cookie-parser";
 import crypto from "crypto";
 import Redis from "ioredis";
 
+import { pool } from "./db.js";
+
 import { resolveTenant } from "./middleware/resolveTenant.js";
 import { resolveAuth } from "./middleware/resolveAuth.js";
 import { rateLimit } from "./middleware/rateLimit.js";
 
 import { createPublicRouter } from "./routes/public.js";
 import { createInternalRouter } from "./routes/internal.js";
+import { initializeSlugReservationLayer } from "./services/provision/slugReservation.js";
 
 /* ================= REDIS ================= */
 
@@ -179,6 +182,12 @@ setTimeout(runFinanceLoop, 15000);
 /* ================= START ================= */
 
 const PORT = process.env.PORT || 8080;
+
+initializeSlugReservationLayer(pool).then(() => {
+  console.log("SLUG_RESERVATION_READY");
+}).catch((error) => {
+  console.error("SLUG_RESERVATION_INIT_FAILED", error);
+});
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log("Server running on port:", PORT);

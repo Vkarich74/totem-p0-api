@@ -1,4 +1,5 @@
 import {
+  buildCanonicalProvisionResponse,
   buildProvisionMeta,
   resolveProvisionError
 } from "./provisionShared.js";
@@ -212,11 +213,18 @@ async function acceptPendingContractIfNeeded(db, salonId, masterId, acceptContra
 }
 
 function buildActivationResult({ salon, master, relation, contractState, meta }){
-  return {
+  return buildCanonicalProvisionResponse({
     ok: true,
-    flow: 'activate_master_salon',
+    flow: "activate_master_salon",
+    owner_type: "salon",
+    owner_id: salon.id,
+    canonical_slug: salon.slug,
+    lifecycle_state: relation?.status === "active" ? "active" : "onboarding",
+    access_state: relation?.status === "active" ? "active" : "none",
+    relation_status: relation?.status || null,
+    readiness_flag: relation?.status === "active" ? "ready" : "pending_bind",
     result: {
-      type: 'activate_bind',
+      type: "activate_bind",
       salon: {
         id: salon.id,
         slug: salon.slug,
@@ -257,7 +265,7 @@ function buildActivationResult({ salon, master, relation, contractState, meta })
     },
     errors: null,
     meta
-  };
+  });
 }
 
 export async function activateMasterSalonCanonical({ pool, payload }){
@@ -265,36 +273,36 @@ export async function activateMasterSalonCanonical({ pool, payload }){
   const db = await pool.connect();
 
   try{
-    await db.query('BEGIN');
+    await db.query("BEGIN");
 
     const salon = await findSalonBySlug(db, input.salon_slug);
     if(!salon){
-      const err = new Error('SALON_NOT_FOUND');
-      err.code = 'SALON_NOT_FOUND';
+      const err = new Error("SALON_NOT_FOUND");
+      err.code = "SALON_NOT_FOUND";
       throw err;
     }
 
     const master = await findMasterBySlug(db, input.master_slug);
     if(!master){
-      const err = new Error('MASTER_NOT_FOUND');
-      err.code = 'MASTER_NOT_FOUND';
+      const err = new Error("MASTER_NOT_FOUND");
+      err.code = "MASTER_NOT_FOUND";
       throw err;
     }
 
     const relation = await lockRelation(db, salon.id, master.id);
     if(!relation){
-      const err = new Error('MASTER_SALON_LINK_NOT_FOUND');
-      err.code = 'MASTER_SALON_LINK_NOT_FOUND';
+      const err = new Error("MASTER_SALON_LINK_NOT_FOUND");
+      err.code = "MASTER_SALON_LINK_NOT_FOUND";
       throw err;
     }
 
-    const nextRelation = relation.status === 'active'
+    const nextRelation = relation.status === "active"
       ? relation
       : await activateRelation(db, relation.id);
 
     const contractState = await acceptPendingContractIfNeeded(db, salon.id, master.id, input.accept_contract);
 
-    await db.query('COMMIT');
+    await db.query("COMMIT");
 
     return buildActivationResult({
       salon,
@@ -303,12 +311,12 @@ export async function activateMasterSalonCanonical({ pool, payload }){
       contractState,
       meta: buildProvisionMeta({
         created: false,
-        updated: relation.status !== 'active' || contractState.updated,
-        idempotent: relation.status === 'active' && (!input.accept_contract || contractState.idempotent || !contractState.contract)
+        updated: relation.status !== "active" || contractState.updated,
+        idempotent: relation.status === "active" && (!input.accept_contract || contractState.idempotent || !contractState.contract)
       })
     });
   }catch(err){
-    try{ await db.query('ROLLBACK'); }catch(e){}
+    try{ await db.query("ROLLBACK"); }catch(e){}
 
     const resolved = resolveProvisionError(err);
     const wrapped = new Error(resolved.error);

@@ -1,4 +1,5 @@
 import {
+  buildCanonicalProvisionResponse,
   buildProvisionMeta,
   resolveProvisionError
 } from "./provisionShared.js";
@@ -149,12 +150,7 @@ async function upsertMasterSalonRelation(db, salonId, masterId, bindMode){
          fired_at,
          created_at,
          updated_at`,
-      [
-        current.id,
-        nextStatus,
-        invitedAt,
-        activatedAt
-      ]
+      [current.id, nextStatus, invitedAt, activatedAt]
     );
 
     return {
@@ -277,9 +273,18 @@ async function ensureContractState(db, payload){
 }
 
 function buildBindResult({ salon, master, relationState, contractState }){
-  return {
+  const relationStatus = relationState.relation?.status || null;
+
+  return buildCanonicalProvisionResponse({
     ok: true,
     flow: "bind_master_to_salon",
+    owner_type: "salon",
+    owner_id: salon.id,
+    canonical_slug: salon.slug,
+    lifecycle_state: relationStatus === "active" ? "active" : "onboarding",
+    access_state: relationStatus === "active" ? "active" : "none",
+    relation_status: relationStatus,
+    readiness_flag: relationStatus === "active" ? "ready" : "pending_bind",
     result: {
       type: "bind",
       salon: {
@@ -326,7 +331,7 @@ function buildBindResult({ salon, master, relationState, contractState }){
       updated: Boolean(relationState.updated),
       idempotent: Boolean(relationState.idempotent && (!contractState.contract || contractState.idempotent))
     })
-  };
+  });
 }
 
 export async function bindMasterToSalonCanonical({ pool, payload }){
@@ -361,12 +366,7 @@ export async function bindMasterToSalonCanonical({ pool, payload }){
 
     await db.query("COMMIT");
 
-    return buildBindResult({
-      salon,
-      master,
-      relationState,
-      contractState
-    });
+    return buildBindResult({ salon, master, relationState, contractState });
   }catch(err){
     try{ await db.query("ROLLBACK"); }catch(e){}
 
@@ -381,20 +381,4 @@ export async function bindMasterToSalonCanonical({ pool, payload }){
   }
 }
 
-
-// RESPONSE NORMALIZATION ADDITIVE
-function buildCanonicalResponse(base){
-    return {
-        ok: true,
-        owner_type: base.owner_type || null,
-        owner_id: base.owner_id || null,
-        canonical_slug: base.slug || null,
-        public_url: base.slug ? `/public/${base.owner_type}/${base.slug}` : null,
-        cabinet_url: base.slug ? `#/${base.owner_type}/${base.slug}` : null,
-        lifecycle_state: base.lifecycle_state || 'draft',
-        access_state: base.access_state || 'none',
-        relation_status: base.relation_status || null,
-        readiness_flag: base.readiness_flag || 'draft',
-        meta: base.meta || {}
-    }
-}
+export default bindMasterToSalonCanonical;

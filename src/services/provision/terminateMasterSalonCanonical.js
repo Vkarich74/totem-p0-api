@@ -1,4 +1,5 @@
 import {
+  buildCanonicalProvisionResponse,
   buildProvisionMeta,
   resolveProvisionError
 } from "./provisionShared.js";
@@ -77,11 +78,18 @@ async function lockRelation(db, salonId, masterId){
 }
 
 function buildTerminationResult({ salon, master, relation, archivedContracts, canceledCalendar, canceledBookings, disabledMasterServices, disabledSalonMasterServices, meta }){
-  return {
+  return buildCanonicalProvisionResponse({
     ok: true,
-    flow: 'terminate_master_salon',
+    flow: "terminate_master_salon",
+    owner_type: "salon",
+    owner_id: salon.id,
+    canonical_slug: salon.slug,
+    lifecycle_state: relation?.status === "fired" ? "blocked" : "active",
+    access_state: relation?.status === "fired" ? "inactive" : "active",
+    relation_status: relation?.status || null,
+    readiness_flag: relation?.status === "fired" ? "terminated" : "ready",
     result: {
-      type: 'terminate_bind',
+      type: "terminate_bind",
       salon: {
         id: salon.id,
         slug: salon.slug,
@@ -119,7 +127,7 @@ function buildTerminationResult({ salon, master, relation, archivedContracts, ca
     },
     errors: null,
     meta
-  };
+  });
 }
 
 export async function terminateMasterSalonCanonical({ pool, payload }){
@@ -127,26 +135,26 @@ export async function terminateMasterSalonCanonical({ pool, payload }){
   const db = await pool.connect();
 
   try{
-    await db.query('BEGIN');
+    await db.query("BEGIN");
 
     const salon = await findSalonBySlug(db, input.salon_slug);
     if(!salon){
-      const err = new Error('SALON_NOT_FOUND');
-      err.code = 'SALON_NOT_FOUND';
+      const err = new Error("SALON_NOT_FOUND");
+      err.code = "SALON_NOT_FOUND";
       throw err;
     }
 
     const master = await findMasterBySlug(db, input.master_slug);
     if(!master){
-      const err = new Error('MASTER_NOT_FOUND');
-      err.code = 'MASTER_NOT_FOUND';
+      const err = new Error("MASTER_NOT_FOUND");
+      err.code = "MASTER_NOT_FOUND";
       throw err;
     }
 
     const relation = await lockRelation(db, salon.id, master.id);
     if(!relation){
-      const err = new Error('MASTER_SALON_LINK_NOT_FOUND');
-      err.code = 'MASTER_SALON_LINK_NOT_FOUND';
+      const err = new Error("MASTER_SALON_LINK_NOT_FOUND");
+      err.code = "MASTER_SALON_LINK_NOT_FOUND";
       throw err;
     }
 
@@ -230,7 +238,7 @@ export async function terminateMasterSalonCanonical({ pool, payload }){
       [salon.id, master.id]
     );
 
-    await db.query('COMMIT');
+    await db.query("COMMIT");
 
     return buildTerminationResult({
       salon,
@@ -244,11 +252,11 @@ export async function terminateMasterSalonCanonical({ pool, payload }){
       meta: buildProvisionMeta({
         created: false,
         updated: true,
-        idempotent: relation.status === 'fired'
+        idempotent: relation.status === "fired"
       })
     });
   }catch(err){
-    try{ await db.query('ROLLBACK'); }catch(e){}
+    try{ await db.query("ROLLBACK"); }catch(e){}
 
     const resolved = resolveProvisionError(err);
     const wrapped = new Error(resolved.error);

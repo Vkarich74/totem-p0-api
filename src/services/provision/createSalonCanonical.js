@@ -1,9 +1,16 @@
 import {
+  activateReservedSlug,
+  checkSlugAvailability,
+  reserveSlug
+} from "./slugReservation.js";
+import {
+  buildCanonicalProvisionResponse,
   buildProvisionMeta,
   createOnboardingIdentityIfNeeded,
   createOnboardingTransition,
   ensureUniqueSalonSlug,
   findExistingAuthUser,
+  normalizeLifecycleState,
   resolveProvisionError,
   upsertOwnerSalonLink,
   upsertUserDefaultSalon,
@@ -33,32 +40,29 @@ async function findSalonBySlug(db, slug){
   return result.rows[0] || null;
 }
 
-async function findOwnerLink(db, ownerId, salonId){
-  const result = await db.query(
-    `SELECT
-       id,
-       owner_id,
-       salon_id,
-       status,
-       created_at
-     FROM owner_salon
-     WHERE owner_id = $1
-       AND salon_id = $2
-     LIMIT 1`,
-    [String(ownerId), salonId]
-  );
+function buildProvisionResult({
+  user,
+  salon,
+  ownerLink,
+  defaultSalon,
+  onboardingIdentity,
+  onboardingTransition,
+  reservation,
+  meta,
+  isIdempotent = false
+}){
+  const lifecycleState = normalizeLifecycleState(onboardingIdentity?.state, isIdempotent ? "active" : "onboarding");
 
-  return result.rows[0] || null;
-}
-
-function buildCanonicalResponse(base){
-  return base;
-}
-
-function buildProvisionResult({ user, salon, ownerLink, defaultSalon, onboardingIdentity, onboardingTransition, meta }){
-  return buildCanonicalResponse({
+  return buildCanonicalProvisionResponse({
     ok: true,
     flow: "create_salon",
+    owner_type: "salon",
+    owner_id: salon.id,
+    canonical_slug: salon.slug,
+    lifecycle_state: lifecycleState,
+    access_state: lifecycleState === "active" ? "active" : "none",
+    relation_status: ownerLink?.status || null,
+    readiness_flag: isIdempotent ? "ready" : "awaiting_activation",
     result: {
       type: "salon",
       user: {
@@ -94,6 +98,15 @@ function buildProvisionResult({ user, salon, ownerLink, defaultSalon, onboarding
         identity: onboardingIdentity,
         transition: onboardingTransition
       },
+      reservation: reservation ? {
+        id: reservation.id,
+        owner_type: reservation.owner_type,
+        owner_id: reservation.owner_id,
+        slug: reservation.slug,
+        status: reservation.status,
+        expires_at: reservation.expires_at,
+        activated_at: reservation.activated_at
+      } : null,
       urls: {
         public: `/salon/${salon.slug}`,
         internal: `/internal/salons/${salon.slug}`
@@ -102,6 +115,17 @@ function buildProvisionResult({ user, salon, ownerLink, defaultSalon, onboarding
     errors: null,
     meta
   });
+}
+
+async function resolveSalonSlugForReservation(db, requestedSlug){
+  const requested = String(requestedSlug || "").trim();
+  const availability = await checkSlugAvailability(db, "salon", requested);
+
+  if(availability.available){
+    return availability.slug;
+  }
+
+  return ensureUniqueSalonSlug(db, requested);
 }
 
 export async function createSalonCanonical({ pool, payload }){
@@ -148,48 +172,57 @@ export async function createSalonCanonical({ pool, payload }){
         defaultSalon,
         onboardingIdentity,
         onboardingTransition,
-        meta: buildProvisionMeta({ created: false, updated: true, idempotent: true })
+        reservation: null,
+        meta: buildProvisionMeta({ created: false, updated: true, idempotent: true }),
+        isIdempotent: true
       });
     }
 
-    const finalSalonSlug = await ensureUniqueSalonSlug(db, input.salon_slug || input.salon_name);
+    const finalSalonSlug = await resolveSalonSlugForReservation(db, input.salon_slug || input.salon_name);
+
+    const reservation = await reserveSlug(db, {
+      owner_type: "salon",
+      slug: finalSalonSlug,
+      meta: {
+        source: "create_salon",
+        email: input.email
+      }
+    });
 
     const salonCreated = await db.query(
       `INSERT INTO salons(
          slug,
          name,
-         enabled,
          status,
+         city,
+         phone,
          description,
          logo_url,
          cover_url,
-         city,
-         phone,
          slogan,
          created_at
        )
-       VALUES($1, $2, true, 'active', $3, $4, $5, $6, $7, $8, NOW())
+       VALUES($1, $2, 'draft', $3, $4, $5, $6, $7, $8, NOW())
        RETURNING
          id,
          slug,
          name,
-         enabled,
          status,
+         city,
+         phone,
          description,
          logo_url,
          cover_url,
-         city,
-         phone,
          slogan,
          created_at`,
       [
         finalSalonSlug,
         input.salon_name,
+        input.city,
+        input.phone,
         input.description,
         input.logo_url,
         input.cover_url,
-        input.city,
-        input.phone,
         input.slogan
       ]
     );
@@ -219,17 +252,11 @@ export async function createSalonCanonical({ pool, payload }){
          created_at,
          salon_id,
          master_id`,
-      [
-        input.email,
-        salon.slug,
-        String(salon.id)
-      ]
+      [input.email, salon.slug, String(salon.id)]
     );
 
     const user = userCreated.rows[0];
-
     const ownerLink = await upsertOwnerSalonLink(db, user.id, salon.id);
-
     const defaultSalon = await upsertUserDefaultSalon(db, user.id, salon.slug);
 
     const onboardingIdentity = await createOnboardingIdentityIfNeeded(db, {
@@ -245,6 +272,13 @@ export async function createSalonCanonical({ pool, payload }){
       reason: "create_salon"
     });
 
+    const activatedReservation = await activateReservedSlug(db, {
+      owner_type: "salon",
+      slug: salon.slug,
+      owner_id: Number(salon.id),
+      reservation_id: reservation?.reservation?.id || reservation?.id || null
+    });
+
     await db.query("COMMIT");
 
     return buildProvisionResult({
@@ -254,10 +288,14 @@ export async function createSalonCanonical({ pool, payload }){
       defaultSalon,
       onboardingIdentity,
       onboardingTransition,
-      meta: buildProvisionMeta({ created: true, updated: false, idempotent: false })
+      reservation: activatedReservation?.reservation || activatedReservation || null,
+      meta: buildProvisionMeta({ created: true, updated: false, idempotent: false }),
+      isIdempotent: false
     });
   }catch(err){
-    try{ await db.query("ROLLBACK"); }catch(e){}
+    try{
+      await db.query("ROLLBACK");
+    }catch(_error){}
 
     const resolved = resolveProvisionError(err);
     const wrapped = new Error(resolved.error);

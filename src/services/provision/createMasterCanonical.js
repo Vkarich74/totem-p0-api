@@ -1,10 +1,16 @@
-import { checkSlugAvailability, reserveSlug, activateSlugReservation } from './slugReservation.js'
 import {
+  activateReservedSlug,
+  checkSlugAvailability,
+  reserveSlug
+} from "./slugReservation.js";
+import {
+  buildCanonicalProvisionResponse,
   buildProvisionMeta,
   createOnboardingIdentityIfNeeded,
   createOnboardingTransition,
   ensureUniqueMasterSlug,
   findExistingAuthUser,
+  normalizeLifecycleState,
   resolveProvisionError,
   validateMasterProvisionInput
 } from "./provisionShared.js";
@@ -46,31 +52,19 @@ async function findMasterByUserId(db, userId){
   return result.rows[0] || null;
 }
 
-function buildCanonicalResponse(base){
-  return {
-    ok: base.ok ?? true,
-    flow: base.flow ?? null,
-    result: base.result ?? null,
-    errors: base.errors ?? null,
-    meta: {
-      ...(base.meta || {}),
-      owner_type: base.owner_type || "master",
-      owner_id: base.owner_id || base.result?.master?.id || null,
-      canonical_slug: base.canonical_slug || base.result?.master?.slug || null,
-      public_url: base.public_url || (base.result?.master?.slug ? `/master/${base.result.master.slug}` : null),
-      cabinet_url: base.cabinet_url || (base.result?.master?.slug ? `#/master/${base.result.master.slug}` : null),
-      lifecycle_state: base.lifecycle_state || 'draft',
-      access_state: base.access_state || 'none',
-      relation_status: base.relation_status || null,
-      readiness_flag: base.readiness_flag || 'draft'
-    }
-  };
-}
+function buildProvisionResult({ user, master, onboardingIdentity, onboardingTransition, reservation, meta, isIdempotent = false }){
+  const lifecycleState = normalizeLifecycleState(onboardingIdentity?.state, isIdempotent ? "active" : "onboarding");
 
-function buildProvisionResult({ user, master, onboardingIdentity, onboardingTransition, meta }){
-  return buildCanonicalResponse({
+  return buildCanonicalProvisionResponse({
     ok: true,
     flow: "create_master",
+    owner_type: "master",
+    owner_id: master.id,
+    canonical_slug: master.slug,
+    lifecycle_state: lifecycleState,
+    access_state: lifecycleState === "active" ? "active" : "none",
+    relation_status: null,
+    readiness_flag: isIdempotent ? "ready" : "awaiting_activation",
     result: {
       type: "master",
       user: {
@@ -94,23 +88,34 @@ function buildProvisionResult({ user, master, onboardingIdentity, onboardingTran
         identity: onboardingIdentity,
         transition: onboardingTransition
       },
+      reservation: reservation ? {
+        id: reservation.id,
+        owner_type: reservation.owner_type,
+        owner_id: reservation.owner_id,
+        slug: reservation.slug,
+        status: reservation.status,
+        expires_at: reservation.expires_at,
+        activated_at: reservation.activated_at
+      } : null,
       urls: {
         public: `/master/${master.slug}`,
         internal: `/internal/masters/${master.slug}`
       }
     },
     errors: null,
-    meta,
-    owner_type: "master",
-    owner_id: master.id,
-    canonical_slug: master.slug,
-    public_url: `/master/${master.slug}`,
-    cabinet_url: `#/master/${master.slug}`,
-    lifecycle_state: onboardingIdentity?.state || onboardingTransition?.to_state?.toLowerCase?.() || "draft",
-    access_state: "none",
-    relation_status: null,
-    readiness_flag: "awaiting_activation"
+    meta
   });
+}
+
+async function resolveMasterSlugForReservation(db, requestedSlug){
+  const requested = String(requestedSlug || "").trim();
+  const availability = await checkSlugAvailability(db, "master", requested);
+
+  if(availability.available){
+    return availability.slug;
+  }
+
+  return ensureUniqueMasterSlug(db, requested);
 }
 
 export async function createMasterCanonical({ pool, payload }){
@@ -134,25 +139,28 @@ export async function createMasterCanonical({ pool, payload }){
         throw err;
       }
 
-      const existingUserAligned = String(existingUser.master_id || "") === String(existingMaster.id)
-        ? existingUser
-        : (await db.query(
-            `UPDATE auth_users
-             SET master_id = $2,
-                 master_slug = $3
-             WHERE id = $1
-             RETURNING
-               id,
-               email,
-               role,
-               salon_slug,
-               master_slug,
-               enabled,
-               created_at,
-               salon_id,
-               master_id`,
-            [existingUser.id, String(existingMaster.id), existingMaster.slug]
-          )).rows[0] || existingUser;
+      const existingUserAligned =
+        String(existingUser.master_id || "") === String(existingMaster.id)
+          ? existingUser
+          : (
+              await db.query(
+                `UPDATE auth_users
+                 SET master_id = $2,
+                     master_slug = $3
+                 WHERE id = $1
+                 RETURNING
+                   id,
+                   email,
+                   role,
+                   salon_slug,
+                   master_slug,
+                   enabled,
+                   created_at,
+                   salon_id,
+                   master_id`,
+                [existingUser.id, String(existingMaster.id), existingMaster.slug]
+              )
+            ).rows[0] || existingUser;
 
       const onboardingIdentity = await createOnboardingIdentityIfNeeded(db, {
         ...input,
@@ -174,19 +182,22 @@ export async function createMasterCanonical({ pool, payload }){
         master: existingMaster,
         onboardingIdentity,
         onboardingTransition,
-        meta: buildProvisionMeta({ created: false, updated: true, idempotent: true })
+        reservation: null,
+        meta: buildProvisionMeta({ created: false, updated: true, idempotent: true }),
+        isIdempotent: true
       });
     }
 
-    const requestedSlug = input.master_slug || input.name;
+    const finalMasterSlug = await resolveMasterSlugForReservation(db, input.master_slug || input.name);
 
-    await checkSlugAvailability(db, "master", requestedSlug);
     const reservation = await reserveSlug(db, {
       owner_type: "master",
-      slug: requestedSlug
+      slug: finalMasterSlug,
+      meta: {
+        source: "create_master",
+        email: input.email
+      }
     });
-
-    const finalMasterSlug = await ensureUniqueMasterSlug(db, requestedSlug);
 
     const userCreated = await db.query(
       `INSERT INTO auth_users(
@@ -211,11 +222,7 @@ export async function createMasterCanonical({ pool, payload }){
          created_at,
          salon_id,
          master_id`,
-      [
-        input.email,
-        finalMasterSlug,
-        input.password_hash
-      ]
+      [input.email, finalMasterSlug, input.password_hash]
     );
 
     const user = userCreated.rows[0];
@@ -236,11 +243,7 @@ export async function createMasterCanonical({ pool, payload }){
          active,
          created_at,
          user_id`,
-      [
-        finalMasterSlug,
-        input.name,
-        user.id
-      ]
+      [finalMasterSlug, input.name, user.id]
     );
 
     const master = masterCreated.rows[0];
@@ -277,11 +280,11 @@ export async function createMasterCanonical({ pool, payload }){
       reason: "create_master"
     });
 
-    await activateSlugReservation(db, {
+    const activatedReservation = await activateReservedSlug(db, {
       owner_type: "master",
       slug: finalMasterSlug,
-      owner_id: master.id,
-      reservation_id: reservation?.id || null
+      owner_id: Number(master.id),
+      reservation_id: reservation?.reservation?.id || reservation?.id || null
     });
 
     await db.query("COMMIT");
@@ -291,10 +294,14 @@ export async function createMasterCanonical({ pool, payload }){
       master,
       onboardingIdentity,
       onboardingTransition,
-      meta: buildProvisionMeta({ created: true, updated: false, idempotent: false })
+      reservation: activatedReservation?.reservation || activatedReservation || null,
+      meta: buildProvisionMeta({ created: true, updated: false, idempotent: false }),
+      isIdempotent: false
     });
   }catch(err){
-    try{ await db.query("ROLLBACK"); }catch(e){}
+    try{
+      await db.query("ROLLBACK");
+    }catch(_error){}
 
     const resolved = resolveProvisionError(err);
     const wrapped = new Error(resolved.error);

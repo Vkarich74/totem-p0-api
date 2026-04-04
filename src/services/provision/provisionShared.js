@@ -214,7 +214,7 @@ export async function upsertOwnerSalonLink(db, ownerId, salonId){
   );
 
   if(existing.rows.length){
-    if(existing.rows[0].status === 'active'){
+    if(existing.rows[0].status === "active"){
       return existing.rows[0];
     }
 
@@ -313,6 +313,85 @@ export async function createOnboardingTransition(db, payload = {}){
   return result.rows[0] || null;
 }
 
+export function normalizeLifecycleState(value, fallback = "draft"){
+  const raw = normalizeText(value).toLowerCase();
+
+  switch(raw){
+    case "active":
+    case "live":
+    case "launched":
+    case "activated":
+      return "active";
+    case "grace":
+      return "active";
+    case "pending_payment":
+    case "payment_pending":
+    case "awaiting_payment":
+      return "pending_payment";
+    case "blocked":
+    case "disabled":
+      return "blocked";
+    case "expired":
+    case "archived":
+      return "expired";
+    case "provisioned":
+    case "onboarding":
+    case "pending":
+    case "invited":
+      return "onboarding";
+    case "draft":
+      return "draft";
+    default:
+      return fallback;
+  }
+}
+
+export function buildCanonicalUrls(ownerType, canonicalSlug){
+  const safeType = normalizeText(ownerType).toLowerCase();
+  const safeSlug = normalizeText(canonicalSlug);
+
+  if(!safeType || !safeSlug){
+    return {
+      public_url: null,
+      cabinet_url: null
+    };
+  }
+
+  return {
+    public_url: `/${safeType}/${safeSlug}`,
+    cabinet_url: `#/${safeType}/${safeSlug}`
+  };
+}
+
+export function buildCanonicalProvisionResponse(payload = {}){
+  const ownerType = normalizeText(payload.owner_type).toLowerCase() || null;
+  const canonicalSlug = normalizeText(payload.canonical_slug) || null;
+  const urls = buildCanonicalUrls(ownerType, canonicalSlug);
+  const lifecycleState = normalizeLifecycleState(payload.lifecycle_state, "draft");
+  const accessState = normalizeText(payload.access_state || "none").toLowerCase() || "none";
+  const relationStatus = normalizeText(payload.relation_status) || null;
+  const readinessFlag = normalizeText(payload.readiness_flag || "draft").toLowerCase() || "draft";
+
+  return {
+    ok: payload.ok !== false,
+    flow: normalizeText(payload.flow) || null,
+    owner_type: ownerType,
+    owner_id: payload.owner_id ?? null,
+    canonical_slug: canonicalSlug,
+    public_url: payload.public_url || urls.public_url,
+    cabinet_url: payload.cabinet_url || urls.cabinet_url,
+    lifecycle_state: lifecycleState,
+    access_state: accessState,
+    relation_status: relationStatus,
+    readiness_flag: readinessFlag,
+    result: payload.result ?? null,
+    errors: payload.errors ?? null,
+    meta: {
+      ...(payload.meta || {})
+    }
+  };
+}
+
 export function resolveProvisionError(err){
   const code = String(err?.code || err?.message || "PROVISION_FAILED").trim();
 
@@ -333,7 +412,10 @@ export function resolveProvisionError(err){
     "MASTER_SLUG_REQUIRED",
     "INVALID_BIND_MODE",
     "INVALID_EFFECTIVE_FROM",
-    "INVALID_CONTRACT_TERMS"
+    "INVALID_CONTRACT_TERMS",
+    "INVALID_OWNER_TYPE",
+    "SLUG_REQUIRED",
+    "OWNER_ID_REQUIRED"
   ]);
 
   if(badRequestCodes.has(code)){
@@ -358,7 +440,9 @@ export function resolveProvisionError(err){
 
   const conflictCodes = new Set([
     "AUTH_USER_ALREADY_EXISTS_WITHOUT_SALON",
-    "AUTH_USER_ALREADY_EXISTS_WITHOUT_MASTER"
+    "AUTH_USER_ALREADY_EXISTS_WITHOUT_MASTER",
+    "SLUG_NOT_AVAILABLE",
+    "SLUG_RESERVATION_NOT_FOUND"
   ]);
 
   if(conflictCodes.has(code)){

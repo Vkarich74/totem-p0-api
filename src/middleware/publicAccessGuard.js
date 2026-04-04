@@ -6,9 +6,10 @@ function getBillingStateFromTenant(tenant) {
     billingAccess?.subscription_status ||
     billingAccess?.access_state ||
     billingAccess?.status ||
+    tenant?.billing_state ||
     "none";
 
-  switch (rawState) {
+  switch (String(rawState).trim().toLowerCase()) {
     case "active":
       return "active";
     case "grace":
@@ -29,18 +30,27 @@ function getLifecycleStateFromTenant(tenant) {
     tenant?.onboarding_state ||
     "draft";
 
-  switch (rawState) {
+  switch (String(rawState).trim().toLowerCase()) {
     case "active":
-      return "active";
+    case "live":
+    case "launched":
+    case "activated":
+    case "provisioned":
     case "grace":
       return "active";
     case "pending_payment":
+    case "payment_pending":
+    case "awaiting_payment":
       return "pending_payment";
     case "blocked":
+    case "disabled":
       return "blocked";
     case "expired":
+    case "archived":
       return "expired";
     case "onboarding":
+    case "pending":
+    case "invited":
       return "onboarding";
     case "draft":
     default:
@@ -48,14 +58,28 @@ function getLifecycleStateFromTenant(tenant) {
   }
 }
 
-function buildAccessSnapshot(tenant, billingState) {
+function buildAccessSnapshot(tenant) {
   const lifecycleState = getLifecycleStateFromTenant(tenant);
+  const billingState = getBillingStateFromTenant(tenant);
 
-  const lifecycleOk = lifecycleState === "active";
-  const billingOk = billingState === "active" || billingState === "grace";
+  const lifecycleAllowsPublic = lifecycleState === "active";
+  const billingAllowsPublic = billingState === "active" || billingState === "grace";
 
-  const publicVisible = lifecycleOk && billingOk;
-  const canBook = lifecycleOk && billingOk;
+  let accessState = "inactive";
+  let denyReason = null;
+
+  if (!lifecycleAllowsPublic) {
+    accessState = `lifecycle_${lifecycleState}`;
+    denyReason = "lifecycle_denied";
+  } else if (!billingAllowsPublic) {
+    accessState = billingState === "none" ? "billing_missing" : `billing_${billingState}`;
+    denyReason = "billing_denied";
+  } else {
+    accessState = "active";
+  }
+
+  const publicVisible = lifecycleAllowsPublic && billingAllowsPublic;
+  const canBook = lifecycleAllowsPublic && billingAllowsPublic;
 
   return {
     exists: true,
@@ -64,12 +88,15 @@ function buildAccessSnapshot(tenant, billingState) {
     slug: tenant?.slug || null,
     lifecycle_state: lifecycleState,
     billing_state: billingState,
+    access_state: accessState,
+    deny_reason: denyReason,
+    lifecycle_first: true,
     public_visible: publicVisible,
     can_book: canBook,
     can_view_profile: publicVisible,
     can_view_metrics: publicVisible,
     can_view_bookings: publicVisible,
-    can_view_availability: canBook,
+    can_view_availability: canBook
   };
 }
 
@@ -98,13 +125,13 @@ function sendDenied(res, action) {
   ) {
     return res.status(404).json({
       ok: false,
-      code: "NOT_FOUND",
+      code: "NOT_FOUND"
     });
   }
 
   return res.status(403).json({
     ok: false,
-    code: "PUBLIC_BOOKING_DISABLED",
+    code: "PUBLIC_BOOKING_DISABLED"
   });
 }
 
@@ -114,12 +141,11 @@ export function buildPublicAccessGuard(action) {
       if (!req.tenant) {
         return res.status(500).json({
           ok: false,
-          code: "PUBLIC_ACCESS_GUARD_ERROR",
+          code: "PUBLIC_ACCESS_GUARD_ERROR"
         });
       }
 
-      const billingState = getBillingStateFromTenant(req.tenant);
-      const snapshot = buildAccessSnapshot(req.tenant, billingState);
+      const snapshot = buildAccessSnapshot(req.tenant);
 
       req.publicAccess = snapshot;
       req.publicAccessAction = action;
@@ -134,7 +160,7 @@ export function buildPublicAccessGuard(action) {
 
       return res.status(500).json({
         ok: false,
-        code: "PUBLIC_ACCESS_GUARD_ERROR",
+        code: "PUBLIC_ACCESS_GUARD_ERROR"
       });
     }
   };
