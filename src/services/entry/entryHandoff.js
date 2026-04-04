@@ -1,3 +1,5 @@
+import crypto from "crypto";
+
 function normalizeText(value){
   return String(value || "").trim();
 }
@@ -36,6 +38,43 @@ function buildRouteMap(contract = {}){
   };
 }
 
+function buildQrPayload(contract = {}){
+  return {
+    url: contract.public_absolute_url,
+    owner_type: contract.owner_type,
+    canonical_slug: contract.canonical_slug,
+    entry_mode: contract.entry_mode
+  };
+}
+
+function buildHandoffReadyFlags(contract = {}, authSnapshot = null, validationSnapshot = null){
+  return {
+    contract_ready: Boolean(
+      contract.owner_type &&
+      contract.canonical_slug &&
+      contract.public_absolute_url &&
+      contract.cabinet_absolute_url
+    ),
+    qr_ready: Boolean(
+      contract.qr_allowed &&
+      contract.public_absolute_url
+    ),
+    auth_ready: Boolean(
+      contract.auth_required_for_cabinet &&
+      contract.auth_login_absolute_url
+    ),
+    validation_ready: Boolean(
+      validationSnapshot &&
+      validationSnapshot.contract_shape_ok
+    ),
+    cabinet_ready: Boolean(
+      contract.cabinet_absolute_url &&
+      contract.auth_required_for_cabinet
+    ),
+    can_open_cabinet_now: Boolean(authSnapshot?.can_open_cabinet)
+  };
+}
+
 export function buildEntryHandoffPackage(resolvedEntry, authSnapshot = null, validationSnapshot = null){
   const contract = resolvedEntry?.contract || null;
 
@@ -54,10 +93,18 @@ export function buildEntryHandoffPackage(resolvedEntry, authSnapshot = null, val
     throw err;
   }
 
+  const issuedAt = new Date().toISOString();
+  const entryId = crypto.randomUUID();
+  const qrPayload = buildQrPayload(contract);
+  const readyFlags = buildHandoffReadyFlags(contract, authSnapshot, validationSnapshot);
+
   return {
     version: "v1",
     block: "IDENTITY_ENTRY_QR_AUTH",
     status: "handoff_ready",
+    entry_id: entryId,
+    issued_at: issuedAt,
+    expires_at: null,
     owner_type: contract.owner_type,
     owner_id: contract.owner_id,
     canonical_slug: contract.canonical_slug,
@@ -70,6 +117,8 @@ export function buildEntryHandoffPackage(resolvedEntry, authSnapshot = null, val
       entry_contract_builder: "buildEntryContract"
     },
     routes: buildRouteMap(contract),
+    qr_payload: qrPayload,
+    handoff_ready_flags: readyFlags,
     contract: {
       public_url: contract.public_url,
       public_absolute_url: contract.public_absolute_url,
