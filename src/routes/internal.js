@@ -19,6 +19,7 @@ import buildOneTimeChargeRouter from "./internal/one-time-charge.js";
 import buildOneTimeChargeHistoryRouter from "./internal/one-time-charge-history.js";
 import buildProvisionRouter from "./internal/provision.js";
 import buildEntryRouter from "./internal/entry.js";
+import buildTemplatesRouter from "./internal/templates.js";
 
 export function createInternalRouter({ rlInternal } = {}){
 
@@ -170,6 +171,9 @@ r.use(provisionRouter);
 
 const entryRouter = buildEntryRouter(pool);
 r.use(entryRouter);
+
+const templatesRouter = buildTemplatesRouter(pool, internalReadRateLimit);
+r.use(templatesRouter);
 
 async function getBillingWalletId(db, ownerType, ownerId){
 const wallet = await db.query(`
