@@ -1,0 +1,105 @@
+{
+  "template_version": "v1",
+  "draft": {
+    "identity": {
+      "salon_name": "TOTEM Demo Salon",
+      "hero_badge": "Премиальный салон",
+      "slogan": "Красота, сервис и комфорт в одном месте",
+      "subtitle": "Уход, окрашивание и сервис с понятной записью"
+    },
+    "contact": {
+      "address": "Bishkek, Chui Avenue 100",
+      "district": "Центр",
+      "city": "Bishkek",
+      "phone": "+996555000111",
+      "whatsapp": "+996555000111",
+      "instagram": "",
+      "telegram": "",
+      "schedule_text": "Ежедневно 10:00–20:00",
+      "map_embed_url": "https://maps.google.com/?q=Bishkek+Chui+100"
+    },
+    "trust": {
+      "rating_value": "4.9",
+      "review_count": "120",
+      "completed_bookings": 850,
+      "trust_note": "Нас выбирают за качество, чистоту и стабильный сервис."
+    },
+    "cta": {
+      "booking_label": "Записаться",
+      "booking_url": "/book/totem-demo-salon",
+      "services_label": "Услуги",
+      "services_anchor": "#services"
+    },
+    "sections": {
+      "benefits": [
+        {
+          "id": "benefit-1",
+          "title": "Опытные мастера",
+          "text": "Команда с сильной практикой и понятным сервисом.",
+          "is_active": true
+        }
+      ],
+      "popular_services": [
+        {
+          "id": "service-1",
+          "name": "Женская стрижка",
+          "description": "Стрижка с укладкой и консультацией.",
+          "price": "1500",
+          "duration_min": 60,
+          "image_asset_id": null,
+          "is_active": true
+        }
+      ],
+      "full_service_list": [
+        {
+          "id": "catalog-1",
+          "name": "Окрашивание волос",
+          "description": "Подбор техники и уход.",
+          "price": "4500",
+          "duration_min": 180,
+          "is_active": true
+        }
+      ],
+      "promos": [],
+      "gallery": [],
+      "reviews": [
+        {
+          "id": "review-1",
+          "name": "Айдана",
+          "text": "Очень аккуратный сервис и приятная атмосфера.",
+          "rating": 5,
+          "is_active": true
+        }
+      ],
+      "about_paragraphs": [
+        {
+          "id": "about-1",
+          "text": "TOTEM Demo Salon — это пространство, где сервис, комфорт и качество собраны в одной системе.",
+          "slot_index": 0,
+          "is_active": true
+        }
+      ],
+      "masters": []
+    },
+    "images": {
+      "hero": {
+        "image_asset_id": "demo-hero-asset",
+        "alt": "Интерьер салона"
+      },
+      "logo": {
+        "image_asset_id": null,
+        "alt": ""
+      },
+      "promo": {
+        "image_asset_id": null,
+        "alt": ""
+      },
+      "assets": {}
+    },
+    "seo": {
+      "title": "TOTEM Demo Salon",
+      "description": "Премиальный салон в Бишкеке.",
+      "canonical_url": "https://www.totemv.com/salon/totem-demo-salon"
+    }
+  }
+}

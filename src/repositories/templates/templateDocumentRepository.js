@@ -1,7 +1,9 @@
 import crypto from "crypto";
 
+const TABLE = "public.template_content_documents";
+
 const SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS public.template_content_documents (
+CREATE TABLE IF NOT EXISTS ${TABLE} (
   id uuid PRIMARY KEY,
   owner_type text NOT NULL,
   owner_slug text NOT NULL,
@@ -18,9 +20,39 @@ CREATE TABLE IF NOT EXISTS public.template_content_documents (
   last_published_at timestamptz NULL,
   UNIQUE(owner_type, owner_slug, template_version)
 );
-CREATE INDEX IF NOT EXISTS idx_tcd_owner ON public.template_content_documents(owner_type, owner_slug);
-CREATE INDEX IF NOT EXISTS idx_tcd_publish_state ON public.template_content_documents(publish_state);
-CREATE INDEX IF NOT EXISTS idx_tcd_updated_at ON public.template_content_documents(updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_tcd_owner 
+ON ${TABLE}(owner_type, owner_slug);
+
+CREATE INDEX IF NOT EXISTS idx_tcd_publish_state 
+ON ${TABLE}(publish_state);
+
+CREATE INDEX IF NOT EXISTS idx_tcd_updated_at 
+ON ${TABLE}(updated_at DESC);
+`;
+
+const CONSTRAINTS_SQL = `
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'tcd_owner_type_check'
+  ) THEN
+    ALTER TABLE ${TABLE}
+    ADD CONSTRAINT tcd_owner_type_check
+    CHECK (owner_type IN ('salon','master'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'tcd_publish_state_check'
+  ) THEN
+    ALTER TABLE ${TABLE}
+    ADD CONSTRAINT tcd_publish_state_check
+    CHECK (publish_state IN ('draft','published','unpublished'));
+  END IF;
+END $$;
 `;
 
 function mapRow(row){
@@ -45,13 +77,14 @@ function mapRow(row){
 
 export async function ensureTemplateContentDocumentsTable(db){
   await db.query(SCHEMA_SQL);
+  await db.query(CONSTRAINTS_SQL);
 }
 
 export async function findTemplateDocumentByOwner(db, ownerType, ownerSlug, templateVersion){
   await ensureTemplateContentDocumentsTable(db);
   const result = await db.query(`
     SELECT *
-    FROM public.template_content_documents
+    FROM ${TABLE}
     WHERE owner_type=$1 AND owner_slug=$2 AND template_version=$3
     LIMIT 1
   `,[ownerType, ownerSlug, templateVersion]);
@@ -62,7 +95,7 @@ export async function createTemplateDocument(db, document){
   await ensureTemplateContentDocumentsTable(db);
   const id = document.id || crypto.randomUUID();
   const result = await db.query(`
-    INSERT INTO public.template_content_documents (
+    INSERT INTO ${TABLE} (
       id, owner_type, owner_slug, template_version, publish_state,
       draft_payload, published_payload, validation_payload, status_payload, meta_payload,
       created_at, updated_at, last_saved_at, last_published_at
@@ -90,7 +123,7 @@ export async function createTemplateDocument(db, document){
 export async function updateTemplateDraft(db, ownerType, ownerSlug, templateVersion, draft, validation, status, meta){
   await ensureTemplateContentDocumentsTable(db);
   const result = await db.query(`
-    UPDATE public.template_content_documents
+    UPDATE ${TABLE}
     SET
       draft_payload=$4::jsonb,
       validation_payload=$5::jsonb,
@@ -117,7 +150,7 @@ export async function updateTemplateDraft(db, ownerType, ownerSlug, templateVers
 export async function updateTemplatePublished(db, ownerType, ownerSlug, templateVersion, published, validation, status, meta){
   await ensureTemplateContentDocumentsTable(db);
   const result = await db.query(`
-    UPDATE public.template_content_documents
+    UPDATE ${TABLE}
     SET
       published_payload=$4::jsonb,
       validation_payload=$5::jsonb,
