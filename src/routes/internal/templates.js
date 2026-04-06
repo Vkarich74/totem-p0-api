@@ -37,6 +37,28 @@ export default function buildTemplatesRouter(pool, internalReadRateLimit){
   const r = express.Router();
   const writeRoles = ["system", "owner", "salon_admin", "master_admin"];
 
+  r.get("/templates-public/:owner_type/:owner_slug/published", internalReadRateLimit, async (req, res) => {
+    const db = await pool.connect();
+    try {
+      const { ownerType, ownerSlug } = normalizeOwnerParams(req);
+      const templateVersion = readVersion(req);
+      const published = await getPublishedSource(db, ownerType, ownerSlug, templateVersion);
+      return res.json({
+        ok: true,
+        owner_type: ownerType,
+        owner_slug: ownerSlug,
+        template_version: templateVersion,
+        published_exists: !!published.document?.status?.published_exists,
+        payload: published.payload,
+        meta: published.document?.meta || {},
+      });
+    } catch (err) {
+      return sendError(res, err);
+    } finally {
+      db.release();
+    }
+  });
+
   r.get("/templates/:owner_type/:owner_slug", requireRole(writeRoles), internalReadRateLimit, async (req, res) => {
     const db = await pool.connect();
     try {
