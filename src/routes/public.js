@@ -7,6 +7,8 @@ import { publicLifecycle } from "./publicLifecycle.js";
 
 // ✅ NEW
 import buildPublicAccessGuard from "../middleware/publicAccessGuard.js";
+import { TEMPLATE_VERSION_V1 } from "../contracts/templates/templateConstants.js";
+import { getPublishedSource } from "../services/templates/templateDocumentService.js";
 
 /**
  * PUBLIC API LAYER
@@ -47,6 +49,65 @@ export function createPublicRouter(deps) {
     resolveTenant,
     buildPublicAccessGuard("availability"),
     publicMasterAvailability
+  );
+
+  /**
+   * MASTER PUBLIC PAGE
+   */
+  r.get(
+    "/masters/:slug",
+    async (req, res) => {
+      const db = await pool.connect();
+      try {
+        const slug = String(req.params.slug || "").trim();
+        if (!slug) {
+          return res.status(400).json({ ok: false, error: "MASTER_SLUG_REQUIRED" });
+        }
+
+        const { rows } = await db.query(
+          `
+          SELECT id, slug, name, active
+          FROM masters
+          WHERE slug = $1
+          LIMIT 1
+          `,
+          [slug]
+        );
+
+        if (!rows.length) {
+          return res.status(404).json({ ok: false, error: "MASTER_NOT_FOUND" });
+        }
+
+        const master = rows[0];
+
+        const published = await getPublishedSource(
+          db,
+          "master",
+          slug,
+          TEMPLATE_VERSION_V1
+        );
+
+        const publishedExists = Boolean(published?.document?.status?.published_exists);
+        const payload = published?.payload || {};
+        const meta = published?.document?.meta || {};
+
+        return res.json({
+          ok: true,
+          master,
+          owner_type: "master",
+          owner_slug: slug,
+          template_version: TEMPLATE_VERSION_V1,
+          published_exists: publishedExists,
+          payload,
+          meta
+        });
+      } catch (err) {
+        console.error("PUBLIC_MASTER_PROFILE_ERROR", err.message);
+        return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
+      } finally {
+        db.release();
+      }
+    }
   );
 
   /**
