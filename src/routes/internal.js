@@ -868,6 +868,117 @@ r.post("/auth/start", async (req,res)=>{
   }
 });
 
+r.post("/auth/verify", async (req,res)=>{
+  const db = await pool.connect();
+  try{
+    const phone = normalizePhone(req.body?.phone);
+    const code = String(req.body?.code || "");
+
+    if(!phone || !code){
+      return res.status(400).json({
+        ok:false,
+        error:"VERIFY_PAYLOAD_INVALID"
+      });
+    }
+
+    const otpRes = await db.query(`
+      SELECT *
+      FROM public.auth_otps
+      WHERE phone=$1
+        AND code=$2
+        AND used_at IS NULL
+        AND expires_at > NOW()
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,[phone, code]);
+
+    const otp = otpRes.rows[0];
+
+    if(!otp){
+      return res.status(401).json({
+        ok:false,
+        error:"OTP_INVALID"
+      });
+    }
+
+    await db.query("BEGIN");
+
+    await db.query(`
+      UPDATE public.auth_otps
+      SET used_at=NOW()
+      WHERE id=$1
+    `,[otp.id]);
+
+    let userRes = await db.query(`
+      SELECT id, role
+      FROM public.auth_users
+      WHERE phone=$1
+      LIMIT 1
+    `,[phone]);
+
+    let user = userRes.rows[0];
+
+    if(!user){
+      const created = await db.query(`
+        INSERT INTO public.auth_users(
+          phone,
+          role,
+          enabled,
+          must_set_password
+        )
+        VALUES($1,'master',true,true)
+        RETURNING id, role
+      `,[phone]);
+
+      user = created.rows[0];
+    }
+
+    const session = await createAuthSession(db, Number(user.id));
+
+    const secret = String(process.env.JWT_SECRET || "").trim();
+    if(!secret){
+      throw new Error("JWT_SECRET_NOT_SET");
+    }
+
+    const accessToken = jwt.sign(
+      {
+        user_id: Number(user.id),
+        role: String(user.role),
+        session_id: session.id
+      },
+      secret
+    );
+
+    await db.query("COMMIT");
+
+    return res.json({
+      ok:true,
+      access_token: accessToken,
+      token_type:"Bearer",
+      auth:{
+        user_id:Number(user.id),
+        role:String(user.role),
+        source:"otp_login",
+        session_id:session.id,
+        session_source:"auth_sessions",
+        session_expires_at:session.expires_at,
+        last_seen_at:session.last_seen_at,
+        idle_timeout_at:session.idle_timeout_at
+      }
+    });
+
+  }catch(err){
+    try{ await db.query("ROLLBACK"); }catch(e){}
+    console.error("AUTH_VERIFY_ERROR", err);
+    return res.status(500).json({
+      ok:false,
+      error:"AUTH_VERIFY_FAILED"
+    });
+  }finally{
+    db.release();
+  }
+});
+
 return r;
 
 }
