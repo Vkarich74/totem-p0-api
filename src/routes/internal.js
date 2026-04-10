@@ -72,7 +72,7 @@ return false;
 return idle < Date.now();
 }
 
-r.get("/auth/resolve", async (req,res)=>{
+r.get("/auth/session/resolve", async (req,res)=>{
 try{
 const auth = req.auth || null;
 const identity = req.identity || null;
@@ -125,10 +125,10 @@ ownership
 }
 });
 }catch(err){
-console.error("AUTH_RESOLVE_ROUTE_ERROR", err);
+console.error("AUTH_SESSION_RESOLVE_ROUTE_ERROR", err);
 return res.status(500).json({
 ok:false,
-error:"auth_resolve_failed"
+error:"auth_session_resolve_failed"
 });
 }
 });
