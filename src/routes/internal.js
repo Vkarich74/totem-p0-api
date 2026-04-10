@@ -979,6 +979,48 @@ r.post("/auth/verify", async (req,res)=>{
   }
 });
 
+r.post("/auth/set-password", async (req,res)=>{
+  const db = await pool.connect();
+  try{
+    const userId = req.auth?.user_id;
+    const password = String(req.body?.password || "");
+
+    if(!userId){
+      return res.status(401).json({
+        ok:false,
+        error:"NO_AUTH"
+      });
+    }
+
+    if(!password || password.length < 8){
+      return res.status(400).json({
+        ok:false,
+        error:"PASSWORD_INVALID"
+      });
+    }
+
+    const hash = await bcrypt.hash(password, 10);
+
+    await db.query(`
+      UPDATE public.auth_users
+      SET password_hash=$1,
+          must_set_password=false
+      WHERE id=$2
+    `,[hash, userId]);
+
+    return res.json({ ok:true });
+
+  }catch(err){
+    console.error("AUTH_SET_PASSWORD_ERROR", err);
+    return res.status(500).json({
+      ok:false,
+      error:"AUTH_SET_PASSWORD_FAILED"
+    });
+  }finally{
+    db.release();
+  }
+});
+
 return r;
 
 }
