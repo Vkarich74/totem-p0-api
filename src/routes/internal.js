@@ -759,6 +759,39 @@ If this trigger is enabled -> system will break.
 DO NOT CHANGE WITHOUT FULL FINANCE REFACTOR.
 */
 
+r.post("/auth/logout", async (req,res)=>{
+  const db = await pool.connect();
+  try{
+    const sessionId = req.auth?.session_id;
+
+    if(!sessionId){
+      return res.status(401).json({
+        ok:false,
+        error:"NO_SESSION"
+      });
+    }
+
+    await db.query(`
+      UPDATE public.auth_sessions
+      SET revoked_at=NOW(),
+          revoked_reason='logout'
+      WHERE id=$1
+      AND revoked_at IS NULL
+    `,[sessionId]);
+
+    return res.json({ ok:true });
+
+  }catch(err){
+    console.error("AUTH_LOGOUT_ERROR", err);
+    return res.status(500).json({
+      ok:false,
+      error:"AUTH_LOGOUT_FAILED"
+    });
+  }finally{
+    db.release();
+  }
+});
+
 return r;
 
 }
