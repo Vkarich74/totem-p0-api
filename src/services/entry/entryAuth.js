@@ -49,11 +49,48 @@ function collectOwnedIds(identity = {}, key) {
   return ids;
 }
 
+function parseTimestamp(value) {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = new Date(value).getTime();
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function getSessionDenyCode(auth = null) {
+  if (!auth?.user_id || !auth?.role) {
+    return "AUTH_REQUIRED";
+  }
+
+  const now = Date.now();
+  const sessionExpiresAt = parseTimestamp(auth?.session_expires_at);
+  const idleTimeoutAt = parseTimestamp(auth?.idle_timeout_at);
+
+  if (sessionExpiresAt && sessionExpiresAt <= now) {
+    return "SESSION_EXPIRED";
+  }
+
+  if (idleTimeoutAt && idleTimeoutAt <= now) {
+    return "IDLE_TIMEOUT";
+  }
+
+  return null;
+}
+
 export function hasCabinetOwnerAccess(auth = null, identity = null, ownerType, ownerId) {
   const safeOwnerId = safeInt(ownerId);
   const safeOwnerType = String(ownerType || "").trim().toLowerCase();
 
   if (!auth?.user_id || !auth?.role || !safeOwnerId) {
+    return false;
+  }
+
+  if (getSessionDenyCode(auth)) {
     return false;
   }
 
@@ -81,14 +118,13 @@ export function buildCabinetAuthSnapshot(resolvedEntry, auth = null, identity = 
     throw err;
   }
 
-  const authenticated = Boolean(auth?.user_id && auth?.role);
+  const sessionDenyCode = getSessionDenyCode(auth);
+  const authenticated = sessionDenyCode === null;
   const authorized = authenticated && hasCabinetOwnerAccess(auth, identity, contract.owner_type, contract.owner_id);
   const authUrls = buildAuthLoginUrl(contract.owner_type, contract.canonical_slug, baseUrl);
 
-  let denyCode = null;
-  if (!authenticated) {
-    denyCode = "AUTH_REQUIRED";
-  } else if (!authorized) {
+  let denyCode = sessionDenyCode;
+  if (!denyCode && !authorized) {
     denyCode = "CABINET_ACCESS_DENIED";
   }
 
