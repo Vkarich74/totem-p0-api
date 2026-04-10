@@ -1,6 +1,6 @@
 import express from "express";
 import crypto from "crypto";
-import bcrypt from "bcryptjs";
+import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import { pool } from "../db.js";
 import { xpayCreateQR, xpayCheckStatus } from "../payments/xpay.js";
