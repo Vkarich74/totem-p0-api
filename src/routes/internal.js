@@ -37,6 +37,103 @@ const internalReadRateLimit =
     })(req, res, next);
   });
 
+
+function uniqueNumberList(values = []){
+return [...new Set(
+(values || [])
+.map((value) => Number(value))
+.filter((value) => Number.isInteger(value) && value > 0)
+)];
+}
+
+function isAuthResolveSessionExpired(auth){
+if(!auth?.session_expires_at){
+return false;
+}
+
+const exp = new Date(auth.session_expires_at).getTime();
+if(!Number.isFinite(exp)){
+return false;
+}
+
+return exp < Date.now();
+}
+
+function isAuthResolveIdleExpired(auth){
+if(!auth?.idle_timeout_at){
+return false;
+}
+
+const idle = new Date(auth.idle_timeout_at).getTime();
+if(!Number.isFinite(idle)){
+return false;
+}
+
+return idle < Date.now();
+}
+
+r.get("/auth/resolve", async (req,res)=>{
+try{
+const auth = req.auth || null;
+const identity = req.identity || null;
+const hasAuth = Boolean(auth?.user_id && auth?.role);
+const sessionExpired = isAuthResolveSessionExpired(auth);
+const idleExpired = isAuthResolveIdleExpired(auth);
+const authenticated = hasAuth && !sessionExpired && !idleExpired;
+
+if(!authenticated){
+return res.status(200).json({
+ok:true,
+authenticated:false,
+role:"public",
+reason:sessionExpired ? "SESSION_EXPIRED" : idleExpired ? "IDLE_TIMEOUT" : "NO_AUTH",
+auth:null,
+identity:{
+user_id:null,
+role:"public",
+salons:[],
+masters:[],
+ownership:[]
+}
+});
+}
+
+const salons = uniqueNumberList(Array.isArray(identity?.salons) ? identity.salons : []);
+const masters = uniqueNumberList(Array.isArray(identity?.masters) ? identity.masters : []);
+const ownership = Array.isArray(identity?.ownership) ? identity.ownership : [];
+
+return res.status(200).json({
+ok:true,
+authenticated:true,
+role:String(auth?.role || "public"),
+auth:{
+user_id:Number(auth?.user_id),
+role:String(auth?.role || "public"),
+source:auth?.source || null,
+session_id:auth?.session_id || null,
+session_source:auth?.session_source || null,
+session_expires_at:auth?.session_expires_at || null,
+last_seen_at:auth?.last_seen_at || null,
+idle_timeout_at:auth?.idle_timeout_at || null
+},
+identity:{
+user_id:Number(identity?.user_id || auth?.user_id),
+role:String(identity?.role || auth?.role || "public"),
+salons,
+masters,
+ownership
+}
+});
+}catch(err){
+console.error("AUTH_RESOLVE_ROUTE_ERROR", err);
+return res.status(500).json({
+ok:false,
+error:"auth_resolve_failed"
+});
+}
+});
+
+
 const reportsRouter = buildReportsRouter(pool, internalReadRateLimit);
 
 r.use(reportsRouter);
