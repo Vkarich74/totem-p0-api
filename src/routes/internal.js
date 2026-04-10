@@ -1,5 +1,7 @@
 import express from "express";
 import crypto from "crypto";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 import { pool } from "../db.js";
 import { xpayCreateQR, xpayCheckStatus } from "../payments/xpay.js";
 import { rateLimit } from "../middleware/rateLimit.js";
@@ -37,7 +39,6 @@ const internalReadRateLimit =
     })(req, res, next);
   });
 
-
 function uniqueNumberList(values = []){
 return [...new Set(
 (values || [])
@@ -70,6 +71,91 @@ return false;
 }
 
 return idle < Date.now();
+}
+
+function normalizeAuthIdentifier(value){
+return String(value || "").trim().toLowerCase();
+}
+
+function normalizePhone(value){
+const raw = String(value || "").trim();
+if(!raw){
+return null;
+}
+
+const digits = raw.replace(/\D/g, "");
+if(digits.startsWith("996") && digits.length === 12){
+const local = digits.slice(3);
+if(local[0] === "0"){
+return null;
+}
+return `+996${local}`;
+}
+
+if(raw.startsWith("+996")){
+const local = raw.slice(4).replace(/\D/g, "");
+if(local.length !== 9 || local[0] === "0"){
+return null;
+}
+return `+996${local}`;
+}
+
+return null;
+}
+
+async function findLoginUser(db, { email, phone }){
+if(email){
+const result = await db.query(
+`SELECT id, email, role, enabled, password_hash
+ FROM public.auth_users
+ WHERE lower(email)=lower($1)
+ LIMIT 1`,
+[email]
+);
+return result.rows[0] || null;
+}
+
+if(phone){
+const result = await db.query(
+`SELECT id, email, role, enabled, password_hash, phone
+ FROM public.auth_users
+ WHERE phone=$1
+ LIMIT 1`,
+[phone]
+);
+return result.rows[0] || null;
+}
+
+return null;
+}
+
+async function createAuthSession(db, userId){
+const sessionId = crypto.randomUUID();
+const expiresAt = new Date(Date.now() + (24 * 60 * 60 * 1000));
+const lastSeenAt = new Date();
+
+await db.query(
+`INSERT INTO public.auth_sessions (
+  id,
+  user_id,
+  created_at,
+  expires_at,
+  last_seen_at,
+  revoked_at,
+  revoked_reason,
+  ip_address,
+  user_agent
+)
+VALUES ($1,$2,NOW(),$3,$4,NULL,NULL,NULL,NULL)`,
+[sessionId, userId, expiresAt.toISOString(), lastSeenAt.toISOString()]
+);
+
+return {
+id: sessionId,
+expires_at: expiresAt.toISOString(),
+last_seen_at: lastSeenAt.toISOString(),
+idle_timeout_at: new Date(lastSeenAt.getTime() + (24 * 60 * 60 * 1000)).toISOString()
+};
 }
 
 r.get("/auth/session/resolve", async (req,res)=>{
@@ -133,6 +219,85 @@ error:"auth_session_resolve_failed"
 }
 });
 
+r.post("/auth/login", async (req,res)=>{
+const db = await pool.connect();
+
+try{
+const email = normalizeAuthIdentifier(req.body?.email);
+const phone = normalizePhone(req.body?.phone);
+const password = String(req.body?.password || "");
+
+if((!email && !phone) || !password){
+return res.status(400).json({
+ok:false,
+error:"LOGIN_PAYLOAD_INVALID"
+});
+}
+
+const user = await findLoginUser(db, { email, phone });
+
+if(!user || !user.enabled || !user.password_hash){
+return res.status(401).json({
+ok:false,
+error:"INVALID_CREDENTIALS"
+});
+}
+
+const passwordOk = await bcrypt.compare(password, user.password_hash);
+
+if(!passwordOk){
+return res.status(401).json({
+ok:false,
+error:"INVALID_CREDENTIALS"
+});
+}
+
+await db.query("BEGIN");
+
+const session = await createAuthSession(db, Number(user.id));
+
+const secret = String(process.env.JWT_SECRET || "").trim();
+if(!secret){
+throw new Error("JWT_SECRET_NOT_SET");
+}
+
+const accessToken = jwt.sign(
+{
+user_id: Number(user.id),
+role: String(user.role),
+session_id: session.id
+},
+secret
+);
+
+await db.query("COMMIT");
+
+return res.status(200).json({
+ok:true,
+access_token: accessToken,
+token_type: "Bearer",
+auth: {
+user_id: Number(user.id),
+role: String(user.role),
+source: "password_login",
+session_id: session.id,
+session_source: "auth_sessions",
+session_expires_at: session.expires_at,
+last_seen_at: session.last_seen_at,
+idle_timeout_at: session.idle_timeout_at
+}
+});
+}catch(err){
+try{ await db.query("ROLLBACK"); }catch(e){}
+console.error("AUTH_LOGIN_ROUTE_ERROR", err);
+return res.status(500).json({
+ok:false,
+error:"AUTH_LOGIN_FAILED"
+});
+}finally{
+db.release();
+}
+});
 
 const reportsRouter = buildReportsRouter(pool, internalReadRateLimit);
 
@@ -438,7 +603,6 @@ amount
 continue;
 }
 
-// idempotency check (prevent duplicate subscription charge)
 const exists = await db.query(`
 SELECT 1
 FROM totem_test.ledger_entries
