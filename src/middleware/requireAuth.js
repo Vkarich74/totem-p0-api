@@ -14,6 +14,7 @@ function isPast(value){
 export function requireAuth(req,res,next){
   const auth = req?.auth || null;
 
+  // базовая проверка
   if(!auth || !auth.user_id || !auth.role){
     return res.status(401).json({
       ok:false,
@@ -22,6 +23,16 @@ export function requireAuth(req,res,next){
     });
   }
 
+  // обязательная session проверка
+  if(!auth.session_id){
+    return res.status(401).json({
+      ok:false,
+      error:'UNAUTHORIZED',
+      code:'NO_SESSION'
+    });
+  }
+
+  // session expiry
   if(isPast(auth.session_expires_at)){
     return res.status(401).json({
       ok:false,
@@ -30,6 +41,7 @@ export function requireAuth(req,res,next){
     });
   }
 
+  // idle timeout
   if(isPast(auth.idle_timeout_at)){
     return res.status(401).json({
       ok:false,

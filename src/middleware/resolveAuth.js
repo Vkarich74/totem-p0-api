@@ -3,7 +3,8 @@ import pkg from 'pg';
 
 const { Pool } = pkg;
 
-const ALLOWED_ROLES = new Set(['owner','salon_admin','master','system']);
+const ALLOWED_ROLES = new Set(['owner', 'salon_admin', 'master', 'system']);
+const IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
 let _pool = null;
 function getPool(){
@@ -126,6 +127,13 @@ function isExpired(ts){
   return t < Date.now();
 }
 
+function computeIdleTimeoutAt(lastSeenAt){
+  if(!lastSeenAt) return null;
+  const ts = new Date(lastSeenAt).getTime();
+  if(!Number.isFinite(ts)) return null;
+  return new Date(ts + IDLE_TIMEOUT_MS).toISOString();
+}
+
 export async function resolveAuth(req,res,next){
   req.auth = null;
   req.identity = null;
@@ -141,7 +149,7 @@ export async function resolveAuth(req,res,next){
 
     const user_id = safeInt(payload?.user_id ?? payload?.id ?? payload?.sub);
     const roleRaw = String(payload?.role ?? '').trim();
-    const session_id = payload?.session_id || null;
+    const session_id = String(payload?.session_id || '').trim() || null;
 
     if(!user_id || !ALLOWED_ROLES.has(roleRaw)){
       return next();
@@ -165,13 +173,17 @@ export async function resolveAuth(req,res,next){
       return next();
     }
 
-    // Session-aware path
     const pool = getPool();
     const client = await pool.connect();
     try{
       const sRes = await client.query(
-        `SELECT s.id, s.user_id, s.expires_at, s.last_seen_at, s.revoked_at,
-                u.enabled, u.role
+        `SELECT s.id,
+                s.user_id,
+                s.expires_at,
+                s.last_seen_at,
+                s.revoked_at,
+                u.enabled,
+                u.role
          FROM public.auth_sessions s
          JOIN public.auth_users u ON u.id = s.user_id
          WHERE s.id = $1
@@ -185,34 +197,44 @@ export async function resolveAuth(req,res,next){
 
       const s = sRes.rows[0];
 
-      // Validate user and role
+      if(Number(s.user_id) !== user_id){
+        return next();
+      }
+
       if(!s.enabled || String(s.role) !== roleRaw){
         return next();
       }
 
       const sessionExpired = isExpired(s.expires_at);
-      const idleExpired = isExpired(payload?.idle_timeout_at || null);
+      const idleTimeoutAt = computeIdleTimeoutAt(s.last_seen_at);
+      const idleExpired = isExpired(idleTimeoutAt);
       const revoked = !!s.revoked_at;
 
       if(sessionExpired || idleExpired || revoked){
-        // do not attach auth
         return next();
       }
 
-      // update last_seen_at (non-blocking)
-      client.query(
-        `UPDATE public.auth_sessions SET last_seen_at = NOW() WHERE id = $1`,
-        [session_id]
-      ).catch(()=>{});
+      const nowIso = new Date().toISOString();
+      const nextIdleTimeoutAt = computeIdleTimeoutAt(nowIso);
+
+      try{
+        await client.query(
+          `UPDATE public.auth_sessions
+           SET last_seen_at = NOW()
+           WHERE id = $1`,
+          [session_id]
+        );
+      }catch(e){}
 
       req.auth = {
         user_id,
         role: roleRaw,
         source: 'session',
         session_id,
+        session_source: 'auth_sessions',
         session_expires_at: s.expires_at,
-        last_seen_at: s.last_seen_at,
-        idle_timeout_at: payload?.idle_timeout_at || null
+        last_seen_at: nowIso,
+        idle_timeout_at: nextIdleTimeoutAt
       };
 
       try{
