@@ -792,6 +792,39 @@ r.post("/auth/logout", async (req,res)=>{
   }
 });
 
+r.post("/auth/logout-all", async (req,res)=>{
+  const db = await pool.connect();
+  try{
+    const userId = req.auth?.user_id;
+
+    if(!userId){
+      return res.status(401).json({
+        ok:false,
+        error:"NO_AUTH"
+      });
+    }
+
+    await db.query(`
+      UPDATE public.auth_sessions
+      SET revoked_at=NOW(),
+          revoked_reason='logout_all'
+      WHERE user_id=$1
+      AND revoked_at IS NULL
+    `,[userId]);
+
+    return res.json({ ok:true });
+
+  }catch(err){
+    console.error("AUTH_LOGOUT_ALL_ERROR", err);
+    return res.status(500).json({
+      ok:false,
+      error:"AUTH_LOGOUT_ALL_FAILED"
+    });
+  }finally{
+    db.release();
+  }
+});
+
 return r;
 
 }
