@@ -4,6 +4,7 @@ import pkg from 'pg';
 const { Pool } = pkg;
 
 const ALLOWED_ROLES = new Set(['owner', 'salon_admin', 'master', 'system']);
+const LEGACY_TOKEN_ROLES = new Set(['system', 'owner']);
 const IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
 let _pool = null;
@@ -34,6 +35,16 @@ function uniqueNumberList(values){
       .map((v) => safeInt(v))
       .filter((v) => v !== null)
   )];
+}
+
+function emptyIdentity(userId, role){
+  return {
+    user_id: userId,
+    role,
+    salons: [],
+    masters: [],
+    ownership: []
+  };
 }
 
 async function buildIdentity(userId){
@@ -155,9 +166,15 @@ export async function resolveAuth(req,res,next){
       return next();
     }
 
-    // Legacy/system tokens without session_id are allowed for internal roles
+    // Legacy tokens are allowed only for internal roles.
+    // Cabinet-facing roles must resolve through auth_sessions.
     if(!session_id){
+      if(!LEGACY_TOKEN_ROLES.has(roleRaw)){
+        return next();
+      }
+
       req.auth = { user_id, role: roleRaw, source: 'jwt_legacy' };
+
       try{
         const identityData = await buildIdentity(user_id);
         req.identity = {
@@ -168,13 +185,15 @@ export async function resolveAuth(req,res,next){
           ownership: identityData.ownership
         };
       }catch(e){
-        req.identity = { user_id, role: roleRaw, salons: [], masters: [], ownership: [] };
+        req.identity = emptyIdentity(user_id, roleRaw);
       }
+
       return next();
     }
 
     const pool = getPool();
     const client = await pool.connect();
+
     try{
       const sRes = await client.query(
         `SELECT s.id,
@@ -208,23 +227,21 @@ export async function resolveAuth(req,res,next){
       const sessionExpired = isExpired(s.expires_at);
       const idleTimeoutAt = computeIdleTimeoutAt(s.last_seen_at);
       const idleExpired = isExpired(idleTimeoutAt);
-      const revoked = !!s.revoked_at;
+      const revoked = Boolean(s.revoked_at);
 
       if(sessionExpired || idleExpired || revoked){
         return next();
       }
 
+      await client.query(
+        `UPDATE public.auth_sessions
+         SET last_seen_at = NOW()
+         WHERE id = $1`,
+        [session_id]
+      );
+
       const nowIso = new Date().toISOString();
       const nextIdleTimeoutAt = computeIdleTimeoutAt(nowIso);
-
-      try{
-        await client.query(
-          `UPDATE public.auth_sessions
-           SET last_seen_at = NOW()
-           WHERE id = $1`,
-          [session_id]
-        );
-      }catch(e){}
 
       req.auth = {
         user_id,
@@ -247,7 +264,7 @@ export async function resolveAuth(req,res,next){
           ownership: identityData.ownership
         };
       }catch(e){
-        req.identity = { user_id, role: roleRaw, salons: [], masters: [], ownership: [] };
+        req.identity = emptyIdentity(user_id, roleRaw);
       }
 
       return next();
