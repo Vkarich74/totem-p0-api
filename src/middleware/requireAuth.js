@@ -11,10 +11,13 @@ function isPast(value){
   return time < Date.now();
 }
 
+function isLegacyAuth(auth){
+  return auth?.source === 'jwt_legacy';
+}
+
 export function requireAuth(req,res,next){
   const auth = req?.auth || null;
 
-  // базовая проверка
   if(!auth || !auth.user_id || !auth.role){
     return res.status(401).json({
       ok:false,
@@ -23,7 +26,10 @@ export function requireAuth(req,res,next){
     });
   }
 
-  // обязательная session проверка
+  if(isLegacyAuth(auth)){
+    return next();
+  }
+
   if(!auth.session_id){
     return res.status(401).json({
       ok:false,
@@ -32,7 +38,6 @@ export function requireAuth(req,res,next){
     });
   }
 
-  // session expiry
   if(isPast(auth.session_expires_at)){
     return res.status(401).json({
       ok:false,
@@ -41,7 +46,6 @@ export function requireAuth(req,res,next){
     });
   }
 
-  // idle timeout
   if(isPast(auth.idle_timeout_at)){
     return res.status(401).json({
       ok:false,
