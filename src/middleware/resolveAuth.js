@@ -3,8 +3,6 @@ import pkg from 'pg';
 
 const { Pool } = pkg;
 
-console.log('🔥 RESOLVE AUTH LOADED V3');
-
 const ALLOWED_ROLES = new Set(['owner','salon_admin','master','system']);
 
 let _pool = null;
@@ -40,7 +38,6 @@ function uniqueNumberList(values){
 async function buildIdentity(userId){
   const pool = getPool();
   const client = await pool.connect();
-
   try{
     const masterRes = await client.query(
       `SELECT id
@@ -122,73 +119,120 @@ async function buildIdentity(userId){
   }
 }
 
+function isExpired(ts){
+  if(!ts) return false;
+  const t = new Date(ts).getTime();
+  if(!Number.isFinite(t)) return false;
+  return t < Date.now();
+}
+
 export async function resolveAuth(req,res,next){
   req.auth = null;
   req.identity = null;
 
   const token = parseBearer(req);
 
-  console.log('=== AUTH DEBUG START ===');
-  console.log('JWT_SECRET PRESENT:', !!process.env.JWT_SECRET);
-  console.log('TOKEN PRESENT:', !!token);
-
-  if(token && process.env.JWT_SECRET){
-    try{
-      const payload = jwt.verify(token, process.env.JWT_SECRET);
-
-      console.log('JWT PAYLOAD:', payload);
-
-      const user_id = safeInt(payload?.user_id ?? payload?.id ?? payload?.sub);
-      const roleRaw = String(payload?.role ?? '').trim();
-
-      if(user_id && ALLOWED_ROLES.has(roleRaw)){
-        req.auth = { user_id, role: roleRaw, source: 'jwt' };
-
-        try{
-          const identityData = await buildIdentity(user_id);
-
-          req.identity = {
-            user_id,
-            role: roleRaw,
-            salons: identityData.salons,
-            masters: identityData.masters,
-            ownership: identityData.ownership
-          };
-
-          console.log('AUTH SUCCESS');
-          console.log('IDENTITY SUMMARY:', {
-            user_id,
-            role: roleRaw,
-            salons: req.identity.salons.length,
-            masters: req.identity.masters.length,
-            ownership: req.identity.ownership.length
-          });
-        } catch(identityError){
-          console.error('IDENTITY BUILD ERROR:', identityError?.message);
-          req.identity = {
-            user_id,
-            role: roleRaw,
-            salons: [],
-            masters: [],
-            ownership: []
-          };
-        }
-      } else {
-        console.log('AUTH PAYLOAD INVALID');
-      }
-    }catch(err){
-      console.log('JWT VERIFY ERROR:', err?.message);
-    }
-  } else {
-    if(!process.env.JWT_SECRET){
-      console.log('JWT_SECRET NOT SET IN ENV');
-    }
-    if(!token){
-      console.log('NO TOKEN PROVIDED');
-    }
+  if(!token || !process.env.JWT_SECRET){
+    return next();
   }
 
-  console.log('=== AUTH DEBUG END ===');
+  try{
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
 
-  return next();
+    const user_id = safeInt(payload?.user_id ?? payload?.id ?? payload?.sub);
+    const roleRaw = String(payload?.role ?? '').trim();
+    const session_id = payload?.session_id || null;
+
+    if(!user_id || !ALLOWED_ROLES.has(roleRaw)){
+      return next();
+    }
+
+    // Legacy/system tokens without session_id are allowed for internal roles
+    if(!session_id){
+      req.auth = { user_id, role: roleRaw, source: 'jwt_legacy' };
+      try{
+        const identityData = await buildIdentity(user_id);
+        req.identity = {
+          user_id,
+          role: roleRaw,
+          salons: identityData.salons,
+          masters: identityData.masters,
+          ownership: identityData.ownership
+        };
+      }catch(e){
+        req.identity = { user_id, role: roleRaw, salons: [], masters: [], ownership: [] };
+      }
+      return next();
+    }
+
+    // Session-aware path
+    const pool = getPool();
+    const client = await pool.connect();
+    try{
+      const sRes = await client.query(
+        `SELECT s.id, s.user_id, s.expires_at, s.last_seen_at, s.revoked_at,
+                u.enabled, u.role
+         FROM public.auth_sessions s
+         JOIN public.auth_users u ON u.id = s.user_id
+         WHERE s.id = $1
+         LIMIT 1`,
+        [session_id]
+      );
+
+      if(!sRes.rows.length){
+        return next();
+      }
+
+      const s = sRes.rows[0];
+
+      // Validate user and role
+      if(!s.enabled || String(s.role) !== roleRaw){
+        return next();
+      }
+
+      const sessionExpired = isExpired(s.expires_at);
+      const idleExpired = isExpired(payload?.idle_timeout_at || null);
+      const revoked = !!s.revoked_at;
+
+      if(sessionExpired || idleExpired || revoked){
+        // do not attach auth
+        return next();
+      }
+
+      // update last_seen_at (non-blocking)
+      client.query(
+        `UPDATE public.auth_sessions SET last_seen_at = NOW() WHERE id = $1`,
+        [session_id]
+      ).catch(()=>{});
+
+      req.auth = {
+        user_id,
+        role: roleRaw,
+        source: 'session',
+        session_id,
+        session_expires_at: s.expires_at,
+        last_seen_at: s.last_seen_at,
+        idle_timeout_at: payload?.idle_timeout_at || null
+      };
+
+      try{
+        const identityData = await buildIdentity(user_id);
+        req.identity = {
+          user_id,
+          role: roleRaw,
+          salons: identityData.salons,
+          masters: identityData.masters,
+          ownership: identityData.ownership
+        };
+      }catch(e){
+        req.identity = { user_id, role: roleRaw, salons: [], masters: [], ownership: [] };
+      }
+
+      return next();
+    } finally {
+      client.release();
+    }
+  }catch(err){
+    return next();
+  }
 }
