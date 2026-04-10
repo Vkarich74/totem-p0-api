@@ -830,7 +830,11 @@ r.post("/auth/start", async (req,res)=>{
   try{
     const phone = normalizePhone(req.body?.phone);
     const purpose = String(req.body?.purpose || "login").trim().toLowerCase() || "login";
-    const channel = String(req.body?.channel || "sms").trim().toLowerCase() || "sms";
+    const requestedChannel = String(req.body?.channel || "").trim().toLowerCase();
+    const channel =
+      requestedChannel === "email"
+        ? "email"
+        : "phone";
 
     if(!phone){
       return res.status(400).json({
