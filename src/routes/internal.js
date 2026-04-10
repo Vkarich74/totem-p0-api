@@ -825,6 +825,49 @@ r.post("/auth/logout-all", async (req,res)=>{
   }
 });
 
+r.post("/auth/start", async (req,res)=>{
+  const db = await pool.connect();
+  try{
+    const phone = normalizePhone(req.body?.phone);
+
+    if(!phone){
+      return res.status(400).json({
+        ok:false,
+        error:"PHONE_INVALID"
+      });
+    }
+
+    const code = String(Math.floor(100000 + Math.random()*900000));
+
+    await db.query(`
+      INSERT INTO public.auth_otps(
+        phone,
+        code,
+        created_at,
+        expires_at,
+        used_at
+      )
+      VALUES($1,$2,NOW(),NOW() + interval '5 minutes',NULL)
+    `,[phone, code]);
+
+    console.log("OTP_CODE", phone, code);
+
+    return res.json({
+      ok:true,
+      sent:true
+    });
+
+  }catch(err){
+    console.error("AUTH_START_ERROR", err);
+    return res.status(500).json({
+      ok:false,
+      error:"AUTH_START_FAILED"
+    });
+  }finally{
+    db.release();
+  }
+});
+
 return r;
 
 }
