@@ -1056,16 +1056,19 @@ r.post("/auth/verify", async (req,res)=>{
     let user = userRes.rows[0];
 
     if(!user){
+      const email = `${phone.replace("+","")}@totem.local`;
+
       const created = await db.query(`
         INSERT INTO public.auth_users(
+          email,
           phone,
           role,
           enabled,
           must_set_password
         )
-        VALUES($1,'master',true,true)
+        VALUES($1,$2,'master',true,true)
         RETURNING id, role
-      `,[phone]);
+      `,[email, phone]);
 
       user = created.rows[0];
     }
