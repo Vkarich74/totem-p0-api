@@ -829,6 +829,8 @@ r.post("/auth/start", async (req,res)=>{
   const db = await pool.connect();
   try{
     const phone = normalizePhone(req.body?.phone);
+    const purpose = String(req.body?.purpose || "login").trim().toLowerCase() || "login";
+    const channel = String(req.body?.channel || "sms").trim().toLowerCase() || "sms";
 
     if(!phone){
       return res.status(400).json({
@@ -837,27 +839,77 @@ r.post("/auth/start", async (req,res)=>{
       });
     }
 
+    await db.query("BEGIN");
+
+    const activeOtpRes = await db.query(`
+      SELECT id, resend_available_at
+      FROM public.auth_otps
+      WHERE target=$1
+        AND purpose=$2
+        AND consumed_at IS NULL
+        AND expires_at > NOW()
+      ORDER BY created_at DESC
+      LIMIT 1
+      FOR UPDATE
+    `,[phone, purpose]);
+
+    const activeOtp = activeOtpRes.rows[0] || null;
+
+    if(activeOtp?.resend_available_at && new Date(activeOtp.resend_available_at).getTime() > Date.now()){
+      await db.query("ROLLBACK");
+      return res.status(429).json({
+        ok:false,
+        error:"OTP_RESEND_NOT_AVAILABLE",
+        resend_available_at: activeOtp.resend_available_at
+      });
+    }
+
     const code = String(Math.floor(100000 + Math.random()*900000));
+    const codeHash = await bcrypt.hash(code, 10);
 
     await db.query(`
       INSERT INTO public.auth_otps(
-        phone,
-        code,
-        created_at,
+        channel,
+        target,
+        purpose,
+        code_hash,
         expires_at,
-        used_at
+        attempts_used,
+        max_attempts,
+        blocked_until,
+        resend_available_at,
+        consumed_at,
+        created_at
       )
-      VALUES($1,$2,NOW(),NOW() + interval '5 minutes',NULL)
-    `,[phone, code]);
+      VALUES(
+        $1,
+        $2,
+        $3,
+        $4,
+        NOW() + interval '5 minutes',
+        0,
+        5,
+        NULL,
+        NOW() + interval '60 seconds',
+        NULL,
+        NOW()
+      )
+    `,[channel, phone, purpose, codeHash]);
 
-    console.log("OTP_CODE", phone, code);
+    await db.query("COMMIT");
+
+    console.log("OTP_CODE", phone, purpose, code);
 
     return res.json({
       ok:true,
-      sent:true
+      sent:true,
+      target: phone,
+      purpose,
+      channel
     });
 
   }catch(err){
+    try{ await db.query("ROLLBACK"); }catch(e){}
     console.error("AUTH_START_ERROR", err);
     return res.status(500).json({
       ok:false,
@@ -872,7 +924,8 @@ r.post("/auth/verify", async (req,res)=>{
   const db = await pool.connect();
   try{
     const phone = normalizePhone(req.body?.phone);
-    const code = String(req.body?.code || "");
+    const code = String(req.body?.code || "").trim();
+    const purpose = String(req.body?.purpose || "login").trim().toLowerCase() || "login";
 
     if(!phone || !code){
       return res.status(400).json({
@@ -881,31 +934,94 @@ r.post("/auth/verify", async (req,res)=>{
       });
     }
 
+    await db.query("BEGIN");
+
     const otpRes = await db.query(`
       SELECT *
       FROM public.auth_otps
-      WHERE phone=$1
-        AND code=$2
-        AND used_at IS NULL
-        AND expires_at > NOW()
+      WHERE target=$1
+        AND purpose=$2
+        AND consumed_at IS NULL
       ORDER BY created_at DESC
       LIMIT 1
-    `,[phone, code]);
+      FOR UPDATE
+    `,[phone, purpose]);
 
-    const otp = otpRes.rows[0];
+    const otp = otpRes.rows[0] || null;
 
     if(!otp){
+      await db.query("ROLLBACK");
       return res.status(401).json({
         ok:false,
         error:"OTP_INVALID"
       });
     }
 
-    await db.query("BEGIN");
+    if(otp.blocked_until && new Date(otp.blocked_until).getTime() > Date.now()){
+      await db.query("ROLLBACK");
+      return res.status(429).json({
+        ok:false,
+        error:"OTP_BLOCKED",
+        blocked_until: otp.blocked_until
+      });
+    }
+
+    if(otp.expires_at && new Date(otp.expires_at).getTime() <= Date.now()){
+      await db.query("ROLLBACK");
+      return res.status(401).json({
+        ok:false,
+        error:"OTP_EXPIRED"
+      });
+    }
+
+    const attemptsUsed = Number(otp.attempts_used || 0);
+    const maxAttempts = Number(otp.max_attempts || 5);
+
+    if(attemptsUsed >= maxAttempts){
+      await db.query(`
+        UPDATE public.auth_otps
+        SET blocked_until = COALESCE(blocked_until, NOW() + interval '15 minutes')
+        WHERE id=$1
+      `,[otp.id]);
+
+      await db.query("COMMIT");
+      return res.status(429).json({
+        ok:false,
+        error:"OTP_BLOCKED"
+      });
+    }
+
+    const codeOk = await bcrypt.compare(code, String(otp.code_hash || ""));
+
+    if(!codeOk){
+      const updatedAttempts = attemptsUsed + 1;
+      const shouldBlock = updatedAttempts >= maxAttempts;
+
+      const failedUpdate = await db.query(`
+        UPDATE public.auth_otps
+        SET attempts_used=$2,
+            blocked_until=CASE
+              WHEN $3 THEN NOW() + interval '15 minutes'
+              ELSE blocked_until
+            END
+        WHERE id=$1
+        RETURNING attempts_used, max_attempts, blocked_until
+      `,[otp.id, updatedAttempts, shouldBlock]);
+
+      await db.query("COMMIT");
+
+      return res.status(401).json({
+        ok:false,
+        error: shouldBlock ? "OTP_BLOCKED" : "OTP_INVALID",
+        attempts_used: Number(failedUpdate.rows[0]?.attempts_used || updatedAttempts),
+        max_attempts: Number(failedUpdate.rows[0]?.max_attempts || maxAttempts),
+        blocked_until: failedUpdate.rows[0]?.blocked_until || null
+      });
+    }
 
     await db.query(`
       UPDATE public.auth_otps
-      SET used_at=NOW()
+      SET consumed_at=NOW()
       WHERE id=$1
     `,[otp.id]);
 
