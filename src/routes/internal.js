@@ -829,12 +829,19 @@ r.post("/auth/start", async (req,res)=>{
   const db = await pool.connect();
   try{
     const phone = normalizePhone(req.body?.phone);
-    const purpose = String(req.body?.purpose || "login").trim().toLowerCase() || "login";
+    const requestedPurpose = String(req.body?.purpose || "").trim().toLowerCase();
+    const purpose =
+      requestedPurpose === "password_reset"
+        ? "password_reset"
+        : requestedPurpose === "signup_verify"
+          ? "signup_verify"
+          : requestedPurpose === "email_verify"
+            ? "email_verify"
+            : requestedPurpose === "phone_verify"
+              ? "phone_verify"
+              : "login_verify";
     const requestedChannel = String(req.body?.channel || "").trim().toLowerCase();
-    const channel =
-      requestedChannel === "email"
-        ? "email"
-        : "phone";
+    const channel = requestedChannel === "email" ? "email" : "whatsapp";
 
     if(!phone){
       return res.status(400).json({
@@ -929,7 +936,17 @@ r.post("/auth/verify", async (req,res)=>{
   try{
     const phone = normalizePhone(req.body?.phone);
     const code = String(req.body?.code || "").trim();
-    const purpose = String(req.body?.purpose || "login").trim().toLowerCase() || "login";
+    const requestedPurpose = String(req.body?.purpose || "").trim().toLowerCase();
+    const purpose =
+      requestedPurpose === "password_reset"
+        ? "password_reset"
+        : requestedPurpose === "signup_verify"
+          ? "signup_verify"
+          : requestedPurpose === "email_verify"
+            ? "email_verify"
+            : requestedPurpose === "phone_verify"
+              ? "phone_verify"
+              : "login_verify";
 
     if(!phone || !code){
       return res.status(400).json({
