@@ -236,6 +236,81 @@ FOR UPDATE
 return userRes.rows[0] || null;
 }
 
+
+async function issueAuthOtp(db, { phone, purpose, channel }){
+const activeOtpRes = await db.query(`
+  SELECT id, resend_available_at
+  FROM public.auth_otps
+  WHERE target=$1
+    AND purpose=$2
+    AND consumed_at IS NULL
+    AND expires_at > NOW()
+  ORDER BY created_at DESC
+  LIMIT 1
+  FOR UPDATE
+`,[phone, purpose]);
+
+const activeOtp = activeOtpRes.rows[0] || null;
+
+if(activeOtp?.resend_available_at && new Date(activeOtp.resend_available_at).getTime() > Date.now()){
+  return {
+    ok:false,
+    error:"OTP_RESEND_NOT_AVAILABLE",
+    resend_available_at: activeOtp.resend_available_at
+  };
+}
+
+const code = String(Math.floor(100000 + Math.random()*900000));
+const codeHash = await bcrypt.hash(code, 10);
+
+await db.query(`
+  UPDATE public.auth_otps
+  SET consumed_at=NOW()
+  WHERE target=$1
+    AND purpose=$2
+    AND consumed_at IS NULL
+`,[phone, purpose]);
+
+await db.query(`
+  INSERT INTO public.auth_otps(
+    channel,
+    target,
+    purpose,
+    code_hash,
+    expires_at,
+    attempts_used,
+    max_attempts,
+    blocked_until,
+    resend_available_at,
+    consumed_at,
+    created_at
+  )
+  VALUES(
+    $1,
+    $2,
+    $3,
+    $4,
+    NOW() + ($5 || ' minutes')::interval,
+    0,
+    5,
+    NULL,
+    NOW() + ($6 || ' seconds')::interval,
+    NULL,
+    NOW()
+  )
+`,[channel, phone, purpose, codeHash, AUTH_OTP_TTL_MINUTES, AUTH_OTP_RESEND_SECONDS]);
+
+console.log("OTP_CODE", phone, purpose, code);
+
+return {
+  ok:true,
+  sent:true,
+  target: phone,
+  purpose,
+  channel
+};
+}
+
 async function createAuthUserForRole(db, { phone, role, ownerSlug }){
 const email = `${phone.replace("+","")}@totem.local`;
 const hasMasterSlug = await authUsersHasColumn(db, "master_slug");
