@@ -92,14 +92,16 @@ router.post("/request", async (req, res) => {
   try {
     await client.query("BEGIN");
 
+    const password_hash = sha256("otp_user_placeholder");
+
     const u = await client.query(
       `
-      INSERT INTO auth_users (email, role, salon_slug, master_slug, enabled)
-      VALUES ($1,$2,$3,$4,true)
+      INSERT INTO auth_users (email, role, salon_slug, master_slug, password_hash, enabled)
+      VALUES ($1,$2,$3,$4,$5,true)
       ON CONFLICT (email, role) DO UPDATE SET enabled=true
       RETURNING id
       `,
-      [email, role, salon_slug || null, master_slug || null]
+      [email, role, salon_slug || null, master_slug || null, password_hash]
     );
 
     const code = String(Math.floor(100000 + Math.random() * 900000));
