@@ -42,6 +42,41 @@ const internalReadRateLimit =
 const AUTH_OTP_TTL_MINUTES = 30;
 const AUTH_OTP_BLOCK_MINUTES = 10;
 const AUTH_OTP_RESEND_SECONDS = 60;
+const AUTH_SUPPORTED_ROLES = new Set(["master", "salon_admin"]);
+
+function normalizeRequestedAuthRole(value){
+const raw = String(value || "").trim().toLowerCase();
+
+if(raw === "salon"){
+return "salon_admin";
+}
+
+if(AUTH_SUPPORTED_ROLES.has(raw)){
+return raw;
+}
+
+return "master";
+}
+
+function normalizeRequestedOwnerSlug(role, body = {}){
+const requestedSlug = String(
+body?.owner_slug ||
+(role === "salon_admin" ? body?.salon_slug : body?.master_slug) ||
+body?.slug ||
+""
+).trim().toLowerCase();
+
+if(!requestedSlug){
+return `${role === "salon_admin" ? "salon" : "master"}_${Date.now()}`;
+}
+
+const normalizedSlug = requestedSlug
+.replace(/[^a-z0-9_-]+/g, "-")
+.replace(/-{2,}/g, "-")
+.replace(/^[-_]+|[-_]+$/g, "");
+
+return normalizedSlug || `${role === "salon_admin" ? "salon" : "master"}_${Date.now()}`;
+}
 
 function uniqueNumberList(values = []){
 return [...new Set(
@@ -175,6 +210,61 @@ const result = await db.query(
 );
 
 return result.rows.length > 0;
+}
+
+
+async function getAuthUserByPhone(db, phone){
+const selectMasterSlug = await authUsersHasColumn(db, "master_slug");
+const selectSalonSlug = await authUsersHasColumn(db, "salon_slug");
+
+const fields = ["id", "role"];
+if(selectMasterSlug){
+fields.push("master_slug");
+}
+if(selectSalonSlug){
+fields.push("salon_slug");
+}
+
+const userRes = await db.query(`
+SELECT ${fields.join(", ")}
+FROM public.auth_users
+WHERE phone=$1
+LIMIT 1
+FOR UPDATE
+`,[phone]);
+
+return userRes.rows[0] || null;
+}
+
+async function createAuthUserForRole(db, { phone, role, ownerSlug }){
+const email = `${phone.replace("+","")}@totem.local`;
+const hasMasterSlug = await authUsersHasColumn(db, "master_slug");
+const hasSalonSlug = await authUsersHasColumn(db, "salon_slug");
+
+const columns = ["email", "phone", "role", "enabled", "must_set_password"];
+const values = [email, phone, role, true, true];
+
+if(role === "master" && hasMasterSlug){
+columns.push("master_slug");
+values.push(ownerSlug);
+}
+
+if(role === "salon_admin" && hasSalonSlug){
+columns.push("salon_slug");
+values.push(ownerSlug);
+}
+
+const placeholders = columns.map((_, index) => `$${index + 1}`).join(",");
+
+const created = await db.query(`
+INSERT INTO public.auth_users(
+  ${columns.join(",\n  ")}
+)
+VALUES(${placeholders})
+RETURNING id, role
+`, values);
+
+return created.rows[0] || null;
 }
 
 r.get("/auth/session/resolve", async (req,res)=>{
@@ -964,6 +1054,8 @@ r.post("/auth/verify", async (req,res)=>{
     const phone = normalizePhone(req.body?.phone);
     const code = String(req.body?.code || "").trim();
     const requestedPurpose = String(req.body?.purpose || "").trim().toLowerCase();
+    const requestedRole = normalizeRequestedAuthRole(req.body?.role || req.body?.owner_type);
+    const requestedOwnerSlug = normalizeRequestedOwnerSlug(requestedRole, req.body);
     const purpose =
       requestedPurpose === "password_reset"
         ? "password_reset"
@@ -1073,33 +1165,14 @@ r.post("/auth/verify", async (req,res)=>{
       WHERE id=$1
     `,[otp.id]);
 
-    let userRes = await db.query(`
-      SELECT id, role
-      FROM public.auth_users
-      WHERE phone=$1
-      LIMIT 1
-    `,[phone]);
-
-    let user = userRes.rows[0];
+    let user = await getAuthUserByPhone(db, phone);
 
     if(!user){
-      const email = `${phone.replace("+","")}@totem.local`;
-      const masterSlug = `master_${Date.now()}`;
-
-      const created = await db.query(`
-        INSERT INTO public.auth_users(
-          email,
-          phone,
-          role,
-          master_slug,
-          enabled,
-          must_set_password
-        )
-        VALUES($1,$2,'master',$3,true,true)
-        RETURNING id, role
-      `,[email, phone, masterSlug]);
-
-      user = created.rows[0];
+      user = await createAuthUserForRole(db, {
+        phone,
+        role: requestedRole,
+        ownerSlug: requestedOwnerSlug
+      });
     }
 
     const session = await createAuthSession(db, Number(user.id));
