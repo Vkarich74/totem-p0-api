@@ -5,6 +5,9 @@ import { publicCreateBooking } from "./publicCreateBooking.js";
 import { publicMasterAvailability } from "./publicAvailability.js";
 import { publicLifecycle } from "./publicLifecycle.js";
 
+// ✅ AUTH ROUTER FROM LIVE PUBLIC LAYER
+import authRouter from "../../routes_public/auth.js";
+
 // ✅ NEW
 import buildPublicAccessGuard from "../middleware/publicAccessGuard.js";
 import { TEMPLATE_VERSION_V1 } from "../contracts/templates/templateConstants.js";
@@ -18,6 +21,11 @@ export function createPublicRouter(deps) {
   const { resolveTenant, rlAvailability, rlBookingCreate } = deps;
 
   const r = express.Router();
+
+  /**
+   * AUTH
+   */
+  r.use("/auth", authRouter);
 
   /**
    * CREATE BOOKING
