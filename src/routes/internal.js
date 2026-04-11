@@ -1241,10 +1241,27 @@ r.post("/auth/verify", async (req,res)=>{
 
   }catch(err){
     try{ await db.query("ROLLBACK"); }catch(e){}
-    console.error("AUTH_VERIFY_ERROR", err);
+    console.error("AUTH_VERIFY_ERROR", {
+      message: err?.message || null,
+      code: err?.code || null,
+      detail: err?.detail || null,
+      constraint: err?.constraint || null,
+      table: err?.table || null,
+      column: err?.column || null,
+      requested_role: normalizeRequestedAuthRole(req.body?.role || req.body?.owner_type),
+      requested_owner_slug: normalizeRequestedOwnerSlug(
+        normalizeRequestedAuthRole(req.body?.role || req.body?.owner_type),
+        req.body
+      )
+    });
     return res.status(500).json({
       ok:false,
-      error:"AUTH_VERIFY_FAILED"
+      error:"AUTH_VERIFY_FAILED",
+      reason: err?.message || "UNKNOWN_VERIFY_ERROR",
+      pg_code: err?.code || null,
+      pg_constraint: err?.constraint || null,
+      pg_table: err?.table || null,
+      pg_column: err?.column || null
     });
   }finally{
     db.release();
