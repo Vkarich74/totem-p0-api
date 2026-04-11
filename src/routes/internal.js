@@ -1173,6 +1173,36 @@ r.post("/auth/verify", async (req,res)=>{
         role: requestedRole,
         ownerSlug: requestedOwnerSlug
       });
+    }else{
+      const hasMasterSlug = await authUsersHasColumn(db, "master_slug");
+      const hasSalonSlug = await authUsersHasColumn(db, "salon_slug");
+
+      if(String(user.role || "") !== requestedRole){
+        await db.query(`
+          UPDATE public.auth_users
+          SET role=$1
+          WHERE id=$2
+        `,[requestedRole, user.id]);
+        user.role = requestedRole;
+      }
+
+      if(requestedRole === "master" && hasMasterSlug){
+        await db.query(`
+          UPDATE public.auth_users
+          SET master_slug=$1
+          WHERE id=$2
+        `,[requestedOwnerSlug, user.id]);
+        user.master_slug = requestedOwnerSlug;
+      }
+
+      if(requestedRole === "salon_admin" && hasSalonSlug){
+        await db.query(`
+          UPDATE public.auth_users
+          SET salon_slug=$1
+          WHERE id=$2
+        `,[requestedOwnerSlug, user.id]);
+        user.salon_slug = requestedOwnerSlug;
+      }
     }
 
     const session = await createAuthSession(db, Number(user.id));
