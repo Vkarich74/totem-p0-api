@@ -142,6 +142,16 @@ return `+996${local}`;
 return null;
 }
 
+function buildNeutralAuthStartResponse({ channel, purpose }){
+return {
+ok:true,
+sent:true,
+channel,
+purpose,
+neutral:true
+};
+}
+
 async function findLoginUser(db, { email, phone }){
 if(email){
 const result = await db.query(
@@ -212,6 +222,61 @@ const result = await db.query(
 return result.rows.length > 0;
 }
 
+async function applyPhoneVerificationState(db, userId, channel){
+const hasPhoneVerifiedAt = await authUsersHasColumn(db, "phone_verified_at");
+const hasPreferredLoginChannel = await authUsersHasColumn(db, "preferred_login_channel");
+
+const updates = [];
+const params = [];
+let paramIndex = 1;
+
+if(hasPhoneVerifiedAt){
+updates.push(`phone_verified_at=COALESCE(phone_verified_at, NOW())`);
+}
+
+if(hasPreferredLoginChannel){
+updates.push(`preferred_login_channel=$${paramIndex}`);
+params.push(channel === "email" ? "email" : "whatsapp");
+paramIndex += 1;
+}
+
+if(!updates.length){
+return;
+}
+
+params.push(Number(userId));
+
+await db.query(`
+UPDATE public.auth_users
+SET ${updates.join(",\n    ")}
+WHERE id=$${paramIndex}
+`, params);
+}
+
+async function applyPasswordLifecycleState(db, userId, { preferredLoginChannel = null } = {}){
+const hasPasswordChangedAt = await authUsersHasColumn(db, "password_changed_at");
+const hasPreferredLoginChannel = await authUsersHasColumn(db, "preferred_login_channel");
+
+const updates = ["password_hash=$1", "must_set_password=false"];
+const params = [];
+let paramIndex = 2;
+
+if(hasPasswordChangedAt){
+updates.push("password_changed_at=NOW()");
+}
+
+if(hasPreferredLoginChannel && preferredLoginChannel){
+updates.push(`preferred_login_channel=$${paramIndex}`);
+params.push(preferredLoginChannel);
+paramIndex += 1;
+}
+
+return {
+updates,
+params,
+nextParamIndex: paramIndex
+};
+}
 
 async function getAuthUserByPhone(db, phone){
 const selectMasterSlug = await authUsersHasColumn(db, "master_slug");
@@ -315,9 +380,21 @@ async function createAuthUserForRole(db, { phone, role, ownerSlug }){
 const email = `${phone.replace("+","")}@totem.local`;
 const hasMasterSlug = await authUsersHasColumn(db, "master_slug");
 const hasSalonSlug = await authUsersHasColumn(db, "salon_slug");
+const hasPhoneVerifiedAt = await authUsersHasColumn(db, "phone_verified_at");
+const hasPreferredLoginChannel = await authUsersHasColumn(db, "preferred_login_channel");
 
 const columns = ["email", "phone", "role", "enabled", "must_set_password"];
 const values = [email, phone, role, true, true];
+
+if(hasPhoneVerifiedAt){
+columns.push("phone_verified_at");
+values.push(new Date().toISOString());
+}
+
+if(hasPreferredLoginChannel){
+columns.push("preferred_login_channel");
+values.push("whatsapp");
+}
 
 if(role === "master" && hasMasterSlug){
 columns.push("master_slug");
@@ -437,6 +514,16 @@ error:"INVALID_CREDENTIALS"
 }
 
 await db.query("BEGIN");
+
+const preferredLoginChannel = phone ? "whatsapp" : "email";
+const hasPreferredLoginChannel = await authUsersHasColumn(db, "preferred_login_channel");
+if(hasPreferredLoginChannel){
+await db.query(`
+  UPDATE public.auth_users
+  SET preferred_login_channel=$1
+  WHERE id=$2
+`, [preferredLoginChannel, Number(user.id)]);
+}
 
 const session = await createAuthSession(db, Number(user.id));
 
@@ -1071,6 +1158,8 @@ r.post("/auth/verify", async (req,res)=>{
     const requestedPurpose = String(req.body?.purpose || "").trim().toLowerCase();
     const requestedRole = normalizeRequestedAuthRole(req.body?.role || req.body?.owner_type);
     const requestedOwnerSlug = normalizeRequestedOwnerSlug(requestedRole, req.body);
+    const requestedChannel = String(req.body?.channel || "").trim().toLowerCase();
+    const channel = requestedChannel === "email" ? "email" : "whatsapp";
     const purpose =
       requestedPurpose === "password_reset"
         ? "password_reset"
@@ -1232,6 +1321,8 @@ r.post("/auth/verify", async (req,res)=>{
       }
     }
 
+    await applyPhoneVerificationState(db, Number(user.id), channel);
+
     const session = await createAuthSession(db, Number(user.id));
 
     const secret = String(process.env.JWT_SECRET || "").trim();
@@ -1298,10 +1389,10 @@ r.post("/auth/password/reset/start", async (req,res)=>{
 
     if(!user || !user.enabled){
       await db.query("ROLLBACK");
-      return res.status(404).json({
-        ok:false,
-        error:"AUTH_USER_NOT_FOUND"
-      });
+      return res.status(200).json(buildNeutralAuthStartResponse({
+        channel,
+        purpose: "password_reset"
+      }));
     }
 
     const otpResult = await issueAuthOtp(db, {
@@ -1317,7 +1408,10 @@ r.post("/auth/password/reset/start", async (req,res)=>{
 
     await db.query("COMMIT");
 
-    return res.json(otpResult);
+    return res.json(buildNeutralAuthStartResponse({
+      channel,
+      purpose: "password_reset"
+    }));
   }catch(err){
     try{ await db.query("ROLLBACK"); }catch(e){}
     console.error("AUTH_PASSWORD_RESET_START_ERROR", err);
@@ -1455,24 +1549,15 @@ r.post("/auth/password/reset/finish", async (req,res)=>{
     }
 
     const hash = await bcrypt.hash(password, 10);
-    const hasPasswordChangedAt = await authUsersHasColumn(db, "password_changed_at");
+    const passwordState = await applyPasswordLifecycleState(db, Number(user.id), {
+      preferredLoginChannel: "whatsapp"
+    });
 
-    if(hasPasswordChangedAt){
-      await db.query(`
-        UPDATE public.auth_users
-        SET password_hash=$1,
-            must_set_password=false,
-            password_changed_at=NOW()
-        WHERE id=$2
-      `,[hash, Number(user.id)]);
-    }else{
-      await db.query(`
-        UPDATE public.auth_users
-        SET password_hash=$1,
-            must_set_password=false
-        WHERE id=$2
-      `,[hash, Number(user.id)]);
-    }
+    await db.query(`
+      UPDATE public.auth_users
+      SET ${passwordState.updates.join(",\n          ")}
+      WHERE id=$${passwordState.nextParamIndex}
+    `,[hash, ...passwordState.params, Number(user.id)]);
 
     await db.query(`
       UPDATE public.auth_sessions
@@ -1545,24 +1630,16 @@ r.post("/auth/set-password", async (req,res)=>{
     }
 
     const hash = await bcrypt.hash(password, 10);
-    const hasPasswordChangedAt = await authUsersHasColumn(db, "password_changed_at");
+    const preferredLoginChannel = user.phone ? "whatsapp" : null;
+    const passwordState = await applyPasswordLifecycleState(db, Number(user.id), {
+      preferredLoginChannel
+    });
 
-    if(hasPasswordChangedAt){
-      await db.query(`
-        UPDATE public.auth_users
-        SET password_hash=$1,
-            must_set_password=false,
-            password_changed_at=NOW()
-        WHERE id=$2
-      `,[hash, userId]);
-    }else{
-      await db.query(`
-        UPDATE public.auth_users
-        SET password_hash=$1,
-            must_set_password=false
-        WHERE id=$2
-      `,[hash, userId]);
-    }
+    await db.query(`
+      UPDATE public.auth_users
+      SET ${passwordState.updates.join(",\n          ")}
+      WHERE id=$${passwordState.nextParamIndex}
+    `,[hash, ...passwordState.params, userId]);
 
     await db.query(`
       UPDATE public.auth_sessions
