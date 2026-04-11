@@ -39,6 +39,10 @@ const internalReadRateLimit =
     })(req, res, next);
   });
 
+const AUTH_OTP_TTL_MINUTES = 30;
+const AUTH_OTP_BLOCK_MINUTES = 10;
+const AUTH_OTP_RESEND_SECONDS = 60;
+
 function uniqueNumberList(values = []){
 return [...new Set(
 (values || [])
@@ -156,6 +160,21 @@ expires_at: expiresAt.toISOString(),
 last_seen_at: lastSeenAt.toISOString(),
 idle_timeout_at: new Date(lastSeenAt.getTime() + (24 * 60 * 60 * 1000)).toISOString()
 };
+}
+
+
+async function authUsersHasColumn(db, columnName){
+const result = await db.query(
+`SELECT 1
+ FROM information_schema.columns
+ WHERE table_schema='public'
+   AND table_name='auth_users'
+   AND column_name=$1
+ LIMIT 1`,
+[columnName]
+);
+
+return result.rows.length > 0;
 }
 
 r.get("/auth/session/resolve", async (req,res)=>{
@@ -879,6 +898,14 @@ r.post("/auth/start", async (req,res)=>{
     const codeHash = await bcrypt.hash(code, 10);
 
     await db.query(`
+      UPDATE public.auth_otps
+      SET consumed_at=NOW()
+      WHERE target=$1
+        AND purpose=$2
+        AND consumed_at IS NULL
+    `,[phone, purpose]);
+
+    await db.query(`
       INSERT INTO public.auth_otps(
         channel,
         target,
@@ -897,15 +924,15 @@ r.post("/auth/start", async (req,res)=>{
         $2,
         $3,
         $4,
-        NOW() + interval '5 minutes',
+        NOW() + ($5 || ' minutes')::interval,
         0,
         5,
         NULL,
-        NOW() + interval '60 seconds',
+        NOW() + ($6 || ' seconds')::interval,
         NULL,
         NOW()
       )
-    `,[channel, phone, purpose, codeHash]);
+    `,[channel, phone, purpose, codeHash, AUTH_OTP_TTL_MINUTES, AUTH_OTP_RESEND_SECONDS]);
 
     await db.query("COMMIT");
 
@@ -1001,9 +1028,9 @@ r.post("/auth/verify", async (req,res)=>{
     if(attemptsUsed >= maxAttempts){
       await db.query(`
         UPDATE public.auth_otps
-        SET blocked_until = COALESCE(blocked_until, NOW() + interval '15 minutes')
+        SET blocked_until = COALESCE(blocked_until, NOW() + ($2 || ' minutes')::interval)
         WHERE id=$1
-      `,[otp.id]);
+      `,[otp.id, AUTH_OTP_BLOCK_MINUTES]);
 
       await db.query("COMMIT");
       return res.status(429).json({
@@ -1022,12 +1049,12 @@ r.post("/auth/verify", async (req,res)=>{
         UPDATE public.auth_otps
         SET attempts_used=$2,
             blocked_until=CASE
-              WHEN $3 THEN NOW() + interval '15 minutes'
+              WHEN $3 THEN NOW() + ($4 || ' minutes')::interval
               ELSE blocked_until
             END
         WHERE id=$1
         RETURNING attempts_used, max_attempts, blocked_until
-      `,[otp.id, updatedAttempts, shouldBlock]);
+      `,[otp.id, updatedAttempts, shouldBlock, AUTH_OTP_BLOCK_MINUTES]);
 
       await db.query("COMMIT");
 
@@ -1141,18 +1168,69 @@ r.post("/auth/set-password", async (req,res)=>{
       });
     }
 
+    await db.query("BEGIN");
+
+    const userRes = await db.query(`
+      SELECT id, phone
+      FROM public.auth_users
+      WHERE id=$1
+      LIMIT 1
+      FOR UPDATE
+    `,[userId]);
+
+    const user = userRes.rows[0] || null;
+
+    if(!user){
+      await db.query("ROLLBACK");
+      return res.status(404).json({
+        ok:false,
+        error:"AUTH_USER_NOT_FOUND"
+      });
+    }
+
     const hash = await bcrypt.hash(password, 10);
+    const hasPasswordChangedAt = await authUsersHasColumn(db, "password_changed_at");
+
+    if(hasPasswordChangedAt){
+      await db.query(`
+        UPDATE public.auth_users
+        SET password_hash=$1,
+            must_set_password=false,
+            password_changed_at=NOW()
+        WHERE id=$2
+      `,[hash, userId]);
+    }else{
+      await db.query(`
+        UPDATE public.auth_users
+        SET password_hash=$1,
+            must_set_password=false
+        WHERE id=$2
+      `,[hash, userId]);
+    }
 
     await db.query(`
-      UPDATE public.auth_users
-      SET password_hash=$1,
-          must_set_password=false
-      WHERE id=$2
-    `,[hash, userId]);
+      UPDATE public.auth_sessions
+      SET revoked_at=NOW(),
+          revoked_reason='password_changed'
+      WHERE user_id=$1
+      AND revoked_at IS NULL
+    `,[userId]);
+
+    if(user.phone){
+      await db.query(`
+        UPDATE public.auth_otps
+        SET consumed_at=NOW()
+        WHERE target=$1
+          AND consumed_at IS NULL
+      `,[String(user.phone)]);
+    }
+
+    await db.query("COMMIT");
 
     return res.json({ ok:true });
 
   }catch(err){
+    try{ await db.query("ROLLBACK"); }catch(e){}
     console.error("AUTH_SET_PASSWORD_ERROR", err);
     return res.status(500).json({
       ok:false,
