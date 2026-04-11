@@ -1176,32 +1176,44 @@ r.post("/auth/verify", async (req,res)=>{
     }else{
       const hasMasterSlug = await authUsersHasColumn(db, "master_slug");
       const hasSalonSlug = await authUsersHasColumn(db, "salon_slug");
+      const updateParts = ["role=$1"];
+      const updateValues = [requestedRole];
+      let paramIndex = 2;
 
-      if(String(user.role || "") !== requestedRole){
-        await db.query(`
-          UPDATE public.auth_users
-          SET role=$1
-          WHERE id=$2
-        `,[requestedRole, Number(user.id)]);
-        user.role = requestedRole;
+      if(hasMasterSlug){
+        if(requestedRole === "master"){
+          updateParts.push(`master_slug=$${paramIndex}`);
+          updateValues.push(requestedOwnerSlug);
+          paramIndex += 1;
+        }else{
+          updateParts.push("master_slug=NULL");
+        }
       }
 
-      if(requestedRole === "master" && hasMasterSlug){
-        await db.query(`
-          UPDATE public.auth_users
-          SET master_slug=$1
-          WHERE id=$2
-        `,[requestedOwnerSlug, Number(user.id)]);
-        user.master_slug = requestedOwnerSlug;
+      if(hasSalonSlug){
+        if(requestedRole === "salon_admin"){
+          updateParts.push(`salon_slug=$${paramIndex}`);
+          updateValues.push(requestedOwnerSlug);
+          paramIndex += 1;
+        }else{
+          updateParts.push("salon_slug=NULL");
+        }
       }
 
-      if(requestedRole === "salon_admin" && hasSalonSlug){
-        await db.query(`
-          UPDATE public.auth_users
-          SET salon_slug=$1
-          WHERE id=$2
-        `,[requestedOwnerSlug, Number(user.id)]);
-        user.salon_slug = requestedOwnerSlug;
+      updateValues.push(Number(user.id));
+
+      await db.query(`
+        UPDATE public.auth_users
+        SET ${updateParts.join(",\n            ")}
+        WHERE id=$${paramIndex}
+      `, updateValues);
+
+      user.role = requestedRole;
+      if(hasMasterSlug){
+        user.master_slug = requestedRole === "master" ? requestedOwnerSlug : null;
+      }
+      if(hasSalonSlug){
+        user.salon_slug = requestedRole === "salon_admin" ? requestedOwnerSlug : null;
       }
     }
 
@@ -1241,27 +1253,10 @@ r.post("/auth/verify", async (req,res)=>{
 
   }catch(err){
     try{ await db.query("ROLLBACK"); }catch(e){}
-    console.error("AUTH_VERIFY_ERROR", {
-      message: err?.message || null,
-      code: err?.code || null,
-      detail: err?.detail || null,
-      constraint: err?.constraint || null,
-      table: err?.table || null,
-      column: err?.column || null,
-      requested_role: normalizeRequestedAuthRole(req.body?.role || req.body?.owner_type),
-      requested_owner_slug: normalizeRequestedOwnerSlug(
-        normalizeRequestedAuthRole(req.body?.role || req.body?.owner_type),
-        req.body
-      )
-    });
+    console.error("AUTH_VERIFY_ERROR", err);
     return res.status(500).json({
       ok:false,
-      error:"AUTH_VERIFY_FAILED",
-      reason: err?.message || "UNKNOWN_VERIFY_ERROR",
-      pg_code: err?.code || null,
-      pg_constraint: err?.constraint || null,
-      pg_table: err?.table || null,
-      pg_column: err?.column || null
+      error:"AUTH_VERIFY_FAILED"
     });
   }finally{
     db.release();
