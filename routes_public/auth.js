@@ -5,7 +5,7 @@ import { pool } from "../db/index.js";
 
 const router = express.Router();
 
-const OTP_TTL_MINUTES = 10;
+const OTP_TTL_MINUTES = 30;
 const OTP_PURPOSE = "login_verify";
 
 const GMAIL_CLIENT_ID = process.env.GMAIL_CLIENT_ID || "";
@@ -74,7 +74,7 @@ async function sendOtpEmail({ to, code }) {
 
   const gmail = google.gmail({ version: "v1", auth: gmailClient });
 
-  const subject = "Код входа TOTEM";
+  const subject = "=?UTF-8?B?" + Buffer.from("Код входа TOTEM").toString("base64") + "?=";
   const html = `
     <div style="font-family:Arial,sans-serif;font-size:16px;color:#111827">
       <h2>Код входа TOTEM</h2>
