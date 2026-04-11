@@ -11,6 +11,32 @@ function normalizeSlugPart(value){
     .replace(/-{2,}/g, "-");
 }
 
+function normalizePhone(value){
+  const raw = String(value || "").trim();
+  if(!raw){
+    return null;
+  }
+
+  const digits = raw.replace(/\D/g, "");
+  if(digits.startsWith("996") && digits.length === 12){
+    const local = digits.slice(3);
+    if(local[0] === "0"){
+      return null;
+    }
+    return `+996${local}`;
+  }
+
+  if(raw.startsWith("+996")){
+    const local = raw.slice(4).replace(/\D/g, "");
+    if(local.length !== 9 || local[0] === "0"){
+      return null;
+    }
+    return `+996${local}`;
+  }
+
+  return null;
+}
+
 export function normalizeSlug(value){
   return normalizeSlugPart(value);
 }
@@ -101,7 +127,7 @@ export function validateSalonProvisionInput(payload = {}){
     name,
     salon_name: salonName,
     salon_slug: normalizeSlug(payload.salon_slug || salonName),
-    phone: normalizeText(payload.phone) || null,
+    phone: normalizePhone(payload.phone),
     city: normalizeText(payload.city) || null,
     description: normalizeText(payload.description) || null,
     logo_url: normalizeText(payload.logo_url) || null,
@@ -117,7 +143,6 @@ export function validateMasterProvisionInput(payload = {}){
   const email = normalizeText(payload.email).toLowerCase();
   const name = normalizeText(payload.name);
   const requestedRole = normalizeText(payload.requested_role || "master");
-  const passwordHash = normalizeText(payload.password_hash);
 
   if(!email){
     const err = new Error("EMAIL_REQUIRED");
@@ -137,20 +162,15 @@ export function validateMasterProvisionInput(payload = {}){
     throw err;
   }
 
-  if(!passwordHash){
-    const err = new Error("PASSWORD_HASH_REQUIRED");
-    err.code = "PASSWORD_HASH_REQUIRED";
-    throw err;
-  }
-
   return {
     email,
     name,
     master_slug: normalizeSlug(payload.master_slug || name),
+    phone: normalizePhone(payload.phone),
     lead_id: normalizeText(payload.lead_id) || null,
     odoo_user_id: normalizeText(payload.odoo_user_id) || null,
     requested_role: requestedRole,
-    password_hash: passwordHash
+    password_hash: null
   };
 }
 
@@ -407,7 +427,6 @@ export function resolveProvisionError(err){
     "SALON_NAME_REQUIRED",
     "MASTER_NAME_REQUIRED",
     "INVALID_ROLE",
-    "PASSWORD_HASH_REQUIRED",
     "SALON_SLUG_REQUIRED",
     "MASTER_SLUG_REQUIRED",
     "INVALID_BIND_MODE",
