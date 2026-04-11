@@ -83,6 +83,10 @@ router.post("/request", async (req, res) => {
     return res.status(400).json({ error: "EMAIL_REQUIRED" });
   }
 
+  if (role === "master" && !master_slug) {
+    return res.status(400).json({ error: "MASTER_SLUG_REQUIRED" });
+  }
+
   const client = await pool.connect();
 
   try {
