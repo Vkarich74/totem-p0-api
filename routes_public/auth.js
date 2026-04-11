@@ -48,6 +48,18 @@ function isEmail(v) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 }
 
+function normalizeDbRole(role) {
+  if (role === "salon") return "owner";
+  if (role === "master") return "master";
+  return null;
+}
+
+function normalizeResponseRole(dbRole, salonSlug, masterSlug) {
+  if (dbRole === "owner" && salonSlug) return "salon";
+  if (dbRole === "master" && masterSlug) return "master";
+  return dbRole;
+}
+
 function assertGmailConfig() {
   if (!GMAIL_CLIENT_ID || !GMAIL_CLIENT_SECRET || !GMAIL_REFRESH_TOKEN) {
     const error = new Error("GMAIL_CONFIG_MISSING");
@@ -100,6 +112,7 @@ async function sendOtpEmail({ to, code }) {
  */
 router.post("/request", async (req, res) => {
   const { email, role, salon_slug, master_slug } = req.body;
+  const dbRole = normalizeDbRole(role);
 
   if (!email || !role) {
     return res.status(400).json({ error: "INVALID_INPUT" });
@@ -107,6 +120,14 @@ router.post("/request", async (req, res) => {
 
   if (!isEmail(email)) {
     return res.status(400).json({ error: "EMAIL_REQUIRED" });
+  }
+
+  if (!dbRole) {
+    return res.status(400).json({ error: "INVALID_ROLE" });
+  }
+
+  if (role === "salon" && !salon_slug) {
+    return res.status(400).json({ error: "SALON_SLUG_REQUIRED" });
   }
 
   if (role === "master" && !master_slug) {
@@ -124,10 +145,14 @@ router.post("/request", async (req, res) => {
       `
       INSERT INTO auth_users (email, role, salon_slug, master_slug, password_hash, enabled)
       VALUES ($1,$2,$3,$4,$5,true)
-      ON CONFLICT (email, role) DO UPDATE SET enabled=true
+      ON CONFLICT (email, role) DO UPDATE
+      SET
+        enabled = true,
+        salon_slug = EXCLUDED.salon_slug,
+        master_slug = EXCLUDED.master_slug
       RETURNING id
       `,
-      [email, role, salon_slug || null, master_slug || null, password_hash]
+      [email, dbRole, salon_slug || null, master_slug || null, password_hash]
     );
 
     const code = String(Math.floor(100000 + Math.random() * 900000));
@@ -231,7 +256,7 @@ router.post("/verify-json", async (req, res) => {
   return res.json({
     ok: true,
     session,
-    role: otp.role,
+    role: normalizeResponseRole(otp.role, otp.salon_slug, otp.master_slug),
     salon_slug: otp.salon_slug,
     master_slug: otp.master_slug
   });
