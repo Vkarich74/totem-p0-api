@@ -1182,7 +1182,7 @@ r.post("/auth/verify", async (req,res)=>{
           UPDATE public.auth_users
           SET role=$1
           WHERE id=$2
-        `,[requestedRole, user.id]);
+        `,[requestedRole, Number(user.id)]);
         user.role = requestedRole;
       }
 
@@ -1191,7 +1191,7 @@ r.post("/auth/verify", async (req,res)=>{
           UPDATE public.auth_users
           SET master_slug=$1
           WHERE id=$2
-        `,[requestedOwnerSlug, user.id]);
+        `,[requestedOwnerSlug, Number(user.id)]);
         user.master_slug = requestedOwnerSlug;
       }
 
@@ -1200,7 +1200,7 @@ r.post("/auth/verify", async (req,res)=>{
           UPDATE public.auth_users
           SET salon_slug=$1
           WHERE id=$2
-        `,[requestedOwnerSlug, user.id]);
+        `,[requestedOwnerSlug, Number(user.id)]);
         user.salon_slug = requestedOwnerSlug;
       }
     }
