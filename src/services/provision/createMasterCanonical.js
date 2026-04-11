@@ -1,3 +1,4 @@
+
 import {
   activateReservedSlug,
   checkSlugAvailability,
@@ -52,6 +53,129 @@ async function findMasterByUserId(db, userId){
   return result.rows[0] || null;
 }
 
+async function authUsersHasColumn(db, columnName){
+  const result = await db.query(
+    `SELECT 1
+     FROM information_schema.columns
+     WHERE table_schema='public'
+       AND table_name='auth_users'
+       AND column_name=$1
+     LIMIT 1`,
+    [columnName]
+  );
+
+  return result.rows.length > 0;
+}
+
+function normalizePhone(value){
+  const raw = String(value || "").trim();
+  if(!raw){
+    return null;
+  }
+
+  const digits = raw.replace(/\D/g, "");
+  if(digits.startsWith("996") && digits.length === 12){
+    const local = digits.slice(3);
+    if(local[0] === "0"){
+      return null;
+    }
+    return `+996${local}`;
+  }
+
+  if(raw.startsWith("+996")){
+    const local = raw.slice(4).replace(/\D/g, "");
+    if(local.length !== 9 || local[0] === "0"){
+      return null;
+    }
+    return `+996${local}`;
+  }
+
+  return null;
+}
+
+async function createProvisionMasterAuthUser(db, { input, masterSlug }){
+  const hasSalonSlug = await authUsersHasColumn(db, "salon_slug");
+  const hasMasterSlug = await authUsersHasColumn(db, "master_slug");
+  const hasSalonId = await authUsersHasColumn(db, "salon_id");
+  const hasMasterId = await authUsersHasColumn(db, "master_id");
+  const hasPasswordHash = await authUsersHasColumn(db, "password_hash");
+  const hasMustSetPassword = await authUsersHasColumn(db, "must_set_password");
+  const hasPasswordChangedAt = await authUsersHasColumn(db, "password_changed_at");
+  const hasPhone = await authUsersHasColumn(db, "phone");
+
+  const columns = [];
+  const valueSql = [];
+  const params = [];
+
+  function pushParamColumn(column, value){
+    columns.push(column);
+    params.push(value);
+    valueSql.push(`$${params.length}`);
+  }
+
+  pushParamColumn("email", input.email);
+  pushParamColumn("role", "master");
+
+  if(hasSalonSlug){
+    pushParamColumn("salon_slug", null);
+  }
+
+  if(hasMasterSlug){
+    pushParamColumn("master_slug", masterSlug);
+  }
+
+  pushParamColumn("enabled", true);
+
+  columns.push("created_at");
+  valueSql.push("NOW()");
+
+  if(hasSalonId){
+    pushParamColumn("salon_id", null);
+  }
+
+  if(hasMasterId){
+    pushParamColumn("master_id", null);
+  }
+
+  if(hasPasswordHash){
+    pushParamColumn("password_hash", null);
+  }
+
+  if(hasMustSetPassword){
+    pushParamColumn("must_set_password", true);
+  }
+
+  if(hasPasswordChangedAt){
+    pushParamColumn("password_changed_at", null);
+  }
+
+  if(hasPhone){
+    pushParamColumn("phone", normalizePhone(input.phone));
+  }
+
+  const created = await db.query(
+    `INSERT INTO auth_users(
+       ${columns.join(",\n       ")}
+     )
+     VALUES(${valueSql.join(", ")})
+     RETURNING
+       id,
+       email,
+       role,
+       salon_slug,
+       master_slug,
+       enabled,
+       created_at,
+       salon_id,
+       master_id,
+       must_set_password,
+       phone`,
+    params
+  );
+
+  return created.rows[0] || null;
+}
+
 function buildProvisionResult({ user, master, onboardingIdentity, onboardingTransition, reservation, meta, isIdempotent = false }){
   const lifecycleState = normalizeLifecycleState(onboardingIdentity?.state, isIdempotent ? "active" : "onboarding");
 
@@ -73,7 +197,9 @@ function buildProvisionResult({ user, master, onboardingIdentity, onboardingTran
         role: user.role,
         master_slug: user.master_slug,
         master_id: user.master_id || null,
-        enabled: user.enabled
+        enabled: user.enabled,
+        must_set_password: user.must_set_password ?? null,
+        phone: user.phone ?? null
       },
       master: {
         id: master.id,
@@ -157,7 +283,9 @@ export async function createMasterCanonical({ pool, payload }){
                    enabled,
                    created_at,
                    salon_id,
-                   master_id`,
+                   master_id,
+                   must_set_password,
+                   phone`,
                 [existingUser.id, String(existingMaster.id), existingMaster.slug]
               )
             ).rows[0] || existingUser;
@@ -199,33 +327,10 @@ export async function createMasterCanonical({ pool, payload }){
       }
     });
 
-    const userCreated = await db.query(
-      `INSERT INTO auth_users(
-         email,
-         role,
-         salon_slug,
-         master_slug,
-         enabled,
-         created_at,
-         salon_id,
-         master_id,
-         password_hash
-       )
-       VALUES($1, 'master', NULL, $2, true, NOW(), NULL, NULL, $3)
-       RETURNING
-         id,
-         email,
-         role,
-         salon_slug,
-         master_slug,
-         enabled,
-         created_at,
-         salon_id,
-         master_id`,
-      [input.email, finalMasterSlug, input.password_hash]
-    );
-
-    const user = userCreated.rows[0];
+    const user = await createProvisionMasterAuthUser(db, {
+      input,
+      masterSlug: finalMasterSlug
+    });
 
     const masterCreated = await db.query(
       `INSERT INTO masters(
@@ -261,7 +366,9 @@ export async function createMasterCanonical({ pool, payload }){
          enabled,
          created_at,
          salon_id,
-         master_id`,
+         master_id,
+         must_set_password,
+         phone`,
       [user.id, String(master.id)]
     );
 
