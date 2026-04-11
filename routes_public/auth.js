@@ -1,12 +1,28 @@
 import express from "express";
 import crypto from "crypto";
-import nodemailer from "nodemailer";
+import { google } from "googleapis";
 import { pool } from "../db/index.js";
 
 const router = express.Router();
 
 const OTP_TTL_MINUTES = 10;
 const OTP_PURPOSE = "login_verify";
+
+const GMAIL_CLIENT_ID = process.env.GMAIL_CLIENT_ID || "";
+const GMAIL_CLIENT_SECRET = process.env.GMAIL_CLIENT_SECRET || "";
+const GMAIL_REFRESH_TOKEN = process.env.GMAIL_REFRESH_TOKEN || "";
+const GMAIL_REDIRECT_URI = process.env.GMAIL_REDIRECT_URI || "http://localhost";
+const GMAIL_SENDER_EMAIL = process.env.GMAIL_SENDER_EMAIL || "kantotemus@gmail.com";
+
+const gmailClient = new google.auth.OAuth2(
+  GMAIL_CLIENT_ID,
+  GMAIL_CLIENT_SECRET,
+  GMAIL_REDIRECT_URI
+);
+
+gmailClient.setCredentials({
+  refresh_token: GMAIL_REFRESH_TOKEN
+});
 
 function signSession(payloadObj) {
   const payload = Buffer.from(JSON.stringify(payloadObj)).toString("base64");
@@ -15,57 +31,66 @@ function signSession(payloadObj) {
   return `${payload}.${sig}`;
 }
 
-function nowPlusMinutes(m){
+function nowPlusMinutes(m) {
   return new Date(Date.now() + m * 60 * 1000);
 }
 
-function sha256(v){
+function sha256(v) {
   return crypto.createHash("sha256").update(String(v || "")).digest("hex");
 }
 
-function normalizeEmail(v){
+function normalizeEmail(v) {
   return String(v || "").trim().toLowerCase();
 }
 
-function isEmail(v){
+function isEmail(v) {
   const e = normalizeEmail(v);
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 }
 
-function buildTransport(){
-  const host = String(process.env.SMTP_HOST || "").trim();
-  const port = Number(process.env.SMTP_PORT || 587);
-  const user = String(process.env.SMTP_USER || "").trim();
-  const pass = String(process.env.SMTP_PASS || "").trim();
-
-  if(!host || !user || !pass){
-    return null;
+function assertGmailConfig() {
+  if (!GMAIL_CLIENT_ID || !GMAIL_CLIENT_SECRET || !GMAIL_REFRESH_TOKEN) {
+    const error = new Error("GMAIL_CONFIG_MISSING");
+    error.code = "GMAIL_CONFIG_MISSING";
+    throw error;
   }
-
-  return nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465,
-    auth: { user, pass }
-  });
 }
 
-async function sendOtpEmail({ to, code }){
-  const transporter = buildTransport();
-  if(!transporter) throw new Error("SMTP_NOT_CONFIGURED");
+async function sendOtpEmail({ to, code }) {
+  assertGmailConfig();
 
-  await transporter.sendMail({
-    from: String(process.env.SMTP_FROM || process.env.SMTP_USER || "").trim(),
-    to,
-    subject: "Код входа TOTEM",
-    html: `
-      <div style="font-family:Arial,sans-serif;font-size:16px;color:#111827">
-        <h2>Код входа TOTEM</h2>
-        <p>Ваш код:</p>
-        <div style="font-size:32px;font-weight:700;letter-spacing:6px">${code}</div>
-        <p>Код действует ${OTP_TTL_MINUTES} минут.</p>
-      </div>
-    `
+  const gmail = google.gmail({ version: "v1", auth: gmailClient });
+
+  const subject = "Код входа TOTEM";
+  const html = `
+    <div style="font-family:Arial,sans-serif;font-size:16px;color:#111827">
+      <h2>Код входа TOTEM</h2>
+      <p>Ваш код:</p>
+      <div style="font-size:32px;font-weight:700;letter-spacing:6px">${code}</div>
+      <p>Код действует ${OTP_TTL_MINUTES} минут.</p>
+    </div>
+  `;
+
+  const message = [
+    "MIME-Version: 1.0",
+    'Content-Type: text/html; charset="UTF-8"',
+    "Content-Transfer-Encoding: 7bit",
+    `From: Totem <${GMAIL_SENDER_EMAIL}>`,
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    "",
+    html
+  ].join("\n");
+
+  const raw = Buffer.from(message)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+
+  await gmail.users.messages.send({
+    userId: "me",
+    requestBody: { raw }
   });
 }
 
@@ -80,7 +105,7 @@ router.post("/request", async (req, res) => {
     return res.status(400).json({ error: "INVALID_INPUT" });
   }
 
-  if(!isEmail(email)){
+  if (!isEmail(email)) {
     return res.status(400).json({ error: "EMAIL_REQUIRED" });
   }
 
@@ -148,10 +173,14 @@ router.post("/request", async (req, res) => {
 
     await client.query("COMMIT");
     return res.json({ ok: true });
-
   } catch (e) {
     await client.query("ROLLBACK");
     console.error("AUTH_REQUEST_ERROR", e);
+
+    if (e?.code === "GMAIL_CONFIG_MISSING") {
+      return res.status(500).json({ error: "EMAIL_PROVIDER_NOT_CONFIGURED" });
+    }
+
     return res.status(500).json({ error: "INTERNAL_ERROR" });
   } finally {
     client.release();
