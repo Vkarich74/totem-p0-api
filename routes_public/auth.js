@@ -6,6 +6,7 @@ import { pool } from "../db/index.js";
 const router = express.Router();
 
 const OTP_TTL_MINUTES = 10;
+const OTP_PURPOSE = "login_verify";
 
 function signSession(payloadObj) {
   const payload = Buffer.from(JSON.stringify(payloadObj)).toString("base64");
@@ -132,7 +133,7 @@ router.post("/request", async (req, res) => {
         u.rows[0].id,
         "email",
         target,
-        "login",
+        OTP_PURPOSE,
         codeHash,
         nowPlusMinutes(OTP_TTL_MINUTES),
         0,
@@ -175,11 +176,11 @@ router.post("/verify-json", async (req, res) => {
     SELECT o.*, u.id, u.role, u.salon_slug, u.master_slug
     FROM auth_otps o
     JOIN auth_users u ON u.id = o.user_id
-    WHERE o.target = $1 AND o.purpose='login'
+    WHERE o.target = $1 AND o.purpose=$2
     ORDER BY o.created_at DESC
     LIMIT 1
     `,
-    [target]
+    [target, OTP_PURPOSE]
   );
 
   if (r.rowCount === 0) {
