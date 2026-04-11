@@ -961,80 +961,20 @@ r.post("/auth/start", async (req,res)=>{
 
     await db.query("BEGIN");
 
-    const activeOtpRes = await db.query(`
-      SELECT id, resend_available_at
-      FROM public.auth_otps
-      WHERE target=$1
-        AND purpose=$2
-        AND consumed_at IS NULL
-        AND expires_at > NOW()
-      ORDER BY created_at DESC
-      LIMIT 1
-      FOR UPDATE
-    `,[phone, purpose]);
-
-    const activeOtp = activeOtpRes.rows[0] || null;
-
-    if(activeOtp?.resend_available_at && new Date(activeOtp.resend_available_at).getTime() > Date.now()){
-      await db.query("ROLLBACK");
-      return res.status(429).json({
-        ok:false,
-        error:"OTP_RESEND_NOT_AVAILABLE",
-        resend_available_at: activeOtp.resend_available_at
-      });
-    }
-
-    const code = String(Math.floor(100000 + Math.random()*900000));
-    const codeHash = await bcrypt.hash(code, 10);
-
-    await db.query(`
-      UPDATE public.auth_otps
-      SET consumed_at=NOW()
-      WHERE target=$1
-        AND purpose=$2
-        AND consumed_at IS NULL
-    `,[phone, purpose]);
-
-    await db.query(`
-      INSERT INTO public.auth_otps(
-        channel,
-        target,
-        purpose,
-        code_hash,
-        expires_at,
-        attempts_used,
-        max_attempts,
-        blocked_until,
-        resend_available_at,
-        consumed_at,
-        created_at
-      )
-      VALUES(
-        $1,
-        $2,
-        $3,
-        $4,
-        NOW() + ($5 || ' minutes')::interval,
-        0,
-        5,
-        NULL,
-        NOW() + ($6 || ' seconds')::interval,
-        NULL,
-        NOW()
-      )
-    `,[channel, phone, purpose, codeHash, AUTH_OTP_TTL_MINUTES, AUTH_OTP_RESEND_SECONDS]);
-
-    await db.query("COMMIT");
-
-    console.log("OTP_CODE", phone, purpose, code);
-
-    return res.json({
-      ok:true,
-      sent:true,
-      target: phone,
+    const otpResult = await issueAuthOtp(db, {
+      phone,
       purpose,
       channel
     });
+
+    if(!otpResult.ok){
+      await db.query("ROLLBACK");
+      return res.status(429).json(otpResult);
+    }
+
+    await db.query("COMMIT");
+
+    return res.json(otpResult);
 
   }catch(err){
     try{ await db.query("ROLLBACK"); }catch(e){}
@@ -1257,6 +1197,232 @@ r.post("/auth/verify", async (req,res)=>{
     return res.status(500).json({
       ok:false,
       error:"AUTH_VERIFY_FAILED"
+    });
+  }finally{
+    db.release();
+  }
+});
+
+r.post("/auth/password/reset/start", async (req,res)=>{
+  const db = await pool.connect();
+  try{
+    const phone = normalizePhone(req.body?.phone);
+    const requestedChannel = String(req.body?.channel || "").trim().toLowerCase();
+    const channel = requestedChannel === "email" ? "email" : "whatsapp";
+
+    if(!phone){
+      return res.status(400).json({
+        ok:false,
+        error:"PHONE_INVALID"
+      });
+    }
+
+    await db.query("BEGIN");
+
+    const user = await findLoginUser(db, { phone });
+
+    if(!user || !user.enabled){
+      await db.query("ROLLBACK");
+      return res.status(404).json({
+        ok:false,
+        error:"AUTH_USER_NOT_FOUND"
+      });
+    }
+
+    const otpResult = await issueAuthOtp(db, {
+      phone,
+      purpose:"password_reset",
+      channel
+    });
+
+    if(!otpResult.ok){
+      await db.query("ROLLBACK");
+      return res.status(429).json(otpResult);
+    }
+
+    await db.query("COMMIT");
+
+    return res.json(otpResult);
+  }catch(err){
+    try{ await db.query("ROLLBACK"); }catch(e){}
+    console.error("AUTH_PASSWORD_RESET_START_ERROR", err);
+    return res.status(500).json({
+      ok:false,
+      error:"AUTH_PASSWORD_RESET_START_FAILED"
+    });
+  }finally{
+    db.release();
+  }
+});
+
+r.post("/auth/password/reset/finish", async (req,res)=>{
+  const db = await pool.connect();
+  try{
+    const phone = normalizePhone(req.body?.phone);
+    const code = String(req.body?.code || "").trim();
+    const password = String(req.body?.password || "");
+
+    if(!phone || !code){
+      return res.status(400).json({
+        ok:false,
+        error:"VERIFY_PAYLOAD_INVALID"
+      });
+    }
+
+    if(!password || password.length < 8){
+      return res.status(400).json({
+        ok:false,
+        error:"PASSWORD_INVALID"
+      });
+    }
+
+    await db.query("BEGIN");
+
+    const otpRes = await db.query(`
+      SELECT *
+      FROM public.auth_otps
+      WHERE target=$1
+        AND purpose='password_reset'
+        AND consumed_at IS NULL
+      ORDER BY created_at DESC
+      LIMIT 1
+      FOR UPDATE
+    `,[phone]);
+
+    const otp = otpRes.rows[0] || null;
+
+    if(!otp){
+      await db.query("ROLLBACK");
+      return res.status(401).json({
+        ok:false,
+        error:"OTP_INVALID"
+      });
+    }
+
+    if(otp.blocked_until && new Date(otp.blocked_until).getTime() > Date.now()){
+      await db.query("ROLLBACK");
+      return res.status(429).json({
+        ok:false,
+        error:"OTP_BLOCKED",
+        blocked_until: otp.blocked_until
+      });
+    }
+
+    if(otp.expires_at && new Date(otp.expires_at).getTime() <= Date.now()){
+      await db.query("ROLLBACK");
+      return res.status(401).json({
+        ok:false,
+        error:"OTP_EXPIRED"
+      });
+    }
+
+    const attemptsUsed = Number(otp.attempts_used || 0);
+    const maxAttempts = Number(otp.max_attempts || 5);
+
+    if(attemptsUsed >= maxAttempts){
+      await db.query(`
+        UPDATE public.auth_otps
+        SET blocked_until = COALESCE(blocked_until, NOW() + ($2 || ' minutes')::interval)
+        WHERE id=$1
+      `,[otp.id, AUTH_OTP_BLOCK_MINUTES]);
+
+      await db.query("COMMIT");
+      return res.status(429).json({
+        ok:false,
+        error:"OTP_BLOCKED"
+      });
+    }
+
+    const codeOk = await bcrypt.compare(code, String(otp.code_hash || ""));
+
+    if(!codeOk){
+      const updatedAttempts = attemptsUsed + 1;
+      const shouldBlock = updatedAttempts >= maxAttempts;
+
+      const failedUpdate = await db.query(`
+        UPDATE public.auth_otps
+        SET attempts_used=$2,
+            blocked_until=CASE
+              WHEN $3 THEN NOW() + ($4 || ' minutes')::interval
+              ELSE blocked_until
+            END
+        WHERE id=$1
+        RETURNING attempts_used, max_attempts, blocked_until
+      `,[otp.id, updatedAttempts, shouldBlock, AUTH_OTP_BLOCK_MINUTES]);
+
+      await db.query("COMMIT");
+
+      return res.status(401).json({
+        ok:false,
+        error: shouldBlock ? "OTP_BLOCKED" : "OTP_INVALID",
+        attempts_used: Number(failedUpdate.rows[0]?.attempts_used || updatedAttempts),
+        max_attempts: Number(failedUpdate.rows[0]?.max_attempts || maxAttempts),
+        blocked_until: failedUpdate.rows[0]?.blocked_until || null
+      });
+    }
+
+    const userRes = await db.query(`
+      SELECT id, phone
+      FROM public.auth_users
+      WHERE phone=$1
+      LIMIT 1
+      FOR UPDATE
+    `,[phone]);
+
+    const user = userRes.rows[0] || null;
+
+    if(!user){
+      await db.query("ROLLBACK");
+      return res.status(404).json({
+        ok:false,
+        error:"AUTH_USER_NOT_FOUND"
+      });
+    }
+
+    const hash = await bcrypt.hash(password, 10);
+    const hasPasswordChangedAt = await authUsersHasColumn(db, "password_changed_at");
+
+    if(hasPasswordChangedAt){
+      await db.query(`
+        UPDATE public.auth_users
+        SET password_hash=$1,
+            must_set_password=false,
+            password_changed_at=NOW()
+        WHERE id=$2
+      `,[hash, Number(user.id)]);
+    }else{
+      await db.query(`
+        UPDATE public.auth_users
+        SET password_hash=$1,
+            must_set_password=false
+        WHERE id=$2
+      `,[hash, Number(user.id)]);
+    }
+
+    await db.query(`
+      UPDATE public.auth_sessions
+      SET revoked_at=NOW(),
+          revoked_reason='password_reset'
+      WHERE user_id=$1
+      AND revoked_at IS NULL
+    `,[Number(user.id)]);
+
+    await db.query(`
+      UPDATE public.auth_otps
+      SET consumed_at=NOW()
+      WHERE target=$1
+        AND consumed_at IS NULL
+    `,[String(user.phone)]);
+
+    await db.query("COMMIT");
+
+    return res.json({ ok:true });
+  }catch(err){
+    try{ await db.query("ROLLBACK"); }catch(e){}
+    console.error("AUTH_PASSWORD_RESET_FINISH_ERROR", err);
+    return res.status(500).json({
+      ok:false,
+      error:"AUTH_PASSWORD_RESET_FINISH_FAILED"
     });
   }finally{
     db.release();
