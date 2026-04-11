@@ -40,6 +40,135 @@ async function findSalonBySlug(db, slug){
   return result.rows[0] || null;
 }
 
+function normalizeProvisionPhone(value){
+  const raw = String(value || "").trim();
+  if(!raw){
+    return null;
+  }
+
+  const digits = raw.replace(/\D/g, "");
+
+  if(digits.startsWith("996") && digits.length === 12){
+    const local = digits.slice(3);
+    if(local[0] === "0"){
+      return null;
+    }
+    return `+996${local}`;
+  }
+
+  if(raw.startsWith("+996")){
+    const local = raw.slice(4).replace(/\D/g, "");
+    if(local.length !== 9 || local[0] === "0"){
+      return null;
+    }
+    return `+996${local}`;
+  }
+
+  return null;
+}
+
+async function authUsersHasColumn(db, columnName){
+  const result = await db.query(
+    `SELECT 1
+     FROM information_schema.columns
+     WHERE table_schema='public'
+       AND table_name='auth_users'
+       AND column_name=$1
+     LIMIT 1`,
+    [columnName]
+  );
+
+  return result.rows.length > 0;
+}
+
+async function createProvisionSalonAuthUser(db, { input, salon }){
+  const hasSalonSlug = await authUsersHasColumn(db, "salon_slug");
+  const hasMasterSlug = await authUsersHasColumn(db, "master_slug");
+  const hasSalonId = await authUsersHasColumn(db, "salon_id");
+  const hasMasterId = await authUsersHasColumn(db, "master_id");
+  const hasPasswordHash = await authUsersHasColumn(db, "password_hash");
+  const hasMustSetPassword = await authUsersHasColumn(db, "must_set_password");
+  const hasPhone = await authUsersHasColumn(db, "phone");
+  const hasPasswordChangedAt = await authUsersHasColumn(db, "password_changed_at");
+
+  const columns = ["email", "role", "enabled"];
+  const values = [input.email, "salon_admin", true];
+
+  if(hasSalonSlug){
+    columns.push("salon_slug");
+    values.push(salon.slug);
+  }
+
+  if(hasMasterSlug){
+    columns.push("master_slug");
+    values.push(null);
+  }
+
+  if(hasSalonId){
+    columns.push("salon_id");
+    values.push(String(salon.id));
+  }
+
+  if(hasMasterId){
+    columns.push("master_id");
+    values.push(null);
+  }
+
+  if(hasPasswordHash){
+    columns.push("password_hash");
+    values.push(null);
+  }
+
+  if(hasMustSetPassword){
+    columns.push("must_set_password");
+    values.push(true);
+  }
+
+  if(hasPhone){
+    columns.push("phone");
+    values.push(normalizeProvisionPhone(input.phone));
+  }
+
+  if(hasPasswordChangedAt){
+    columns.push("password_changed_at");
+    values.push(null);
+  }
+
+  const placeholders = columns.map((_, index) => `$${index + 1}`).join(", ");
+  const returnFields = ["id", "email", "role", "enabled", "created_at"];
+
+  if(hasSalonSlug){
+    returnFields.push("salon_slug");
+  }
+  if(hasMasterSlug){
+    returnFields.push("master_slug");
+  }
+  if(hasSalonId){
+    returnFields.push("salon_id");
+  }
+  if(hasMasterId){
+    returnFields.push("master_id");
+  }
+  if(hasPhone){
+    returnFields.push("phone");
+  }
+  if(hasMustSetPassword){
+    returnFields.push("must_set_password");
+  }
+
+  const created = await db.query(
+    `INSERT INTO auth_users(
+       ${columns.join(",\n       ")}
+     )
+     VALUES(${placeholders})
+     RETURNING
+       ${returnFields.join(",\n       ")}`,
+    values
+  );
+
+  return created.rows[0] || null;
+}
+
 function buildProvisionResult({
   user,
   salon,
@@ -71,7 +200,9 @@ function buildProvisionResult({
         role: user.role,
         salon_slug: user.salon_slug,
         salon_id: user.salon_id || null,
-        enabled: user.enabled
+        enabled: user.enabled,
+        must_set_password: user.must_set_password ?? null,
+        phone: user.phone || null
       },
       salon: {
         id: salon.id,
@@ -229,33 +360,11 @@ export async function createSalonCanonical({ pool, payload }){
 
     const salon = salonCreated.rows[0];
 
-    const userCreated = await db.query(
-      `INSERT INTO auth_users(
-         email,
-         role,
-         salon_slug,
-         master_slug,
-         enabled,
-         created_at,
-         salon_id,
-         master_id,
-         password_hash
-       )
-       VALUES($1, 'salon_admin', $2, NULL, true, NOW(), $3, NULL, NULL)
-       RETURNING
-         id,
-         email,
-         role,
-         salon_slug,
-         master_slug,
-         enabled,
-         created_at,
-         salon_id,
-         master_id`,
-      [input.email, salon.slug, String(salon.id)]
-    );
+    const user = await createProvisionSalonAuthUser(db, {
+      input,
+      salon
+    });
 
-    const user = userCreated.rows[0];
     const ownerLink = await upsertOwnerSalonLink(db, user.id, salon.id);
     const defaultSalon = await upsertUserDefaultSalon(db, user.id, salon.slug);
 
