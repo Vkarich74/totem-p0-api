@@ -49,13 +49,14 @@ function isEmail(v) {
 }
 
 function normalizeDbRole(role) {
-  if (role === "salon") return "owner";
+  if (role === "salon") return "salon_admin";
+  if (role === "salon_admin") return "salon_admin";
   if (role === "master") return "master";
   return null;
 }
 
 function normalizeResponseRole(dbRole, salonSlug, masterSlug) {
-  if (dbRole === "owner" && salonSlug) return "salon";
+  if (dbRole === "salon_admin" && salonSlug) return "salon";
   if (dbRole === "master" && masterSlug) return "master";
   return dbRole;
 }
