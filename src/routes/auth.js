@@ -1,7 +1,7 @@
 import express from "express";
 import crypto from "crypto";
 import nodemailer from "nodemailer";
-import db from "../db.js";
+import { pool as db } from "../db.js";
 
 const router = express.Router();
 
