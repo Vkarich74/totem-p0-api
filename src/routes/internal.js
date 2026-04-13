@@ -97,8 +97,7 @@ async function sendOtpEmail({to, code}){
     `Subject: ${subject}`,
     "",
     html
-  ].join("
-");
+  ].join("\n");
 
   const raw = Buffer.from(message)
     .toString("base64")
