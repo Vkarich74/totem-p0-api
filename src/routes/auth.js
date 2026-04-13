@@ -115,7 +115,7 @@ async function createSession(userId){
 router.post("/start", async (req, res) => {
   try {
     const login = String(req.body?.login || req.body?.email || "").trim();
-    const purpose = String(req.body?.purpose || "login").trim() || "login";
+    const purpose = String(req.body?.purpose || "login_verify").trim() || "login_verify";
 
     if(!login){
       return res.status(400).json({ ok:false, error:"LOGIN_REQUIRED" });
