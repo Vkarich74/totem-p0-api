@@ -45,22 +45,47 @@ const AUTH_OTP_BLOCK_MINUTES = 10;
 const AUTH_OTP_RESEND_SECONDS = 60;
 
 function buildTransport(){
-  const host = String(process.env.SMTP_HOST || "").trim();
-  const port = Number(process.env.SMTP_PORT || 587);
-  const user = String(process.env.SMTP_USER || "").trim();
-  const pass = String(process.env.SMTP_PASS || "").trim();
-  if(!host || !user || !pass) return null;
-  return nodemailer.createTransport({host, port, secure: port===465, auth:{user, pass}});
+  const user = String(process.env.GMAIL_SENDER_EMAIL || "").trim();
+  const clientId = String(process.env.GMAIL_CLIENT_ID || "").trim();
+  const clientSecret = String(process.env.MAIL_CLIENT_SECRET || "").trim();
+  const refreshToken = String(process.env.GMAIL_REFRESH_TOKEN || "").trim();
+  const redirectUri = String(process.env.GMAIL_REDIRECT_URI || "http://localhost").trim();
+
+  if(!user || !clientId || !clientSecret || !refreshToken){
+    return null;
+  }
+
+  return nodemailer.createTransport({
+    service: "gmail",
+    auth: {
+      type: "OAuth2",
+      user,
+      clientId,
+      clientSecret,
+      refreshToken,
+      redirectUri
+    }
+  });
 }
 
 async function sendOtpEmail({to, code}){
   const t = buildTransport();
-  if(!t) return;
+  if(!t){
+    return;
+  }
+
   await t.sendMail({
-    from: process.env.SMTP_FROM || process.env.SMTP_USER,
+    from: String(process.env.GMAIL_SENDER_EMAIL || "").trim(),
     to,
     subject: "Код входа TOTEM",
-    html: `<b>${code}</b>`
+    html: `
+      <div style="font-family:Arial,sans-serif;font-size:16px;color:#111827">
+        <h2 style="margin:0 0 16px 0;">Код входа TOTEM</h2>
+        <p style="margin:0 0 12px 0;">Ваш код подтверждения:</p>
+        <div style="font-size:32px;font-weight:700;letter-spacing:6px;margin:0 0 16px 0;">${code}</div>
+        <p style="margin:0;color:#4b5563;">Код действует ${AUTH_OTP_TTL_MINUTES} минут.</p>
+      </div>
+    `
   });
 }
 
