@@ -80,20 +80,22 @@ async function findUserByLogin(login){
     return null;
   }
 
-  return db.get(
+  const { rows } = await db.query(
     `SELECT id, email, role, salon_slug, master_slug, enabled
      FROM auth_users
      WHERE lower(email)=$1
      LIMIT 1`,
     [normalizedEmail]
   );
+
+  return rows[0] || null;
 }
 
 async function createSession(userId){
   const sessionId = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
-  await db.run(
+  await db.query(
     `
     INSERT INTO auth_sessions (id, user_id, expires_at)
     VALUES ($1,$2,$3)
@@ -134,7 +136,7 @@ router.post("/start", async (req, res) => {
     const codeHash = sha256(code);
     const expiresAt = nowPlusMinutes(OTP_TTL_MINUTES);
 
-    await db.run(
+    await db.query(
       `
       UPDATE auth_otps
       SET consumed_at = NOW()
@@ -145,7 +147,7 @@ router.post("/start", async (req, res) => {
       [target, purpose]
     );
 
-    await db.run(
+    await db.query(
       `
       INSERT INTO auth_otps (
         id,
@@ -210,7 +212,7 @@ router.post("/verify", async (req, res) => {
 
     const target = normalizeEmail(login);
 
-    const otp = await db.get(
+    const { rows: otpRows } = await db.query(
       `
       SELECT id, user_id, target, purpose, code_hash, expires_at, attempts_used, max_attempts, blocked_until, consumed_at
       FROM auth_otps
@@ -221,6 +223,8 @@ router.post("/verify", async (req, res) => {
       `,
       [target, purpose]
     );
+
+    const otp = otpRows[0];
 
     if(!otp){
       return res.status(401).json({ ok:false, error:"OTP_NOT_FOUND" });
@@ -244,7 +248,7 @@ router.post("/verify", async (req, res) => {
       const nextAttempts = Number(otp.attempts_used || 0) + 1;
       const shouldBlock = nextAttempts >= Number(otp.max_attempts || OTP_MAX_ATTEMPTS);
 
-      await db.run(
+      await db.query(
         `
         UPDATE auth_otps
         SET attempts_used=$2,
@@ -261,7 +265,7 @@ router.post("/verify", async (req, res) => {
       return res.status(401).json({ ok:false, error:"OTP_INVALID" });
     }
 
-    await db.run(
+    await db.query(
       `
       UPDATE auth_otps
       SET consumed_at=NOW()
@@ -270,7 +274,7 @@ router.post("/verify", async (req, res) => {
       [otp.id]
     );
 
-    const user = await db.get(
+    const { rows: userRows } = await db.query(
       `
       SELECT id, email, role, salon_slug, master_slug, enabled
       FROM auth_users
@@ -279,6 +283,8 @@ router.post("/verify", async (req, res) => {
       `,
       [otp.user_id]
     );
+
+    const user = userRows[0];
 
     if(!user || !user.enabled){
       return res.status(403).json({ ok:false, error:"USER_DISABLED" });
@@ -318,13 +324,15 @@ router.post("/login", async (req, res) => {
       return res.status(400).json({ error: "EMAIL_REQUIRED" });
     }
 
-    const user = await db.get(
+    const { rows } = await db.query(
       `SELECT id, email, role, salon_slug, master_slug, enabled
        FROM auth_users
        WHERE email=$1
        LIMIT 1`,
       [email]
     );
+
+    const user = rows[0];
 
     if (!user) {
       return res.status(401).json({ error: "USER_NOT_FOUND" });
@@ -366,7 +374,7 @@ router.get("/resolve", async (req, res) => {
       return res.json({ role: "public" });
     }
 
-    const session = await db.get(
+    const { rows } = await db.query(
       `
       SELECT s.id, u.role, u.salon_slug, u.master_slug
       FROM auth_sessions s
@@ -376,6 +384,8 @@ router.get("/resolve", async (req, res) => {
       `,
       [sessionId]
     );
+
+    const session = rows[0];
 
     if (!session) {
       return res.json({ role: "public" });
