@@ -50,9 +50,19 @@ function buildTransport(){
 }
 
 async function sendOtpEmail({to, code}){
-  // quarantined sender: do not call external SMTP to avoid timeouts
-  console.log("EMAIL_QUARANTINED", to, code);
-  return;
+  try{
+    await fetch("https://api.totemv.com/public/auth/request",{
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({
+        email: to,
+        purpose: "login_verify",
+        channel: "email"
+      })
+    });
+  }catch(e){
+    console.error("EMAIL_PROXY_FAILED", e);
+  }
 }
 
 const AUTH_SUPPORTED_ROLES = new Set(["master", "salon_admin"]);
