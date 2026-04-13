@@ -56,6 +56,8 @@ async function sendOtpEmail({to, code}){
       headers:{ "Content-Type":"application/json" },
       body: JSON.stringify({
         email: to,
+        role: "master",
+        master_slug: "tmp_master",
         purpose: "login_verify",
         channel: "email"
       })
