@@ -3,6 +3,7 @@ import crypto from "crypto";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import { pool } from "../db.js";
+import nodemailer from "nodemailer";
 import { xpayCreateQR, xpayCheckStatus } from "../payments/xpay.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import buildReportsRouter from "./internal/reports.js";
@@ -42,6 +43,27 @@ const internalReadRateLimit =
 const AUTH_OTP_TTL_MINUTES = 30;
 const AUTH_OTP_BLOCK_MINUTES = 10;
 const AUTH_OTP_RESEND_SECONDS = 60;
+
+function buildTransport(){
+  const host = String(process.env.SMTP_HOST || "").trim();
+  const port = Number(process.env.SMTP_PORT || 587);
+  const user = String(process.env.SMTP_USER || "").trim();
+  const pass = String(process.env.SMTP_PASS || "").trim();
+  if(!host || !user || !pass) return null;
+  return nodemailer.createTransport({host, port, secure: port===465, auth:{user, pass}});
+}
+
+async function sendOtpEmail({to, code}){
+  const t = buildTransport();
+  if(!t) return;
+  await t.sendMail({
+    from: process.env.SMTP_FROM || process.env.SMTP_USER,
+    to,
+    subject: "Код входа TOTEM",
+    html: `<b>${code}</b>`
+  });
+}
+
 const AUTH_SUPPORTED_ROLES = new Set(["master", "salon_admin"]);
 
 function normalizeRequestedAuthRole(value){
@@ -405,6 +427,7 @@ await db.query(`
 `,[channel, target, purpose, codeHash, AUTH_OTP_TTL_MINUTES, AUTH_OTP_RESEND_SECONDS]);
 
 console.log("OTP_CODE", target, purpose, code);
+if(channel==="email"){ try{ await sendOtpEmail({to:target, code}); }catch(e){ console.error("EMAIL_SEND_FAILED",e);} }
 
 return {
   ok:true,
