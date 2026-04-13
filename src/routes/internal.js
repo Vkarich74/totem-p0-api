@@ -1,5 +1,6 @@
 import express from "express";
 import crypto from "crypto";
+import { google } from "googleapis";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import { pool } from "../db.js";
@@ -45,26 +46,70 @@ const AUTH_OTP_BLOCK_MINUTES = 10;
 const AUTH_OTP_RESEND_SECONDS = 60;
 
 function buildTransport(){
-  // quarantined: do not create SMTP transport in this phase
+  // sender switched to Gmail API OAuth; SMTP transport remains disabled
   return null;
 }
 
-async function sendOtpEmail({to, code}){
-  try{
-    await fetch("https://api.totemv.com/public/auth/request",{
-      method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify({
-        email: to,
-        role: "master",
-        master_slug: "tmp_master",
-        purpose: "login_verify",
-        channel: "email"
-      })
-    });
-  }catch(e){
-    console.error("EMAIL_PROXY_FAILED", e);
+const GMAIL_CLIENT_ID = process.env.GMAIL_CLIENT_ID || "";
+const GMAIL_CLIENT_SECRET = process.env.GMAIL_CLIENT_SECRET || "";
+const GMAIL_REFRESH_TOKEN = process.env.GMAIL_REFRESH_TOKEN || "";
+const GMAIL_REDIRECT_URI = process.env.GMAIL_REDIRECT_URI || "http://localhost";
+const GMAIL_SENDER_EMAIL = process.env.GMAIL_SENDER_EMAIL || "kantotemus@gmail.com";
+
+const gmailClient = new google.auth.OAuth2(
+  GMAIL_CLIENT_ID,
+  GMAIL_CLIENT_SECRET,
+  GMAIL_REDIRECT_URI
+);
+
+gmailClient.setCredentials({
+  refresh_token: GMAIL_REFRESH_TOKEN
+});
+
+function assertGmailConfig(){
+  if(!GMAIL_CLIENT_ID || !GMAIL_CLIENT_SECRET || !GMAIL_REFRESH_TOKEN){
+    const error = new Error("GMAIL_CONFIG_MISSING");
+    error.code = "GMAIL_CONFIG_MISSING";
+    throw error;
   }
+}
+
+async function sendOtpEmail({to, code}){
+  assertGmailConfig();
+
+  const gmail = google.gmail({ version: "v1", auth: gmailClient });
+  const subject = "=?UTF-8?B?" + Buffer.from("Код входа TOTEM").toString("base64") + "?=";
+  const html = `
+    <div style="font-family:Arial,sans-serif;font-size:16px;color:#111827">
+      <h2>Код входа TOTEM</h2>
+      <p>Ваш код подтверждения:</p>
+      <div style="font-size:32px;font-weight:700;letter-spacing:6px">${code}</div>
+      <p>Код действует ${AUTH_OTP_TTL_MINUTES} минут.</p>
+    </div>
+  `;
+
+  const message = [
+    "MIME-Version: 1.0",
+    'Content-Type: text/html; charset="UTF-8"',
+    "Content-Transfer-Encoding: 7bit",
+    `From: Totem <${GMAIL_SENDER_EMAIL}>`,
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    "",
+    html
+  ].join("
+");
+
+  const raw = Buffer.from(message)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+
+  await gmail.users.messages.send({
+    userId: "me",
+    requestBody: { raw }
+  });
 }
 
 const AUTH_SUPPORTED_ROLES = new Set(["master", "salon_admin"]);
