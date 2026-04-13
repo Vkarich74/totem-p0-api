@@ -3,7 +3,7 @@ import crypto from "crypto";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import { pool } from "../db.js";
-import nodemailer from "nodemailer";
+// import nodemailer from "nodemailer";  // quarantined sender
 import { xpayCreateQR, xpayCheckStatus } from "../payments/xpay.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import buildReportsRouter from "./internal/reports.js";
@@ -45,48 +45,14 @@ const AUTH_OTP_BLOCK_MINUTES = 10;
 const AUTH_OTP_RESEND_SECONDS = 60;
 
 function buildTransport(){
-  const user = String(process.env.GMAIL_SENDER_EMAIL || "").trim();
-  const clientId = String(process.env.GMAIL_CLIENT_ID || "").trim();
-  const clientSecret = String(process.env.GMAIL_CLIENT_SECRET || "").trim();
-  const refreshToken = String(process.env.GMAIL_REFRESH_TOKEN || "").trim();
-  const redirectUri = String(process.env.GMAIL_REDIRECT_URI || "http://localhost").trim();
-
-  if(!user || !clientId || !clientSecret || !refreshToken){
-    return null;
-  }
-
-  return nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-      type: "OAuth2",
-      user,
-      clientId,
-      clientSecret,
-      refreshToken,
-      redirectUri
-    }
-  });
+  // quarantined: do not create SMTP transport in this phase
+  return null;
 }
 
 async function sendOtpEmail({to, code}){
-  const t = buildTransport();
-  if(!t){
-    return;
-  }
-
-  await t.sendMail({
-    from: String(process.env.GMAIL_SENDER_EMAIL || "").trim(),
-    to,
-    subject: "Код входа TOTEM",
-    html: `
-      <div style="font-family:Arial,sans-serif;font-size:16px;color:#111827">
-        <h2 style="margin:0 0 16px 0;">Код входа TOTEM</h2>
-        <p style="margin:0 0 12px 0;">Ваш код подтверждения:</p>
-        <div style="font-size:32px;font-weight:700;letter-spacing:6px;margin:0 0 16px 0;">${code}</div>
-        <p style="margin:0;color:#4b5563;">Код действует ${AUTH_OTP_TTL_MINUTES} минут.</p>
-      </div>
-    `
-  });
+  // quarantined sender: do not call external SMTP to avoid timeouts
+  console.log("EMAIL_QUARANTINED", to, code);
+  return;
 }
 
 const AUTH_SUPPORTED_ROLES = new Set(["master", "salon_admin"]);
