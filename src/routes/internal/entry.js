@@ -5,6 +5,7 @@ import { buildResolvedQrImage } from "../../services/entry/entryQr.js";
 import { buildCabinetAuthSnapshot } from "../../services/entry/entryAuth.js";
 import { buildEntryValidationSnapshot } from "../../services/entry/entryValidation.js";
 import { buildEntryHandoffPackage } from "../../services/entry/entryHandoff.js";
+import { buildQrContract } from "../../services/entry/qrService.js"; // ✅ NEW
 
 function readBaseUrl(req){
   const explicit = process.env.PUBLIC_WEB_BASE_URL || process.env.APP_BASE_URL || process.env.PUBLIC_APP_BASE_URL || "";
@@ -42,29 +43,21 @@ export default function buildEntryRouter(pool){
     }
   });
 
+  // ✅ FIXED: QR PAYLOAD через qrService
   r.get("/entry/:ownerType/:slug/qr-payload", requireAuth, async (req, res) => {
     try {
       const { ownerType, slug } = req.params;
-      const resolved = await buildResolvedEntryContract(pool, ownerType, slug, readBaseUrl(req));
 
-      if (!resolved) {
-        return res.status(404).json({ ok: false, code: "NOT_FOUND" });
-      }
-
-      if (!resolved.contract.qr_allowed) {
-        return res.status(403).json({ ok: false, code: "QR_NOT_AVAILABLE" });
-      }
+      const qr = buildQrContract({
+        owner_type: ownerType,
+        canonical_slug: slug
+      });
 
       return res.status(200).json({
         ok: true,
-        owner_type: resolved.contract.owner_type,
-        owner_id: resolved.contract.owner_id,
-        canonical_slug: resolved.contract.canonical_slug,
-        qr_payload: resolved.contract.public_absolute_url,
-        public_absolute_url: resolved.contract.public_absolute_url,
-        entry_allowed: resolved.contract.entry_allowed,
-        qr_allowed: resolved.contract.qr_allowed
+        ...qr.qr
       });
+
     } catch (err) {
       const code = err?.code || "ENTRY_QR_PAYLOAD_FAILED";
       const status = code === "INVALID_OWNER_TYPE" || code === "INVALID_CANONICAL_SLUG" ? 400 : 500;
@@ -85,9 +78,15 @@ export default function buildEntryRouter(pool){
         return res.status(403).json({ ok: false, code: "QR_NOT_AVAILABLE" });
       }
 
+      // ✅ header теперь консистентен с qrService
+      const qrContract = buildQrContract({
+        owner_type: ownerType,
+        canonical_slug: slug
+      });
+
       res.setHeader("Content-Type", resolvedQr.qr.contentType);
       res.setHeader("Cache-Control", "public, max-age=300");
-      res.setHeader("X-Totem-Qr-Payload", resolvedQr.resolved.contract.public_absolute_url);
+      res.setHeader("X-Totem-Qr-Payload", qrContract.qr.qr_target_url);
 
       return res.status(200).send(resolvedQr.qr.buffer);
     } catch (err) {
