@@ -14,6 +14,7 @@ import { resolveAuth } from "./middleware/resolveAuth.js";
 import { rateLimit } from "./middleware/rateLimit.js";
 
 import { createPublicRouter } from "./routes/public.js";
+import authRouter from "./routes/auth.js";
 import { createInternalRouter } from "./routes/internal.js";
 import { initializeSlugReservationLayer } from "./services/provision/slugReservation.js";
 
@@ -138,6 +139,8 @@ app.use(
     rlBookingCreate,
   })
 );
+
+app.use("/auth", authRouter);
 
 app.use(
   "/internal",
