@@ -47,7 +47,7 @@ const AUTH_OTP_RESEND_SECONDS = 60;
 function buildTransport(){
   const user = String(process.env.GMAIL_SENDER_EMAIL || "").trim();
   const clientId = String(process.env.GMAIL_CLIENT_ID || "").trim();
-  const clientSecret = String(process.env.MAIL_CLIENT_SECRET || "").trim();
+  const clientSecret = String(process.env.GMAIL_CLIENT_SECRET || "").trim();
   const refreshToken = String(process.env.GMAIL_REFRESH_TOKEN || "").trim();
   const redirectUri = String(process.env.GMAIL_REDIRECT_URI || "http://localhost").trim();
 
