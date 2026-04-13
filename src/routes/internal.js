@@ -452,7 +452,13 @@ await db.query(`
 `,[channel, target, purpose, codeHash, AUTH_OTP_TTL_MINUTES, AUTH_OTP_RESEND_SECONDS]);
 
 console.log("OTP_CODE", target, purpose, code);
-if(channel==="email"){ try{ await sendOtpEmail({to:target, code}); }catch(e){ console.error("EMAIL_SEND_FAILED",e);} }
+if(channel==="email"){
+  Promise.resolve()
+    .then(() => sendOtpEmail({to:target, code}))
+    .catch((e) => {
+      console.error("EMAIL_SEND_FAILED", e);
+    });
+}
 
 return {
   ok:true,
