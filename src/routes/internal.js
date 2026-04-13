@@ -142,6 +142,36 @@ return `+996${local}`;
 return null;
 }
 
+function normalizeEmail(value){
+const email = normalizeAuthIdentifier(value);
+if(!email || !email.includes("@")){
+return null;
+}
+return email;
+}
+
+function resolveAuthTarget(body = {}){
+const phone = normalizePhone(body?.phone);
+if(phone){
+return {
+channel: "whatsapp",
+lookup: "phone",
+value: phone
+};
+}
+
+const email = normalizeEmail(body?.email || body?.login);
+if(email){
+return {
+channel: "email",
+lookup: "email",
+value: email
+};
+}
+
+return null;
+}
+
 function buildNeutralAuthStartResponse({ channel, purpose }){
 return {
 ok:true,
@@ -222,21 +252,26 @@ const result = await db.query(
 return result.rows.length > 0;
 }
 
-async function applyPhoneVerificationState(db, userId, channel){
+async function applyAuthVerificationState(db, userId, target){
 const hasPhoneVerifiedAt = await authUsersHasColumn(db, "phone_verified_at");
+const hasEmailVerifiedAt = await authUsersHasColumn(db, "email_verified_at");
 const hasPreferredLoginChannel = await authUsersHasColumn(db, "preferred_login_channel");
 
 const updates = [];
 const params = [];
 let paramIndex = 1;
 
-if(hasPhoneVerifiedAt){
+if(target?.lookup === "phone" && hasPhoneVerifiedAt){
 updates.push(`phone_verified_at=COALESCE(phone_verified_at, NOW())`);
+}
+
+if(target?.lookup === "email" && hasEmailVerifiedAt){
+updates.push(`email_verified_at=COALESCE(email_verified_at, NOW())`);
 }
 
 if(hasPreferredLoginChannel){
 updates.push(`preferred_login_channel=$${paramIndex}`);
-params.push(channel === "email" ? "email" : "whatsapp");
+params.push(target?.channel === "email" ? "email" : "whatsapp");
 paramIndex += 1;
 }
 
@@ -278,7 +313,7 @@ nextParamIndex: paramIndex
 };
 }
 
-async function getAuthUserByPhone(db, phone){
+async function getAuthUserByTarget(db, target){
 const selectMasterSlug = await authUsersHasColumn(db, "master_slug");
 const selectSalonSlug = await authUsersHasColumn(db, "salon_slug");
 
@@ -290,19 +325,23 @@ if(selectSalonSlug){
 fields.push("salon_slug");
 }
 
+const whereClause = target?.lookup === "email"
+? "lower(email)=lower($1)"
+: "phone=$1";
+
 const userRes = await db.query(`
 SELECT ${fields.join(", ")}
 FROM public.auth_users
-WHERE phone=$1
+WHERE ${whereClause}
 LIMIT 1
 FOR UPDATE
-`,[phone]);
+`,[target?.value]);
 
 return userRes.rows[0] || null;
 }
 
 
-async function issueAuthOtp(db, { phone, purpose, channel }){
+async function issueAuthOtp(db, { target, purpose, channel }){
 const activeOtpRes = await db.query(`
   SELECT id, resend_available_at
   FROM public.auth_otps
@@ -313,7 +352,7 @@ const activeOtpRes = await db.query(`
   ORDER BY created_at DESC
   LIMIT 1
   FOR UPDATE
-`,[phone, purpose]);
+`,[target, purpose]);
 
 const activeOtp = activeOtpRes.rows[0] || null;
 
@@ -334,7 +373,7 @@ await db.query(`
   WHERE target=$1
     AND purpose=$2
     AND consumed_at IS NULL
-`,[phone, purpose]);
+`,[target, purpose]);
 
 await db.query(`
   INSERT INTO public.auth_otps(
@@ -363,37 +402,52 @@ await db.query(`
     NULL,
     NOW()
   )
-`,[channel, phone, purpose, codeHash, AUTH_OTP_TTL_MINUTES, AUTH_OTP_RESEND_SECONDS]);
+`,[channel, target, purpose, codeHash, AUTH_OTP_TTL_MINUTES, AUTH_OTP_RESEND_SECONDS]);
 
-console.log("OTP_CODE", phone, purpose, code);
+console.log("OTP_CODE", target, purpose, code);
 
 return {
   ok:true,
   sent:true,
-  target: phone,
+  target,
   purpose,
   channel
 };
 }
 
-async function createAuthUserForRole(db, { phone, role, ownerSlug }){
-const email = `${phone.replace("+","")}@totem.local`;
+async function createAuthUserForRole(db, { target, role, ownerSlug }){
 const hasMasterSlug = await authUsersHasColumn(db, "master_slug");
 const hasSalonSlug = await authUsersHasColumn(db, "salon_slug");
 const hasPhoneVerifiedAt = await authUsersHasColumn(db, "phone_verified_at");
+const hasEmailVerifiedAt = await authUsersHasColumn(db, "email_verified_at");
 const hasPreferredLoginChannel = await authUsersHasColumn(db, "preferred_login_channel");
 
-const columns = ["email", "phone", "role", "enabled", "must_set_password"];
-const values = [email, phone, role, true, true];
+const email = target?.lookup === "email"
+? target.value
+: `${String(target?.value || "").replace("+","")}@totem.local`;
+const phone = target?.lookup === "phone" ? target.value : null;
 
-if(hasPhoneVerifiedAt){
+const columns = ["email", "role", "enabled", "must_set_password"];
+const values = [email, role, true, true];
+
+if(phone){
+columns.push("phone");
+values.push(phone);
+}
+
+if(target?.lookup === "phone" && hasPhoneVerifiedAt){
 columns.push("phone_verified_at");
+values.push(new Date().toISOString());
+}
+
+if(target?.lookup === "email" && hasEmailVerifiedAt){
+columns.push("email_verified_at");
 values.push(new Date().toISOString());
 }
 
 if(hasPreferredLoginChannel){
 columns.push("preferred_login_channel");
-values.push("whatsapp");
+values.push(target?.channel === "email" ? "email" : "whatsapp");
 }
 
 if(role === "master" && hasMasterSlug){
@@ -1099,7 +1153,7 @@ r.post("/auth/logout-all", async (req,res)=>{
 r.post("/auth/start", async (req,res)=>{
   const db = await pool.connect();
   try{
-    const phone = normalizePhone(req.body?.phone);
+    const authTarget = resolveAuthTarget(req.body || {});
     const requestedPurpose = String(req.body?.purpose || "").trim().toLowerCase();
     const purpose =
       requestedPurpose === "password_reset"
@@ -1112,19 +1166,19 @@ r.post("/auth/start", async (req,res)=>{
               ? "phone_verify"
               : "login_verify";
     const requestedChannel = String(req.body?.channel || "").trim().toLowerCase();
-    const channel = requestedChannel === "email" ? "email" : "whatsapp";
+    const channel = requestedChannel === "email" ? "email" : authTarget?.channel || "whatsapp";
 
-    if(!phone){
+    if(!authTarget?.value){
       return res.status(400).json({
         ok:false,
-        error:"PHONE_INVALID"
+        error:"AUTH_TARGET_INVALID"
       });
     }
 
     await db.query("BEGIN");
 
     const otpResult = await issueAuthOtp(db, {
-      phone,
+      target: authTarget.value,
       purpose,
       channel
     });
@@ -1153,13 +1207,13 @@ r.post("/auth/start", async (req,res)=>{
 r.post("/auth/verify", async (req,res)=>{
   const db = await pool.connect();
   try{
-    const phone = normalizePhone(req.body?.phone);
+    const authTarget = resolveAuthTarget(req.body || {});
     const code = String(req.body?.code || "").trim();
     const requestedPurpose = String(req.body?.purpose || "").trim().toLowerCase();
     const requestedRole = normalizeRequestedAuthRole(req.body?.role || req.body?.owner_type);
     const requestedOwnerSlug = normalizeRequestedOwnerSlug(requestedRole, req.body);
     const requestedChannel = String(req.body?.channel || "").trim().toLowerCase();
-    const channel = requestedChannel === "email" ? "email" : "whatsapp";
+    const channel = requestedChannel === "email" ? "email" : authTarget?.channel || "whatsapp";
     const purpose =
       requestedPurpose === "password_reset"
         ? "password_reset"
@@ -1171,7 +1225,7 @@ r.post("/auth/verify", async (req,res)=>{
               ? "phone_verify"
               : "login_verify";
 
-    if(!phone || !code){
+    if(!authTarget?.value || !code){
       return res.status(400).json({
         ok:false,
         error:"VERIFY_PAYLOAD_INVALID"
@@ -1189,7 +1243,7 @@ r.post("/auth/verify", async (req,res)=>{
       ORDER BY created_at DESC
       LIMIT 1
       FOR UPDATE
-    `,[phone, purpose]);
+    `,[authTarget.value, purpose]);
 
     const otp = otpRes.rows[0] || null;
 
@@ -1269,11 +1323,14 @@ r.post("/auth/verify", async (req,res)=>{
       WHERE id=$1
     `,[otp.id]);
 
-    let user = await getAuthUserByPhone(db, phone);
+    let user = await getAuthUserByTarget(db, authTarget);
 
     if(!user){
       user = await createAuthUserForRole(db, {
-        phone,
+        target: {
+          ...authTarget,
+          channel
+        },
         role: requestedRole,
         ownerSlug: requestedOwnerSlug
       });
@@ -1321,7 +1378,10 @@ r.post("/auth/verify", async (req,res)=>{
       }
     }
 
-    await applyPhoneVerificationState(db, Number(user.id), channel);
+    await applyAuthVerificationState(db, Number(user.id), {
+      ...authTarget,
+      channel
+    });
 
     const session = await createAuthSession(db, Number(user.id));
 
@@ -1372,20 +1432,23 @@ r.post("/auth/verify", async (req,res)=>{
 r.post("/auth/password/reset/start", async (req,res)=>{
   const db = await pool.connect();
   try{
-    const phone = normalizePhone(req.body?.phone);
+    const authTarget = resolveAuthTarget(req.body || {});
     const requestedChannel = String(req.body?.channel || "").trim().toLowerCase();
-    const channel = requestedChannel === "email" ? "email" : "whatsapp";
+    const channel = requestedChannel === "email" ? "email" : authTarget?.channel || "whatsapp";
 
-    if(!phone){
+    if(!authTarget?.value){
       return res.status(400).json({
         ok:false,
-        error:"PHONE_INVALID"
+        error:"AUTH_TARGET_INVALID"
       });
     }
 
     await db.query("BEGIN");
 
-    const user = await findLoginUser(db, { phone });
+    const user = await findLoginUser(db, {
+      email: authTarget.lookup === "email" ? authTarget.value : null,
+      phone: authTarget.lookup === "phone" ? authTarget.value : null
+    });
 
     if(!user || !user.enabled){
       await db.query("ROLLBACK");
@@ -1396,7 +1459,7 @@ r.post("/auth/password/reset/start", async (req,res)=>{
     }
 
     const otpResult = await issueAuthOtp(db, {
-      phone,
+      target: authTarget.value,
       purpose:"password_reset",
       channel
     });
@@ -1427,11 +1490,11 @@ r.post("/auth/password/reset/start", async (req,res)=>{
 r.post("/auth/password/reset/finish", async (req,res)=>{
   const db = await pool.connect();
   try{
-    const phone = normalizePhone(req.body?.phone);
+    const authTarget = resolveAuthTarget(req.body || {});
     const code = String(req.body?.code || "").trim();
     const password = String(req.body?.password || "");
 
-    if(!phone || !code){
+    if(!authTarget?.value || !code){
       return res.status(400).json({
         ok:false,
         error:"VERIFY_PAYLOAD_INVALID"
@@ -1456,7 +1519,7 @@ r.post("/auth/password/reset/finish", async (req,res)=>{
       ORDER BY created_at DESC
       LIMIT 1
       FOR UPDATE
-    `,[phone]);
+    `,[authTarget.value]);
 
     const otp = otpRes.rows[0] || null;
 
@@ -1531,12 +1594,12 @@ r.post("/auth/password/reset/finish", async (req,res)=>{
     }
 
     const userRes = await db.query(`
-      SELECT id, phone
+      SELECT id, phone, email
       FROM public.auth_users
-      WHERE phone=$1
+      WHERE ${authTarget.lookup === "email" ? "lower(email)=lower($1)" : "phone=$1"}
       LIMIT 1
       FOR UPDATE
-    `,[phone]);
+    `,[authTarget.value]);
 
     const user = userRes.rows[0] || null;
 
@@ -1550,7 +1613,7 @@ r.post("/auth/password/reset/finish", async (req,res)=>{
 
     const hash = await bcrypt.hash(password, 10);
     const passwordState = await applyPasswordLifecycleState(db, Number(user.id), {
-      preferredLoginChannel: "whatsapp"
+      preferredLoginChannel: authTarget.channel === "email" ? "email" : "whatsapp"
     });
 
     await db.query(`
@@ -1572,7 +1635,7 @@ r.post("/auth/password/reset/finish", async (req,res)=>{
       SET consumed_at=NOW()
       WHERE target=$1
         AND consumed_at IS NULL
-    `,[String(user.phone)]);
+    `,[authTarget.value]);
 
     await db.query("COMMIT");
 
@@ -1612,7 +1675,7 @@ r.post("/auth/set-password", async (req,res)=>{
     await db.query("BEGIN");
 
     const userRes = await db.query(`
-      SELECT id, phone
+      SELECT id, phone, email
       FROM public.auth_users
       WHERE id=$1
       LIMIT 1
@@ -1630,7 +1693,7 @@ r.post("/auth/set-password", async (req,res)=>{
     }
 
     const hash = await bcrypt.hash(password, 10);
-    const preferredLoginChannel = user.phone ? "whatsapp" : null;
+    const preferredLoginChannel = user.email ? "email" : user.phone ? "whatsapp" : null;
     const passwordState = await applyPasswordLifecycleState(db, Number(user.id), {
       preferredLoginChannel
     });
@@ -1656,6 +1719,15 @@ r.post("/auth/set-password", async (req,res)=>{
         WHERE target=$1
           AND consumed_at IS NULL
       `,[String(user.phone)]);
+    }
+
+    if(user.email){
+      await db.query(`
+        UPDATE public.auth_otps
+        SET consumed_at=NOW()
+        WHERE lower(target)=lower($1)
+          AND consumed_at IS NULL
+      `,[String(user.email)]);
     }
 
     await db.query("COMMIT");
