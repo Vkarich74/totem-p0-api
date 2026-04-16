@@ -282,20 +282,84 @@ const sessionId = crypto.randomUUID();
 const expiresAt = new Date(Date.now() + (24 * 60 * 60 * 1000));
 const lastSeenAt = new Date();
 
+const sessionColumnsRes = await db.query(
+`SELECT column_name
+ FROM information_schema.columns
+ WHERE table_schema='public'
+   AND table_name='auth_sessions'`
+);
+
+const sessionColumns = new Set(
+(sessionColumnsRes.rows || []).map((row) => String(row.column_name || "").trim())
+);
+
+const insertColumns = [];
+const insertValues = [];
+const insertParams = [];
+let paramIndex = 1;
+
+function pushValue(columnName, value, { useNow = false, useNull = false } = {}){
+insertColumns.push(columnName);
+
+if(useNow){
+  insertValues.push('NOW()');
+  return;
+}
+
+if(useNull){
+  insertValues.push('NULL');
+  return;
+}
+
+insertValues.push(`$${paramIndex}`);
+insertParams.push(value);
+paramIndex += 1;
+}
+
+if(sessionColumns.has('id')){
+pushValue('id', sessionId);
+}
+
+if(sessionColumns.has('user_id')){
+pushValue('user_id', userId);
+}
+
+if(sessionColumns.has('created_at')){
+pushValue('created_at', null, { useNow: true });
+}
+
+if(sessionColumns.has('expires_at')){
+pushValue('expires_at', expiresAt.toISOString());
+}
+
+if(sessionColumns.has('last_seen_at')){
+pushValue('last_seen_at', lastSeenAt.toISOString());
+}
+
+if(sessionColumns.has('revoked_at')){
+pushValue('revoked_at', null, { useNull: true });
+}
+
+if(sessionColumns.has('revoked_reason')){
+pushValue('revoked_reason', null, { useNull: true });
+}
+
+if(sessionColumns.has('ip_address')){
+pushValue('ip_address', null, { useNull: true });
+}
+
+if(sessionColumns.has('user_agent')){
+pushValue('user_agent', null, { useNull: true });
+}
+
+if(!insertColumns.length || !sessionColumns.has('id') || !sessionColumns.has('user_id') || !sessionColumns.has('expires_at')){
+throw new Error('AUTH_SESSIONS_SCHEMA_INVALID');
+}
+
 await db.query(
-`INSERT INTO public.auth_sessions (
-  id,
-  user_id,
-  created_at,
-  expires_at,
-  last_seen_at,
-  revoked_at,
-  revoked_reason,
-  ip_address,
-  user_agent
-)
-VALUES ($1,$2,NOW(),$3,$4,NULL,NULL,NULL,NULL)`,
-[sessionId, userId, expiresAt.toISOString(), lastSeenAt.toISOString()]
+`INSERT INTO public.auth_sessions (${insertColumns.join(', ')})
+ VALUES (${insertValues.join(', ')})`,
+insertParams
 );
 
 return {
