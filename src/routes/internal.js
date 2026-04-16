@@ -329,11 +329,11 @@ pushValue('created_at', null, { useNow: true });
 }
 
 if(sessionColumns.has('expires_at')){
-pushValue('expires_at', expiresAt.toISOString());
+pushValue('expires_at', expiresAt);
 }
 
 if(sessionColumns.has('last_seen_at')){
-pushValue('last_seen_at', lastSeenAt.toISOString());
+pushValue('last_seen_at', lastSeenAt);
 }
 
 if(sessionColumns.has('revoked_at')){
