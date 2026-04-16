@@ -613,6 +613,39 @@ RETURNING id, role
 return created.rows[0] || null;
 }
 
+function isPgUniqueViolation(err){
+return String(err?.code || "").trim() === "23505";
+}
+
+async function resolveOrCreateAuthUserForVerify(db, { authTarget, channel, requestedRole, requestedOwnerSlug }){
+let user = await getAuthUserByTarget(db, authTarget);
+
+if(user){
+  return user;
+}
+
+try{
+  user = await createAuthUserForRole(db, {
+    target: {
+      ...authTarget,
+      channel
+    },
+    role: requestedRole,
+    ownerSlug: requestedOwnerSlug
+  });
+
+  if(user){
+    return user;
+  }
+}catch(err){
+  if(!isPgUniqueViolation(err)){
+    throw err;
+  }
+}
+
+return await getAuthUserByTarget(db, authTarget);
+}
+
 r.get("/auth/session/resolve", async (req,res)=>{
 try{
 const auth = req.auth || null;
@@ -1463,58 +1496,27 @@ r.post("/auth/verify", async (req,res)=>{
       WHERE id=$1
     `,[otp.id]);
 
-    let user = await getAuthUserByTarget(db, authTarget);
+    let user = await resolveOrCreateAuthUserForVerify(db, {
+      authTarget,
+      channel,
+      requestedRole,
+      requestedOwnerSlug
+    });
 
-    if(!user){
-      user = await createAuthUserForRole(db, {
-        target: {
-          ...authTarget,
-          channel
-        },
-        role: requestedRole,
-        ownerSlug: requestedOwnerSlug
-      });
-    }else{
-      const hasMasterSlug = await authUsersHasColumn(db, "master_slug");
-      const hasSalonSlug = await authUsersHasColumn(db, "salon_slug");
-      const updateParts = ["role=$1"];
-      const updateValues = [requestedRole];
-      let paramIndex = 2;
+    if(!user?.id){
+      throw new Error("AUTH_USER_RESOLVE_FAILED");
+    }
 
-      if(hasMasterSlug){
-        if(requestedRole === "master"){
-          updateParts.push(`master_slug=$${paramIndex}`);
-          updateValues.push(requestedOwnerSlug);
-          paramIndex += 1;
-        }else{
-          updateParts.push("master_slug=NULL");
-        }
-      }
-
-      if(hasSalonSlug){
-        if(requestedRole === "salon_admin"){
-          updateParts.push(`salon_slug=$${paramIndex}`);
-          updateValues.push(requestedOwnerSlug);
-          paramIndex += 1;
-        }else{
-          updateParts.push("salon_slug=NULL");
-        }
-      }
-
-      updateValues.push(Number(user.id));
-
-      await db.query(`
-        UPDATE public.auth_users
-        SET ${updateParts.join(",\n            ")}
-        WHERE id=$${paramIndex}
-      `, updateValues);
-
-      user.role = requestedRole;
-      if(hasMasterSlug){
-        user.master_slug = requestedRole === "master" ? requestedOwnerSlug : null;
-      }
-      if(hasSalonSlug){
-        user.salon_slug = requestedRole === "salon_admin" ? requestedOwnerSlug : null;
+    if(String(user.role || "").trim() !== requestedRole){
+      try{
+        await db.query(`
+          UPDATE public.auth_users
+          SET role=$1
+          WHERE id=$2
+        `,[requestedRole, Number(user.id)]);
+        user.role = requestedRole;
+      }catch(err){
+        console.error("AUTH_VERIFY_ROLE_UPDATE_SKIPPED", err);
       }
     }
 
