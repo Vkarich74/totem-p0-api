@@ -1507,18 +1507,7 @@ r.post("/auth/verify", async (req,res)=>{
       throw new Error("AUTH_USER_RESOLVE_FAILED");
     }
 
-    if(String(user.role || "").trim() !== requestedRole){
-      try{
-        await db.query(`
-          UPDATE public.auth_users
-          SET role=$1
-          WHERE id=$2
-        `,[requestedRole, Number(user.id)]);
-        user.role = requestedRole;
-      }catch(err){
-        console.error("AUTH_VERIFY_ROLE_UPDATE_SKIPPED", err);
-      }
-    }
+    // FIX: verify не должен менять role, чтобы не ломать DB constraint
 
     await applyAuthVerificationState(db, Number(user.id), {
       ...authTarget,
