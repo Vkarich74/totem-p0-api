@@ -61,7 +61,7 @@ function emptyIdentity(userId, role){
   };
 }
 
-async function buildIdentity(userId){
+async function buildIdentity(userId, requestedMasterSlug = ''){
   const pool = getPool();
   const client = await pool.connect();
   try{
@@ -131,6 +131,46 @@ async function buildIdentity(userId){
       ...masterIdsFromSlug
     ]);
 
+    const safeRequestedMasterSlug = String(requestedMasterSlug || '').trim();
+    let requestedMasterId = null;
+    let requestedMasterRelation = '';
+
+    if(safeRequestedMasterSlug){
+      const requestedMasterRes = await client.query(
+        `SELECT id, slug, user_id
+         FROM masters
+         WHERE slug = $1
+         LIMIT 1`,
+        [safeRequestedMasterSlug]
+      );
+
+      const requestedMaster = requestedMasterRes.rows[0] || null;
+      const requestedMasterUserId = safeInt(requestedMaster?.user_id);
+      const requestedMasterIdRaw = safeInt(requestedMaster?.id);
+
+      if(requestedMasterIdRaw){
+        if(requestedMasterUserId === safeInt(userId)){
+          requestedMasterId = requestedMasterIdRaw;
+          requestedMasterRelation = 'requested_slug -> masters.user_id';
+        }else if(authUserMasterId && authUserMasterId === requestedMasterIdRaw){
+          requestedMasterId = requestedMasterIdRaw;
+          requestedMasterRelation = 'requested_slug -> auth_users.master_id';
+        }else if(
+          authUserRole === 'master' &&
+          authUserMasterSlug &&
+          authUserMasterSlug === safeRequestedMasterSlug
+        ){
+          requestedMasterId = requestedMasterIdRaw;
+          requestedMasterRelation = 'requested_slug -> auth_users.master_slug';
+        }
+      }
+    }
+
+    const mergedMasterIds = uniqueNumberList([
+      ...masterIds,
+      requestedMasterId
+    ]);
+
     const ownerSalonRes = await client.query(
       `SELECT salon_id
        FROM owner_salon
@@ -145,13 +185,13 @@ async function buildIdentity(userId){
 
     let salonIdsFromMaster = [];
 
-    if(masterIds.length > 0){
+    if(mergedMasterIds.length > 0){
       const masterSalonRes = await client.query(
         `SELECT DISTINCT ms.salon_id
          FROM master_salon ms
          WHERE ms.master_id = ANY($1::int[])
          ORDER BY ms.salon_id ASC`,
-        [masterIds]
+        [mergedMasterIds]
       );
 
       salonIdsFromMaster = uniqueNumberList(
@@ -182,13 +222,15 @@ async function buildIdentity(userId){
       });
     }
 
-    for(const masterId of masterIds){
+    for(const masterId of mergedMasterIds){
       let relation = 'auth_users.master_slug -> masters.slug';
 
       if(masterIdsFromUserId.includes(masterId)){
         relation = 'masters.user_id';
       }else if(masterIdsFromAuthUserMasterId.includes(masterId)){
         relation = 'auth_users.master_id -> masters.id';
+      }else if(requestedMasterId && masterId === requestedMasterId && requestedMasterRelation){
+        relation = requestedMasterRelation;
       }
 
       ownership.push({
@@ -200,7 +242,7 @@ async function buildIdentity(userId){
 
     return {
       salons: salonIds,
-      masters: masterIds,
+      masters: mergedMasterIds,
       ownership
     };
   } finally {
@@ -220,6 +262,18 @@ function computeIdleTimeoutAt(lastSeenAt){
   const ts = new Date(lastSeenAt).getTime();
   if(!Number.isFinite(ts)) return null;
   return new Date(ts + IDLE_TIMEOUT_MS).toISOString();
+}
+
+function extractRequestedMasterSlug(req){
+  const path = String(req?.path || '').trim();
+  const match = path.match(/^\/masters\/([^/]+)/i);
+  if(!match) return '';
+
+  try{
+    return decodeURIComponent(match[1]).trim();
+  }catch(e){
+    return String(match[1] || '').trim();
+  }
 }
 
 export async function resolveAuth(req,res,next){
@@ -252,8 +306,10 @@ export async function resolveAuth(req,res,next){
 
       req.auth = { user_id, role: roleRaw, source: 'jwt_legacy' };
 
+      const requestedMasterSlug = extractRequestedMasterSlug(req);
+
       try{
-        const identityData = await buildIdentity(user_id);
+        const identityData = await buildIdentity(user_id, requestedMasterSlug);
         req.identity = {
           user_id,
           role: roleRaw,
@@ -331,8 +387,10 @@ export async function resolveAuth(req,res,next){
         idle_timeout_at: nextIdleTimeoutAt
       };
 
+      const requestedMasterSlug = extractRequestedMasterSlug(req);
+
       try{
-        const identityData = await buildIdentity(user_id);
+        const identityData = await buildIdentity(user_id, requestedMasterSlug);
         req.identity = {
           user_id,
           role: roleRaw,
