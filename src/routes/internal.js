@@ -251,27 +251,99 @@ neutral:true
 };
 }
 
-async function findLoginUser(db, { email, phone }){
+function selectBestAuthUserCandidate(rows, { requestedRole = "", requestedOwnerSlug = "" } = {}){
+const safeRequestedRole = String(requestedRole || "").trim().toLowerCase();
+const safeRequestedOwnerSlug = String(requestedOwnerSlug || "").trim().toLowerCase();
+const candidates = Array.isArray(rows) ? rows : [];
+
+if(!candidates.length){
+return null;
+}
+
+function scoreCandidate(row){
+const role = String(row?.role || "").trim().toLowerCase();
+const masterSlug = String(row?.master_slug || "").trim().toLowerCase();
+const salonSlug = String(row?.salon_slug || "").trim().toLowerCase();
+let score = 0;
+
+if(safeRequestedRole === "master"){
+  if(role === "master" && safeRequestedOwnerSlug && masterSlug === safeRequestedOwnerSlug){
+    score += 1000;
+  }else if(role === "master"){
+    score += 700;
+  }else if(role === "salon_admin"){
+    score += 300;
+  }else{
+    score += 100;
+  }
+}else if(safeRequestedRole === "salon_admin"){
+  if(role === "salon_admin" && safeRequestedOwnerSlug && salonSlug === safeRequestedOwnerSlug){
+    score += 1000;
+  }else if(role === "salon_admin"){
+    score += 700;
+  }else if(role === "master"){
+    score += 300;
+  }else{
+    score += 100;
+  }
+}else{
+  if(role === "master" || role === "salon_admin"){
+    score += 200;
+  }
+}
+
+if(row?.enabled){
+  score += 50;
+}
+
+if(row?.password_hash){
+  score += 10;
+}
+
+return score;
+}
+
+return candidates
+.map((row) => ({ row, score: scoreCandidate(row) }))
+.sort((a, b) => {
+  if(b.score !== a.score){
+    return b.score - a.score;
+  }
+  return Number(a.row?.id || 0) - Number(b.row?.id || 0);
+})
+[0]?.row || null;
+}
+
+async function findLoginUser(db, { email, phone, requestedRole = "", requestedOwnerSlug = "" }){
+const selectMasterSlug = await authUsersHasColumn(db, "master_slug");
+const selectSalonSlug = await authUsersHasColumn(db, "salon_slug");
+
+const fields = ["id", "email", "role", "enabled", "password_hash", "phone"];
+if(selectMasterSlug){
+fields.push("master_slug");
+}
+if(selectSalonSlug){
+fields.push("salon_slug");
+}
+
 if(email){
 const result = await db.query(
-`SELECT id, email, role, enabled, password_hash
+`SELECT ${fields.join(", ")}
  FROM public.auth_users
- WHERE lower(email)=lower($1)
- LIMIT 1`,
+ WHERE lower(email)=lower($1)`,
 [email]
 );
-return result.rows[0] || null;
+return selectBestAuthUserCandidate(result.rows, { requestedRole, requestedOwnerSlug });
 }
 
 if(phone){
 const result = await db.query(
-`SELECT id, email, role, enabled, password_hash, phone
+`SELECT ${fields.join(", ")}
  FROM public.auth_users
- WHERE phone=$1
- LIMIT 1`,
+ WHERE phone=$1`,
 [phone]
 );
-return result.rows[0] || null;
+return selectBestAuthUserCandidate(result.rows, { requestedRole, requestedOwnerSlug });
 }
 
 return null;
@@ -446,7 +518,7 @@ nextParamIndex: paramIndex
 };
 }
 
-async function getAuthUserByTarget(db, target){
+async function getAuthUserByTarget(db, target, { requestedRole = "", requestedOwnerSlug = "" } = {}){
 const selectMasterSlug = await authUsersHasColumn(db, "master_slug");
 const selectSalonSlug = await authUsersHasColumn(db, "salon_slug");
 
@@ -466,11 +538,10 @@ const userRes = await db.query(`
 SELECT ${fields.join(", ")}
 FROM public.auth_users
 WHERE ${whereClause}
-LIMIT 1
 FOR UPDATE
 `,[target?.value]);
 
-return userRes.rows[0] || null;
+return selectBestAuthUserCandidate(userRes.rows, { requestedRole, requestedOwnerSlug });
 }
 
 
@@ -618,7 +689,10 @@ return String(err?.code || "").trim() === "23505";
 }
 
 async function resolveOrCreateAuthUserForVerify(db, { authTarget, channel, requestedRole, requestedOwnerSlug }){
-let user = await getAuthUserByTarget(db, authTarget);
+let user = await getAuthUserByTarget(db, authTarget, {
+requestedRole,
+requestedOwnerSlug
+});
 
 if(user){
   return user;
@@ -643,7 +717,10 @@ try{
   }
 }
 
-return await getAuthUserByTarget(db, authTarget);
+return await getAuthUserByTarget(db, authTarget, {
+requestedRole,
+requestedOwnerSlug
+});
 }
 
 r.get("/auth/session/resolve", async (req,res)=>{
@@ -714,6 +791,8 @@ try{
 const email = normalizeAuthIdentifier(req.body?.email);
 const phone = normalizePhone(req.body?.phone);
 const password = String(req.body?.password || "");
+const requestedRole = normalizeRequestedAuthRole(req.body?.role || req.body?.owner_type);
+const requestedOwnerSlug = normalizeRequestedOwnerSlug(requestedRole, req.body);
 
 if((!email && !phone) || !password){
 return res.status(400).json({
@@ -722,7 +801,12 @@ error:"LOGIN_PAYLOAD_INVALID"
 });
 }
 
-const user = await findLoginUser(db, { email, phone });
+const user = await findLoginUser(db, {
+email,
+phone,
+requestedRole,
+requestedOwnerSlug
+});
 
 if(!user || !user.enabled || !user.password_hash){
 return res.status(401).json({
