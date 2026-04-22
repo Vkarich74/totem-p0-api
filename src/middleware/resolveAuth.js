@@ -51,6 +51,18 @@ async function buildIdentity(userId){
   const pool = getPool();
   const client = await pool.connect();
   try{
+    const authUserRes = await client.query(
+      `SELECT role, master_slug
+       FROM public.auth_users
+       WHERE id = $1
+       LIMIT 1`,
+      [userId]
+    );
+
+    const authUser = authUserRes.rows[0] || null;
+    const authUserRole = String(authUser?.role || '').trim();
+    const authUserMasterSlug = String(authUser?.master_slug || '').trim();
+
     const masterRes = await client.query(
       `SELECT id
        FROM masters
@@ -59,7 +71,27 @@ async function buildIdentity(userId){
       [userId]
     );
 
-    const masterIds = uniqueNumberList(masterRes.rows.map((row) => row.id));
+    const masterIdsFromUserId = uniqueNumberList(masterRes.rows.map((row) => row.id));
+    let masterIdsFromSlug = [];
+
+    if(authUserRole === 'master' && authUserMasterSlug){
+      const masterBySlugRes = await client.query(
+        `SELECT id
+         FROM masters
+         WHERE slug = $1
+         ORDER BY id ASC`,
+        [authUserMasterSlug]
+      );
+
+      masterIdsFromSlug = uniqueNumberList(
+        masterBySlugRes.rows.map((row) => row.id)
+      );
+    }
+
+    const masterIds = uniqueNumberList([
+      ...masterIdsFromUserId,
+      ...masterIdsFromSlug
+    ]);
 
     const ownerSalonRes = await client.query(
       `SELECT salon_id
@@ -79,10 +111,9 @@ async function buildIdentity(userId){
       const masterSalonRes = await client.query(
         `SELECT DISTINCT ms.salon_id
          FROM master_salon ms
-         JOIN masters m ON m.id = ms.master_id
-         WHERE m.user_id = $1
+         WHERE ms.master_id = ANY($1::int[])
          ORDER BY ms.salon_id ASC`,
-        [userId]
+        [masterIds]
       );
 
       salonIdsFromMaster = uniqueNumberList(
@@ -114,10 +145,14 @@ async function buildIdentity(userId){
     }
 
     for(const masterId of masterIds){
+      const relation = masterIdsFromUserId.includes(masterId)
+        ? 'masters.user_id'
+        : 'auth_users.master_slug -> masters.slug';
+
       ownership.push({
         owner_type: 'master',
         owner_id: masterId,
-        relation: 'masters.user_id'
+        relation
       });
     }
 
