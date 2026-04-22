@@ -37,6 +37,20 @@ function uniqueNumberList(values){
   )];
 }
 
+async function authUsersHasColumn(client, columnName){
+  const result = await client.query(
+    `SELECT 1
+     FROM information_schema.columns
+     WHERE table_schema='public'
+       AND table_name='auth_users'
+       AND column_name=$1
+     LIMIT 1`,
+    [columnName]
+  );
+
+  return result.rows.length > 0;
+}
+
 function emptyIdentity(userId, role){
   return {
     user_id: userId,
@@ -51,8 +65,15 @@ async function buildIdentity(userId){
   const pool = getPool();
   const client = await pool.connect();
   try{
+    const hasMasterId = await authUsersHasColumn(client, 'master_id');
+
+    const authUserFields = ['role', 'master_slug'];
+    if(hasMasterId){
+      authUserFields.push('master_id');
+    }
+
     const authUserRes = await client.query(
-      `SELECT role, master_slug
+      `SELECT ${authUserFields.join(', ')}
        FROM public.auth_users
        WHERE id = $1
        LIMIT 1`,
@@ -62,6 +83,7 @@ async function buildIdentity(userId){
     const authUser = authUserRes.rows[0] || null;
     const authUserRole = String(authUser?.role || '').trim();
     const authUserMasterSlug = String(authUser?.master_slug || '').trim();
+    const authUserMasterId = safeInt(authUser?.master_id);
 
     const masterRes = await client.query(
       `SELECT id
@@ -72,7 +94,22 @@ async function buildIdentity(userId){
     );
 
     const masterIdsFromUserId = uniqueNumberList(masterRes.rows.map((row) => row.id));
+    let masterIdsFromAuthUserMasterId = [];
     let masterIdsFromSlug = [];
+
+    if(authUserRole === 'master' && authUserMasterId){
+      const masterByIdRes = await client.query(
+        `SELECT id
+         FROM masters
+         WHERE id = $1
+         ORDER BY id ASC`,
+        [authUserMasterId]
+      );
+
+      masterIdsFromAuthUserMasterId = uniqueNumberList(
+        masterByIdRes.rows.map((row) => row.id)
+      );
+    }
 
     if(authUserRole === 'master' && authUserMasterSlug){
       const masterBySlugRes = await client.query(
@@ -90,6 +127,7 @@ async function buildIdentity(userId){
 
     const masterIds = uniqueNumberList([
       ...masterIdsFromUserId,
+      ...masterIdsFromAuthUserMasterId,
       ...masterIdsFromSlug
     ]);
 
@@ -145,9 +183,13 @@ async function buildIdentity(userId){
     }
 
     for(const masterId of masterIds){
-      const relation = masterIdsFromUserId.includes(masterId)
-        ? 'masters.user_id'
-        : 'auth_users.master_slug -> masters.slug';
+      let relation = 'auth_users.master_slug -> masters.slug';
+
+      if(masterIdsFromUserId.includes(masterId)){
+        relation = 'masters.user_id';
+      }else if(masterIdsFromAuthUserMasterId.includes(masterId)){
+        relation = 'auth_users.master_id -> masters.id';
+      }
 
       ownership.push({
         owner_type: 'master',
