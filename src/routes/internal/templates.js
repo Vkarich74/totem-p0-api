@@ -35,7 +35,7 @@ function sendError(res, err){
 
 export default function buildTemplatesRouter(pool, internalReadRateLimit){
   const r = express.Router();
-  const writeRoles = ["system", "owner", "salon_admin", "master_admin"];
+  const writeRoles = ["system", "owner", "salon_admin", "master_admin", "master"];
 
   r.get("/templates-public/:owner_type/:owner_slug/published", internalReadRateLimit, async (req, res) => {
     const db = await pool.connect();
