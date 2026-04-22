@@ -166,11 +166,6 @@ async function buildIdentity(userId, requestedMasterSlug = ''){
       }
     }
 
-    const mergedMasterIds = uniqueNumberList([
-      ...masterIds,
-      requestedMasterId
-    ]);
-
     const ownerSalonRes = await client.query(
       `SELECT salon_id
        FROM owner_salon
@@ -182,6 +177,28 @@ async function buildIdentity(userId, requestedMasterSlug = ''){
     const salonIdsFromOwner = uniqueNumberList(
       ownerSalonRes.rows.map((row) => row.salon_id)
     );
+
+    let masterIdsFromOwnerSalon = [];
+
+    if(salonIdsFromOwner.length > 0){
+      const ownerSalonMasterRes = await client.query(
+        `SELECT DISTINCT ms.master_id
+         FROM master_salon ms
+         WHERE ms.salon_id = ANY($1::int[])
+         ORDER BY ms.master_id ASC`,
+        [salonIdsFromOwner]
+      );
+
+      masterIdsFromOwnerSalon = uniqueNumberList(
+        ownerSalonMasterRes.rows.map((row) => row.master_id)
+      );
+    }
+
+    const mergedMasterIds = uniqueNumberList([
+      ...masterIds,
+      ...masterIdsFromOwnerSalon,
+      requestedMasterId
+    ]);
 
     let salonIdsFromMaster = [];
 
@@ -229,6 +246,8 @@ async function buildIdentity(userId, requestedMasterSlug = ''){
         relation = 'masters.user_id';
       }else if(masterIdsFromAuthUserMasterId.includes(masterId)){
         relation = 'auth_users.master_id -> masters.id';
+      }else if(masterIdsFromOwnerSalon.includes(masterId)){
+        relation = 'owner_salon -> master_salon';
       }else if(requestedMasterId && masterId === requestedMasterId && requestedMasterRelation){
         relation = requestedMasterRelation;
       }
