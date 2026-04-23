@@ -20,6 +20,9 @@ import buildWithdrawsProcessorRouter from "./internal/withdraws-processor.js";
 import buildMastersRouter from "./internal/masters.js";
 import buildSalonsRouter from "./internal/salons.js";
 import buildAdminRouter from "./internal/admin.js";
+import leadsRouter from "./admin.leads.js";
+import moderationRouter from "./admin.moderation.js";
+import messagesRouter from "./admin.messages.js";
 import buildOneTimeChargeRouter from "./internal/one-time-charge.js";
 import buildOneTimeChargeHistoryRouter from "./internal/one-time-charge-history.js";
 import buildProvisionRouter from "./internal/provision.js";
@@ -29,6 +32,10 @@ import buildTemplatesRouter from "./internal/templates.js";
 export function createInternalRouter({ rlInternal } = {}){
 
 const r = express.Router();
+
+r.use('/admin/leads', leadsRouter)
+r.use('/admin/moderation', moderationRouter)
+r.use('/admin/messages', messagesRouter)
 
 const internalReadRateLimit =
   rlInternal ||
