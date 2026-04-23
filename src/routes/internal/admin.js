@@ -96,7 +96,15 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
 
       return res.json({
         ok: true,
-        masters: data.rows,
+        data: {
+          items: data.rows,
+          pagination: {
+            total: data.rows.length,
+            limit,
+            offset,
+          },
+        },
+        meta: {},
       });
     } catch (error) {
       console.error("ADMIN_MASTERS_FETCH_ERROR", error);
@@ -162,7 +170,15 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
 
       return res.json({
         ok: true,
-        salons: data.rows,
+        data: {
+          items: data.rows,
+          pagination: {
+            total: data.rows.length,
+            limit,
+            offset,
+          },
+        },
+        meta: {},
       });
     } catch (error) {
       console.error("ADMIN_SALONS_FETCH_ERROR", error);
@@ -205,7 +221,15 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
 
       return res.json({
         ok: true,
-        bookings: data.rows,
+        data: {
+          items: data.rows,
+          pagination: {
+            total: data.rows.length,
+            limit,
+            offset,
+          },
+        },
+        meta: {},
       });
     } catch (error) {
       console.error("ADMIN_BOOKINGS_FETCH_ERROR", error);
@@ -250,7 +274,15 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
 
       return res.json({
         ok: true,
-        clients: data.rows,
+        data: {
+          items: data.rows,
+          pagination: {
+            total: data.rows.length,
+            limit,
+            offset,
+          },
+        },
+        meta: {},
       });
     } catch (error) {
       console.error("ADMIN_CLIENTS_FETCH_ERROR", error);
@@ -282,7 +314,7 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
 
       return res.json({
         ok: true,
-        overview: data.rows[0] || {
+        data: data.rows[0] || {
           salons_total: 0,
           masters_total: 0,
           clients_total: 0,
@@ -290,6 +322,7 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
           revenue_today: 0,
           payouts_total: 0,
         },
+        meta: {},
       });
     } catch (error) {
       console.error("ADMIN_OVERVIEW_FETCH_ERROR", error);
