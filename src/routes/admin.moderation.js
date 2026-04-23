@@ -27,6 +27,7 @@ router.get("/:id", (req, res) => {
       status: "open",
       priority: "normal",
     },
+    meta: {},
   });
 });
 
