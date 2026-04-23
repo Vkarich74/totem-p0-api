@@ -144,7 +144,6 @@ app.use("/auth", authRouter);
 
 app.use(
   "/internal",
-  resolveAuth,
   createInternalRouter({
     rlInternal,
   })

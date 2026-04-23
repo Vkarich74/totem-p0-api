@@ -33,9 +33,11 @@ export function createInternalRouter({ rlInternal } = {}){
 
 const r = express.Router();
 
-r.use('/admin/leads', leadsRouter)
-r.use('/admin/moderation', moderationRouter)
-r.use('/admin/messages', messagesRouter)
+const adminContainer = express.Router();
+
+adminContainer.use('/leads', leadsRouter);
+adminContainer.use('/moderation', moderationRouter);
+adminContainer.use('/messages', messagesRouter);
 
 const internalReadRateLimit =
   rlInternal ||
@@ -1019,7 +1021,8 @@ const salonsRouter = buildSalonsRouter(pool, internalReadRateLimit);
 r.use(salonsRouter);
 
 const adminRouter = buildAdminRouter(pool, internalReadRateLimit);
-r.use("/admin", adminRouter);
+adminContainer.use('/', adminRouter);
+r.use("/admin", adminContainer);
 
 const provisionRouter = buildProvisionRouter(pool);
 r.use(provisionRouter);
