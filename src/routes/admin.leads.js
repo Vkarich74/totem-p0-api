@@ -15,12 +15,7 @@ router.get("/:id", (req, res) => {
   return res.json({
     ok: true,
     data: {
-      id: req.params.id,
-      name: "Lead Mock",
-      phone: "+996700000000",
-      source: "manual_admin",
-      status: "new",
-      assigned_to: null,
+      id: String(req.params.id || ""),
     },
   });
 });
