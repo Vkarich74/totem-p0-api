@@ -31,6 +31,21 @@ router.get("/:id", (req, res) => {
   });
 });
 
+router.get("/:id/audit", (req, res) => {
+  return res.json({
+    ok: true,
+    data: {
+      items: [],
+      pagination: {
+        total: 0,
+        limit: 0,
+        offset: 0,
+      },
+    },
+    meta: {},
+  });
+});
+
 router.post("/", (req, res) => {
   return res.json({
     ok: true,

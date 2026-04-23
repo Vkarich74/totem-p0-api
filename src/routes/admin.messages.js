@@ -7,7 +7,13 @@ router.get("/", (req, res) => {
     ok: true,
     data: {
       items: [],
+      pagination: {
+        total: 0,
+        limit: 0,
+        offset: 0,
+      },
     },
+    meta: {},
   });
 });
 
@@ -16,7 +22,13 @@ router.get("/templates", (req, res) => {
     ok: true,
     data: {
       items: [],
+      pagination: {
+        total: 0,
+        limit: 0,
+        offset: 0,
+      },
     },
+    meta: {},
   });
 });
 
@@ -31,6 +43,7 @@ router.post("/send", (req, res) => {
       recipient_type,
       status: "sent",
     },
+    meta: {},
   });
 });
 
@@ -41,6 +54,7 @@ router.post("/:id/retry", (req, res) => {
       id: req.params.id,
       status: "sent",
     },
+    meta: {},
   });
 });
 
@@ -54,6 +68,7 @@ router.get("/:id", (req, res) => {
       recipient_type: "lead",
       recipient_id: "lead_mock_1",
     },
+    meta: {},
   });
 });
 
