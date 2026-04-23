@@ -216,5 +216,50 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
     }
   });
 
+  r.get("/clients", readLimiter, async (req, res) => {
+    const limit = Math.min(parsePositiveInt(req.query.limit, 50), 200);
+    const offset = parsePositiveInt(req.query.offset, 0);
+
+    try {
+      const data = await pool.query(
+        `
+        SELECT
+          c.id,
+          c.name,
+          c.phone,
+          c.salon_id,
+          s.slug AS salon_slug,
+          s.name AS salon_name,
+          COALESCE(stats.bookings_total, 0)::int AS bookings_total,
+          stats.last_booking_at
+        FROM clients c
+        LEFT JOIN salons s ON s.id = c.salon_id
+        LEFT JOIN LATERAL (
+          SELECT
+            COUNT(*)::int AS bookings_total,
+            MAX(b.start_at) AS last_booking_at
+          FROM bookings b
+          WHERE b.client_id = c.id
+        ) stats ON true
+        ORDER BY stats.last_booking_at DESC NULLS LAST, c.id DESC
+        LIMIT $1
+        OFFSET $2
+        `,
+        [limit, offset],
+      );
+
+      return res.json({
+        ok: true,
+        clients: data.rows,
+      });
+    } catch (error) {
+      console.error("ADMIN_CLIENTS_FETCH_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_CLIENTS_FETCH_FAILED",
+      });
+    }
+  });
+
   return r;
 }
