@@ -13,6 +13,7 @@ router.get("/", (req, res) => {
         offset: 0,
       },
     },
+    meta: {},
   });
 });
 
@@ -22,6 +23,7 @@ router.get("/:id", (req, res) => {
     data: {
       id: String(req.params.id || ""),
     },
+    meta: {},
   });
 });
 
@@ -35,6 +37,7 @@ router.post("/", (req, res) => {
       phone: String(req.body?.phone || ""),
       source: String(req.body?.source || ""),
     },
+    meta: {},
   });
 });
 
@@ -45,6 +48,7 @@ router.post("/:id/status", (req, res) => {
       id: String(req.params.id || ""),
       status: String(req.body?.status || ""),
     },
+    meta: {},
   });
 });
 
@@ -55,6 +59,7 @@ router.post("/:id/assign", (req, res) => {
       id: String(req.params.id || ""),
       assigned_to: String(req.body?.assigned_to || ""),
     },
+    meta: {},
   });
 });
 
@@ -65,6 +70,7 @@ router.post("/:id/convert", (req, res) => {
       id: String(req.params.id || ""),
       target_type: String(req.body?.target_type || ""),
     },
+    meta: {},
   });
 });
 
@@ -75,6 +81,7 @@ router.get("/:id/audit", (req, res) => {
       id: String(req.params.id || ""),
       items: [],
     },
+    meta: {},
   });
 });
 
