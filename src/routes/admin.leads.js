@@ -46,13 +46,11 @@ router.post("/:id/status", (req, res) => {
 });
 
 router.post("/:id/assign", (req, res) => {
-  const { assigned_to } = req.body;
-
   return res.json({
     ok: true,
     data: {
-      id: req.params.id,
-      assigned_to,
+      id: String(req.params.id || ""),
+      assigned_to: String(req.body?.assigned_to || ""),
     },
   });
 });
