@@ -19,6 +19,7 @@ import buildFinanceEngineRouter from "./internal/finance-engine.js";
 import buildWithdrawsProcessorRouter from "./internal/withdraws-processor.js";
 import buildMastersRouter from "./internal/masters.js";
 import buildSalonsRouter from "./internal/salons.js";
+import buildAdminRouter from "./internal/admin.js";
 import buildOneTimeChargeRouter from "./internal/one-time-charge.js";
 import buildOneTimeChargeHistoryRouter from "./internal/one-time-charge-history.js";
 import buildProvisionRouter from "./internal/provision.js";
@@ -1009,6 +1010,9 @@ r.use(mastersRouter);
 
 const salonsRouter = buildSalonsRouter(pool, internalReadRateLimit);
 r.use(salonsRouter);
+
+const adminRouter = buildAdminRouter(pool, internalReadRateLimit);
+r.use("/admin", adminRouter);
 
 const provisionRouter = buildProvisionRouter(pool);
 r.use(provisionRouter);
