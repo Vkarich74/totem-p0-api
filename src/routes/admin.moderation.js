@@ -51,6 +51,7 @@ router.post("/:id/status", (req, res) => {
       id: req.params.id,
       status,
     },
+    meta: {},
   });
 });
 
