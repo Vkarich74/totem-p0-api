@@ -173,5 +173,48 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
     }
   });
 
+  r.get("/bookings", readLimiter, async (req, res) => {
+    const limit = Math.min(parsePositiveInt(req.query.limit, 50), 200);
+    const offset = parsePositiveInt(req.query.offset, 0);
+
+    try {
+      const data = await pool.query(
+        `
+        SELECT
+          b.id,
+          b.salon_id,
+          s.slug AS salon_slug,
+          s.name AS salon_name,
+          b.master_id,
+          m.slug AS master_slug,
+          m.name AS master_name,
+          c.name AS client_name,
+          c.phone AS client_phone,
+          b.start_at,
+          b.status
+        FROM bookings b
+        LEFT JOIN salons s ON s.id = b.salon_id
+        LEFT JOIN masters m ON m.id = b.master_id
+        LEFT JOIN clients c ON c.id = b.client_id
+        ORDER BY b.start_at DESC, b.id DESC
+        LIMIT $1
+        OFFSET $2
+        `,
+        [limit, offset],
+      );
+
+      return res.json({
+        ok: true,
+        bookings: data.rows,
+      });
+    } catch (error) {
+      console.error("ADMIN_BOOKINGS_FETCH_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_BOOKINGS_FETCH_FAILED",
+      });
+    }
+  });
+
   return r;
 }
