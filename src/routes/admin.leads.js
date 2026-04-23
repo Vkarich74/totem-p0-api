@@ -4,6 +4,15 @@ const router = express.Router();
 const leads = new Map();
 let nextLeadId = 1;
 
+function persistLead(item, operation = "upsert") {
+  // mock persistence layer
+  // в будущем здесь будет DB insert/update
+  return {
+    operation,
+    item,
+  };
+}
+
 router.get("/", (req, res) => {
   const items = Array.from(leads.values());
 
@@ -53,6 +62,7 @@ router.post("/", (req, res) => {
   };
 
   leads.set(id, leadItem);
+  persistLead(leadItem, "create");
 
   return res.json({
     ok: true,
@@ -84,6 +94,7 @@ router.post("/:id/status", (req, res) => {
     value: status,
   });
   leads.set(req.params.id, item);
+  persistLead(item, "status_update");
 
   return res.json({
     ok: true,
@@ -112,6 +123,7 @@ router.post("/:id/assign", (req, res) => {
     value: assigned_to,
   });
   leads.set(req.params.id, item);
+  persistLead(item, "assign_update");
 
   return res.json({
     ok: true,
@@ -144,6 +156,7 @@ router.post("/:id/convert", (req, res) => {
     value: target_type,
   });
   leads.set(req.params.id, item);
+  persistLead(item, "convert_update");
 
   return res.json({
     ok: true,

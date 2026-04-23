@@ -3,6 +3,41 @@ import express from "express";
 const router = express.Router();
 const messages = new Map();
 let nextMessageId = 1;
+
+function persistMessage(item, operation = "upsert") {
+  // mock persistence layer
+  // в будущем здесь будет DB insert/update
+  return {
+    operation,
+    item,
+  };
+}
+
+function persistMessageAudit(messageId, auditItem) {
+  // mock audit persistence layer
+  // в будущем здесь будет DB insert
+  return {
+    message_id: messageId,
+    audit: auditItem,
+  };
+}
+
+function persistTraceLink(traceId, payload) {
+  // mock trace persistence layer
+  // в будущем здесь будет DB insert/update
+  return {
+    trace_id: traceId,
+    payload,
+  };
+}
+
+function getMessagesPersistenceAdapter() {
+  return {
+    saveMessage: persistMessage,
+    saveAudit: persistMessageAudit,
+    saveTrace: persistTraceLink,
+  };
+}
 const templates = [
   {
     id: "tpl_whatsapp_followup",
@@ -59,6 +94,7 @@ router.post("/send", (req, res) => {
   const recipient_id = String(req.body?.recipient_id || "lead_mock_1");
   const moderation_case_id = String(req.body?.moderation_case_id || "");
   const trace_id = String(req.body?.trace_id || `trace_${id}`);
+  const persistence = getMessagesPersistenceAdapter();
   const messageItem = {
     id,
     channel,
@@ -71,6 +107,12 @@ router.post("/send", (req, res) => {
   };
 
   messages.set(id, messageItem);
+  persistence.saveMessage(messageItem, "create");
+  persistence.saveTrace(trace_id, {
+    message_id: id,
+    recipient_id,
+    moderation_case_id,
+  });
 
   return res.json({
     ok: true,
@@ -86,6 +128,7 @@ router.post("/send", (req, res) => {
 
 router.post("/:id/retry", (req, res) => {
   const item = messages.get(req.params.id);
+  const persistence = getMessagesPersistenceAdapter();
 
   if (!item) {
     return res.status(404).json({
@@ -99,7 +142,12 @@ router.post("/:id/retry", (req, res) => {
     type: "retry",
     value: "sent",
   });
+  persistence.saveAudit(req.params.id, {
+    type: "retry",
+    value: "sent",
+  });
   messages.set(req.params.id, item);
+  persistence.saveMessage(item, "retry_update");
 
   return res.json({
     ok: true,

@@ -4,6 +4,15 @@ const router = express.Router();
 const cases = new Map();
 let nextCaseId = 1;
 
+function persistCase(item, operation = "upsert") {
+  // mock persistence layer
+  // в будущем здесь будет DB insert/update
+  return {
+    operation,
+    item,
+  };
+}
+
 router.get("/", (req, res) => {
   const items = Array.from(cases.values());
 
@@ -76,6 +85,7 @@ router.post("/", (req, res) => {
   };
 
   cases.set(id, caseItem);
+  persistCase(caseItem, "create");
 
   return res.json({
     ok: true,
@@ -104,6 +114,7 @@ router.post("/:id/status", (req, res) => {
     value: status,
   });
   cases.set(req.params.id, item);
+  persistCase(item, "status_update");
 
   return res.json({
     ok: true,
@@ -131,6 +142,7 @@ router.post("/:id/action", (req, res) => {
     value: action,
   });
   cases.set(req.params.id, item);
+  persistCase(item, "action_update");
 
   return res.json({
     ok: true,
