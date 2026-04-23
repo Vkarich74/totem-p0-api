@@ -56,14 +56,11 @@ router.post("/:id/assign", (req, res) => {
 });
 
 router.post("/:id/convert", (req, res) => {
-  const { target_type } = req.body;
-
   return res.json({
     ok: true,
     data: {
-      id: req.params.id,
-      status: "converted",
-      target_type,
+      id: String(req.params.id || ""),
+      target_type: String(req.body?.target_type || ""),
     },
   });
 });
