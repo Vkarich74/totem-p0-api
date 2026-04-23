@@ -64,6 +64,7 @@ router.post("/:id/action", (req, res) => {
       id: req.params.id,
       action,
     },
+    meta: {},
   });
 });
 
