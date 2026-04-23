@@ -36,13 +36,11 @@ router.post("/", (req, res) => {
 });
 
 router.post("/:id/status", (req, res) => {
-  const { status } = req.body;
-
   return res.json({
     ok: true,
     data: {
-      id: req.params.id,
-      status,
+      id: String(req.params.id || ""),
+      status: String(req.body?.status || ""),
     },
   });
 });
