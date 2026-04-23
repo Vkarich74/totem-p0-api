@@ -19,11 +19,11 @@ import buildFinanceEngineRouter from "./internal/finance-engine.js";
 import buildWithdrawsProcessorRouter from "./internal/withdraws-processor.js";
 import buildMastersRouter from "./internal/masters.js";
 import buildSalonsRouter from "./internal/salons.js";
-import buildAdminRouter from "./internal/admin.js";
-import buildAdminAuthRouter from "./internal/adminAuth.js";
 import leadsRouter from "./admin.leads.js";
 import moderationRouter from "./admin.moderation.js";
 import messagesRouter from "./admin.messages.js";
+import buildAdminRouter from "./internal/admin.js";
+import buildAdminAuthRouter from "./internal/adminAuth.js";
 import AdminRuntimeGuard from "../middleware/AdminRuntimeGuard.js";
 import buildOneTimeChargeRouter from "./internal/one-time-charge.js";
 import buildOneTimeChargeHistoryRouter from "./internal/one-time-charge-history.js";
@@ -34,7 +34,6 @@ import buildTemplatesRouter from "./internal/templates.js";
 export function createInternalRouter({ rlInternal } = {}){
 
 const r = express.Router();
-
 const adminContainer = express.Router();
 const adminProtectedContainer = express.Router();
 
@@ -49,6 +48,13 @@ const internalReadRateLimit =
       redis,
     })(req, res, next);
   });
+
+const adminAuthRouter = buildAdminAuthRouter();
+adminContainer.use('/auth', adminAuthRouter);
+adminProtectedContainer.use(AdminRuntimeGuard);
+adminProtectedContainer.use('/leads', leadsRouter);
+adminProtectedContainer.use('/moderation', moderationRouter);
+adminProtectedContainer.use('/messages', messagesRouter);
 
 const AUTH_OTP_TTL_MINUTES = 30;
 const AUTH_OTP_BLOCK_MINUTES = 10;
@@ -260,99 +266,27 @@ neutral:true
 };
 }
 
-function selectBestAuthUserCandidate(rows, { requestedRole = "", requestedOwnerSlug = "" } = {}){
-const safeRequestedRole = String(requestedRole || "").trim().toLowerCase();
-const safeRequestedOwnerSlug = String(requestedOwnerSlug || "").trim().toLowerCase();
-const candidates = Array.isArray(rows) ? rows : [];
-
-if(!candidates.length){
-return null;
-}
-
-function scoreCandidate(row){
-const role = String(row?.role || "").trim().toLowerCase();
-const masterSlug = String(row?.master_slug || "").trim().toLowerCase();
-const salonSlug = String(row?.salon_slug || "").trim().toLowerCase();
-let score = 0;
-
-if(safeRequestedRole === "master"){
-  if(role === "master" && safeRequestedOwnerSlug && masterSlug === safeRequestedOwnerSlug){
-    score += 1000;
-  }else if(role === "master"){
-    score += 700;
-  }else if(role === "salon_admin"){
-    score += 300;
-  }else{
-    score += 100;
-  }
-}else if(safeRequestedRole === "salon_admin"){
-  if(role === "salon_admin" && safeRequestedOwnerSlug && salonSlug === safeRequestedOwnerSlug){
-    score += 1000;
-  }else if(role === "salon_admin"){
-    score += 700;
-  }else if(role === "master"){
-    score += 300;
-  }else{
-    score += 100;
-  }
-}else{
-  if(role === "master" || role === "salon_admin"){
-    score += 200;
-  }
-}
-
-if(row?.enabled){
-  score += 50;
-}
-
-if(row?.password_hash){
-  score += 10;
-}
-
-return score;
-}
-
-return candidates
-.map((row) => ({ row, score: scoreCandidate(row) }))
-.sort((a, b) => {
-  if(b.score !== a.score){
-    return b.score - a.score;
-  }
-  return Number(a.row?.id || 0) - Number(b.row?.id || 0);
-})
-[0]?.row || null;
-}
-
-async function findLoginUser(db, { email, phone, requestedRole = "", requestedOwnerSlug = "" }){
-const selectMasterSlug = await authUsersHasColumn(db, "master_slug");
-const selectSalonSlug = await authUsersHasColumn(db, "salon_slug");
-
-const fields = ["id", "email", "role", "enabled", "password_hash", "phone"];
-if(selectMasterSlug){
-fields.push("master_slug");
-}
-if(selectSalonSlug){
-fields.push("salon_slug");
-}
-
+async function findLoginUser(db, { email, phone }){
 if(email){
 const result = await db.query(
-`SELECT ${fields.join(", ")}
+`SELECT id, email, role, enabled, password_hash
  FROM public.auth_users
- WHERE lower(email)=lower($1)`,
+ WHERE lower(email)=lower($1)
+ LIMIT 1`,
 [email]
 );
-return selectBestAuthUserCandidate(result.rows, { requestedRole, requestedOwnerSlug });
+return result.rows[0] || null;
 }
 
 if(phone){
 const result = await db.query(
-`SELECT ${fields.join(", ")}
+`SELECT id, email, role, enabled, password_hash, phone
  FROM public.auth_users
- WHERE phone=$1`,
+ WHERE phone=$1
+ LIMIT 1`,
 [phone]
 );
-return selectBestAuthUserCandidate(result.rows, { requestedRole, requestedOwnerSlug });
+return result.rows[0] || null;
 }
 
 return null;
@@ -527,7 +461,7 @@ nextParamIndex: paramIndex
 };
 }
 
-async function getAuthUserByTarget(db, target, { requestedRole = "", requestedOwnerSlug = "" } = {}){
+async function getAuthUserByTarget(db, target){
 const selectMasterSlug = await authUsersHasColumn(db, "master_slug");
 const selectSalonSlug = await authUsersHasColumn(db, "salon_slug");
 
@@ -547,10 +481,11 @@ const userRes = await db.query(`
 SELECT ${fields.join(", ")}
 FROM public.auth_users
 WHERE ${whereClause}
+LIMIT 1
 FOR UPDATE
 `,[target?.value]);
 
-return selectBestAuthUserCandidate(userRes.rows, { requestedRole, requestedOwnerSlug });
+return userRes.rows[0] || null;
 }
 
 
@@ -698,10 +633,7 @@ return String(err?.code || "").trim() === "23505";
 }
 
 async function resolveOrCreateAuthUserForVerify(db, { authTarget, channel, requestedRole, requestedOwnerSlug }){
-let user = await getAuthUserByTarget(db, authTarget, {
-requestedRole,
-requestedOwnerSlug
-});
+let user = await getAuthUserByTarget(db, authTarget);
 
 if(user){
   return user;
@@ -726,10 +658,7 @@ try{
   }
 }
 
-return await getAuthUserByTarget(db, authTarget, {
-requestedRole,
-requestedOwnerSlug
-});
+return await getAuthUserByTarget(db, authTarget);
 }
 
 r.get("/auth/session/resolve", async (req,res)=>{
@@ -800,8 +729,6 @@ try{
 const email = normalizeAuthIdentifier(req.body?.email);
 const phone = normalizePhone(req.body?.phone);
 const password = String(req.body?.password || "");
-const requestedRole = normalizeRequestedAuthRole(req.body?.role || req.body?.owner_type);
-const requestedOwnerSlug = normalizeRequestedOwnerSlug(requestedRole, req.body);
 
 if((!email && !phone) || !password){
 return res.status(400).json({
@@ -810,12 +737,7 @@ error:"LOGIN_PAYLOAD_INVALID"
 });
 }
 
-const user = await findLoginUser(db, {
-email,
-phone,
-requestedRole,
-requestedOwnerSlug
-});
+const user = await findLoginUser(db, { email, phone });
 
 if(!user || !user.enabled || !user.password_hash){
 return res.status(401).json({
@@ -1018,14 +940,6 @@ r.use(mastersRouter);
 
 const salonsRouter = buildSalonsRouter(pool, internalReadRateLimit);
 r.use(salonsRouter);
-
-const adminAuthRouter = buildAdminAuthRouter();
-adminContainer.use('/auth', adminAuthRouter);
-
-adminProtectedContainer.use(AdminRuntimeGuard);
-adminProtectedContainer.use('/leads', leadsRouter);
-adminProtectedContainer.use('/moderation', moderationRouter);
-adminProtectedContainer.use('/messages', messagesRouter);
 
 const adminRouter = buildAdminRouter(pool, internalReadRateLimit);
 adminProtectedContainer.use('/', adminRouter);

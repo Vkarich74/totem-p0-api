@@ -10,16 +10,11 @@ import {
 } from "../../auth/sharedSession.js";
 
 function parseBearer(req) {
-  const header = String(req.headers?.authorization || "");
-  const match = header.match(/^Bearer\s+(.+)$/i);
-  return match ? match[1].trim() : null;
-}
+  const header = String(req.headers.authorization || "").trim();
+  if (!header) return "";
 
-function computeIdleTimeoutAt(lastSeenAt) {
-  if (!lastSeenAt) return null;
-  const ts = new Date(lastSeenAt).getTime();
-  if (!Number.isFinite(ts)) return null;
-  return new Date(ts + 24 * 60 * 60 * 1000).toISOString();
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  return match ? String(match[1] || "").trim() : "";
 }
 
 function getJwtSecret() {
@@ -35,41 +30,55 @@ function signAdminJwt(payload) {
 }
 
 function verifyAdminJwt(token) {
-  return jwt.verify(token, getJwtSecret());
+  try {
+    return jwt.verify(token, getJwtSecret());
+  } catch {
+    return null;
+  }
+}
+
+function computeIdleTimeoutAt(lastSeenAt) {
+  if (!lastSeenAt) return null;
+
+  const ts = new Date(lastSeenAt).getTime();
+  if (!Number.isFinite(ts)) return null;
+
+  return new Date(ts + 24 * 60 * 60 * 1000).toISOString();
+}
+
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
 }
 
 export default function buildAdminAuthRouter() {
   const r = express.Router();
 
   r.post("/login", async (req, res) => {
-    const email = String(req.body?.email || "").trim().toLowerCase();
-    const password = String(req.body?.password || "");
+    const email = normalizeEmail(req.body?.email);
+    const password = String(req.body?.password ?? "");
 
-    if (!email || !password) {
+    if (!email || !password.trim()) {
       return res.status(400).json({
         ok: false,
         error: "LOGIN_PAYLOAD_INVALID",
       });
     }
 
-    const db = await pool.connect();
-
     try {
-      const userRes = await db.query(
+      const userResult = await pool.query(
         `
-        SELECT id, role, enabled, password_hash
+        SELECT id, email, role, enabled, password_hash
         FROM public.auth_users
-        WHERE lower(email)=lower($1)
-          AND role='admin'
-          AND enabled=true
+        WHERE lower(email) = lower($1)
+          AND role = 'admin'
+          AND enabled = true
         LIMIT 1
         `,
-        [email]
+        [email],
       );
 
-      const user = userRes.rows[0] || null;
-
-      if (!user?.password_hash) {
+      const user = userResult.rows?.[0];
+      if (!user || !user.password_hash) {
         return res.status(401).json({
           ok: false,
           error: "INVALID_CREDENTIALS",
@@ -77,7 +86,6 @@ export default function buildAdminAuthRouter() {
       }
 
       const passwordOk = await bcrypt.compare(password, String(user.password_hash));
-
       if (!passwordOk) {
         return res.status(401).json({
           ok: false,
@@ -85,20 +93,20 @@ export default function buildAdminAuthRouter() {
         });
       }
 
-      const session = await createAuthSession(db, Number(user.id));
+      const session = await createAuthSession(pool, Number(user.id));
       const accessToken = signAdminJwt({
         user_id: Number(user.id),
-        role: String(user.role),
+        role: "admin",
         session_id: session.id,
       });
 
-      return res.json({
+      return res.status(200).json({
         ok: true,
         access_token: accessToken,
         token_type: "Bearer",
         auth: {
           user_id: Number(user.id),
-          role: String(user.role),
+          role: "admin",
           source: "admin_password_login",
           session_id: session.id,
           session_source: "auth_sessions",
@@ -108,23 +116,16 @@ export default function buildAdminAuthRouter() {
         },
       });
     } catch (error) {
-      if (String(error?.message || "") === "JWT_SECRET_NOT_SET") {
-        throw error;
-      }
-
-      console.error("ADMIN_LOGIN_ERROR", error);
+      console.error("ADMIN_AUTH_LOGIN_ERROR", error);
       return res.status(500).json({
         ok: false,
-        error: "ADMIN_LOGIN_FAILED",
+        error: "ADMIN_AUTH_LOGIN_FAILED",
       });
-    } finally {
-      db.release();
     }
   });
 
   r.get("/session", async (req, res) => {
     const token = parseBearer(req);
-
     if (!token) {
       return res.status(401).json({
         ok: false,
@@ -132,38 +133,33 @@ export default function buildAdminAuthRouter() {
       });
     }
 
-    let payload;
-
-    try {
-      payload = verifyAdminJwt(token);
-    } catch (error) {
+    const payload = verifyAdminJwt(token);
+    if (!payload) {
       return res.status(401).json({
         ok: false,
         error: "INVALID_TOKEN",
       });
     }
 
-    if (String(payload?.role || "") !== "admin") {
+    if (String(payload.role || "") !== "admin") {
       return res.status(403).json({
         ok: false,
         error: "FORBIDDEN",
       });
     }
 
-    const userId = Number(payload?.user_id);
-    const sessionId = String(payload?.session_id || "").trim();
+    const userId = Number(payload.user_id);
+    const sessionId = String(payload.session_id || "");
 
-    if (!Number.isInteger(userId) || userId <= 0 || !sessionId) {
+    if (!Number.isFinite(userId) || !sessionId) {
       return res.status(401).json({
         ok: false,
-        error: "INVALID_SESSION",
+        error: "INVALID_TOKEN",
       });
     }
 
-    const db = await pool.connect();
-
     try {
-      const sessionRes = await db.query(
+      const sessionResult = await pool.query(
         `
         SELECT
           s.id,
@@ -171,44 +167,31 @@ export default function buildAdminAuthRouter() {
           s.expires_at,
           s.last_seen_at,
           s.revoked_at,
-          u.enabled,
-          u.role
+          u.role,
+          u.enabled
         FROM public.auth_sessions s
         JOIN public.auth_users u ON u.id = s.user_id
         WHERE s.id = $1
           AND s.user_id = $2
         LIMIT 1
         `,
-        [sessionId, userId]
+        [sessionId, userId],
       );
 
-      const sessionRow = sessionRes.rows[0] || null;
+      const session = sessionResult.rows?.[0];
 
-      if (!sessionRow) {
+      if (!session || !session.enabled || String(session.role || "") !== "admin" || session.revoked_at) {
         return res.status(401).json({
           ok: false,
           error: "INVALID_SESSION",
         });
       }
 
-      if (!sessionRow.enabled || String(sessionRow.role) !== "admin") {
-        return res.status(401).json({
-          ok: false,
-          error: "INVALID_SESSION",
-        });
-      }
-
+      const lastSeenAt = session.last_seen_at || session.expires_at || new Date().toISOString();
       const authSnapshot = {
-        session_expires_at: sessionRow.expires_at || null,
-        idle_timeout_at: computeIdleTimeoutAt(sessionRow.last_seen_at),
+        session_expires_at: session.expires_at,
+        idle_timeout_at: computeIdleTimeoutAt(lastSeenAt),
       };
-
-      if (sessionRow.revoked_at) {
-        return res.status(401).json({
-          ok: false,
-          error: "INVALID_SESSION",
-        });
-      }
 
       if (isAuthResolveSessionExpired(authSnapshot) || isAuthResolveIdleExpired(authSnapshot)) {
         return res.status(401).json({
@@ -218,44 +201,43 @@ export default function buildAdminAuthRouter() {
       }
 
       const nowIso = new Date().toISOString();
-      await db.query(
+
+      await pool.query(
         `
         UPDATE public.auth_sessions
         SET last_seen_at = NOW()
         WHERE id = $1
           AND user_id = $2
+          AND revoked_at IS NULL
         `,
-        [sessionId, userId]
+        [sessionId, userId],
       );
 
-      return res.json({
+      return res.status(200).json({
         ok: true,
         authenticated: true,
         auth: {
-          user_id: userId,
+          user_id: Number(session.user_id),
           role: "admin",
           source: "admin_session",
-          session_id: sessionId,
+          session_id: session.id,
           session_source: "auth_sessions",
-          session_expires_at: sessionRow.expires_at || null,
+          session_expires_at: session.expires_at,
           last_seen_at: nowIso,
           idle_timeout_at: computeIdleTimeoutAt(nowIso),
         },
       });
     } catch (error) {
-      console.error("ADMIN_SESSION_ERROR", error);
+      console.error("ADMIN_AUTH_SESSION_ERROR", error);
       return res.status(500).json({
         ok: false,
-        error: "ADMIN_SESSION_FAILED",
+        error: "ADMIN_AUTH_SESSION_FAILED",
       });
-    } finally {
-      db.release();
     }
   });
 
   r.post("/logout", async (req, res) => {
     const token = parseBearer(req);
-
     if (!token) {
       return res.status(401).json({
         ok: false,
@@ -263,46 +245,40 @@ export default function buildAdminAuthRouter() {
       });
     }
 
-    let payload;
-
-    try {
-      payload = verifyAdminJwt(token);
-    } catch (error) {
+    const payload = verifyAdminJwt(token);
+    if (!payload) {
       return res.status(401).json({
         ok: false,
         error: "INVALID_TOKEN",
       });
     }
 
-    if (String(payload?.role || "") !== "admin") {
+    if (String(payload.role || "") !== "admin") {
       return res.status(403).json({
         ok: false,
         error: "FORBIDDEN",
       });
     }
 
-    const sessionId = String(payload?.session_id || "").trim();
-
+    const sessionId = String(payload.session_id || "");
     if (!sessionId) {
       return res.status(401).json({
         ok: false,
-        error: "INVALID_SESSION",
+        error: "INVALID_TOKEN",
       });
     }
 
-    const db = await pool.connect();
-
     try {
-      await revokeAuthSession(db, sessionId, "admin_logout");
-      return res.json({ ok: true });
+      await revokeAuthSession(pool, sessionId, "admin_logout");
+      return res.status(200).json({
+        ok: true,
+      });
     } catch (error) {
-      console.error("ADMIN_LOGOUT_ERROR", error);
+      console.error("ADMIN_AUTH_LOGOUT_ERROR", error);
       return res.status(500).json({
         ok: false,
-        error: "ADMIN_LOGOUT_FAILED",
+        error: "ADMIN_AUTH_LOGOUT_FAILED",
       });
-    } finally {
-      db.release();
     }
   });
 
