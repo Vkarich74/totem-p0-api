@@ -29,8 +29,11 @@ router.post("/", (req, res) => {
   return res.json({
     ok: true,
     data: {
-      id: "lead_mock_1",
-      status: "new",
+      id: "new_lead",
+      lead_type: String(req.body?.lead_type || ""),
+      name: String(req.body?.name || ""),
+      phone: String(req.body?.phone || ""),
+      source: String(req.body?.source || ""),
     },
   });
 });
