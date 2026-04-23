@@ -107,5 +107,71 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
     }
   });
 
+  r.get("/salons", readLimiter, async (req, res) => {
+    const limit = Math.min(parsePositiveInt(req.query.limit, 50), 200);
+    const offset = parsePositiveInt(req.query.offset, 0);
+
+    try {
+      const data = await pool.query(
+        `
+        WITH salon_page AS (
+          SELECT
+            s.id,
+            s.name,
+            s.slug,
+            s.enabled,
+            s.created_at
+          FROM salons s
+          ORDER BY s.id DESC
+          LIMIT $1
+          OFFSET $2
+        )
+        SELECT
+          sp.id,
+          sp.name,
+          sp.slug,
+          sp.enabled,
+          sp.created_at,
+          COALESCE(stats.masters_total, 0)::int AS masters_total,
+          COALESCE(stats.clients_total, 0)::int AS clients_total,
+          COALESCE(stats.bookings_today, 0)::int AS bookings_today
+        FROM salon_page sp
+        LEFT JOIN LATERAL (
+          SELECT
+            COALESCE((
+              SELECT COUNT(DISTINCT ms.master_id)::int
+              FROM master_salon ms
+              WHERE ms.salon_id = sp.id
+            ), 0) AS masters_total,
+            COALESCE((
+              SELECT COUNT(DISTINCT c.id)::int
+              FROM clients c
+              WHERE c.salon_id = sp.id
+            ), 0) AS clients_total,
+            COALESCE((
+              SELECT COUNT(*)::int
+              FROM bookings b
+              WHERE b.salon_id = sp.id
+              AND DATE(b.start_at) = CURRENT_DATE
+            ), 0) AS bookings_today
+        ) stats ON true
+        ORDER BY sp.id DESC
+        `,
+        [limit, offset],
+      );
+
+      return res.json({
+        ok: true,
+        salons: data.rows,
+      });
+    } catch (error) {
+      console.error("ADMIN_SALONS_FETCH_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_SALONS_FETCH_FAILED",
+      });
+    }
+  });
+
   return r;
 }
