@@ -7,6 +7,11 @@ router.get("/", (req, res) => {
     ok: true,
     data: {
       items: [],
+      pagination: {
+        total: 0,
+        limit: 0,
+        offset: 0,
+      },
     },
   });
 });
