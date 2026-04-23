@@ -38,6 +38,7 @@ router.post("/", (req, res) => {
       id: "case_mock_1",
       status: "open",
     },
+    meta: {},
   });
 });
 
