@@ -1,6 +1,6 @@
 import express from "express";
 
-export function buildAdminAuthRouter() {
+export default function buildAdminAuthRouter() {
   const r = express.Router();
 
   r.post("/login", (req, res) => {
