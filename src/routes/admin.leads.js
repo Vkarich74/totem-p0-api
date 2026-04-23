@@ -69,6 +69,7 @@ router.get("/:id/audit", (req, res) => {
   return res.json({
     ok: true,
     data: {
+      id: String(req.params.id || ""),
       items: [],
     },
   });
