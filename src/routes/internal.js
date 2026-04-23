@@ -20,9 +20,11 @@ import buildWithdrawsProcessorRouter from "./internal/withdraws-processor.js";
 import buildMastersRouter from "./internal/masters.js";
 import buildSalonsRouter from "./internal/salons.js";
 import buildAdminRouter from "./internal/admin.js";
+import buildAdminAuthRouter from "./internal/adminAuth.js";
 import leadsRouter from "./admin.leads.js";
 import moderationRouter from "./admin.moderation.js";
 import messagesRouter from "./admin.messages.js";
+import AdminRuntimeGuard from "../middleware/AdminRuntimeGuard.js";
 import buildOneTimeChargeRouter from "./internal/one-time-charge.js";
 import buildOneTimeChargeHistoryRouter from "./internal/one-time-charge-history.js";
 import buildProvisionRouter from "./internal/provision.js";
@@ -34,10 +36,7 @@ export function createInternalRouter({ rlInternal } = {}){
 const r = express.Router();
 
 const adminContainer = express.Router();
-
-adminContainer.use('/leads', leadsRouter);
-adminContainer.use('/moderation', moderationRouter);
-adminContainer.use('/messages', messagesRouter);
+const adminProtectedContainer = express.Router();
 
 const internalReadRateLimit =
   rlInternal ||
@@ -1020,8 +1019,17 @@ r.use(mastersRouter);
 const salonsRouter = buildSalonsRouter(pool, internalReadRateLimit);
 r.use(salonsRouter);
 
+const adminAuthRouter = buildAdminAuthRouter();
+adminContainer.use('/auth', adminAuthRouter);
+
+adminProtectedContainer.use(AdminRuntimeGuard);
+adminProtectedContainer.use('/leads', leadsRouter);
+adminProtectedContainer.use('/moderation', moderationRouter);
+adminProtectedContainer.use('/messages', messagesRouter);
+
 const adminRouter = buildAdminRouter(pool, internalReadRateLimit);
-adminContainer.use('/', adminRouter);
+adminProtectedContainer.use('/', adminRouter);
+adminContainer.use('/', adminProtectedContainer);
 r.use("/admin", adminContainer);
 
 const provisionRouter = buildProvisionRouter(pool);
