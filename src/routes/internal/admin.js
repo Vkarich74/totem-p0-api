@@ -261,5 +261,44 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
     }
   });
 
+  r.get("/overview", readLimiter, async (req, res) => {
+    try {
+      const data = await pool.query(`
+        SELECT
+          (SELECT COUNT(*)::int FROM salons) AS salons_total,
+          (SELECT COUNT(*)::int FROM masters) AS masters_total,
+          (SELECT COUNT(*)::int FROM clients) AS clients_total,
+          (SELECT COUNT(*)::int FROM bookings WHERE DATE(start_at) = CURRENT_DATE) AS bookings_today,
+          COALESCE((
+            SELECT SUM(COALESCE(price_snapshot, 0))::bigint
+            FROM bookings
+            WHERE DATE(start_at) = CURRENT_DATE
+          ), 0)::bigint AS revenue_today,
+          COALESCE((
+            SELECT SUM(COALESCE(amount, 0))::bigint
+            FROM payouts
+          ), 0)::bigint AS payouts_total
+      `);
+
+      return res.json({
+        ok: true,
+        overview: data.rows[0] || {
+          salons_total: 0,
+          masters_total: 0,
+          clients_total: 0,
+          bookings_today: 0,
+          revenue_today: 0,
+          payouts_total: 0,
+        },
+      });
+    } catch (error) {
+      console.error("ADMIN_OVERVIEW_FETCH_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_OVERVIEW_FETCH_FAILED",
+      });
+    }
+  });
+
   return r;
 }
