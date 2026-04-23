@@ -1,14 +1,18 @@
 import express from "express";
 
 const router = express.Router();
+const cases = new Map();
+let nextCaseId = 1;
 
 router.get("/", (req, res) => {
+  const items = Array.from(cases.values());
+
   return res.json({
     ok: true,
     data: {
-      items: [],
+      items,
       pagination: {
-        total: 0,
+        total: items.length,
         limit: 0,
         offset: 0,
       },
@@ -18,26 +22,40 @@ router.get("/", (req, res) => {
 });
 
 router.get("/:id", (req, res) => {
+  const item = cases.get(req.params.id);
+
+  if (!item) {
+    return res.status(404).json({
+      ok: false,
+      error: "CASE_NOT_FOUND",
+    });
+  }
+
   return res.json({
     ok: true,
-    data: {
-      id: req.params.id,
-      entity_type: "lead",
-      entity_id: "lead_mock_1",
-      status: "open",
-      priority: "normal",
-    },
+    data: item,
     meta: {},
   });
 });
 
 router.get("/:id/audit", (req, res) => {
+  const item = cases.get(req.params.id);
+
+  if (!item) {
+    return res.status(404).json({
+      ok: false,
+      error: "CASE_NOT_FOUND",
+    });
+  }
+
+  const items = item.audit || [];
+
   return res.json({
     ok: true,
     data: {
-      items: [],
+      items,
       pagination: {
-        total: 0,
+        total: items.length,
         limit: 0,
         offset: 0,
       },
@@ -47,10 +65,22 @@ router.get("/:id/audit", (req, res) => {
 });
 
 router.post("/", (req, res) => {
+  const id = `case_${nextCaseId++}`;
+  const caseItem = {
+    id,
+    entity_type: "lead",
+    entity_id: "lead_mock_1",
+    status: "open",
+    priority: "normal",
+    audit: [],
+  };
+
+  cases.set(id, caseItem);
+
   return res.json({
     ok: true,
     data: {
-      id: "case_mock_1",
+      id,
       status: "open",
     },
     meta: {},
@@ -59,6 +89,21 @@ router.post("/", (req, res) => {
 
 router.post("/:id/status", (req, res) => {
   const { status } = req.body;
+  const item = cases.get(req.params.id);
+
+  if (!item) {
+    return res.status(404).json({
+      ok: false,
+      error: "CASE_NOT_FOUND",
+    });
+  }
+
+  item.status = status;
+  item.audit.push({
+    type: "status",
+    value: status,
+  });
+  cases.set(req.params.id, item);
 
   return res.json({
     ok: true,
@@ -72,6 +117,20 @@ router.post("/:id/status", (req, res) => {
 
 router.post("/:id/action", (req, res) => {
   const { action } = req.body;
+  const item = cases.get(req.params.id);
+
+  if (!item) {
+    return res.status(404).json({
+      ok: false,
+      error: "CASE_NOT_FOUND",
+    });
+  }
+
+  item.audit.push({
+    type: "action",
+    value: action,
+  });
+  cases.set(req.params.id, item);
 
   return res.json({
     ok: true,
