@@ -108,23 +108,39 @@ router.get("/", async (req, res) => {
   }
 });
 
-router.get("/:id", (req, res) => {
-  const item = cases.get(req.params.id);
+router.get("/:id", async (req, res) => {
+  try {
+    const result = await pool.query(
+      `
+      SELECT data
+      FROM public.moderation_cases
+      WHERE data->>'id' = $1
+      LIMIT 1
+      `,
+      [String(req.params.id || "")],
+    );
+    const item = result.rows?.[0]?.data ?? null;
 
-  if (!item) {
-    return res.status(404).json({
+    if (!item) {
+      return res.status(404).json({
+        ok: false,
+        error: "CASE_NOT_FOUND",
+      });
+    }
+
+    const { db_id, ...responseItem } = item;
+
+    return res.json({
+      ok: true,
+      data: responseItem,
+      meta: {},
+    });
+  } catch (error) {
+    return res.status(500).json({
       ok: false,
-      error: "CASE_NOT_FOUND",
+      error: "CASE_READ_FAILED",
     });
   }
-
-  const { db_id, ...responseItem } = item;
-
-  return res.json({
-    ok: true,
-    data: responseItem,
-    meta: {},
-  });
 });
 
 router.get("/:id/audit", (req, res) => {
