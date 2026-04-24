@@ -255,7 +255,16 @@ router.post("/:id/status", async (req, res) => {
 
 router.post("/:id/assign", async (req, res) => {
   try {
-    const item = leads.get(req.params.id);
+    const result = await pool.query(
+      `
+      SELECT id, data
+      FROM public.leads
+      WHERE data->>'id' = $1
+      LIMIT 1
+      `,
+      [String(req.params.id || "")],
+    );
+    const item = result.rows?.[0]?.data ?? null;
 
     if (!item) {
       return res.status(404).json({
@@ -264,6 +273,8 @@ router.post("/:id/assign", async (req, res) => {
       });
     }
 
+    item.db_id = result.rows?.[0]?.id;
+    item.audit = item.audit || [];
     const assigned_to = String(req.body?.assigned_to || "");
     item.assigned_to = assigned_to;
     item.audit.push({
