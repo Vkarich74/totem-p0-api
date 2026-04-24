@@ -30,7 +30,7 @@ async function persistCase(item, operation = "upsert") {
     ...item,
   };
   const runtimeLeadId = item?.lead_runtime_id ?? null;
-  const leadDbId = getLeadDbIdById(runtimeLeadId);
+  const leadDbId = await getLeadDbIdById(runtimeLeadId);
 
   if (operation === "create") {
     if (leadDbId === null || leadDbId === undefined) {
