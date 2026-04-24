@@ -280,16 +280,16 @@ router.post("/:id/retry", async (req, res) => {
       type: "retry",
       value: "sent",
     });
-    await persistence.saveAudit(req.params.id, {
-      type: "retry",
-      value: "sent",
-    });
     messages.set(req.params.id, item);
     if (!item.db_id) {
       await persistence.saveMessage(item, "create");
     } else {
       await persistence.saveMessage(item, "retry_update");
     }
+    await persistence.saveAudit(req.params.id, {
+      type: "retry",
+      value: "sent",
+    });
 
     return res.json({
       ok: true,
