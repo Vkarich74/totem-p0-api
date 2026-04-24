@@ -24,8 +24,8 @@ async function persistMessage(item, operation = "upsert") {
   const data = {
     ...item,
   };
-  const leadDbId = getLeadDbIdById(item?.lead_runtime_id);
-  const caseDbId = getCaseDbIdById(item?.moderation_case_runtime_id);
+  const leadDbId = await getLeadDbIdById(item?.lead_runtime_id);
+  const caseDbId = await getCaseDbIdById(item?.moderation_case_runtime_id);
   const idempotencyKey = item?.idempotency_key ?? null;
 
   if (leadDbId === null || leadDbId === undefined) {
