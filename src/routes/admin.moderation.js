@@ -16,13 +16,33 @@ function validateCaseCreateBody(body) {
   return true;
 }
 
-export function getCaseDbIdById(runtimeCaseId) {
-  const item = cases.get(runtimeCaseId);
-  if (!item) {
+export async function getCaseDbIdById(runtimeCaseId) {
+  if (!runtimeCaseId) {
     return null;
   }
 
-  return item.db_id ?? null;
+  const item = cases.get(runtimeCaseId);
+  const dbId = item?.db_id ?? null;
+
+  if (dbId !== null && dbId !== undefined) {
+    return dbId;
+  }
+
+  try {
+    const result = await pool.query(
+      `
+      SELECT id
+      FROM public.moderation_cases
+      WHERE data->>'id' = $1
+      LIMIT 1
+      `,
+      [String(runtimeCaseId || "")],
+    );
+
+    return result.rows?.[0]?.id ?? null;
+  } catch (error) {
+    return null;
+  }
 }
 
 async function persistCase(item, operation = "upsert") {
