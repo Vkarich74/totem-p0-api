@@ -163,30 +163,46 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-router.get("/:id/audit", (req, res) => {
-  const item = cases.get(req.params.id);
+router.get("/:id/audit", async (req, res) => {
+  try {
+    const result = await pool.query(
+      `
+      SELECT data
+      FROM public.moderation_cases
+      WHERE data->>'id' = $1
+      LIMIT 1
+      `,
+      [String(req.params.id || "")],
+    );
+    const item = result.rows?.[0]?.data ?? null;
 
-  if (!item) {
-    return res.status(404).json({
+    if (!item) {
+      return res.status(404).json({
+        ok: false,
+        error: "CASE_NOT_FOUND",
+      });
+    }
+
+    const items = item.audit || [];
+
+    return res.json({
+      ok: true,
+      data: {
+        items,
+        pagination: {
+          total: items.length,
+          limit: 0,
+          offset: 0,
+        },
+      },
+      meta: {},
+    });
+  } catch (error) {
+    return res.status(500).json({
       ok: false,
-      error: "CASE_NOT_FOUND",
+      error: "CASE_AUDIT_READ_FAILED",
     });
   }
-
-  const items = item.audit || [];
-
-  return res.json({
-    ok: true,
-    data: {
-      items,
-      pagination: {
-        total: items.length,
-        limit: 0,
-        offset: 0,
-      },
-    },
-    meta: {},
-  });
 });
 
 router.post("/", async (req, res) => {
