@@ -16,6 +16,32 @@ function validateCaseCreateBody(body) {
   return true;
 }
 
+async function getNextCaseRuntimeId() {
+  try {
+    const result = await pool.query(`
+      SELECT data->>'id' AS runtime_id
+      FROM public.moderation_cases
+      WHERE data->>'id' LIKE 'case_%'
+    `);
+    const max = result.rows.reduce((currentMax, row) => {
+      const runtimeId = String(row.runtime_id || "");
+      if (!/^case_\d+$/.test(runtimeId)) {
+        return currentMax;
+      }
+
+      const value = Number(runtimeId.replace("case_", ""));
+      return Number.isFinite(value) ? Math.max(currentMax, value) : currentMax;
+    }, 0);
+    const nextId = max + 1;
+    const runtimeId = `case_${nextId}`;
+    nextCaseId = Math.max(nextCaseId, nextId + 1);
+
+    return runtimeId;
+  } catch (error) {
+    return `case_${nextCaseId++}`;
+  }
+}
+
 export async function getCaseDbIdById(runtimeCaseId) {
   if (!runtimeCaseId) {
     return null;
@@ -214,7 +240,7 @@ router.post("/", async (req, res) => {
       });
     }
 
-    const id = `case_${nextCaseId++}`;
+    const id = await getNextCaseRuntimeId();
     const caseItem = {
       id,
       entity_type: "lead",
