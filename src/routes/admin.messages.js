@@ -332,30 +332,60 @@ router.post("/:id/retry", async (req, res) => {
   }
 });
 
-router.get("/:id/audit", (req, res) => {
-  const item = messages.get(req.params.id);
+router.get("/:id/audit", async (req, res) => {
+  try {
+    const messageResult = await pool.query(
+      `
+      SELECT id
+      FROM public.messages
+      WHERE data->>'id' = $1
+      LIMIT 1
+      `,
+      [String(req.params.id || "")],
+    );
+    const messageDbId = messageResult.rows?.[0]?.id ?? null;
 
-  if (!item) {
-    return res.status(404).json({
+    if (messageDbId === null || messageDbId === undefined) {
+      return res.status(404).json({
+        ok: false,
+        error: "MESSAGE_NOT_FOUND",
+      });
+    }
+
+    const auditResult = await pool.query(
+      `
+      SELECT action, data, created_at
+      FROM public.audit_logs
+      WHERE entity_type = 'message'
+      AND entity_id = $1
+      ORDER BY created_at DESC, id DESC
+      `,
+      [messageDbId],
+    );
+    const items = auditResult.rows.map((row) => ({
+      ...(row.data || {}),
+      action: row.data?.action ?? row.action,
+      created_at: row.data?.created_at ?? row.created_at,
+    }));
+
+    return res.json({
+      ok: true,
+      data: {
+        items,
+        pagination: {
+          total: items.length,
+          limit: 0,
+          offset: 0,
+        },
+      },
+      meta: {},
+    });
+  } catch (error) {
+    return res.status(500).json({
       ok: false,
-      error: "MESSAGE_NOT_FOUND",
+      error: "MESSAGE_AUDIT_READ_FAILED",
     });
   }
-
-  const items = item.audit || [];
-
-  return res.json({
-    ok: true,
-    data: {
-      items,
-      pagination: {
-        total: items.length,
-        limit: 0,
-        offset: 0,
-      },
-    },
-    meta: {},
-  });
 });
 
 router.get("/:id", async (req, res) => {
