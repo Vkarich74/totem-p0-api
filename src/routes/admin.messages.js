@@ -277,7 +277,16 @@ router.post("/send", async (req, res) => {
 
 router.post("/:id/retry", async (req, res) => {
   try {
-    const item = messages.get(req.params.id);
+    const result = await pool.query(
+      `
+      SELECT id, data
+      FROM public.messages
+      WHERE data->>'id' = $1
+      LIMIT 1
+      `,
+      [String(req.params.id || "")],
+    );
+    const item = result.rows?.[0]?.data ?? null;
     const persistence = getMessagesPersistenceAdapter();
 
     if (!item) {
@@ -287,17 +296,15 @@ router.post("/:id/retry", async (req, res) => {
       });
     }
 
+    item.db_id = result.rows?.[0]?.id;
+    item.audit = item.audit || [];
     item.status = "sent";
     item.audit.push({
       type: "retry",
       value: "sent",
     });
     messages.set(req.params.id, item);
-    if (!item.db_id) {
-      await persistence.saveMessage(item, "create");
-    } else {
-      await persistence.saveMessage(item, "retry_update");
-    }
+    await persistence.saveMessage(item, "retry_update");
     await persistence.saveAudit(req.params.id, {
       type: "retry",
       value: "sent",
