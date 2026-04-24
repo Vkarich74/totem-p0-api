@@ -1,20 +1,84 @@
 import express from "express";
+import { pool } from "../db.js";
 
 const router = express.Router();
 const leads = new Map();
+const leadDbIds = new WeakMap();
 let nextLeadId = 1;
 
-function persistLead(item, operation = "upsert") {
-  // mock persistence layer
-  // в будущем здесь будет DB insert/update
-  return {
-    operation,
-    item,
+function validateLeadCreateBody(body) {
+  const lead_type = String(body?.lead_type || "");
+  const name = String(body?.name || "");
+  const phone = String(body?.phone || "");
+  const source = String(body?.source || "");
+
+  if (!lead_type || !name || !phone || !source) {
+    return false;
+  }
+
+  return true;
+}
+
+export function getLeadDbIdById(runtimeLeadId) {
+  const lead = leads.get(runtimeLeadId);
+  if (!lead) {
+    return null;
+  }
+
+  return lead.db_id ?? leadDbIds.get(lead) ?? null;
+}
+
+async function persistLead(item, operation = "upsert") {
+  const data = {
+    ...item,
   };
+  const idempotencyKey = item?.idempotency_key ?? null;
+
+  if (operation === "create") {
+    const result = await pool.query(
+      `
+      INSERT INTO public.leads (status, idempotency_key, data)
+      VALUES ($1, $2, $3::jsonb)
+      RETURNING id
+      `,
+      [String(item?.status || ""), idempotencyKey, JSON.stringify(data)],
+    );
+    const dbId = result.rows?.[0]?.id ?? null;
+    if (dbId !== null) {
+      item.db_id = dbId;
+      leadDbIds.set(item, dbId);
+    }
+    return dbId;
+  }
+
+  const dbId = item?.db_id ?? leadDbIds.get(item);
+  if (dbId === null || dbId === undefined) {
+    throw new Error("LEAD_DB_ID_MISSING");
+  }
+
+  const result = await pool.query(
+    `
+    UPDATE public.leads
+    SET status = $1,
+        data = $2::jsonb,
+        updated_at = NOW()
+    WHERE id = $3
+    `,
+    [String(item?.status || ""), JSON.stringify(data), dbId],
+  );
+
+  if (!result.rowCount) {
+    throw new Error("LEAD_DB_UPDATE_FAILED");
+  }
+
+  return result;
 }
 
 router.get("/", (req, res) => {
-  const items = Array.from(leads.values());
+  const items = Array.from(leads.values()).map((item) => {
+    const { db_id, ...responseItem } = item;
+    return responseItem;
+  });
 
   return res.json({
     ok: true,
@@ -40,132 +104,170 @@ router.get("/:id", (req, res) => {
     });
   }
 
+  const { db_id, ...responseItem } = item;
+
   return res.json({
     ok: true,
-    data: item,
+    data: responseItem,
     meta: {},
   });
 });
 
-router.post("/", (req, res) => {
-  const id = `lead_${nextLeadId++}`;
-  const leadItem = {
-    id,
-    lead_type: String(req.body?.lead_type || ""),
-    name: String(req.body?.name || ""),
-    phone: String(req.body?.phone || ""),
-    source: String(req.body?.source || ""),
-    status: "new",
-    assigned_to: null,
-    converted_to: null,
-    audit: [],
-  };
+router.post("/", async (req, res) => {
+  try {
+    if (!validateLeadCreateBody(req.body)) {
+      return res.status(400).json({
+        ok: false,
+        error: "LEAD_VALIDATION_FAILED",
+      });
+    }
 
-  leads.set(id, leadItem);
-  persistLead(leadItem, "create");
-
-  return res.json({
-    ok: true,
-    data: {
+    const id = `lead_${nextLeadId++}`;
+    const leadItem = {
       id,
-      lead_type: leadItem.lead_type,
-      name: leadItem.name,
-      phone: leadItem.phone,
-      source: leadItem.source,
-    },
-    meta: {},
-  });
-});
+      lead_type: String(req.body?.lead_type || ""),
+      name: String(req.body?.name || ""),
+      phone: String(req.body?.phone || ""),
+      source: String(req.body?.source || ""),
+      status: "new",
+      assigned_to: null,
+      converted_to: null,
+      db_id: null,
+      audit: [],
+    };
 
-router.post("/:id/status", (req, res) => {
-  const item = leads.get(req.params.id);
+    leads.set(id, leadItem);
+    await persistLead(leadItem, "create");
 
-  if (!item) {
-    return res.status(404).json({
+    return res.json({
+      ok: true,
+      data: {
+        id,
+        lead_type: leadItem.lead_type,
+        name: leadItem.name,
+        phone: leadItem.phone,
+        source: leadItem.source,
+      },
+      meta: {},
+    });
+  } catch (error) {
+    return res.status(500).json({
       ok: false,
-      error: "LEAD_NOT_FOUND",
+      error: "LEAD_PERSIST_FAILED",
     });
   }
-
-  const status = String(req.body?.status || "");
-  item.status = status;
-  item.audit.push({
-    type: "status",
-    value: status,
-  });
-  leads.set(req.params.id, item);
-  persistLead(item, "status_update");
-
-  return res.json({
-    ok: true,
-    data: {
-      id: String(req.params.id || ""),
-      status,
-    },
-    meta: {},
-  });
 });
 
-router.post("/:id/assign", (req, res) => {
-  const item = leads.get(req.params.id);
+router.post("/:id/status", async (req, res) => {
+  try {
+    const item = leads.get(req.params.id);
 
-  if (!item) {
-    return res.status(404).json({
+    if (!item) {
+      return res.status(404).json({
+        ok: false,
+        error: "LEAD_NOT_FOUND",
+      });
+    }
+
+    const status = String(req.body?.status || "");
+    item.status = status;
+    item.audit.push({
+      type: "status",
+      value: status,
+    });
+    leads.set(req.params.id, item);
+    await persistLead(item, "status_update");
+
+    return res.json({
+      ok: true,
+      data: {
+        id: String(req.params.id || ""),
+        status,
+      },
+      meta: {},
+    });
+  } catch (error) {
+    return res.status(500).json({
       ok: false,
-      error: "LEAD_NOT_FOUND",
+      error: "LEAD_PERSIST_FAILED",
     });
   }
-
-  const assigned_to = String(req.body?.assigned_to || "");
-  item.assigned_to = assigned_to;
-  item.audit.push({
-    type: "assign",
-    value: assigned_to,
-  });
-  leads.set(req.params.id, item);
-  persistLead(item, "assign_update");
-
-  return res.json({
-    ok: true,
-    data: {
-      id: String(req.params.id || ""),
-      assigned_to,
-    },
-    meta: {},
-  });
 });
 
-router.post("/:id/convert", (req, res) => {
-  const item = leads.get(req.params.id);
+router.post("/:id/assign", async (req, res) => {
+  try {
+    const item = leads.get(req.params.id);
 
-  if (!item) {
-    return res.status(404).json({
+    if (!item) {
+      return res.status(404).json({
+        ok: false,
+        error: "LEAD_NOT_FOUND",
+      });
+    }
+
+    const assigned_to = String(req.body?.assigned_to || "");
+    item.assigned_to = assigned_to;
+    item.audit.push({
+      type: "assign",
+      value: assigned_to,
+    });
+    leads.set(req.params.id, item);
+    await persistLead(item, "assign_update");
+
+    return res.json({
+      ok: true,
+      data: {
+        id: String(req.params.id || ""),
+        assigned_to,
+      },
+      meta: {},
+    });
+  } catch (error) {
+    return res.status(500).json({
       ok: false,
-      error: "LEAD_NOT_FOUND",
+      error: "LEAD_PERSIST_FAILED",
     });
   }
+});
 
-  const target_type = String(req.body?.target_type || "");
-  item.converted_to = target_type;
-  item.status = "converted";
-  // создать связанный moderation case (mock связь)
-  const caseId = `case_from_${item.id}`;
-  item.moderation_case_id = caseId;
-  item.audit.push({
-    type: "convert",
-    value: target_type,
-  });
-  leads.set(req.params.id, item);
-  persistLead(item, "convert_update");
+router.post("/:id/convert", async (req, res) => {
+  try {
+    const item = leads.get(req.params.id);
 
-  return res.json({
-    ok: true,
-    data: {
-      id: String(req.params.id || ""),
-      target_type,
-    },
-    meta: {},
-  });
+    if (!item) {
+      return res.status(404).json({
+        ok: false,
+        error: "LEAD_NOT_FOUND",
+      });
+    }
+
+    const target_type = String(req.body?.target_type || "");
+    item.converted_to = target_type;
+    item.status = "converted";
+    // создать связанный moderation case (mock связь)
+    const caseId = `case_from_${item.id}`;
+    item.moderation_case_id = caseId;
+    item.audit.push({
+      type: "convert",
+      value: target_type,
+    });
+    leads.set(req.params.id, item);
+    await persistLead(item, "convert_update");
+
+    return res.json({
+      ok: true,
+      data: {
+        id: String(req.params.id || ""),
+        target_type,
+      },
+      meta: {},
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: "LEAD_PERSIST_FAILED",
+    });
+  }
 });
 
 router.get("/:id/audit", (req, res) => {
