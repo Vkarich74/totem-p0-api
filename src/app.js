@@ -59,6 +59,7 @@ const allowedOrigins = [
   "https://www.totemv.com",
   "https://totemv.com",
   "https://app.totemv.com",
+  "https://totem-admin-production.up.railway.app",
   "http://localhost:5173",
 ];
 
