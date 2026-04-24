@@ -333,5 +333,209 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
     }
   });
 
+  r.post("/salons/:id/action", async (req, res) => {
+    const id = Number(req.params.id);
+    const action = String(req.body?.action || "").trim();
+    const reason = String(req.body?.reason || "").trim();
+
+    if (action !== "suspend" && action !== "unsuspend") {
+      return res.status(400).json({
+        ok: false,
+        error: "ADMIN_ACTION_INVALID",
+      });
+    }
+
+    const db = await pool.connect();
+
+    try {
+      await db.query("BEGIN");
+
+      const beforeResult = await db.query(
+        `
+        SELECT id, slug, name, enabled, status
+        FROM public.salons
+        WHERE id = $1
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [id],
+      );
+      const before = beforeResult.rows?.[0] || null;
+
+      if (!before) {
+        await db.query("ROLLBACK");
+        return res.status(404).json({
+          ok: false,
+          error: "ADMIN_SALON_NOT_FOUND",
+        });
+      }
+
+      const updateResult = await db.query(
+        action === "suspend"
+          ? `
+            UPDATE public.salons
+            SET enabled=false, status='suspended'
+            WHERE id=$1
+            RETURNING id, slug, name, enabled, status
+            `
+          : `
+            UPDATE public.salons
+            SET enabled=true, status='active'
+            WHERE id=$1
+            RETURNING id, slug, name, enabled, status
+            `,
+        [id],
+      );
+      const entity = updateResult.rows?.[0] || null;
+      const auditAction = action === "suspend" ? "entity_suspended" : "entity_unsuspended";
+
+      await db.query(
+        `
+        INSERT INTO public.audit_logs (entity_type, entity_id, action, data)
+        VALUES ($1, $2, $3, $4::jsonb)
+        `,
+        [
+          "salon",
+          id,
+          auditAction,
+          JSON.stringify({
+            source: "admin_control",
+            entity_type: "salon",
+            entity_id: id,
+            action,
+            reason,
+            actor_user_id: req.auth?.user_id ?? null,
+            before,
+            after: entity,
+          }),
+        ],
+      );
+
+      await db.query("COMMIT");
+
+      return res.json({
+        ok: true,
+        data: {
+          entity,
+          audit_action: auditAction,
+        },
+      });
+    } catch (error) {
+      try {
+        await db.query("ROLLBACK");
+      } catch (rollbackError) {}
+
+      console.error("ADMIN_SALON_ACTION_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_SALON_ACTION_FAILED",
+      });
+    } finally {
+      db.release();
+    }
+  });
+
+  r.post("/masters/:id/action", async (req, res) => {
+    const id = Number(req.params.id);
+    const action = String(req.body?.action || "").trim();
+    const reason = String(req.body?.reason || "").trim();
+
+    if (action !== "suspend" && action !== "unsuspend") {
+      return res.status(400).json({
+        ok: false,
+        error: "ADMIN_ACTION_INVALID",
+      });
+    }
+
+    const db = await pool.connect();
+
+    try {
+      await db.query("BEGIN");
+
+      const beforeResult = await db.query(
+        `
+        SELECT id, slug, name, active
+        FROM public.masters
+        WHERE id = $1
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [id],
+      );
+      const before = beforeResult.rows?.[0] || null;
+
+      if (!before) {
+        await db.query("ROLLBACK");
+        return res.status(404).json({
+          ok: false,
+          error: "ADMIN_MASTER_NOT_FOUND",
+        });
+      }
+
+      const updateResult = await db.query(
+        action === "suspend"
+          ? `
+            UPDATE public.masters
+            SET active=false
+            WHERE id=$1
+            RETURNING id, slug, name, active
+            `
+          : `
+            UPDATE public.masters
+            SET active=true
+            WHERE id=$1
+            RETURNING id, slug, name, active
+            `,
+        [id],
+      );
+      const entity = updateResult.rows?.[0] || null;
+      const auditAction = action === "suspend" ? "entity_suspended" : "entity_unsuspended";
+
+      await db.query(
+        `
+        INSERT INTO public.audit_logs (entity_type, entity_id, action, data)
+        VALUES ($1, $2, $3, $4::jsonb)
+        `,
+        [
+          "master",
+          id,
+          auditAction,
+          JSON.stringify({
+            source: "admin_control",
+            entity_type: "master",
+            entity_id: id,
+            action,
+            reason,
+            actor_user_id: req.auth?.user_id ?? null,
+            before,
+            after: entity,
+          }),
+        ],
+      );
+
+      await db.query("COMMIT");
+
+      return res.json({
+        ok: true,
+        data: {
+          entity,
+          audit_action: auditAction,
+        },
+      });
+    } catch (error) {
+      try {
+        await db.query("ROLLBACK");
+      } catch (rollbackError) {}
+
+      console.error("ADMIN_MASTER_ACTION_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_MASTER_ACTION_FAILED",
+      });
+    } finally {
+      db.release();
+    }
+  });
+
   return r;
 }
