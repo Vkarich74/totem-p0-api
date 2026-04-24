@@ -19,13 +19,33 @@ function validateLeadCreateBody(body) {
   return true;
 }
 
-export function getLeadDbIdById(runtimeLeadId) {
-  const lead = leads.get(runtimeLeadId);
-  if (!lead) {
+export async function getLeadDbIdById(runtimeLeadId) {
+  if (!runtimeLeadId) {
     return null;
   }
 
-  return lead.db_id ?? leadDbIds.get(lead) ?? null;
+  const lead = leads.get(runtimeLeadId);
+  const dbId = lead?.db_id ?? (lead ? leadDbIds.get(lead) : null) ?? null;
+
+  if (dbId !== null && dbId !== undefined) {
+    return dbId;
+  }
+
+  try {
+    const result = await pool.query(
+      `
+      SELECT id
+      FROM public.leads
+      WHERE data->>'id' = $1
+      LIMIT 1
+      `,
+      [String(runtimeLeadId || "")],
+    );
+
+    return result.rows?.[0]?.id ?? null;
+  } catch (error) {
+    return null;
+  }
 }
 
 async function persistLead(item, operation = "upsert") {
