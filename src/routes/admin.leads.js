@@ -19,6 +19,32 @@ function validateLeadCreateBody(body) {
   return true;
 }
 
+async function getNextLeadRuntimeId() {
+  try {
+    const result = await pool.query(`
+      SELECT data->>'id' AS runtime_id
+      FROM public.leads
+      WHERE data->>'id' LIKE 'lead_%'
+    `);
+    const max = result.rows.reduce((currentMax, row) => {
+      const runtimeId = String(row.runtime_id || "");
+      if (!/^lead_\d+$/.test(runtimeId)) {
+        return currentMax;
+      }
+
+      const value = Number(runtimeId.replace("lead_", ""));
+      return Number.isFinite(value) ? Math.max(currentMax, value) : currentMax;
+    }, 0);
+    const nextId = max + 1;
+    const runtimeId = `lead_${nextId}`;
+    nextLeadId = Math.max(nextLeadId, nextId + 1);
+
+    return runtimeId;
+  } catch (error) {
+    return `lead_${nextLeadId++}`;
+  }
+}
+
 export async function getLeadDbIdById(runtimeLeadId) {
   if (!runtimeLeadId) {
     return null;
@@ -170,7 +196,7 @@ router.post("/", async (req, res) => {
       });
     }
 
-    const id = `lead_${nextLeadId++}`;
+    const id = await getNextLeadRuntimeId();
     const leadItem = {
       id,
       lead_type: String(req.body?.lead_type || ""),
