@@ -285,7 +285,11 @@ router.post("/:id/retry", async (req, res) => {
       value: "sent",
     });
     messages.set(req.params.id, item);
-    await persistence.saveMessage(item, "retry_update");
+    if (!item.db_id) {
+      await persistence.saveMessage(item, "create");
+    } else {
+      await persistence.saveMessage(item, "retry_update");
+    }
 
     return res.json({
       ok: true,
