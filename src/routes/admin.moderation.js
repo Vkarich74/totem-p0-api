@@ -76,24 +76,36 @@ async function persistCase(item, operation = "upsert") {
   return result;
 }
 
-router.get("/", (req, res) => {
-  const items = Array.from(cases.values()).map((item) => {
-    const { db_id, ...responseItem } = item;
-    return responseItem;
-  });
+router.get("/", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT data
+      FROM public.moderation_cases
+      ORDER BY created_at DESC, id DESC
+    `);
+    const items = result.rows.map((row) => {
+      const { db_id, ...responseItem } = row.data || {};
+      return responseItem;
+    });
 
-  return res.json({
-    ok: true,
-    data: {
-      items,
-      pagination: {
-        total: items.length,
-        limit: 0,
-        offset: 0,
+    return res.json({
+      ok: true,
+      data: {
+        items,
+        pagination: {
+          total: items.length,
+          limit: 0,
+          offset: 0,
+        },
       },
-    },
-    meta: {},
-  });
+      meta: {},
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: "CASES_READ_FAILED",
+    });
+  }
 });
 
 router.get("/:id", (req, res) => {
