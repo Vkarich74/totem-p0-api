@@ -20,6 +20,32 @@ function validateMessageSendBody(body) {
   return true;
 }
 
+async function getNextMessageRuntimeId() {
+  try {
+    const result = await pool.query(`
+      SELECT data->>'id' AS runtime_id
+      FROM public.messages
+      WHERE data->>'id' LIKE 'msg_%'
+    `);
+    const max = result.rows.reduce((currentMax, row) => {
+      const runtimeId = String(row.runtime_id || "");
+      if (!/^msg_\d+$/.test(runtimeId)) {
+        return currentMax;
+      }
+
+      const value = Number(runtimeId.replace("msg_", ""));
+      return Number.isFinite(value) ? Math.max(currentMax, value) : currentMax;
+    }, 0);
+    const nextId = max + 1;
+    const runtimeId = `msg_${nextId}`;
+    nextMessageId = Math.max(nextMessageId, nextId + 1);
+
+    return runtimeId;
+  } catch (error) {
+    return `msg_${nextMessageId++}`;
+  }
+}
+
 async function persistMessage(item, operation = "upsert") {
   const data = {
     ...item,
@@ -229,7 +255,7 @@ router.post("/send", async (req, res) => {
       });
     }
 
-    const id = `msg_${nextMessageId++}`;
+    const id = await getNextMessageRuntimeId();
     const channel = String(req.body?.channel || "");
     const recipient_type = String(req.body?.recipient_type || "");
     const recipient_id = String(req.body?.recipient_id || "");
