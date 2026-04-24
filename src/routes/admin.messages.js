@@ -115,7 +115,21 @@ async function persistMessageAudit(messageId, auditItem) {
 
 async function persistTraceLink(messageId, payload) {
   const item = messages.get(messageId);
-  const messageDbId = item?.db_id ?? null;
+  let messageDbId = item?.db_id ?? null;
+
+  if (messageDbId === null || messageDbId === undefined) {
+    const result = await pool.query(
+      `
+      SELECT id
+      FROM public.messages
+      WHERE data->>'id' = $1
+      LIMIT 1
+      `,
+      [String(messageId || "")],
+    );
+
+    messageDbId = result.rows?.[0]?.id ?? null;
+  }
 
   if (messageDbId === null || messageDbId === undefined) {
     throw new Error("MESSAGE_DB_ID_MISSING");
