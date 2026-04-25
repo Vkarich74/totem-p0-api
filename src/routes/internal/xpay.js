@@ -1,13 +1,25 @@
 import express from "express";
 
-export default function buildXpayRouter({ pool, xpayCreateQR, xpayCheckStatus, xpayCreateDynamicQR, xpayCheckDynamicQRStatus }){
+export default function buildXpayRouter({
+pool,
+xpayCreateQR,
+xpayCheckStatus,
+xpayCreateDynamicQR,
+xpayCheckDynamicQRStatus,
+xpayCreateStaticQR,
+xpayCheckStaticQRStatus,
+xpaySetStaticQRStatus
+}){
 const r = express.Router();
 
 const XPAY_RELEASE_ENABLED = String(process.env.XPAY_RELEASE_ENABLED || "false").toLowerCase() === "true";
 const XPAY_DYNAMIC_ENABLED = String(process.env.XPAY_DYNAMIC_ENABLED || "false").toLowerCase() === "true";
+const XPAY_STATIC_ENABLED = String(process.env.XPAY_STATIC_ENABLED || "false").toLowerCase() === "true";
 
 const createDynamicQR = xpayCreateDynamicQR || xpayCreateQR;
 const checkDynamicQRStatus = xpayCheckDynamicQRStatus || xpayCheckStatus;
+const createStaticQR = xpayCreateStaticQR || xpayCreateQR;
+const checkStaticQRStatus = xpayCheckStaticQRStatus || xpayCheckStatus;
 
 /* ============================= */
 /* XPAY QR ENGINE                */
@@ -57,6 +69,20 @@ return "failed";
 return "pending";
 }
 
+function mapXpayStaticStatusToTotem(xpayStatus){
+const normalized = String(xpayStatus || "").trim().toUpperCase();
+
+if(["ACTIVE","BLOCKED"].includes(normalized)){
+return "pending";
+}
+
+if(normalized === "COMPLETED"){
+return "confirmed";
+}
+
+return "pending";
+}
+
 function extractXpayStatus(statusResponse){
 if(!statusResponse){
 return null;
@@ -67,8 +93,10 @@ return statusResponse;
 }
 
 return statusResponse?.pay_status
+|| statusResponse?.qr_status
 || statusResponse?.status
 || statusResponse?.data?.pay_status
+|| statusResponse?.data?.qr_status
 || statusResponse?.data?.status
 || null;
 }
@@ -287,6 +315,168 @@ return {
 ok:false,
 httpStatus:500,
 body:{ok:false,error:"XPAY_STATUS_FAILED"}
+};
+
+}finally{
+
+client.release();
+
+}
+}
+
+async function verifyAndUpdateStaticPaymentStatus({ paymentId, qrTransactionId }){
+if(typeof checkStaticQRStatus !== "function"){
+return {
+ok:false,
+httpStatus:500,
+body:{ok:false,error:"XPAY_STATIC_STATUS_ADAPTER_NOT_CONFIGURED"}
+};
+}
+
+const client = await pool.connect();
+
+try{
+await client.query("BEGIN");
+
+let payment;
+
+if(paymentId){
+payment = await client.query(`
+SELECT
+id,
+booking_id,
+provider,
+status,
+amount,
+qr_transaction_id,
+is_active
+FROM payments
+WHERE id=$1
+FOR UPDATE
+`,[paymentId]);
+}else{
+payment = await client.query(`
+SELECT
+id,
+booking_id,
+provider,
+status,
+amount,
+qr_transaction_id,
+is_active
+FROM payments
+WHERE qr_transaction_id=$1
+FOR UPDATE
+`,[qrTransactionId]);
+}
+
+if(!payment.rows.length){
+await client.query("ROLLBACK");
+
+return {
+ok:false,
+httpStatus:404,
+body:{ok:false,error:"PAYMENT_NOT_FOUND"}
+};
+}
+
+const paymentRow = payment.rows[0];
+
+if(paymentRow.provider !== "xpay"){
+await client.query("ROLLBACK");
+
+return {
+ok:false,
+httpStatus:409,
+body:{ok:false,error:"PAYMENT_PROVIDER_MISMATCH",payment:normalizePaymentRow(paymentRow)}
+};
+}
+
+const transactionId = paymentRow.qr_transaction_id || qrTransactionId;
+
+if(!transactionId){
+await client.query("ROLLBACK");
+
+return {
+ok:false,
+httpStatus:409,
+body:{ok:false,error:"PAYMENT_QR_TRANSACTION_MISSING",payment:normalizePaymentRow(paymentRow)}
+};
+}
+
+const providerStatus = await checkStaticQRStatus(transactionId);
+const xpayStatus = extractXpayStatus(providerStatus);
+const mappedStatus = mapXpayStaticStatusToTotem(xpayStatus);
+
+let nextStatus = paymentRow.status;
+
+if(paymentRow.status === "pending" && mappedStatus === "confirmed"){
+nextStatus = "confirmed";
+}
+
+let updatedPayment = paymentRow;
+
+if(nextStatus !== paymentRow.status){
+const updated = await client.query(`
+UPDATE payments
+SET
+status=$2,
+updated_at=now()
+WHERE id=$1
+RETURNING
+id,
+booking_id,
+provider,
+status,
+amount,
+qr_transaction_id,
+is_active
+`,[
+paymentRow.id,
+nextStatus
+]);
+
+updatedPayment = updated.rows[0];
+}
+
+await client.query("COMMIT");
+
+await recordXpayEvent("xpay_static_status_verified",{
+payment_id:updatedPayment.id,
+booking_id:updatedPayment.booking_id,
+qr_transaction_id:transactionId,
+xpay_status:xpayStatus,
+totem_status:updatedPayment.status,
+provider_response:providerStatus
+});
+
+return {
+ok:true,
+httpStatus:200,
+body:{
+ok:true,
+payment:normalizePaymentRow(updatedPayment),
+payment_id:updatedPayment.id,
+qr_transaction_id:transactionId,
+xpay_status:xpayStatus,
+totem_status:updatedPayment.status,
+status:providerStatus
+}
+};
+
+}catch(err){
+try{
+await client.query("ROLLBACK");
+}catch(rollbackErr){
+console.error("XPAY_STATIC_STATUS_ROLLBACK_ERROR",rollbackErr);
+}
+
+console.error("XPAY_STATIC_STATUS_ERROR",err);
+
+return {
+ok:false,
+httpStatus:500,
+body:{ok:false,error:"XPAY_STATIC_STATUS_FAILED"}
 };
 
 }finally{
@@ -608,6 +798,420 @@ res.status(result.httpStatus).json({
 ...result.body,
 accepted:result.ok
 });
+
+});
+
+r.post("/payments/xpay/static/create", async (req,res)=>{
+
+if(!XPAY_RELEASE_ENABLED){
+return res.status(409).json({
+ok:false,
+error:"XPAY_DISABLED_UNTIL_PROVIDER_ACTIVATION"
+});
+}
+
+if(!XPAY_STATIC_ENABLED){
+return res.status(409).json({
+ok:false,
+error:"XPAY_STATIC_DISABLED_UNTIL_PROVIDER_ACTIVATION"
+});
+}
+
+const salonId = parsePositiveInteger(req.body?.salon_id);
+const amountValue = parsePositiveInteger(req.body?.amount);
+const terminalName = String(req.body?.terminal_name || "TOTEM static terminal").trim();
+const comments = String(req.body?.comments || "Оплата в салоне TOTEM").trim();
+
+if(!salonId){
+return res.status(400).json({
+ok:false,
+error:"SALON_ID_REQUIRED"
+});
+}
+
+if(!amountValue){
+return res.status(400).json({
+ok:false,
+error:"AMOUNT_REQUIRED"
+});
+}
+
+if(typeof createStaticQR !== "function"){
+return res.status(500).json({
+ok:false,
+error:"XPAY_STATIC_CREATE_QR_ADAPTER_NOT_CONFIGURED"
+});
+}
+
+const client = await pool.connect();
+
+try{
+
+await client.query("BEGIN");
+
+const salon = await client.query(`
+SELECT id
+FROM salons
+WHERE id=$1
+`,[salonId]);
+
+if(!salon.rows.length){
+await client.query("ROLLBACK");
+
+return res.status(404).json({
+ok:false,
+error:"SALON_NOT_FOUND"
+});
+}
+
+const payment = await client.query(`
+INSERT INTO payments(
+booking_id,
+provider,
+amount,
+status,
+is_active
+)
+VALUES(NULL,'xpay',$1,'pending',true)
+RETURNING
+id,
+booking_id,
+provider,
+status,
+amount,
+qr_transaction_id,
+is_active
+`,[
+amountValue
+]);
+
+const paymentRow = payment.rows[0];
+
+const qr = await createStaticQR({
+payment_id:paymentRow.id,
+amount:amountValue,
+service_id:`totem-static-${paymentRow.id}`,
+service_name:terminalName,
+comments
+});
+
+const qrTransactionId = qr.qr_transaction_id || qr.transaction_id;
+
+if(!qrTransactionId){
+throw new Error("XPAY_STATIC_QR_TRANSACTION_ID_MISSING");
+}
+
+const updatedPayment = await client.query(`
+UPDATE payments
+SET
+qr_transaction_id=$2,
+updated_at=now()
+WHERE id=$1
+RETURNING
+id,
+booking_id,
+provider,
+status,
+amount,
+qr_transaction_id,
+is_active
+`,[
+paymentRow.id,
+qrTransactionId
+]);
+
+await client.query("COMMIT");
+
+await recordXpayEvent("xpay_static_qr_created",{
+payment_id:updatedPayment.rows[0].id,
+salon_id:salonId,
+qr_transaction_id:qrTransactionId,
+terminal_name:terminalName,
+comments,
+provider_response:qr
+});
+
+res.json({
+ok:true,
+payment:normalizePaymentRow(updatedPayment.rows[0]),
+payment_id:updatedPayment.rows[0].id,
+salon_id:salonId,
+qr_transaction_id:qrTransactionId,
+transaction_id:qrTransactionId,
+qr_code:qr.qr_code || null,
+qr_image:qr.qr_image || null
+});
+
+}catch(err){
+
+try{
+await client.query("ROLLBACK");
+}catch(rollbackErr){
+console.error("XPAY_STATIC_CREATE_ROLLBACK_ERROR",rollbackErr);
+}
+
+if(err?.code === "23505"){
+return res.status(409).json({
+ok:false,
+error:"STATIC_PAYMENT_CONFLICT"
+});
+}
+
+console.error("XPAY_STATIC_CREATE_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"XPAY_STATIC_CREATE_FAILED"
+});
+
+}finally{
+
+client.release();
+
+}
+
+});
+
+r.post("/payments/xpay/static/status", async (req,res)=>{
+
+if(!XPAY_RELEASE_ENABLED){
+return res.status(409).json({
+ok:false,
+error:"XPAY_DISABLED_UNTIL_PROVIDER_ACTIVATION"
+});
+}
+
+if(!XPAY_STATIC_ENABLED){
+return res.status(409).json({
+ok:false,
+error:"XPAY_STATIC_DISABLED_UNTIL_PROVIDER_ACTIVATION"
+});
+}
+
+const paymentId = parsePositiveInteger(req.body?.payment_id);
+const qrTransactionId = req.body?.qr_transaction_id || req.body?.transaction_id || null;
+
+if(!paymentId && !qrTransactionId){
+return res.status(400).json({
+ok:false,
+error:"PAYMENT_ID_REQUIRED"
+});
+}
+
+const result = await verifyAndUpdateStaticPaymentStatus({
+paymentId,
+qrTransactionId
+});
+
+res.status(result.httpStatus).json(result.body);
+
+});
+
+r.post("/payments/xpay/static/activate", async (req,res)=>{
+
+if(!XPAY_RELEASE_ENABLED){
+return res.status(409).json({
+ok:false,
+error:"XPAY_DISABLED_UNTIL_PROVIDER_ACTIVATION"
+});
+}
+
+if(!XPAY_STATIC_ENABLED){
+return res.status(409).json({
+ok:false,
+error:"XPAY_STATIC_DISABLED_UNTIL_PROVIDER_ACTIVATION"
+});
+}
+
+const paymentId = parsePositiveInteger(req.body?.payment_id);
+
+if(!paymentId){
+return res.status(400).json({
+ok:false,
+error:"PAYMENT_ID_REQUIRED"
+});
+}
+
+if(typeof xpaySetStaticQRStatus !== "function"){
+return res.status(500).json({
+ok:false,
+error:"XPAY_STATIC_STATUS_SET_ADAPTER_NOT_CONFIGURED"
+});
+}
+
+try{
+
+const payment = await pool.query(`
+SELECT
+id,
+booking_id,
+provider,
+status,
+amount,
+qr_transaction_id,
+is_active
+FROM payments
+WHERE id=$1
+`,[paymentId]);
+
+if(!payment.rows.length){
+return res.status(404).json({
+ok:false,
+error:"PAYMENT_NOT_FOUND"
+});
+}
+
+const paymentRow = payment.rows[0];
+
+if(paymentRow.provider !== "xpay"){
+return res.status(409).json({
+ok:false,
+error:"PAYMENT_PROVIDER_MISMATCH",
+payment:normalizePaymentRow(paymentRow)
+});
+}
+
+if(paymentRow.status !== "pending"){
+return res.status(409).json({
+ok:false,
+error:"PAYMENT_NOT_PENDING",
+payment:normalizePaymentRow(paymentRow)
+});
+}
+
+if(!paymentRow.qr_transaction_id){
+return res.status(409).json({
+ok:false,
+error:"PAYMENT_QR_TRANSACTION_MISSING",
+payment:normalizePaymentRow(paymentRow)
+});
+}
+
+const providerResponse = await xpaySetStaticQRStatus(paymentRow.qr_transaction_id,"ACTIVE");
+
+await recordXpayEvent("xpay_static_qr_activated",{
+payment_id:paymentRow.id,
+qr_transaction_id:paymentRow.qr_transaction_id,
+provider_response:providerResponse
+});
+
+res.json({
+ok:true,
+payment:normalizePaymentRow(paymentRow),
+qr_transaction_id:paymentRow.qr_transaction_id,
+status:providerResponse
+});
+
+}catch(err){
+
+console.error("XPAY_STATIC_ACTIVATE_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"XPAY_STATIC_ACTIVATE_FAILED"
+});
+
+}
+
+});
+
+r.post("/payments/xpay/static/block", async (req,res)=>{
+
+if(!XPAY_RELEASE_ENABLED){
+return res.status(409).json({
+ok:false,
+error:"XPAY_DISABLED_UNTIL_PROVIDER_ACTIVATION"
+});
+}
+
+if(!XPAY_STATIC_ENABLED){
+return res.status(409).json({
+ok:false,
+error:"XPAY_STATIC_DISABLED_UNTIL_PROVIDER_ACTIVATION"
+});
+}
+
+const paymentId = parsePositiveInteger(req.body?.payment_id);
+
+if(!paymentId){
+return res.status(400).json({
+ok:false,
+error:"PAYMENT_ID_REQUIRED"
+});
+}
+
+if(typeof xpaySetStaticQRStatus !== "function"){
+return res.status(500).json({
+ok:false,
+error:"XPAY_STATIC_STATUS_SET_ADAPTER_NOT_CONFIGURED"
+});
+}
+
+try{
+
+const payment = await pool.query(`
+SELECT
+id,
+booking_id,
+provider,
+status,
+amount,
+qr_transaction_id,
+is_active
+FROM payments
+WHERE id=$1
+`,[paymentId]);
+
+if(!payment.rows.length){
+return res.status(404).json({
+ok:false,
+error:"PAYMENT_NOT_FOUND"
+});
+}
+
+const paymentRow = payment.rows[0];
+
+if(paymentRow.provider !== "xpay"){
+return res.status(409).json({
+ok:false,
+error:"PAYMENT_PROVIDER_MISMATCH",
+payment:normalizePaymentRow(paymentRow)
+});
+}
+
+if(!paymentRow.qr_transaction_id){
+return res.status(409).json({
+ok:false,
+error:"PAYMENT_QR_TRANSACTION_MISSING",
+payment:normalizePaymentRow(paymentRow)
+});
+}
+
+const providerResponse = await xpaySetStaticQRStatus(paymentRow.qr_transaction_id,"BLOCKED");
+
+await recordXpayEvent("xpay_static_qr_blocked",{
+payment_id:paymentRow.id,
+qr_transaction_id:paymentRow.qr_transaction_id,
+provider_response:providerResponse
+});
+
+res.json({
+ok:true,
+payment:normalizePaymentRow(paymentRow),
+qr_transaction_id:paymentRow.qr_transaction_id,
+status:providerResponse
+});
+
+}catch(err){
+
+console.error("XPAY_STATIC_BLOCK_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"XPAY_STATIC_BLOCK_FAILED"
+});
+
+}
 
 });
 
