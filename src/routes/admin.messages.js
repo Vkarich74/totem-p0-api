@@ -81,9 +81,8 @@ function validateMessageSendBody(body) {
   const direction = normalizeDirection(body?.direction || "outbound");
   const recipientType = normalizeRecipientType(body?.recipient_type);
   const recipientId = normalizeText(body?.recipient_id);
-  const leadId = normalizeText(body?.lead_id || (recipientType === "lead" ? recipientId : ""));
 
-  if (!channel || !direction || !recipientType || !recipientId || !leadId) {
+  if (!channel || !direction || !recipientType || !recipientId) {
     return false;
   }
 
@@ -135,6 +134,26 @@ async function getMessageDbIdByRuntimeId(runtimeMessageId) {
   return result.rows?.[0]?.id ?? null;
 }
 
+async function resolveOptionalLeadDbId(runtimeLeadId) {
+  const normalized = normalizeText(runtimeLeadId);
+
+  if (!normalized) {
+    return null;
+  }
+
+  return getLeadDbIdById(normalized);
+}
+
+async function resolveOptionalCaseDbId(runtimeCaseId) {
+  const normalized = normalizeText(runtimeCaseId);
+
+  if (!normalized) {
+    return null;
+  }
+
+  return getCaseDbIdById(normalized);
+}
+
 async function logMessageAudit(db, messageDbId, action, payload = {}) {
   await db.query(
     `
@@ -176,15 +195,9 @@ async function persistMessage(item, operation = "upsert", db = pool) {
   };
   delete data.audit;
 
-  const leadDbId = await getLeadDbIdById(item?.lead_runtime_id);
-  const caseDbId = item?.moderation_case_runtime_id
-    ? await getCaseDbIdById(item?.moderation_case_runtime_id)
-    : null;
+  const leadDbId = await resolveOptionalLeadDbId(item?.lead_runtime_id);
+  const caseDbId = await resolveOptionalCaseDbId(item?.moderation_case_runtime_id);
   const idempotencyKey = item?.idempotency_key ?? null;
-
-  if (leadDbId === null || leadDbId === undefined) {
-    throw new Error("MESSAGE_LEAD_DB_ID_MISSING");
-  }
 
   if (operation === "create") {
     const result = await db.query(
@@ -338,7 +351,7 @@ router.post("/send", async (req, res) => {
     const recipient_type = normalizeRecipientType(req.body?.recipient_type);
     const recipient_id = normalizeText(req.body?.recipient_id);
     const recipient_label = normalizeText(req.body?.recipient_label) || recipient_id;
-    const lead_runtime_id = normalizeText(req.body?.lead_id || (recipient_type === "lead" ? recipient_id : ""));
+    const lead_runtime_id = normalizeText(req.body?.lead_id || (recipient_type === "lead" ? recipient_id : "")) || null;
     const moderation_case_runtime_id = normalizeText(req.body?.moderation_case_id) || null;
     const template_key = normalizeText(req.body?.template_key);
     const body_preview = buildBodyPreview(req.body?.body_preview || req.body?.body, template_key);
@@ -412,13 +425,6 @@ router.post("/send", async (req, res) => {
       stack: error?.stack,
       payload: req.body,
     });
-
-    if (error?.message === "MESSAGE_LEAD_DB_ID_MISSING") {
-      return res.status(400).json({
-        ok: false,
-        error: "MESSAGE_LEAD_DB_ID_MISSING",
-      });
-    }
 
     return res.status(500).json({
       ok: false,

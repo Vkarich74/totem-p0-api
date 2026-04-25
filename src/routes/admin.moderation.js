@@ -50,9 +50,8 @@ function sanitizeCaseForResponse(item) {
 function validateCaseCreateBody(body) {
   const entityType = normalizeCaseEntityType(body?.entity_type || "lead");
   const entityId = normalizeText(body?.entity_id || body?.lead_id);
-  const leadId = normalizeText(body?.lead_id || (entityType === "lead" ? entityId : ""));
 
-  if (!entityType || !entityId || !leadId) {
+  if (!entityType || !entityId) {
     return false;
   }
 
@@ -134,20 +133,25 @@ export async function getCaseDbIdById(runtimeCaseId) {
   }
 }
 
+async function resolveOptionalLeadDbId(runtimeLeadId) {
+  const normalized = normalizeText(runtimeLeadId);
+
+  if (!normalized) {
+    return null;
+  }
+
+  return getLeadDbIdById(normalized);
+}
+
 async function persistCase(item, operation = "upsert", db = pool) {
   const data = {
     ...item,
   };
   delete data.audit;
 
-  const runtimeLeadId = item?.lead_runtime_id ?? null;
-  const leadDbId = await getLeadDbIdById(runtimeLeadId);
+  const leadDbId = await resolveOptionalLeadDbId(item?.lead_runtime_id);
 
   if (operation === "create") {
-    if (leadDbId === null || leadDbId === undefined) {
-      throw new Error("CASE_LEAD_DB_ID_MISSING");
-    }
-
     const result = await db.query(
       `
       INSERT INTO public.moderation_cases (lead_id, status, data)
@@ -172,12 +176,13 @@ async function persistCase(item, operation = "upsert", db = pool) {
   const result = await db.query(
     `
     UPDATE public.moderation_cases
-    SET status = $1,
-        data = $2::jsonb,
+    SET lead_id = $1,
+        status = $2,
+        data = $3::jsonb,
         updated_at = NOW()
-    WHERE id = $3
+    WHERE id = $4
     `,
-    [String(item?.status || ""), JSON.stringify(data), dbId],
+    [leadDbId, String(item?.status || ""), JSON.stringify(data), dbId],
   );
 
   if (!result.rowCount) {
@@ -371,7 +376,7 @@ router.post("/", async (req, res) => {
       id,
       entity_type: entityType,
       entity_id: entityId,
-      lead_runtime_id: leadRuntimeId,
+      lead_runtime_id: leadRuntimeId || null,
       reason_code: reasonCode,
       reason_text: reasonText,
       status: "open",
