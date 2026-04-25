@@ -7,13 +7,83 @@ const router = express.Router();
 const messages = new Map();
 let nextMessageId = 1;
 
-function validateMessageSendBody(body) {
-  const channel = String(body?.channel || "");
-  const recipient_id = String(body?.recipient_id || "");
-  const lead_id = String(body?.lead_id || "");
-  const moderation_case_id = String(body?.moderation_case_id || "");
+const MESSAGE_CHANNELS = new Set(["whatsapp", "email", "sms", "internal"]);
+const MESSAGE_DIRECTIONS = new Set(["outbound", "inbound"]);
+const MESSAGE_RECIPIENT_TYPES = new Set(["salon", "master", "client", "lead"]);
+const MESSAGE_STATUSES = new Set(["queued", "sent", "delivered", "failed", "read"]);
 
-  if (!channel || !recipient_id || !lead_id || !moderation_case_id) {
+const templates = [
+  {
+    id: "tpl_whatsapp_followup",
+    template_key: "whatsapp_followup",
+    channel: "whatsapp",
+    name: "Follow Up",
+    body: "Здравствуйте. Напоминаем по вашему обращению.",
+  },
+  {
+    id: "tpl_whatsapp_welcome",
+    template_key: "whatsapp_welcome",
+    channel: "whatsapp",
+    name: "Welcome",
+    body: "Здравствуйте. Спасибо за интерес к TOTEM.",
+  },
+  {
+    id: "tpl_internal_note",
+    template_key: "internal_note",
+    channel: "internal",
+    name: "Internal Note",
+    body: "Internal admin message.",
+  },
+];
+
+function normalizeText(value) {
+  return String(value ?? "").trim();
+}
+
+function normalizeChannel(value) {
+  const channel = normalizeText(value).toLowerCase();
+  return MESSAGE_CHANNELS.has(channel) ? channel : "";
+}
+
+function normalizeDirection(value) {
+  const direction = normalizeText(value || "outbound").toLowerCase();
+  return MESSAGE_DIRECTIONS.has(direction) ? direction : "";
+}
+
+function normalizeRecipientType(value) {
+  const recipientType = normalizeText(value).toLowerCase();
+  return MESSAGE_RECIPIENT_TYPES.has(recipientType) ? recipientType : "";
+}
+
+function normalizeStatus(value) {
+  const status = normalizeText(value || "sent").toLowerCase();
+  return MESSAGE_STATUSES.has(status) ? status : "";
+}
+
+function sanitizeMessageForResponse(item) {
+  const { db_id, audit, ...responseItem } = item || {};
+  return responseItem;
+}
+
+function buildBodyPreview(body, templateKey) {
+  const raw = normalizeText(body);
+
+  if (raw) {
+    return raw.slice(0, 240);
+  }
+
+  const template = templates.find((item) => item.template_key === templateKey || item.id === templateKey);
+  return normalizeText(template?.body).slice(0, 240);
+}
+
+function validateMessageSendBody(body) {
+  const channel = normalizeChannel(body?.channel);
+  const direction = normalizeDirection(body?.direction || "outbound");
+  const recipientType = normalizeRecipientType(body?.recipient_type);
+  const recipientId = normalizeText(body?.recipient_id);
+  const leadId = normalizeText(body?.lead_id || (recipientType === "lead" ? recipientId : ""));
+
+  if (!channel || !direction || !recipientType || !recipientId || !leadId) {
     return false;
   }
 
@@ -46,24 +116,78 @@ async function getNextMessageRuntimeId() {
   }
 }
 
-async function persistMessage(item, operation = "upsert") {
+async function getMessageDbIdByRuntimeId(runtimeMessageId) {
+  const cached = messages.get(runtimeMessageId);
+  if (cached?.db_id !== null && cached?.db_id !== undefined) {
+    return cached.db_id;
+  }
+
+  const result = await pool.query(
+    `
+    SELECT id
+    FROM public.messages
+    WHERE data->>'id' = $1
+    LIMIT 1
+    `,
+    [String(runtimeMessageId || "")],
+  );
+
+  return result.rows?.[0]?.id ?? null;
+}
+
+async function logMessageAudit(db, messageDbId, action, payload = {}) {
+  await db.query(
+    `
+    INSERT INTO public.audit_logs (entity_type, entity_id, action, data)
+    VALUES ($1, $2, $3, $4::jsonb)
+    `,
+    [
+      "message",
+      messageDbId,
+      action,
+      JSON.stringify({
+        source: "admin_control",
+        entity_type: "message",
+        entity_id: messageDbId,
+        ...payload,
+      }),
+    ],
+  );
+}
+
+async function persistTraceLink(db, messageDbId, payload) {
+  return db.query(
+    `
+    INSERT INTO public.traces (message_id, attempt, status, data)
+    VALUES ($1, $2, $3, $4::jsonb)
+    `,
+    [
+      messageDbId,
+      Number(payload?.attempt || 1),
+      String(payload?.status || "linked"),
+      JSON.stringify(payload),
+    ],
+  );
+}
+
+async function persistMessage(item, operation = "upsert", db = pool) {
   const data = {
     ...item,
   };
+  delete data.audit;
+
   const leadDbId = await getLeadDbIdById(item?.lead_runtime_id);
-  const caseDbId = await getCaseDbIdById(item?.moderation_case_runtime_id);
+  const caseDbId = item?.moderation_case_runtime_id
+    ? await getCaseDbIdById(item?.moderation_case_runtime_id)
+    : null;
   const idempotencyKey = item?.idempotency_key ?? null;
 
   if (leadDbId === null || leadDbId === undefined) {
     throw new Error("MESSAGE_LEAD_DB_ID_MISSING");
   }
 
-  if (caseDbId === null || caseDbId === undefined) {
-    throw new Error("MESSAGE_CASE_DB_ID_MISSING");
-  }
-
   if (operation === "create") {
-    const result = await pool.query(
+    const result = await db.query(
       `
       INSERT INTO public.messages (lead_id, moderation_case_id, status, idempotency_key, data)
       VALUES ($1, $2, $3, $4, $5::jsonb)
@@ -83,7 +207,7 @@ async function persistMessage(item, operation = "upsert") {
     throw new Error("MESSAGE_DB_ID_MISSING");
   }
 
-  const result = await pool.query(
+  const result = await db.query(
     `
     UPDATE public.messages
     SET lead_id = $1,
@@ -103,111 +227,64 @@ async function persistMessage(item, operation = "upsert") {
   return result;
 }
 
-async function persistMessageAudit(messageId, auditItem) {
-  const item = messages.get(messageId);
-  let messageDbId = item?.db_id ?? null;
-
-  if (messageDbId === null || messageDbId === undefined) {
-    const result = await pool.query(
-      `
-      SELECT id
-      FROM public.messages
-      WHERE data->>'id' = $1
-      LIMIT 1
-      `,
-      [String(messageId || "")],
-    );
-
-    messageDbId = result.rows?.[0]?.id ?? null;
-  }
-
-  if (messageDbId === null || messageDbId === undefined) {
-    throw new Error("MESSAGE_DB_ID_MISSING");
-  }
-
-  return pool.query(
+async function loadMessageByRuntimeId(runtimeMessageId) {
+  const result = await pool.query(
     `
-    INSERT INTO public.audit_logs (entity_type, entity_id, action, data)
-    VALUES ($1, $2, $3, $4::jsonb)
+    SELECT id, data
+    FROM public.messages
+    WHERE data->>'id' = $1
+    LIMIT 1
     `,
-    [
-      "message",
-      messageDbId,
-      String(auditItem?.type || ""),
-      JSON.stringify(auditItem),
-    ],
+    [String(runtimeMessageId || "")],
   );
-}
 
-async function persistTraceLink(messageId, payload) {
-  const item = messages.get(messageId);
-  let messageDbId = item?.db_id ?? null;
-
-  if (messageDbId === null || messageDbId === undefined) {
-    const result = await pool.query(
-      `
-      SELECT id
-      FROM public.messages
-      WHERE data->>'id' = $1
-      LIMIT 1
-      `,
-      [String(messageId || "")],
-    );
-
-    messageDbId = result.rows?.[0]?.id ?? null;
+  const row = result.rows?.[0] || null;
+  if (!row?.data) {
+    return null;
   }
 
-  if (messageDbId === null || messageDbId === undefined) {
-    throw new Error("MESSAGE_DB_ID_MISSING");
-  }
-
-  return pool.query(
-    `
-    INSERT INTO public.traces (message_id, attempt, status, data)
-    VALUES ($1, $2, $3, $4::jsonb)
-    `,
-    [
-      messageDbId,
-      1,
-      "linked",
-      JSON.stringify(payload),
-    ],
-  );
-}
-
-function getMessagesPersistenceAdapter() {
-  return {
-    saveMessage: persistMessage,
-    saveAudit: persistMessageAudit,
-    saveTrace: persistTraceLink,
+  const item = {
+    ...row.data,
+    db_id: row.id,
   };
+
+  messages.set(String(runtimeMessageId || ""), item);
+
+  return item;
 }
-const templates = [
-  {
-    id: "tpl_whatsapp_followup",
-    channel: "whatsapp",
-    name: "Follow Up",
-    body: "Здравствуйте. Напоминаем по вашему обращению.",
-  },
-  {
-    id: "tpl_whatsapp_welcome",
-    channel: "whatsapp",
-    name: "Welcome",
-    body: "Здравствуйте. Спасибо за интерес к TOTEM.",
-  },
-];
 
 router.get("/", async (req, res) => {
   try {
+    const channel = normalizeChannel(req.query.channel);
+    const status = normalizeStatus(req.query.status);
+    const recipientType = normalizeRecipientType(req.query.recipient_type);
+
     const result = await pool.query(`
-      SELECT data
+      SELECT id, data
       FROM public.messages
       ORDER BY created_at DESC, id DESC
     `);
-    const items = result.rows.map((row) => {
-      const { db_id, ...responseItem } = row.data || {};
-      return responseItem;
+
+    let items = result.rows.map((row) => {
+      const item = {
+        ...(row.data || {}),
+        db_id: row.id,
+      };
+      messages.set(String(item.id || ""), item);
+      return sanitizeMessageForResponse(item);
     });
+
+    if (channel) {
+      items = items.filter((item) => String(item.channel || "").toLowerCase() === channel);
+    }
+
+    if (status) {
+      items = items.filter((item) => String(item.status || "").toLowerCase() === status);
+    }
+
+    if (recipientType) {
+      items = items.filter((item) => String(item.recipient_type || "").toLowerCase() === recipientType);
+    }
 
     return res.json({
       ok: true,
@@ -222,6 +299,7 @@ router.get("/", async (req, res) => {
       meta: {},
     });
   } catch (error) {
+    console.error("ADMIN_MESSAGES_READ_ERROR", error);
     return res.status(500).json({
       ok: false,
       error: "MESSAGES_READ_FAILED",
@@ -230,14 +308,12 @@ router.get("/", async (req, res) => {
 });
 
 router.get("/templates", (req, res) => {
-  const items = templates;
-
   return res.json({
     ok: true,
     data: {
-      items,
+      items: templates,
       pagination: {
-        total: items.length,
+        total: templates.length,
         limit: 0,
         offset: 0,
       },
@@ -247,6 +323,8 @@ router.get("/templates", (req, res) => {
 });
 
 router.post("/send", async (req, res) => {
+  const db = await pool.connect();
+
   try {
     if (!validateMessageSendBody(req.body)) {
       return res.status(400).json({
@@ -255,93 +333,107 @@ router.post("/send", async (req, res) => {
       });
     }
 
+    const channel = normalizeChannel(req.body?.channel);
+    const direction = normalizeDirection(req.body?.direction || "outbound");
+    const recipient_type = normalizeRecipientType(req.body?.recipient_type);
+    const recipient_id = normalizeText(req.body?.recipient_id);
+    const recipient_label = normalizeText(req.body?.recipient_label) || recipient_id;
+    const lead_runtime_id = normalizeText(req.body?.lead_id || (recipient_type === "lead" ? recipient_id : ""));
+    const moderation_case_runtime_id = normalizeText(req.body?.moderation_case_id) || null;
+    const template_key = normalizeText(req.body?.template_key);
+    const body_preview = buildBodyPreview(req.body?.body_preview || req.body?.body, template_key);
+    const provider_ref = normalizeText(req.body?.provider_ref) || null;
+    const status = normalizeStatus(req.body?.status || "sent") || "sent";
+    const trace_id = normalizeText(req.body?.trace_id) || null;
+    const now = new Date().toISOString();
+
+    await db.query("BEGIN");
+
     const id = await getNextMessageRuntimeId();
-    const channel = String(req.body?.channel || "");
-    const recipient_type = String(req.body?.recipient_type || "");
-    const recipient_id = String(req.body?.recipient_id || "");
-    if (!recipient_id) {
-      throw new Error("MESSAGE_RECIPIENT_ID_MISSING");
-    }
-    const lead_runtime_id = String(req.body?.lead_id || "");
-    const moderation_case_runtime_id = String(req.body?.moderation_case_id || "");
-    if (!lead_runtime_id) {
-      throw new Error("MESSAGE_LEAD_RUNTIME_ID_MISSING");
-    }
-    if (!moderation_case_runtime_id) {
-      throw new Error("MESSAGE_CASE_RUNTIME_ID_MISSING");
-    }
-    const trace_id = String(req.body?.trace_id || `trace_${id}`);
-    const persistence = getMessagesPersistenceAdapter();
     const messageItem = {
       id,
       channel,
+      direction,
+      recipient_type,
+      recipient_id,
+      recipient_label,
+      status,
+      template_key,
+      body_preview,
+      provider_ref,
+      lead_runtime_id,
+      moderation_case_runtime_id,
+      trace_id: trace_id || `trace_${id}`,
+      created_at: now,
+      sent_at: status === "sent" || status === "delivered" || status === "read" ? now : null,
+      delivered_at: status === "delivered" || status === "read" ? now : null,
+      failed_at: status === "failed" ? now : null,
+      error_message: normalizeText(req.body?.error_message) || null,
+      db_id: null,
+    };
+
+    messages.set(id, messageItem);
+    const dbId = await persistMessage(messageItem, "create", db);
+
+    await logMessageAudit(db, dbId, "message_sent", {
+      action: "send",
+      after: sanitizeMessageForResponse(messageItem),
+      channel,
+      recipient_type,
+      recipient_id,
+      status,
+    });
+
+    await persistTraceLink(db, dbId, {
+      message_id: id,
       recipient_type,
       recipient_id,
       lead_runtime_id,
       moderation_case_runtime_id,
-      trace_id,
-      status: "sent",
-      db_id: null,
-      audit: [],
-    };
-
-    messages.set(id, messageItem);
-    await persistence.saveMessage(messageItem, "create");
-    await persistence.saveTrace(id, {
-      message_id: id,
-      recipient_id,
-      lead_runtime_id,
-      moderation_case_runtime_id,
+      trace_id: messageItem.trace_id,
+      status: "linked",
+      attempt: 1,
     });
+
+    await db.query("COMMIT");
 
     return res.json({
       ok: true,
-      data: {
-        id,
-        channel,
-        recipient_type,
-        status: "sent",
-      },
+      data: sanitizeMessageForResponse(messageItem),
       meta: {},
     });
   } catch (error) {
-    if (
-      error?.message === "MESSAGE_RECIPIENT_ID_MISSING" ||
-      error?.message === "MESSAGE_LEAD_RUNTIME_ID_MISSING" ||
-      error?.message === "MESSAGE_CASE_RUNTIME_ID_MISSING"
-    ) {
-      return res.status(400).json({
-        ok: false,
-        error: error.message,
-      });
-    }
+    try {
+      await db.query("ROLLBACK");
+    } catch (rollbackError) {}
 
-    console.error("MESSAGE_ERROR", {
+    console.error("ADMIN_MESSAGE_SEND_ERROR", {
       error: error?.message,
       stack: error?.stack,
       payload: req.body,
     });
 
+    if (error?.message === "MESSAGE_LEAD_DB_ID_MISSING") {
+      return res.status(400).json({
+        ok: false,
+        error: "MESSAGE_LEAD_DB_ID_MISSING",
+      });
+    }
+
     return res.status(500).json({
       ok: false,
       error: "MESSAGE_PERSIST_FAILED",
     });
+  } finally {
+    db.release();
   }
 });
 
 router.post("/:id/retry", async (req, res) => {
+  const db = await pool.connect();
+
   try {
-    const result = await pool.query(
-      `
-      SELECT id, data
-      FROM public.messages
-      WHERE data->>'id' = $1
-      LIMIT 1
-      `,
-      [String(req.params.id || "")],
-    );
-    const item = result.rows?.[0]?.data ?? null;
-    const persistence = getMessagesPersistenceAdapter();
+    const item = await loadMessageByRuntimeId(req.params.id);
 
     if (!item) {
       return res.status(404).json({
@@ -350,30 +442,58 @@ router.post("/:id/retry", async (req, res) => {
       });
     }
 
-    item.db_id = result.rows?.[0]?.id;
-    item.audit = item.audit || [];
+    await db.query("BEGIN");
+
+    const before = sanitizeMessageForResponse(item);
+    const now = new Date().toISOString();
+
     item.status = "sent";
-    item.audit.push({
-      type: "retry",
-      value: "sent",
+    item.sent_at = now;
+    item.failed_at = null;
+    item.error_message = null;
+    item.retry_count = Number(item.retry_count || 0) + 1;
+    item.updated_at = now;
+
+    messages.set(String(req.params.id || ""), item);
+
+    await persistMessage(item, "retry_update", db);
+
+    await logMessageAudit(db, item.db_id, "message_retry", {
+      action: "retry",
+      before,
+      after: sanitizeMessageForResponse(item),
+      status: "sent",
+      retry_count: item.retry_count,
     });
-    messages.set(req.params.id, item);
-    await persistence.saveMessage(item, "retry_update");
-    await persistence.saveAudit(req.params.id, {
-      type: "retry",
-      value: "sent",
+
+    await persistTraceLink(db, item.db_id, {
+      message_id: item.id,
+      recipient_type: item.recipient_type,
+      recipient_id: item.recipient_id,
+      lead_runtime_id: item.lead_runtime_id,
+      moderation_case_runtime_id: item.moderation_case_runtime_id,
+      trace_id: item.trace_id || `trace_${item.id}`,
+      status: "retry",
+      attempt: item.retry_count + 1,
     });
+
+    await db.query("COMMIT");
 
     return res.json({
       ok: true,
       data: {
-        id: req.params.id,
+        id: String(req.params.id || ""),
         status: "sent",
+        retry_count: item.retry_count,
       },
       meta: {},
     });
   } catch (error) {
-    console.error("MESSAGE_ERROR", {
+    try {
+      await db.query("ROLLBACK");
+    } catch (rollbackError) {}
+
+    console.error("ADMIN_MESSAGE_RETRY_ERROR", {
       error: error?.message,
       stack: error?.stack,
       payload: req.body,
@@ -383,21 +503,14 @@ router.post("/:id/retry", async (req, res) => {
       ok: false,
       error: "MESSAGE_PERSIST_FAILED",
     });
+  } finally {
+    db.release();
   }
 });
 
 router.get("/:id/audit", async (req, res) => {
   try {
-    const messageResult = await pool.query(
-      `
-      SELECT id
-      FROM public.messages
-      WHERE data->>'id' = $1
-      LIMIT 1
-      `,
-      [String(req.params.id || "")],
-    );
-    const messageDbId = messageResult.rows?.[0]?.id ?? null;
+    const messageDbId = await getMessageDbIdByRuntimeId(req.params.id);
 
     if (messageDbId === null || messageDbId === undefined) {
       return res.status(404).json({
@@ -408,33 +521,38 @@ router.get("/:id/audit", async (req, res) => {
 
     const auditResult = await pool.query(
       `
-      SELECT action, data, created_at
+      SELECT
+        id,
+        entity_type,
+        entity_id,
+        action,
+        data,
+        created_at
       FROM public.audit_logs
       WHERE entity_type = 'message'
       AND entity_id = $1
       ORDER BY created_at DESC, id DESC
+      LIMIT 50
       `,
       [messageDbId],
     );
-    const items = auditResult.rows.map((row) => ({
-      ...(row.data || {}),
-      action: row.data?.action ?? row.action,
-      created_at: row.data?.created_at ?? row.created_at,
-    }));
 
     return res.json({
       ok: true,
       data: {
-        items,
+        id: String(req.params.id || ""),
+        entity_id: messageDbId,
+        items: auditResult.rows,
         pagination: {
-          total: items.length,
-          limit: 0,
+          total: auditResult.rows.length,
+          limit: 50,
           offset: 0,
         },
       },
       meta: {},
     });
   } catch (error) {
+    console.error("ADMIN_MESSAGE_AUDIT_ERROR", error);
     return res.status(500).json({
       ok: false,
       error: "MESSAGE_AUDIT_READ_FAILED",
@@ -444,16 +562,7 @@ router.get("/:id/audit", async (req, res) => {
 
 router.get("/:id", async (req, res) => {
   try {
-    const result = await pool.query(
-      `
-      SELECT data
-      FROM public.messages
-      WHERE data->>'id' = $1
-      LIMIT 1
-      `,
-      [String(req.params.id || "")],
-    );
-    const item = result.rows?.[0]?.data ?? null;
+    const item = await loadMessageByRuntimeId(req.params.id);
 
     if (!item) {
       return res.status(404).json({
@@ -462,14 +571,13 @@ router.get("/:id", async (req, res) => {
       });
     }
 
-    const { db_id, ...responseItem } = item;
-
     return res.json({
       ok: true,
-      data: responseItem,
+      data: sanitizeMessageForResponse(item),
       meta: {},
     });
   } catch (error) {
+    console.error("ADMIN_MESSAGE_DETAIL_ERROR", error);
     return res.status(500).json({
       ok: false,
       error: "MESSAGE_READ_FAILED",
