@@ -5,6 +5,17 @@ function parsePositiveInt(value, fallback) {
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
+function normalizeAuditEntityType(value) {
+  const raw = String(value ?? "").trim().toLowerCase();
+
+  if (raw === "salons") return "salon";
+  if (raw === "masters") return "master";
+  if (raw === "clients") return "client";
+  if (raw === "bookings") return "booking";
+
+  return raw;
+}
+
 export default function buildAdminRouter(pool, internalReadRateLimit) {
   const r = express.Router();
   const readLimiter =
@@ -331,6 +342,147 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
       return res.status(500).json({
         ok: false,
         error: "ADMIN_OVERVIEW_FETCH_FAILED",
+      });
+    }
+  });
+
+  r.get("/audit", readLimiter, async (req, res) => {
+    const limit = Math.min(parsePositiveInt(req.query.limit, 50), 200);
+    const offset = parsePositiveInt(req.query.offset, 0);
+    const entityType = normalizeAuditEntityType(req.query.entity_type);
+    const entityIdRaw = req.query.entity_id;
+    const action = String(req.query.action ?? "").trim();
+
+    const where = [];
+    const values = [];
+
+    if (entityType) {
+      values.push(entityType);
+      where.push(`entity_type = $${values.length}`);
+    }
+
+    if (entityIdRaw !== undefined && entityIdRaw !== null && String(entityIdRaw).trim() !== "") {
+      const entityId = Number(entityIdRaw);
+
+      if (!Number.isInteger(entityId) || entityId <= 0) {
+        return res.status(400).json({
+          ok: false,
+          error: "ADMIN_AUDIT_ENTITY_ID_INVALID",
+        });
+      }
+
+      values.push(entityId);
+      where.push(`entity_id = $${values.length}`);
+    }
+
+    if (action) {
+      values.push(action);
+      where.push(`action = $${values.length}`);
+    }
+
+    values.push(limit);
+    const limitIndex = values.length;
+
+    values.push(offset);
+    const offsetIndex = values.length;
+
+    try {
+      const data = await pool.query(
+        `
+        SELECT
+          id,
+          entity_type,
+          entity_id,
+          action,
+          data,
+          created_at
+        FROM public.audit_logs
+        ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+        ORDER BY created_at DESC, id DESC
+        LIMIT $${limitIndex}
+        OFFSET $${offsetIndex}
+        `,
+        values,
+      );
+
+      return res.json({
+        ok: true,
+        data: {
+          items: data.rows,
+          pagination: {
+            total: data.rows.length,
+            limit,
+            offset,
+          },
+        },
+        meta: {},
+      });
+    } catch (error) {
+      console.error("ADMIN_AUDIT_FETCH_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_AUDIT_FETCH_FAILED",
+      });
+    }
+  });
+
+  r.get("/audit/:entityType/:entityId", readLimiter, async (req, res) => {
+    const limit = Math.min(parsePositiveInt(req.query.limit, 50), 200);
+    const offset = parsePositiveInt(req.query.offset, 0);
+    const entityType = normalizeAuditEntityType(req.params.entityType);
+    const entityId = Number(req.params.entityId);
+
+    if (!entityType) {
+      return res.status(400).json({
+        ok: false,
+        error: "ADMIN_AUDIT_ENTITY_TYPE_INVALID",
+      });
+    }
+
+    if (!Number.isInteger(entityId) || entityId <= 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "ADMIN_AUDIT_ENTITY_ID_INVALID",
+      });
+    }
+
+    try {
+      const data = await pool.query(
+        `
+        SELECT
+          id,
+          entity_type,
+          entity_id,
+          action,
+          data,
+          created_at
+        FROM public.audit_logs
+        WHERE entity_type = $1
+          AND entity_id = $2
+        ORDER BY created_at DESC, id DESC
+        LIMIT $3
+        OFFSET $4
+        `,
+        [entityType, entityId, limit, offset],
+      );
+
+      return res.json({
+        ok: true,
+        data: {
+          items: data.rows,
+          pagination: {
+            total: data.rows.length,
+            limit,
+            offset,
+          },
+        },
+        meta: {},
+      });
+    } catch (error) {
+      console.error("ADMIN_AUDIT_ENTITY_FETCH_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_AUDIT_ENTITY_FETCH_FAILED",
       });
     }
   });
