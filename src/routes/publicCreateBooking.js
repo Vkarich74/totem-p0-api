@@ -1,6 +1,29 @@
 import { pool } from "../db.js";
 import crypto from "crypto";
 
+function normalizeKgMobilePhone(value) {
+  const raw = String(value || "").trim();
+  const compact = raw.replace(/[\s\-()]/g, "");
+
+  if (!compact) {
+    return { ok: false, error: "PHONE_REQUIRED" };
+  }
+
+  let canonical = compact;
+
+  if (/^996[0-9]{9}$/.test(compact)) {
+    canonical = `+${compact}`;
+  } else if (/^0[0-9]{9}$/.test(compact)) {
+    canonical = `+996${compact.slice(1)}`;
+  }
+
+  if (!/^\+996[579][0-9]{8}$/.test(canonical)) {
+    return { ok: false, error: "INVALID_KG_MOBILE_PHONE" };
+  }
+
+  return { ok: true, phone: canonical };
+}
+
 export async function publicCreateBooking(req, res) {
   const client = await pool.connect();
 
@@ -14,11 +37,20 @@ export async function publicCreateBooking(req, res) {
     const rawBody = JSON.stringify(req.body || {});
     const requestHash = crypto.createHash("sha256").update(rawBody).digest("hex");
 
-    const { master_id, service_id, start_at, client_id, client_payload } = req.body;
+    const { master_id, service_id, start_at, client_id, client_payload, client_name, phone } = req.body;
     const { slug } = req.params;
 
     if (!master_id || !service_id || !start_at) {
       return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
+    }
+
+    const rawClientPhone = client_payload?.phone ?? phone;
+    const normalizedClientPhone = client_id
+      ? { ok: true, phone: null }
+      : normalizeKgMobilePhone(rawClientPhone);
+
+    if (!normalizedClientPhone.ok) {
+      return res.status(400).json({ ok: false, error: normalizedClientPhone.error });
     }
 
     await client.query("BEGIN");
@@ -130,23 +162,20 @@ export async function publicCreateBooking(req, res) {
     let finalClientId = client_id || null;
 
     if (!finalClientId) {
-      const safeName = String(client_payload?.name || "").trim() || "Клиент";
-      const safePhoneRaw = String(client_payload?.phone || "").trim();
-      const safePhone = safePhoneRaw || null;
+      const safeName = String(client_payload?.name ?? client_name ?? "").trim() || "Клиент";
+      const safePhone = normalizedClientPhone.phone;
 
-      if (safePhone) {
-        const existingClient = await client.query(
-          `SELECT id
-           FROM public.clients
-           WHERE salon_id = $1
-             AND phone = $2
-           LIMIT 1`,
-          [salonId, safePhone]
-        );
+      const existingClient = await client.query(
+        `SELECT id
+         FROM public.clients
+         WHERE salon_id = $1
+           AND phone = $2
+         LIMIT 1`,
+        [salonId, safePhone]
+      );
 
-        if (existingClient.rowCount > 0) {
-          finalClientId = existingClient.rows[0].id;
-        }
+      if (existingClient.rowCount > 0) {
+        finalClientId = existingClient.rows[0].id;
       }
 
       if (!finalClientId) {
