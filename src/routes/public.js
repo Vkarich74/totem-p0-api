@@ -1,4 +1,5 @@
 import express from "express";
+import crypto from "crypto";
 import { pool } from "../db.js";
 
 import { publicCreateBooking } from "./publicCreateBooking.js";
@@ -12,6 +13,14 @@ import authRouter from "../../routes_public/auth.js";
 import buildPublicAccessGuard from "../middleware/publicAccessGuard.js";
 import { TEMPLATE_VERSION_V1 } from "../contracts/templates/templateConstants.js";
 import { getPublishedSource } from "../services/templates/templateDocumentService.js";
+
+function hashClientCabinetToken(token) {
+  return crypto.createHash("sha256").update(String(token || "")).digest("hex");
+}
+
+function buildClientPersonalLink(clientId, token) {
+  return `#/client/${clientId}/${token}`;
+}
 
 /**
  * PUBLIC API LAYER
@@ -386,6 +395,185 @@ export function createPublicRouter(deps) {
         return res
           .status(500)
           .json({ ok: false, error: "INTERNAL_ERROR" });
+      }
+    }
+  );
+
+  /**
+   * CLIENT CABINET V1
+   */
+  r.get(
+    "/clients/:clientId/:token",
+    async (req, res) => {
+      const db = await pool.connect();
+
+      try {
+        const clientId = Number(req.params.clientId);
+        const token = String(req.params.token || "").trim();
+
+        if (!Number.isInteger(clientId) || clientId <= 0) {
+          return res.status(400).json({ ok: false, error: "INVALID_CLIENT_ID" });
+        }
+
+        if (!token) {
+          return res.status(400).json({ ok: false, error: "CLIENT_TOKEN_REQUIRED" });
+        }
+
+        const tokenHash = hashClientCabinetToken(token);
+
+        const tokenRes = await db.query(
+          `
+          SELECT
+            id,
+            client_id,
+            booking_id,
+            token_last4,
+            purpose,
+            created_at
+          FROM client_access_tokens
+          WHERE client_id = $1
+            AND token_hash = $2
+            AND purpose = 'cabinet'
+            AND revoked_at IS NULL
+          LIMIT 1
+          `,
+          [clientId, tokenHash]
+        );
+
+        if (!tokenRes.rows.length) {
+          return res.status(403).json({ ok: false, error: "INVALID_CLIENT_TOKEN" });
+        }
+
+        const clientRes = await db.query(
+          `
+          SELECT
+            id,
+            salon_id,
+            name,
+            phone,
+            email,
+            created_at
+          FROM clients
+          WHERE id = $1
+          LIMIT 1
+          `,
+          [clientId]
+        );
+
+        if (!clientRes.rows.length) {
+          return res.status(404).json({ ok: false, error: "CLIENT_NOT_FOUND" });
+        }
+
+        const bookingsRes = await db.query(
+          `
+          SELECT
+            b.id,
+            b.salon_id,
+            b.salon_slug,
+            salon.name AS salon_name,
+            b.master_id,
+            m.slug AS master_slug,
+            m.name AS master_name,
+            b.service_id,
+            s.name AS service_name,
+            b.start_at,
+            b.end_at,
+            b.status,
+            b.price_snapshot,
+            b.created_at
+          FROM bookings b
+          LEFT JOIN salons salon ON salon.id = b.salon_id
+          LEFT JOIN masters m ON m.id = b.master_id
+          LEFT JOIN services s ON s.id = b.service_id
+          WHERE b.client_id = $1
+          ORDER BY b.start_at DESC, b.id DESC
+          `,
+          [clientId]
+        );
+
+        const mastersRes = await db.query(
+          `
+          SELECT DISTINCT
+            m.id,
+            m.slug,
+            m.name
+          FROM bookings b
+          JOIN masters m ON m.id = b.master_id
+          WHERE b.client_id = $1
+          ORDER BY m.name ASC
+          `,
+          [clientId]
+        );
+
+        const salonsRes = await db.query(
+          `
+          SELECT DISTINCT
+            s.id,
+            s.slug,
+            s.name
+          FROM bookings b
+          JOIN salons s ON s.id = b.salon_id
+          WHERE b.client_id = $1
+          ORDER BY s.name ASC
+          `,
+          [clientId]
+        );
+
+        const statsRes = await db.query(
+          `
+          SELECT
+            COUNT(*)::int AS bookings_total,
+            COUNT(*) FILTER (WHERE status IN ('reserved', 'confirmed'))::int AS active_bookings,
+            COUNT(*) FILTER (WHERE status = 'completed')::int AS completed_bookings,
+            COUNT(*) FILTER (WHERE status IN ('canceled', 'cancelled'))::int AS cancelled_bookings,
+            MAX(start_at) AS last_booking_at
+          FROM bookings
+          WHERE client_id = $1
+          `,
+          [clientId]
+        );
+
+        await db.query(
+          `
+          INSERT INTO client_audit_events (
+            client_id,
+            booking_id,
+            actor_type,
+            action,
+            metadata
+          )
+          VALUES ($1, $2, 'client', 'cabinet_opened', $3)
+          `,
+          [
+            clientId,
+            tokenRes.rows[0].booking_id,
+            {
+              token_last4: tokenRes.rows[0].token_last4,
+              source: "public_client_cabinet"
+            }
+          ]
+        );
+
+        return res.json({
+          ok: true,
+          client: clientRes.rows[0],
+          bookings: bookingsRes.rows,
+          masters: mastersRes.rows,
+          salons: salonsRes.rows,
+          stats: statsRes.rows[0] || {
+            bookings_total: 0,
+            active_bookings: 0,
+            completed_bookings: 0,
+            cancelled_bookings: 0,
+            last_booking_at: null
+          },
+          personal_link: buildClientPersonalLink(clientId, token)
+        });
+      } catch (err) {
+        console.error("PUBLIC_CLIENT_CABINET_ERROR", err);
+        return res.status(500).json({ ok: false, error: "CLIENT_CABINET_FETCH_FAILED" });
+      } finally {
+        db.release();
       }
     }
   );
