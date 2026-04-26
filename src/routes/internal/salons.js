@@ -1394,10 +1394,16 @@ return res.status(403).json({ok:false,error:"FORBIDDEN"});
 }
 
 const clients = await pool.query(`
-SELECT id,name,phone
-FROM clients
-WHERE salon_id=$1
-ORDER BY id DESC
+SELECT
+c.id,
+c.name,
+c.phone,
+COUNT(b.id)::int AS visits
+FROM clients c
+LEFT JOIN bookings b ON b.client_id=c.id AND b.salon_id=$1
+WHERE c.salon_id=$1
+GROUP BY c.id,c.name,c.phone
+ORDER BY c.id DESC
 `,[salonId]);
 
 res.json({
