@@ -1424,13 +1424,15 @@ return res.status(403).json({ok:false,error:"FORBIDDEN"});
 }
 
 const clients = await pool.query(`
-SELECT DISTINCT
+SELECT
 c.id,
 c.name,
-c.phone
+c.phone,
+COUNT(b.id)::int AS visits
 FROM clients c
 JOIN bookings b ON b.client_id=c.id
 WHERE b.master_id=$1
+GROUP BY c.id,c.name,c.phone
 ORDER BY c.id DESC
 `,[masterId]);
 
