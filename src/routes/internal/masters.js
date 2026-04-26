@@ -13,6 +13,29 @@ return null;
 return n;
 }
 
+function normalizeKgMobilePhone(value){
+const raw = String(value || "").trim();
+const compact = raw.replace(/[\s\-()]/g, "");
+
+if(!compact){
+return { ok:false, error:"PHONE_REQUIRED" };
+}
+
+let canonical = compact;
+
+if(/^996[0-9]{9}$/.test(compact)){
+canonical = `+${compact}`;
+}else if(/^0[0-9]{9}$/.test(compact)){
+canonical = `+996${compact.slice(1)}`;
+}
+
+if(!/^\+996[579][0-9]{8}$/.test(canonical)){
+return { ok:false, error:"INVALID_KG_MOBILE_PHONE" };
+}
+
+return { ok:true, phone:canonical };
+}
+
 function getIdentityMasterIds(identity){
 const ids = new Set();
 
@@ -1510,11 +1533,16 @@ const servicePk = Number(serviceLink.rows[0].service_pk);
 const priceSnapshot = Number(serviceLink.rows[0].price);
 
 const safeName = String(client_name || "").trim() || "client";
-const safePhone = String(phone || "").trim() || null;
+const normalizedPhone = normalizeKgMobilePhone(phone);
+
+if(!normalizedPhone.ok){
+await db.query("ROLLBACK");
+return res.status(400).json({ok:false,error:normalizedPhone.error});
+}
+
+const safePhone = normalizedPhone.phone;
 
 let clientId = null;
-
-if(safePhone){
 
 const existingClient = await db.query(
 `SELECT id
@@ -1526,8 +1554,6 @@ LIMIT 1`,
 
 if(existingClient.rows.length){
 clientId = existingClient.rows[0].id;
-}
-
 }
 
 if(!clientId){
