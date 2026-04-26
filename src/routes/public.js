@@ -578,5 +578,160 @@ export function createPublicRouter(deps) {
     }
   );
 
+  /**
+   * CLIENT MINI PROFILE UPDATE V1
+   */
+  r.patch(
+    "/clients/:clientId/:token/profile",
+    async (req, res) => {
+      const db = await pool.connect();
+
+      try {
+        const clientId = Number(req.params.clientId);
+        const token = String(req.params.token || "").trim();
+
+        if (!Number.isInteger(clientId) || clientId <= 0) {
+          return res.status(400).json({ ok: false, error: "INVALID_CLIENT_ID" });
+        }
+
+        if (!token) {
+          return res.status(400).json({ ok: false, error: "CLIENT_TOKEN_REQUIRED" });
+        }
+
+        if (Object.prototype.hasOwnProperty.call(req.body || {}, "phone")) {
+          return res.status(400).json({ ok: false, error: "PHONE_LOCKED_IN_V1" });
+        }
+
+        const tokenHash = hashClientCabinetToken(token);
+
+        const tokenRes = await db.query(
+          `
+          SELECT
+            id,
+            client_id,
+            booking_id,
+            token_last4,
+            purpose,
+            created_at
+          FROM client_access_tokens
+          WHERE client_id = $1
+            AND token_hash = $2
+            AND purpose = 'cabinet'
+            AND revoked_at IS NULL
+          LIMIT 1
+          `,
+          [clientId, tokenHash]
+        );
+
+        if (!tokenRes.rows.length) {
+          return res.status(403).json({ ok: false, error: "INVALID_CLIENT_TOKEN" });
+        }
+
+        const existingClient = await db.query(
+          `
+          SELECT
+            id,
+            salon_id,
+            name,
+            phone,
+            email,
+            created_at
+          FROM clients
+          WHERE id = $1
+          LIMIT 1
+          `,
+          [clientId]
+        );
+
+        if (!existingClient.rows.length) {
+          return res.status(404).json({ ok: false, error: "CLIENT_NOT_FOUND" });
+        }
+
+        const currentClient = existingClient.rows[0];
+
+        const hasName = Object.prototype.hasOwnProperty.call(req.body || {}, "name");
+        const hasEmail = Object.prototype.hasOwnProperty.call(req.body || {}, "email");
+
+        if (!hasName && !hasEmail) {
+          return res.status(400).json({ ok: false, error: "NO_PROFILE_FIELDS" });
+        }
+
+        const nextName = hasName
+          ? String(req.body.name || "").trim()
+          : currentClient.name;
+
+        if (!nextName) {
+          return res.status(400).json({ ok: false, error: "NAME_REQUIRED" });
+        }
+
+        const nextEmail = hasEmail
+          ? String(req.body.email || "").trim() || null
+          : currentClient.email;
+
+        if (nextEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail)) {
+          return res.status(400).json({ ok: false, error: "INVALID_EMAIL" });
+        }
+
+        const updated = await db.query(
+          `
+          UPDATE clients
+          SET
+            name = $2,
+            email = $3
+          WHERE id = $1
+          RETURNING
+            id,
+            salon_id,
+            name,
+            phone,
+            email,
+            created_at
+          `,
+          [
+            clientId,
+            nextName,
+            nextEmail
+          ]
+        );
+
+        await db.query(
+          `
+          INSERT INTO client_audit_events (
+            client_id,
+            booking_id,
+            actor_type,
+            action,
+            metadata
+          )
+          VALUES ($1, $2, 'client', 'profile_updated', $3)
+          `,
+          [
+            clientId,
+            tokenRes.rows[0].booking_id,
+            {
+              token_last4: tokenRes.rows[0].token_last4,
+              changed_fields: {
+                name: hasName,
+                email: hasEmail
+              },
+              source: "public_client_cabinet"
+            }
+          ]
+        );
+
+        return res.json({
+          ok: true,
+          client: updated.rows[0],
+          personal_link: buildClientPersonalLink(clientId, token)
+        });
+      } catch (err) {
+        console.error("PUBLIC_CLIENT_PROFILE_UPDATE_ERROR", err);
+        return res.status(500).json({ ok: false, error: "CLIENT_PROFILE_UPDATE_FAILED" });
+      } finally {
+        db.release();
+      }
+    }
+  );
+
   return r;
 }
