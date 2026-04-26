@@ -488,6 +488,55 @@ FOR UPDATE
 return userRes.rows[0] || null;
 }
 
+async function getAuthUserByTargetRoleAndSlug(db, { target, requestedRole, requestedOwnerSlug }){
+const safeRole = String(requestedRole || "").trim().toLowerCase();
+const safeOwnerSlug = String(requestedOwnerSlug || "").trim().toLowerCase();
+
+if(!target?.value || !safeRole || !safeOwnerSlug){
+return null;
+}
+
+const selectMasterSlug = await authUsersHasColumn(db, "master_slug");
+const selectSalonSlug = await authUsersHasColumn(db, "salon_slug");
+
+let slugColumn = "";
+if(safeRole === "master" && selectMasterSlug){
+slugColumn = "master_slug";
+}
+if(safeRole === "salon_admin" && selectSalonSlug){
+slugColumn = "salon_slug";
+}
+
+if(!slugColumn){
+return null;
+}
+
+const fields = ["id", "role"];
+if(selectMasterSlug){
+fields.push("master_slug");
+}
+if(selectSalonSlug){
+fields.push("salon_slug");
+}
+
+const whereClause = target?.lookup === "email"
+? "lower(email)=lower($1)"
+: "phone=$1";
+
+const userRes = await db.query(`
+SELECT ${fields.join(", ")}
+FROM public.auth_users
+WHERE ${whereClause}
+AND role=$2
+AND enabled=true
+AND ${slugColumn}=$3
+LIMIT 1
+FOR UPDATE
+`,[target.value, safeRole, safeOwnerSlug]);
+
+return userRes.rows[0] || null;
+}
+
 
 async function issueAuthOtp(db, { target, purpose, channel }){
 const activeOtpRes = await db.query(`
@@ -633,7 +682,17 @@ return String(err?.code || "").trim() === "23505";
 }
 
 async function resolveOrCreateAuthUserForVerify(db, { authTarget, channel, requestedRole, requestedOwnerSlug }){
-let user = await getAuthUserByTarget(db, authTarget);
+let user = await getAuthUserByTargetRoleAndSlug(db, {
+  target: authTarget,
+  requestedRole,
+  requestedOwnerSlug
+});
+
+if(user){
+  return user;
+}
+
+user = await getAuthUserByTarget(db, authTarget);
 
 if(user){
   return user;
