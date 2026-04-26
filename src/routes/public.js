@@ -322,41 +322,33 @@ export function createPublicRouter(deps) {
         const { rows } = await pool.query(
           `
           SELECT
-            s.id,
-            s.name,
-            s.description,
-            COALESCE(s.duration_min, sms.duration_min, 0)::int AS duration_min,
-            COALESCE(sms.price, s.price, 0)::numeric AS price,
+            sms.id,
+            sms.salon_id,
             sms.master_id,
-            m.name AS master_name
+            m.slug AS master_slug,
+            m.name AS master_name,
+            sms.service_pk,
+            s.service_id AS catalog_service_id,
+            s.name,
+            sms.price,
+            sms.duration_min,
+            sms.active
           FROM salon_master_services sms
           JOIN services s ON s.id = sms.service_pk
           LEFT JOIN masters m ON m.id = sms.master_id
           WHERE sms.salon_id = $1
             AND COALESCE(sms.active, true) = true
-            AND COALESCE(s.active, true) = true
-          ORDER BY s.name ASC, m.name ASC NULLS LAST
+          ORDER BY sms.id DESC
           `,
           [salon_id]
         );
 
-        const services = rows.map((row) => ({
-          id: row.id,
-          name: row.name,
-          description: row.description || "",
-          duration_min: row.duration_min || 0,
-          duration: row.duration_min || 0,
-          price: Number(row.price || 0),
-          master_id: row.master_id,
-          master_name: row.master_name || null,
-        }));
-
-        return res.json({ ok: true, services });
+        return res.json({ ok: true, services: rows });
       } catch (err) {
-        console.error("PUBLIC_SALON_SERVICES_ERROR", err.message);
+        console.error("PUBLIC_SALON_SERVICES_ERROR", err);
         return res
           .status(500)
-          .json({ ok: false, error: "INTERNAL_ERROR" });
+          .json({ ok: false, error: "PUBLIC_SALON_SERVICES_FETCH_FAILED" });
       }
     }
   );
