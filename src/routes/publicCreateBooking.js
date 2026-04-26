@@ -24,6 +24,22 @@ function normalizeKgMobilePhone(value) {
   return { ok: true, phone: canonical };
 }
 
+function buildClientCabinetUrl(clientId, token) {
+  return `#/client/${clientId}/${token}`;
+}
+
+function createClientCabinetToken() {
+  const token = crypto.randomBytes(32).toString("hex");
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  const tokenLast4 = token.slice(-4);
+
+  return {
+    token,
+    tokenHash,
+    tokenLast4
+  };
+}
+
 export async function publicCreateBooking(req, res) {
   const client = await pool.connect();
 
@@ -160,13 +176,34 @@ export async function publicCreateBooking(req, res) {
     const end_at = endAtRes.rows[0].end_at;
 
     let finalClientId = client_id || null;
+    let finalClientName = null;
+    let finalClientPhone = null;
+    let clientAuditAction = "client_reused_by_id";
+
+    if (finalClientId) {
+      const existingClientById = await client.query(
+        `SELECT id, name, phone
+         FROM public.clients
+         WHERE id = $1
+         LIMIT 1`,
+        [finalClientId]
+      );
+
+      if (existingClientById.rowCount === 0) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ ok: false, error: "CLIENT_NOT_FOUND" });
+      }
+
+      finalClientName = existingClientById.rows[0].name;
+      finalClientPhone = existingClientById.rows[0].phone;
+    }
 
     if (!finalClientId) {
       const safeName = String(client_payload?.name ?? client_name ?? "").trim() || "Клиент";
       const safePhone = normalizedClientPhone.phone;
 
       const existingClient = await client.query(
-        `SELECT id
+        `SELECT id, name, phone
          FROM public.clients
          WHERE salon_id = $1
            AND phone = $2
@@ -176,17 +213,23 @@ export async function publicCreateBooking(req, res) {
 
       if (existingClient.rowCount > 0) {
         finalClientId = existingClient.rows[0].id;
+        finalClientName = existingClient.rows[0].name;
+        finalClientPhone = existingClient.rows[0].phone;
+        clientAuditAction = "client_reused_from_phone";
       }
 
       if (!finalClientId) {
         const createdClient = await client.query(
           `INSERT INTO public.clients (salon_id, name, phone)
            VALUES ($1, $2, $3)
-           RETURNING id`,
+           RETURNING id, name, phone`,
           [salonId, safeName, safePhone]
         );
 
         finalClientId = createdClient.rows[0].id;
+        finalClientName = createdClient.rows[0].name;
+        finalClientPhone = createdClient.rows[0].phone;
+        clientAuditAction = "client_created_from_booking";
       }
     }
 
@@ -252,10 +295,122 @@ export async function publicCreateBooking(req, res) {
 
     const booking_id = bookingInsert.rows[0].id;
 
+    const cabinetToken = createClientCabinetToken();
+
+    await client.query(
+      `UPDATE public.client_access_tokens
+       SET revoked_at = NOW()
+       WHERE client_id = $1
+         AND purpose = 'cabinet'
+         AND revoked_at IS NULL`,
+      [finalClientId]
+    );
+
+    await client.query(
+      `INSERT INTO public.client_access_tokens (
+         client_id,
+         booking_id,
+         token_hash,
+         token_last4,
+         purpose
+       )
+       VALUES ($1, $2, $3, $4, 'cabinet')`,
+      [
+        finalClientId,
+        booking_id,
+        cabinetToken.tokenHash,
+        cabinetToken.tokenLast4
+      ]
+    );
+
+    await client.query(
+      `INSERT INTO public.client_sources (
+         client_id,
+         booking_id,
+         source_type,
+         source_slug
+       )
+       VALUES ($1, $2, 'salon', $3)`,
+      [
+        finalClientId,
+        booking_id,
+        salonSlug
+      ]
+    );
+
+    await client.query(
+      `INSERT INTO public.client_audit_events (
+         client_id,
+         booking_id,
+         actor_type,
+         action,
+         metadata
+       )
+       VALUES ($1, $2, 'system', $3, $4)`,
+      [
+        finalClientId,
+        booking_id,
+        clientAuditAction,
+        {
+          source_type: "salon",
+          source_slug: salonSlug,
+          booking_id,
+          request_id: idempotencyKey
+        }
+      ]
+    );
+
+    await client.query(
+      `INSERT INTO public.client_audit_events (
+         client_id,
+         booking_id,
+         actor_type,
+         action,
+         metadata
+       )
+       VALUES ($1, $2, 'system', 'cabinet_token_created', $3)`,
+      [
+        finalClientId,
+        booking_id,
+        {
+          token_last4: cabinetToken.tokenLast4,
+          source_type: "salon",
+          source_slug: salonSlug,
+          booking_id,
+          request_id: idempotencyKey
+        }
+      ]
+    );
+
+    const clientCabinetUrl = buildClientCabinetUrl(finalClientId, cabinetToken.token);
+
     const responseBody = {
       ok: true,
       booking_id,
-      status: "reserved"
+      status: "reserved",
+      client: {
+        id: finalClientId,
+        name: finalClientName,
+        phone: finalClientPhone
+      },
+      client_cabinet: {
+        url: clientCabinetUrl
+      }
+    };
+
+    const idempotencyResponseBody = {
+      ok: true,
+      booking_id,
+      status: "reserved",
+      client: {
+        id: finalClientId,
+        name: finalClientName,
+        phone: finalClientPhone
+      },
+      client_cabinet: {
+        url: null,
+        token_last4: cabinetToken.tokenLast4
+      }
     };
 
     await client.query(
@@ -263,7 +418,7 @@ export async function publicCreateBooking(req, res) {
        SET response_code = 201,
            response_body = $2
        WHERE idempotency_key = $1`,
-      [idempotencyKey, responseBody]
+      [idempotencyKey, idempotencyResponseBody]
     );
 
     await client.query("COMMIT");
