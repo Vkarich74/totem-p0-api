@@ -306,6 +306,60 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
     }
   });
 
+  r.get("/clients/:id/audit", readLimiter, async (req, res) => {
+    const clientId = Number(req.params.id);
+    const limit = Math.min(parsePositiveInt(req.query.limit, 50), 200);
+    const offset = parsePositiveInt(req.query.offset, 0);
+
+    if (!Number.isInteger(clientId) || clientId <= 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "ADMIN_CLIENT_ID_INVALID",
+      });
+    }
+
+    try {
+      const data = await pool.query(
+        `
+        SELECT
+          id,
+          client_id,
+          booking_id,
+          actor_type,
+          actor_id,
+          action,
+          metadata,
+          created_at
+        FROM public.client_audit_events
+        WHERE client_id = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT $2
+        OFFSET $3
+        `,
+        [clientId, limit, offset],
+      );
+
+      return res.json({
+        ok: true,
+        data: {
+          items: data.rows,
+          pagination: {
+            total: data.rows.length,
+            limit,
+            offset,
+          },
+        },
+        meta: {},
+      });
+    } catch (error) {
+      console.error("ADMIN_CLIENT_AUDIT_FETCH_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_CLIENT_AUDIT_FETCH_FAILED",
+      });
+    }
+  });
+
   r.get("/overview", readLimiter, async (req, res) => {
     try {
       const data = await pool.query(`
