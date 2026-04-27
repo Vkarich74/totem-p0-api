@@ -132,19 +132,26 @@ export function createPublicRouter(deps) {
    */
   r.get(
     "/salons/:slug",
-    resolveTenant,
-    buildPublicAccessGuard("page"),
     async (req, res) => {
       try {
-        const { salon_id } = req.tenant;
+        const slug = String(req.params.slug || "").trim();
+
+        if (!slug) {
+          return res
+            .status(400)
+            .json({ ok: false, error: "SALON_SLUG_REQUIRED" });
+        }
 
         const { rows } = await pool.query(
           `
           SELECT id, slug, name
           FROM salons
-          WHERE id = $1
+          WHERE slug = $1
+            AND COALESCE(enabled, true) = true
+            AND COALESCE(status, 'active') = 'active'
+          LIMIT 1
           `,
-          [salon_id]
+          [slug]
         );
 
         if (!rows.length) {
