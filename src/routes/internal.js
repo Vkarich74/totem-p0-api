@@ -24,6 +24,7 @@ import moderationRouter from "./admin.moderation.js";
 import messagesRouter from "./admin.messages.js";
 import buildAdminRouter from "./internal/admin.js";
 import buildAdminAuthRouter from "./internal/adminAuth.js";
+import buildAdminOpenOwnerRouter from "./internal/adminOpenOwner.js";
 import AdminRuntimeGuard from "../middleware/AdminRuntimeGuard.js";
 import buildOneTimeChargeRouter from "./internal/one-time-charge.js";
 import buildOneTimeChargeHistoryRouter from "./internal/one-time-charge-history.js";
@@ -55,6 +56,8 @@ adminProtectedContainer.use(AdminRuntimeGuard);
 adminProtectedContainer.use('/leads', leadsRouter);
 adminProtectedContainer.use('/moderation', moderationRouter);
 adminProtectedContainer.use('/messages', messagesRouter);
+const adminOpenOwnerRouter = buildAdminOpenOwnerRouter(pool, internalReadRateLimit);
+adminProtectedContainer.use('/open-owner', adminOpenOwnerRouter);
 
 const AUTH_OTP_TTL_MINUTES = 30;
 const AUTH_OTP_BLOCK_MINUTES = 10;
