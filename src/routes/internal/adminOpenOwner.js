@@ -541,8 +541,12 @@ async function writeOwnerOpeningAuditEvent(db, { request, eventType, admin, data
     ...data,
   };
 
+  const actor = admin.email || (admin.id ? `admin:${admin.id}` : "admin");
+
   return await insertDynamicPublicRow(db, "audit_events", {
     event_type: eventType,
+    actor,
+    core_user_id: admin.id,
     action: eventType,
     type: eventType,
     entity_type: "owner_opening_request",
