@@ -252,6 +252,322 @@ async function checkSalonSlug(pool, salonSlug){
   };
 }
 
+async function buildOpenOwnerPrecheck(pool, body = {}){
+  const checks = [];
+  const errors = [];
+
+  const ownerType = normalizeOwnerType(body.owner_type);
+  const name = normalizeText(body.name);
+  const slugSource = normalizeText(body.slug || body.slug_requested || name);
+  const slugFinal = normalizeSlug(slugSource);
+  const email = normalizeEmail(body.email);
+  const phoneRaw = normalizeText(body.phone || body.phone_raw || body.phone_normalized);
+  const phoneNormalized = normalizeKgPhone(phoneRaw);
+  const city = normalizeText(body.city);
+  const workMode = normalizeText(body.work_mode || (ownerType === "master" ? "independent" : ""));
+  const salonSlug = normalizeSlug(body.salon_slug);
+
+  addCheck(checks, "owner_type_valid", Boolean(ownerType), {
+    owner_type: ownerType || null,
+  });
+  if(!ownerType){
+    errors.push("OWNER_TYPE_INVALID");
+  }
+
+  addCheck(checks, "name_present", Boolean(name), {
+    name,
+  });
+  if(!name){
+    errors.push("NAME_REQUIRED");
+  }
+
+  addCheck(checks, "slug_present", Boolean(slugFinal), {
+    slug_requested: slugSource,
+    slug_final: slugFinal || null,
+  });
+  if(!slugFinal){
+    errors.push("SLUG_REQUIRED");
+  }
+
+  const slugLengthOk = slugFinal.length >= 3 && slugFinal.length <= 80;
+  addCheck(checks, "slug_length_valid", slugLengthOk, {
+    min: 3,
+    max: 80,
+    slug_length: slugFinal.length,
+  });
+  if(slugFinal && !slugLengthOk){
+    errors.push("SLUG_LENGTH_INVALID");
+  }
+
+  const slugReserved = RESERVED_SLUGS.has(slugFinal);
+  addCheck(checks, "slug_not_reserved", Boolean(slugFinal) && !slugReserved, {
+    slug_final: slugFinal || null,
+  });
+  if(slugFinal && slugReserved){
+    errors.push("SLUG_RESERVED");
+  }
+
+  if(slugFinal && slugLengthOk && !slugReserved){
+    const slugAvailability = await checkSlugAvailability(pool, slugFinal);
+    addCheck(checks, "slug_available", slugAvailability.available, {
+      slug_final: slugFinal,
+      conflicts: slugAvailability.conflicts,
+    });
+
+    if(!slugAvailability.available){
+      errors.push("SLUG_NOT_AVAILABLE");
+    }
+  }
+
+  const emailValid = isValidEmail(email);
+  addCheck(checks, "email_valid", emailValid, {
+    email: email || null,
+  });
+  if(!emailValid){
+    errors.push("EMAIL_INVALID");
+  }
+
+  if(emailValid){
+    const emailAvailability = await checkEmailAvailability(pool, email);
+    addCheck(checks, "email_available", emailAvailability.available, {
+      email,
+      conflicts: emailAvailability.conflicts,
+    });
+
+    if(!emailAvailability.available){
+      errors.push("EMAIL_ALREADY_EXISTS");
+    }
+  }
+
+  addCheck(checks, "phone_valid", Boolean(phoneNormalized), {
+    phone_raw: phoneRaw || null,
+    phone_normalized: phoneNormalized || null,
+  });
+  if(!phoneNormalized){
+    errors.push("INVALID_KG_MOBILE_PHONE");
+  }
+
+  addCheck(checks, "city_present", Boolean(city), {
+    city,
+  });
+  if(!city){
+    errors.push("CITY_REQUIRED");
+  }
+
+  if(ownerType === "master"){
+    const workModeValid = ["independent", "attached_to_salon"].includes(workMode);
+    addCheck(checks, "work_mode_valid", workModeValid, {
+      work_mode: workMode || null,
+    });
+
+    if(!workModeValid){
+      errors.push("WORK_MODE_INVALID");
+    }
+
+    if(workMode === "attached_to_salon"){
+      addCheck(checks, "salon_slug_present", Boolean(salonSlug), {
+        salon_slug: salonSlug || null,
+      });
+
+      if(!salonSlug){
+        errors.push("SALON_SLUG_REQUIRED");
+      }else{
+        const salonCheck = await checkSalonSlug(pool, salonSlug);
+        addCheck(checks, "salon_slug_exists", salonCheck.exists, {
+          salon_slug: salonSlug,
+          salon: salonCheck.salon,
+        });
+
+        if(!salonCheck.exists){
+          errors.push("SALON_NOT_FOUND");
+        }
+      }
+    }
+  }
+
+  const valid = errors.length === 0;
+
+  return {
+    ok: true,
+    valid,
+    error: valid ? null : "PRECHECK_FAILED",
+    errors,
+    normalized: {
+      owner_type: ownerType || null,
+      name,
+      slug_requested: slugSource,
+      slug_final: slugFinal || null,
+      email,
+      phone_raw: phoneRaw,
+      phone_normalized: phoneNormalized || null,
+      city,
+      address: normalizeText(body.address),
+      description: normalizeText(body.description),
+      specialization: normalizeText(body.specialization),
+      work_mode: ownerType === "master" ? workMode : null,
+      salon_slug: ownerType === "master" && workMode === "attached_to_salon" ? salonSlug : null,
+      admin_notes: normalizeText(body.admin_notes),
+    },
+    checks,
+  };
+}
+
+function normalizeRequestId(value){
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+function getAdminActor(req){
+  const userId = Number(req.auth?.user_id || req.identity?.user_id || 0);
+
+  return {
+    id: Number.isInteger(userId) && userId > 0 ? userId : null,
+    email: normalizeEmail(req.auth?.email || req.identity?.email || req.user?.email || ""),
+  };
+}
+
+async function getPublicTableColumns(db, tableName){
+  const result = await db.query(
+    `
+      SELECT column_name, data_type, udt_name, is_nullable, column_default
+      FROM information_schema.columns
+      WHERE table_schema='public'
+        AND table_name=$1
+      ORDER BY ordinal_position
+    `,
+    [tableName]
+  );
+
+  return result.rows || [];
+}
+
+function hasColumn(columns, name){
+  return columns.some((column) => column.column_name === name);
+}
+
+function pickColumnValue(columnName, values){
+  return Object.prototype.hasOwnProperty.call(values, columnName)
+    ? values[columnName]
+    : undefined;
+}
+
+async function insertDynamicPublicRow(db, tableName, values, returningColumn = "id"){
+  const columns = await getPublicTableColumns(db, tableName);
+  const insertColumns = [];
+  const insertValues = [];
+  const params = [];
+
+  for(const column of columns){
+    const columnName = column.column_name;
+
+    if(columnName === "created_at" && pickColumnValue(columnName, values) === "__NOW__"){
+      insertColumns.push(columnName);
+      insertValues.push("NOW()");
+      continue;
+    }
+
+    if(columnName === "updated_at" && pickColumnValue(columnName, values) === "__NOW__"){
+      insertColumns.push(columnName);
+      insertValues.push("NOW()");
+      continue;
+    }
+
+    const value = pickColumnValue(columnName, values);
+
+    if(value === undefined){
+      continue;
+    }
+
+    insertColumns.push(columnName);
+    params.push(value);
+    insertValues.push(`$${params.length}`);
+  }
+
+  if(!insertColumns.length){
+    throw new Error(`NO_INSERTABLE_COLUMNS_${tableName}`);
+  }
+
+  const safeTableName = tableName.replace(/[^a-zA-Z0-9_]/g, "");
+  const returning = hasColumn(columns, returningColumn) ? ` RETURNING ${returningColumn}` : "";
+
+  const result = await db.query(
+    `
+      INSERT INTO public.${safeTableName}(
+        ${insertColumns.join(",\n        ")}
+      )
+      VALUES(
+        ${insertValues.join(",\n        ")}
+      )${returning}
+    `,
+    params
+  );
+
+  return result.rows[0] || null;
+}
+
+async function createOwnerOpeningModerationCase(db, request){
+  const data = {
+    entity_type: "owner_opening_request",
+    entity_id: Number(request.id),
+    reason_code: "owner_opening_review",
+    owner_type: request.owner_type,
+    slug: request.slug_final,
+    email: request.email,
+  };
+
+  return await insertDynamicPublicRow(db, "moderation_cases", {
+    status: "review",
+    data,
+    reason_code: "owner_opening_review",
+    entity_type: "owner_opening_request",
+    entity_id: String(request.id),
+    owner_type: request.owner_type,
+    slug: request.slug_final,
+    lead_id: null,
+    created_at: "__NOW__",
+    updated_at: "__NOW__",
+  });
+}
+
+async function writeOwnerOpeningAuditEvent(db, { request, eventType, admin, data = {} }){
+  const payload = {
+    event_type: eventType,
+    entity_type: "owner_opening_request",
+    entity_id: Number(request.id),
+    request_id: Number(request.id),
+    owner_type: request.owner_type,
+    slug: request.slug_final,
+    status: request.status,
+    ...data,
+  };
+
+  return await insertDynamicPublicRow(db, "audit_events", {
+    event_type: eventType,
+    action: eventType,
+    type: eventType,
+    entity_type: "owner_opening_request",
+    entity_id: String(request.id),
+    owner_opening_request_id: Number(request.id),
+    request_id: Number(request.id),
+    owner_type: request.owner_type,
+    status: request.status,
+    actor_user_id: admin.id,
+    user_id: admin.id,
+    admin_user_id: admin.id,
+    created_by_admin_id: admin.id,
+    actor_email: admin.email || null,
+    created_by_admin_email: admin.email || null,
+    data: payload,
+    metadata: payload,
+    payload,
+    details: payload,
+    source: "admin_open_owner",
+    created_at: "__NOW__",
+    updated_at: "__NOW__",
+  });
+}
+
+
 export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
   const r = express.Router();
 
@@ -477,6 +793,250 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       return res.status(500).json({
         ok: false,
         error: "ADMIN_OPEN_OWNER_PRECHECK_FAILED",
+      });
+    }
+  });
+
+
+  r.post("/requests", async (req,res)=>{
+    const db = await pool.connect();
+
+    try{
+      const precheck = await buildOpenOwnerPrecheck(pool, req.body || {});
+
+      if(!precheck.valid){
+        return res.status(400).json({
+          ok: false,
+          error: "PRECHECK_FAILED",
+          precheck,
+        });
+      }
+
+      const admin = getAdminActor(req);
+      const normalized = precheck.normalized;
+
+      await db.query("BEGIN");
+
+      const createdRequest = await db.query(
+        `
+          INSERT INTO public.owner_opening_requests(
+            owner_type,
+            status,
+            name,
+            slug_requested,
+            slug_final,
+            email,
+            phone_raw,
+            phone_normalized,
+            city,
+            address,
+            description,
+            specialization,
+            work_mode,
+            salon_slug,
+            admin_notes,
+            precheck_result_json,
+            created_by_admin_id,
+            created_by_admin_email,
+            validated_at,
+            created_at,
+            updated_at
+          )
+          VALUES(
+            $1,
+            'validated',
+            $2,
+            $3,
+            $4,
+            $5,
+            $6,
+            $7,
+            $8,
+            $9,
+            $10,
+            $11,
+            $12,
+            $13,
+            $14,
+            $15,
+            $16,
+            $17,
+            NOW(),
+            NOW(),
+            NOW()
+          )
+          RETURNING *
+        `,
+        [
+          normalized.owner_type,
+          normalized.name,
+          normalized.slug_requested,
+          normalized.slug_final,
+          normalized.email,
+          normalized.phone_raw,
+          normalized.phone_normalized,
+          normalized.city,
+          normalized.address,
+          normalized.description,
+          normalized.specialization,
+          normalized.work_mode,
+          normalized.salon_slug,
+          normalized.admin_notes,
+          JSON.stringify(precheck),
+          admin.id,
+          admin.email || null,
+        ]
+      );
+
+      let request = createdRequest.rows[0];
+
+      const moderationCase = await createOwnerOpeningModerationCase(db, request);
+
+      if(moderationCase?.id){
+        const updatedRequest = await db.query(
+          `
+            UPDATE public.owner_opening_requests
+            SET moderation_case_id=$2,
+                updated_at=NOW()
+            WHERE id=$1
+            RETURNING *
+          `,
+          [Number(request.id), Number(moderationCase.id)]
+        );
+
+        request = updatedRequest.rows[0] || request;
+      }
+
+      const auditEvent = await writeOwnerOpeningAuditEvent(db, {
+        request,
+        eventType: "owner_opening.request_created",
+        admin,
+        data: {
+          moderation_case_id: moderationCase?.id ? Number(moderationCase.id) : null,
+          precheck_valid: true,
+        },
+      });
+
+      await db.query("COMMIT");
+
+      return res.status(201).json({
+        ok: true,
+        request,
+        moderation_case_id: moderationCase?.id ? Number(moderationCase.id) : null,
+        audit_event_id: auditEvent?.id ? Number(auditEvent.id) : null,
+      });
+    }catch(err){
+      try{ await db.query("ROLLBACK"); }catch(e){}
+      console.error("ADMIN_OPEN_OWNER_CREATE_REQUEST_ERROR", err);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_OPEN_OWNER_CREATE_REQUEST_FAILED",
+      });
+    }finally{
+      db.release();
+    }
+  });
+
+  r.get("/requests", async (req,res)=>{
+    try{
+      const limitRaw = Number(req.query?.limit || 100);
+      const limit = Number.isInteger(limitRaw) && limitRaw > 0 && limitRaw <= 200 ? limitRaw : 100;
+
+      const result = await pool.query(
+        `
+          SELECT
+            id,
+            owner_type,
+            status,
+            name,
+            slug_requested,
+            slug_final,
+            email,
+            phone_raw,
+            phone_normalized,
+            city,
+            address,
+            description,
+            specialization,
+            work_mode,
+            salon_slug,
+            admin_notes,
+            created_owner_id,
+            created_auth_user_id,
+            moderation_case_id,
+            message_id,
+            email_status,
+            email_sent_at,
+            email_error,
+            created_by_admin_id,
+            created_by_admin_email,
+            created_at,
+            updated_at,
+            validated_at,
+            approved_at,
+            provisioned_at,
+            rejected_at,
+            suspended_at,
+            activated_at
+          FROM public.owner_opening_requests
+          ORDER BY created_at DESC, id DESC
+          LIMIT $1
+        `,
+        [limit]
+      );
+
+      return res.status(200).json({
+        ok: true,
+        requests: result.rows,
+      });
+    }catch(err){
+      console.error("ADMIN_OPEN_OWNER_LIST_REQUESTS_ERROR", err);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_OPEN_OWNER_LIST_REQUESTS_FAILED",
+      });
+    }
+  });
+
+  r.get("/requests/:id", async (req,res)=>{
+    try{
+      const requestId = normalizeRequestId(req.params?.id);
+
+      if(!requestId){
+        return res.status(400).json({
+          ok: false,
+          error: "REQUEST_ID_INVALID",
+        });
+      }
+
+      const result = await pool.query(
+        `
+          SELECT *
+          FROM public.owner_opening_requests
+          WHERE id=$1
+          LIMIT 1
+        `,
+        [requestId]
+      );
+
+      const request = result.rows[0] || null;
+
+      if(!request){
+        return res.status(404).json({
+          ok: false,
+          error: "OWNER_OPENING_REQUEST_NOT_FOUND",
+        });
+      }
+
+      return res.status(200).json({
+        ok: true,
+        request,
+      });
+    }catch(err){
+      console.error("ADMIN_OPEN_OWNER_GET_REQUEST_ERROR", err);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_OPEN_OWNER_GET_REQUEST_FAILED",
       });
     }
   });
