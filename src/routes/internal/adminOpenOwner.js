@@ -1,7 +1,24 @@
 import express from "express";
+import { google } from "googleapis";
 import { createSalonCanonical } from "../../services/provision/createSalonCanonical.js";
 import { createMasterCanonical } from "../../services/provision/createMasterCanonical.js";
 import { bindMasterToSalonCanonical } from "../../services/provision/bindMasterToSalonCanonical.js";
+
+const GMAIL_CLIENT_ID = process.env.GMAIL_CLIENT_ID || "";
+const GMAIL_CLIENT_SECRET = process.env.GMAIL_CLIENT_SECRET || "";
+const GMAIL_REFRESH_TOKEN = process.env.GMAIL_REFRESH_TOKEN || "";
+const GMAIL_REDIRECT_URI = process.env.GMAIL_REDIRECT_URI || "http://localhost";
+const GMAIL_SENDER_EMAIL = process.env.GMAIL_SENDER_EMAIL || "kantotemus@gmail.com";
+
+const gmailClient = new google.auth.OAuth2(
+  GMAIL_CLIENT_ID,
+  GMAIL_CLIENT_SECRET,
+  GMAIL_REDIRECT_URI
+);
+
+gmailClient.setCredentials({
+  refresh_token: GMAIL_REFRESH_TOKEN
+});
 
 const OWNER_TYPES = ["salon", "master"];
 
@@ -631,6 +648,200 @@ function resolveProvisionStatus(err){
 
 function buildProvisionErrorCode(err){
   return String(err?.code || err?.message || "ADMIN_OPEN_OWNER_PROVISION_FAILED").trim() || "ADMIN_OPEN_OWNER_PROVISION_FAILED";
+}
+
+function assertGmailConfig(){
+  if(!GMAIL_CLIENT_ID || !GMAIL_CLIENT_SECRET || !GMAIL_REFRESH_TOKEN){
+    const error = new Error("GMAIL_CONFIG_MISSING");
+    error.code = "GMAIL_CONFIG_MISSING";
+    throw error;
+  }
+}
+
+function buildOwnerOpeningEmailPreview(request){
+  const links = request.links_json || {};
+  const ownerType = normalizeOwnerType(request.owner_type);
+  const ownerLabel = ownerType === "master" ? "мастера" : "салона";
+  const publicUrl = links.public_url || (ownerType && request.slug_final ? `/${ownerType}/${request.slug_final}` : null);
+  const cabinetUrl = links.cabinet_url || (ownerType && request.slug_final ? `#/${ownerType}/${request.slug_final}` : null);
+  const appBaseUrl = "https://app.totemv.com";
+  const publicLink = publicUrl && publicUrl.startsWith("http") ? publicUrl : publicUrl ? `${appBaseUrl}${publicUrl.startsWith("/") ? "" : "/"}${publicUrl}` : null;
+  const cabinetLink = cabinetUrl && cabinetUrl.startsWith("http") ? cabinetUrl : cabinetUrl ? `${appBaseUrl}/${cabinetUrl}` : null;
+
+  const subject = `TOTEM: доступ ${ownerLabel} создан`;
+
+  const text = [
+    `Здравствуйте, ${request.name}.`,
+    "",
+    `Доступ ${ownerLabel} в TOTEM создан.`,
+    "",
+    cabinetLink ? `Кабинет: ${cabinetLink}` : null,
+    publicLink ? `Публичная страница: ${publicLink}` : null,
+    "",
+    "Как войти:",
+    "1. Откройте ссылку кабинета.",
+    "2. Введите email, на который пришло это письмо.",
+    "3. Получите код входа на email.",
+    "4. Введите код и откройте кабинет.",
+    "",
+    "Что заполнить в кабинете:",
+    ownerType === "master"
+      ? "- профиль мастера, услуги, расписание и описание"
+      : "- профиль салона, услуги, мастеров, расписание и описание",
+    "",
+    "Если код не пришёл, проверьте Спам/Промоакции или обратитесь в поддержку TOTEM.",
+    "",
+    "Поддержка: kantotemus@gmail.com"
+  ].filter((line) => line !== null).join("\n");
+
+  const html = `
+    <div style="font-family:Arial,sans-serif;font-size:16px;line-height:1.5;color:#111827">
+      <h2>TOTEM: доступ ${ownerLabel} создан</h2>
+      <p>Здравствуйте, ${request.name}.</p>
+      <p>Доступ ${ownerLabel} в TOTEM создан.</p>
+      ${cabinetLink ? `<p><strong>Кабинет:</strong> <a href="${cabinetLink}">${cabinetLink}</a></p>` : ""}
+      ${publicLink ? `<p><strong>Публичная страница:</strong> <a href="${publicLink}">${publicLink}</a></p>` : ""}
+      <h3>Как войти</h3>
+      <ol>
+        <li>Откройте ссылку кабинета.</li>
+        <li>Введите email, на который пришло это письмо.</li>
+        <li>Получите код входа на email.</li>
+        <li>Введите код и откройте кабинет.</li>
+      </ol>
+      <h3>Что заполнить в кабинете</h3>
+      <p>${ownerType === "master" ? "Профиль мастера, услуги, расписание и описание." : "Профиль салона, услуги, мастеров, расписание и описание."}</p>
+      <p>Если код не пришёл, проверьте Спам/Промоакции или обратитесь в поддержку TOTEM.</p>
+      <p>Поддержка: kantotemus@gmail.com</p>
+    </div>
+  `;
+
+  return {
+    to: request.email,
+    subject,
+    text,
+    html,
+    owner_type: ownerType || request.owner_type,
+    links: {
+      public_url: publicLink,
+      cabinet_url: cabinetLink,
+    },
+    generated_at: new Date().toISOString(),
+  };
+}
+
+async function sendOwnerOpeningEmail(preview){
+  assertGmailConfig();
+
+  const gmail = google.gmail({ version: "v1", auth: gmailClient });
+  const subject = "=?UTF-8?B?" + Buffer.from(preview.subject).toString("base64") + "?=";
+
+  const message = [
+    "MIME-Version: 1.0",
+    'Content-Type: text/html; charset="UTF-8"',
+    "Content-Transfer-Encoding: 7bit",
+    `From: Totem <${GMAIL_SENDER_EMAIL}>`,
+    `To: ${preview.to}`,
+    `Subject: ${subject}`,
+    "",
+    preview.html,
+  ].join("\n");
+
+  const raw = Buffer.from(message)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+
+  return await gmail.users.messages.send({
+    userId: "me",
+    requestBody: { raw },
+  });
+}
+
+async function createOwnerOpeningMessage(db, { request, preview, status }){
+  const data = {
+    entity_type: "owner_opening_request",
+    entity_id: Number(request.id),
+    owner_type: request.owner_type,
+    slug: request.slug_final,
+    to: preview.to,
+    subject: preview.subject,
+    text: preview.text,
+    html: preview.html,
+    links: preview.links,
+    status,
+  };
+
+  const message = await db.query(
+    `
+      INSERT INTO public.messages(
+        lead_id,
+        moderation_case_id,
+        status,
+        idempotency_key,
+        data,
+        created_at,
+        updated_at
+      )
+      VALUES(
+        NULL,
+        $1,
+        $2,
+        $3,
+        $4,
+        NOW(),
+        NOW()
+      )
+      RETURNING *
+    `,
+    [
+      request.moderation_case_id ? Number(request.moderation_case_id) : null,
+      status,
+      `owner_opening:${request.id}:${status}:${Date.now()}`,
+      JSON.stringify(data),
+    ]
+  );
+
+  return message.rows[0] || null;
+}
+
+async function createOwnerOpeningTrace(db, { messageId, attempt, status, data }){
+  const trace = await db.query(
+    `
+      INSERT INTO public.traces(
+        message_id,
+        attempt,
+        status,
+        data,
+        created_at
+      )
+      VALUES($1, $2, $3, $4, NOW())
+      RETURNING *
+    `,
+    [
+      Number(messageId),
+      Number(attempt),
+      status,
+      JSON.stringify(data || {}),
+    ]
+  );
+
+  return trace.rows[0] || null;
+}
+
+async function getOwnerOpeningRequestForUpdate(db, requestId){
+  const result = await db.query(
+    `
+      SELECT *
+      FROM public.owner_opening_requests
+      WHERE id=$1
+      LIMIT 1
+      FOR UPDATE
+    `,
+    [requestId]
+  );
+
+  return result.rows[0] || null;
 }
 
 
@@ -1337,6 +1548,349 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       });
     }
   });
+
+  r.post("/requests/:id/email-preview", async (req,res)=>{
+    const requestId = normalizeRequestId(req.params?.id);
+
+    if(!requestId){
+      return res.status(400).json({
+        ok: false,
+        error: "REQUEST_ID_INVALID",
+      });
+    }
+
+    const db = await pool.connect();
+
+    try{
+      const admin = getAdminActor(req);
+
+      await db.query("BEGIN");
+
+      const request = await getOwnerOpeningRequestForUpdate(db, requestId);
+
+      if(!request){
+        await db.query("ROLLBACK");
+        return res.status(404).json({
+          ok: false,
+          error: "OWNER_OPENING_REQUEST_NOT_FOUND",
+        });
+      }
+
+      if(request.status !== "provisioned" && request.status !== "email_ready" && request.status !== "email_sent" && request.status !== "email_failed"){
+        await db.query("ROLLBACK");
+        return res.status(409).json({
+          ok: false,
+          error: "OWNER_OPENING_REQUEST_STATUS_INVALID",
+          status: request.status,
+        });
+      }
+
+      const preview = buildOwnerOpeningEmailPreview(request);
+
+      const updatedResult = await db.query(
+        `
+          UPDATE public.owner_opening_requests
+          SET status=CASE
+                WHEN status='provisioned' THEN 'email_ready'
+                ELSE status
+              END,
+              email_preview_json=$2,
+              email_status='ready',
+              email_error=NULL,
+              updated_at=NOW()
+          WHERE id=$1
+          RETURNING *
+        `,
+        [
+          requestId,
+          JSON.stringify(preview),
+        ]
+      );
+
+      const updatedRequest = updatedResult.rows[0] || request;
+
+      const auditEvent = await writeOwnerOpeningAuditEvent(db, {
+        request: updatedRequest,
+        eventType: "owner_opening.email_preview_generated",
+        admin,
+        data: {
+          to: preview.to,
+          subject: preview.subject,
+        },
+      });
+
+      await db.query("COMMIT");
+
+      return res.status(200).json({
+        ok: true,
+        request: updatedRequest,
+        preview,
+        audit_event_id: auditEvent?.id ? Number(auditEvent.id) : null,
+      });
+    }catch(err){
+      try{ await db.query("ROLLBACK"); }catch(e){}
+      console.error("ADMIN_OPEN_OWNER_EMAIL_PREVIEW_ERROR", err);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_OPEN_OWNER_EMAIL_PREVIEW_FAILED",
+      });
+    }finally{
+      db.release();
+    }
+  });
+
+  r.post("/requests/:id/send-email", async (req,res)=>{
+    const requestId = normalizeRequestId(req.params?.id);
+
+    if(!requestId){
+      return res.status(400).json({
+        ok: false,
+        error: "REQUEST_ID_INVALID",
+      });
+    }
+
+    const admin = getAdminActor(req);
+    let request = null;
+    let preview = null;
+    let message = null;
+
+    const prepareDb = await pool.connect();
+
+    try{
+      await prepareDb.query("BEGIN");
+
+      request = await getOwnerOpeningRequestForUpdate(prepareDb, requestId);
+
+      if(!request){
+        await prepareDb.query("ROLLBACK");
+        return res.status(404).json({
+          ok: false,
+          error: "OWNER_OPENING_REQUEST_NOT_FOUND",
+        });
+      }
+
+      if(request.status !== "email_ready" && request.status !== "email_failed"){
+        await prepareDb.query("ROLLBACK");
+        return res.status(409).json({
+          ok: false,
+          error: "OWNER_OPENING_REQUEST_STATUS_INVALID",
+          status: request.status,
+        });
+      }
+
+      preview = request.email_preview_json && Object.keys(request.email_preview_json || {}).length
+        ? request.email_preview_json
+        : buildOwnerOpeningEmailPreview(request);
+
+      message = await createOwnerOpeningMessage(prepareDb, {
+        request,
+        preview,
+        status: "pending",
+      });
+
+      await createOwnerOpeningTrace(prepareDb, {
+        messageId: message.id,
+        attempt: 1,
+        status: "pending",
+        data: {
+          event: "owner_opening_email_send_started",
+          to: preview.to,
+          subject: preview.subject,
+        },
+      });
+
+      await prepareDb.query(
+        `
+          UPDATE public.owner_opening_requests
+          SET message_id=$2,
+              email_preview_json=$3,
+              email_status='ready',
+              email_error=NULL,
+              updated_at=NOW()
+          WHERE id=$1
+        `,
+        [
+          requestId,
+          Number(message.id),
+          JSON.stringify(preview),
+        ]
+      );
+
+      await prepareDb.query("COMMIT");
+    }catch(err){
+      try{ await prepareDb.query("ROLLBACK"); }catch(e){}
+      prepareDb.release();
+      console.error("ADMIN_OPEN_OWNER_EMAIL_PREPARE_ERROR", err);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_OPEN_OWNER_EMAIL_PREPARE_FAILED",
+      });
+    }
+
+    prepareDb.release();
+
+    try{
+      const sent = await sendOwnerOpeningEmail(preview);
+      const doneDb = await pool.connect();
+
+      try{
+        await doneDb.query("BEGIN");
+
+        await doneDb.query(
+          `
+            UPDATE public.messages
+            SET status='sent',
+                updated_at=NOW(),
+                data = data || $2::jsonb
+            WHERE id=$1
+          `,
+          [
+            Number(message.id),
+            JSON.stringify({
+              gmail_message_id: sent?.data?.id || null,
+              sent_at: new Date().toISOString(),
+            }),
+          ]
+        );
+
+        await createOwnerOpeningTrace(doneDb, {
+          messageId: message.id,
+          attempt: 1,
+          status: "sent",
+          data: {
+            event: "owner_opening_email_sent",
+            gmail_message_id: sent?.data?.id || null,
+          },
+        });
+
+        const updatedResult = await doneDb.query(
+          `
+            UPDATE public.owner_opening_requests
+            SET status='email_sent',
+                email_status='sent',
+                email_sent_at=NOW(),
+                email_error=NULL,
+                updated_at=NOW()
+            WHERE id=$1
+            RETURNING *
+          `,
+          [requestId]
+        );
+
+        const updatedRequest = updatedResult.rows[0] || request;
+
+        const auditEvent = await writeOwnerOpeningAuditEvent(doneDb, {
+          request: updatedRequest,
+          eventType: "owner_opening.email_sent",
+          admin,
+          data: {
+            message_id: Number(message.id),
+            gmail_message_id: sent?.data?.id || null,
+          },
+        });
+
+        await doneDb.query("COMMIT");
+
+        return res.status(200).json({
+          ok: true,
+          request: updatedRequest,
+          message_id: Number(message.id),
+          gmail_message_id: sent?.data?.id || null,
+          audit_event_id: auditEvent?.id ? Number(auditEvent.id) : null,
+        });
+      }catch(err){
+        try{ await doneDb.query("ROLLBACK"); }catch(e){}
+        throw err;
+      }finally{
+        doneDb.release();
+      }
+    }catch(err){
+      const failedDb = await pool.connect();
+      const code = String(err?.code || err?.message || "OWNER_OPENING_EMAIL_SEND_FAILED");
+
+      try{
+        await failedDb.query("BEGIN");
+
+        await failedDb.query(
+          `
+            UPDATE public.messages
+            SET status='failed',
+                updated_at=NOW(),
+                data = data || $2::jsonb
+            WHERE id=$1
+          `,
+          [
+            Number(message.id),
+            JSON.stringify({
+              error: code,
+              failed_at: new Date().toISOString(),
+            }),
+          ]
+        );
+
+        await createOwnerOpeningTrace(failedDb, {
+          messageId: message.id,
+          attempt: 1,
+          status: "failed",
+          data: {
+            event: "owner_opening_email_failed",
+            error: code,
+          },
+        });
+
+        const failedResult = await failedDb.query(
+          `
+            UPDATE public.owner_opening_requests
+            SET status='email_failed',
+                email_status='failed',
+                email_error=$2,
+                updated_at=NOW()
+            WHERE id=$1
+            RETURNING *
+          `,
+          [
+            requestId,
+            code,
+          ]
+        );
+
+        const failedRequest = failedResult.rows[0] || request;
+
+        await writeOwnerOpeningAuditEvent(failedDb, {
+          request: failedRequest,
+          eventType: "owner_opening.email_failed",
+          admin,
+          data: {
+            message_id: Number(message.id),
+            error: code,
+          },
+        });
+
+        await failedDb.query("COMMIT");
+      }catch(updateErr){
+        try{ await failedDb.query("ROLLBACK"); }catch(e){}
+        console.error("ADMIN_OPEN_OWNER_EMAIL_FAILED_UPDATE_ERROR", updateErr);
+      }finally{
+        failedDb.release();
+      }
+
+      console.error("ADMIN_OPEN_OWNER_SEND_EMAIL_ERROR", err);
+      return res.status(500).json({
+        ok: false,
+        error: code,
+      });
+    }
+  });
+
+  r.post("/requests/:id/resend-email", async (req,res)=>{
+    return r.handle({
+      ...req,
+      method: "POST",
+      url: `/requests/${req.params.id}/send-email`,
+      originalUrl: req.originalUrl,
+    }, res);
+  });
+
 
   r.get("/requests", async (req,res)=>{
     try{
