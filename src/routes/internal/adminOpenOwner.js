@@ -633,7 +633,7 @@ function buildOwnerOpeningLinks({ request, provisionResult, bindResult = null })
   return {
     owner_type: ownerType || request.owner_type,
     slug,
-    public_url: provisionResult?.public_url || (ownerType && slug ? `/${ownerType}/${slug}` : null),
+    public_url: provisionResult?.result?.urls?.public || provisionResult?.public_url || (ownerType && slug ? `/${ownerType}/${slug}` : null),
     cabinet_url: provisionResult?.cabinet_url || (ownerType && slug ? `#/${ownerType}/${slug}` : null),
     internal_url: ownerType && slug ? `/internal/${ownerType === "salon" ? "salons" : "masters"}/${slug}` : null,
     provision_urls: provisionResult?.result?.urls || null,
