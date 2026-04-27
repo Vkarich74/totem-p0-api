@@ -1,4 +1,7 @@
 import express from "express";
+import { createSalonCanonical } from "../../services/provision/createSalonCanonical.js";
+import { createMasterCanonical } from "../../services/provision/createMasterCanonical.js";
+import { bindMasterToSalonCanonical } from "../../services/provision/bindMasterToSalonCanonical.js";
 
 const OWNER_TYPES = ["salon", "master"];
 
@@ -571,6 +574,66 @@ async function writeOwnerOpeningAuditEvent(db, { request, eventType, admin, data
   });
 }
 
+function buildSalonProvisionPayload(request){
+  return {
+    email: request.email,
+    name: request.name,
+    salon_name: request.name,
+    salon_slug: request.slug_final,
+    phone: request.phone_normalized || request.phone_raw || null,
+    city: request.city || null,
+    description: request.description || null,
+    requested_role: "salon_admin",
+  };
+}
+
+function buildMasterProvisionPayload(request){
+  return {
+    email: request.email,
+    name: request.name,
+    master_slug: request.slug_final,
+    phone: request.phone_normalized || request.phone_raw || null,
+    requested_role: "master",
+  };
+}
+
+function extractProvisionAuthUserId(provisionResult){
+  const value = provisionResult?.result?.user?.id;
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+function extractProvisionOwnerId(provisionResult){
+  const value = provisionResult?.owner_id || provisionResult?.result?.salon?.id || provisionResult?.result?.master?.id;
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+function buildOwnerOpeningLinks({ request, provisionResult, bindResult = null }){
+  const ownerType = normalizeOwnerType(request.owner_type);
+  const slug = normalizeText(provisionResult?.canonical_slug || request.slug_final);
+
+  return {
+    owner_type: ownerType || request.owner_type,
+    slug,
+    public_url: provisionResult?.public_url || (ownerType && slug ? `/${ownerType}/${slug}` : null),
+    cabinet_url: provisionResult?.cabinet_url || (ownerType && slug ? `#/${ownerType}/${slug}` : null),
+    internal_url: ownerType && slug ? `/internal/${ownerType === "salon" ? "salons" : "masters"}/${slug}` : null,
+    provision_urls: provisionResult?.result?.urls || null,
+    bind_urls: bindResult?.result?.urls || null,
+  };
+}
+
+function resolveProvisionStatus(err){
+  const status = Number(err?.status || 500);
+  return Number.isInteger(status) && status >= 400 && status <= 599 ? status : 500;
+}
+
+function buildProvisionErrorCode(err){
+  return String(err?.code || err?.message || "ADMIN_OPEN_OWNER_PROVISION_FAILED").trim() || "ADMIN_OPEN_OWNER_PROVISION_FAILED";
+}
+
+
 
 export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
   const r = express.Router();
@@ -938,6 +1001,340 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       });
     }finally{
       db.release();
+    }
+  });
+
+
+  r.post("/requests/:id/approve", async (req,res)=>{
+    const requestId = normalizeRequestId(req.params?.id);
+
+    if(!requestId){
+      return res.status(400).json({
+        ok: false,
+        error: "REQUEST_ID_INVALID",
+      });
+    }
+
+    const db = await pool.connect();
+
+    try{
+      const admin = getAdminActor(req);
+
+      await db.query("BEGIN");
+
+      const currentResult = await db.query(
+        `
+          SELECT *
+          FROM public.owner_opening_requests
+          WHERE id=$1
+          LIMIT 1
+          FOR UPDATE
+        `,
+        [requestId]
+      );
+
+      const current = currentResult.rows[0] || null;
+
+      if(!current){
+        await db.query("ROLLBACK");
+        return res.status(404).json({
+          ok: false,
+          error: "OWNER_OPENING_REQUEST_NOT_FOUND",
+        });
+      }
+
+      if(current.status === "approved"){
+        await db.query("COMMIT");
+        return res.status(200).json({
+          ok: true,
+          request: current,
+          idempotent: true,
+        });
+      }
+
+      if(current.status !== "validated"){
+        await db.query("ROLLBACK");
+        return res.status(409).json({
+          ok: false,
+          error: "OWNER_OPENING_REQUEST_STATUS_INVALID",
+          status: current.status,
+        });
+      }
+
+      const updatedResult = await db.query(
+        `
+          UPDATE public.owner_opening_requests
+          SET status='approved',
+              approved_at=NOW(),
+              updated_at=NOW()
+          WHERE id=$1
+          RETURNING *
+        `,
+        [requestId]
+      );
+
+      const request = updatedResult.rows[0];
+
+      const auditEvent = await writeOwnerOpeningAuditEvent(db, {
+        request,
+        eventType: "owner_opening.approved",
+        admin,
+      });
+
+      await db.query("COMMIT");
+
+      return res.status(200).json({
+        ok: true,
+        request,
+        audit_event_id: auditEvent?.id ? Number(auditEvent.id) : null,
+      });
+    }catch(err){
+      try{ await db.query("ROLLBACK"); }catch(e){}
+      console.error("ADMIN_OPEN_OWNER_APPROVE_REQUEST_ERROR", err);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_OPEN_OWNER_APPROVE_REQUEST_FAILED",
+      });
+    }finally{
+      db.release();
+    }
+  });
+
+  r.post("/requests/:id/provision", async (req,res)=>{
+    const requestId = normalizeRequestId(req.params?.id);
+
+    if(!requestId){
+      return res.status(400).json({
+        ok: false,
+        error: "REQUEST_ID_INVALID",
+      });
+    }
+
+    let request = null;
+    const admin = getAdminActor(req);
+    const markDb = await pool.connect();
+
+    try{
+      await markDb.query("BEGIN");
+
+      const currentResult = await markDb.query(
+        `
+          SELECT *
+          FROM public.owner_opening_requests
+          WHERE id=$1
+          LIMIT 1
+          FOR UPDATE
+        `,
+        [requestId]
+      );
+
+      request = currentResult.rows[0] || null;
+
+      if(!request){
+        await markDb.query("ROLLBACK");
+        return res.status(404).json({
+          ok: false,
+          error: "OWNER_OPENING_REQUEST_NOT_FOUND",
+        });
+      }
+
+      if(request.status === "provisioned"){
+        await markDb.query("COMMIT");
+        return res.status(200).json({
+          ok: true,
+          request,
+          idempotent: true,
+        });
+      }
+
+      if(request.status !== "approved"){
+        await markDb.query("ROLLBACK");
+        return res.status(409).json({
+          ok: false,
+          error: "OWNER_OPENING_REQUEST_STATUS_INVALID",
+          status: request.status,
+        });
+      }
+
+      const provisioningResult = await markDb.query(
+        `
+          UPDATE public.owner_opening_requests
+          SET status='provisioning',
+              updated_at=NOW()
+          WHERE id=$1
+          RETURNING *
+        `,
+        [requestId]
+      );
+
+      request = provisioningResult.rows[0] || request;
+
+      await writeOwnerOpeningAuditEvent(markDb, {
+        request,
+        eventType: "owner_opening.provision_started",
+        admin,
+      });
+
+      await markDb.query("COMMIT");
+    }catch(err){
+      try{ await markDb.query("ROLLBACK"); }catch(e){}
+      console.error("ADMIN_OPEN_OWNER_MARK_PROVISIONING_ERROR", err);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_OPEN_OWNER_MARK_PROVISIONING_FAILED",
+      });
+    }finally{
+      markDb.release();
+    }
+
+    try{
+      let provisionResult = null;
+      let bindResult = null;
+
+      if(request.owner_type === "salon"){
+        provisionResult = await createSalonCanonical({
+          pool,
+          payload: buildSalonProvisionPayload(request),
+        });
+      }else if(request.owner_type === "master"){
+        provisionResult = await createMasterCanonical({
+          pool,
+          payload: buildMasterProvisionPayload(request),
+        });
+
+        if(request.work_mode === "attached_to_salon"){
+          bindResult = await bindMasterToSalonCanonical({
+            pool,
+            payload: {
+              salon_slug: request.salon_slug,
+              master_slug: provisionResult?.canonical_slug || request.slug_final,
+              bind_mode: "active",
+              create_contract: false,
+            },
+          });
+        }
+      }else{
+        return res.status(400).json({
+          ok: false,
+          error: "OWNER_TYPE_INVALID",
+        });
+      }
+
+      const ownerId = extractProvisionOwnerId(provisionResult);
+      const authUserId = extractProvisionAuthUserId(provisionResult);
+      const links = buildOwnerOpeningLinks({ request, provisionResult, bindResult });
+      const resultJson = {
+        provision: provisionResult,
+        bind: bindResult,
+      };
+
+      const doneDb = await pool.connect();
+
+      try{
+        await doneDb.query("BEGIN");
+
+        const updatedResult = await doneDb.query(
+          `
+            UPDATE public.owner_opening_requests
+            SET status='provisioned',
+                created_owner_id=$2,
+                created_auth_user_id=$3,
+                provision_result_json=$4,
+                links_json=$5,
+                provisioned_at=NOW(),
+                updated_at=NOW()
+            WHERE id=$1
+            RETURNING *
+          `,
+          [
+            requestId,
+            ownerId,
+            authUserId,
+            JSON.stringify(resultJson),
+            JSON.stringify(links),
+          ]
+        );
+
+        const finalRequest = updatedResult.rows[0] || request;
+
+        const auditEvent = await writeOwnerOpeningAuditEvent(doneDb, {
+          request: finalRequest,
+          eventType: "owner_opening.provisioned",
+          admin,
+          data: {
+            created_owner_id: ownerId,
+            created_auth_user_id: authUserId,
+            bind_created: Boolean(bindResult),
+          },
+        });
+
+        await doneDb.query("COMMIT");
+
+        return res.status(200).json({
+          ok: true,
+          request: finalRequest,
+          provision_result: provisionResult,
+          bind_result: bindResult,
+          links,
+          audit_event_id: auditEvent?.id ? Number(auditEvent.id) : null,
+        });
+      }catch(err){
+        try{ await doneDb.query("ROLLBACK"); }catch(e){}
+        throw err;
+      }finally{
+        doneDb.release();
+      }
+    }catch(err){
+      const code = buildProvisionErrorCode(err);
+      const failedDb = await pool.connect();
+
+      try{
+        await failedDb.query("BEGIN");
+
+        const failedResult = await failedDb.query(
+          `
+            UPDATE public.owner_opening_requests
+            SET status='failed',
+                provision_result_json=$2,
+                updated_at=NOW()
+            WHERE id=$1
+            RETURNING *
+          `,
+          [
+            requestId,
+            JSON.stringify({
+              ok: false,
+              error: code,
+              details: err?.details || null,
+            }),
+          ]
+        );
+
+        const failedRequest = failedResult.rows[0] || request;
+
+        await writeOwnerOpeningAuditEvent(failedDb, {
+          request: failedRequest,
+          eventType: "owner_opening.provision_failed",
+          admin,
+          data: {
+            error: code,
+            details: err?.details || null,
+          },
+        });
+
+        await failedDb.query("COMMIT");
+      }catch(updateErr){
+        try{ await failedDb.query("ROLLBACK"); }catch(e){}
+        console.error("ADMIN_OPEN_OWNER_PROVISION_FAILED_UPDATE_ERROR", updateErr);
+      }finally{
+        failedDb.release();
+      }
+
+      console.error("ADMIN_OPEN_OWNER_PROVISION_REQUEST_ERROR", err);
+      return res.status(resolveProvisionStatus(err)).json({
+        ok: false,
+        error: code,
+      });
     }
   });
 
