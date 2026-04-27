@@ -224,7 +224,7 @@ function buildProvisionResult({ user, master, onboardingIdentity, onboardingTran
         activated_at: reservation.activated_at
       } : null,
       urls: {
-        public: `/master?slug=${encodeURIComponent(master.slug)}`,
+        public: `/master/totem-demo-master?slug=${encodeURIComponent(master.slug)}`,
         internal: `/internal/masters/${master.slug}`
       }
     },
