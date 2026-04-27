@@ -239,7 +239,7 @@ function buildProvisionResult({
         activated_at: reservation.activated_at
       } : null,
       urls: {
-        public: `/salon/${salon.slug}`,
+        public: `/salon?slug=${encodeURIComponent(salon.slug)}`,
         internal: `/internal/salons/${salon.slug}`
       }
     },
