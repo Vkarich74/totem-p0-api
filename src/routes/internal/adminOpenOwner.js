@@ -881,6 +881,25 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         ORDER BY email_status
       `);
 
+      const provisionResult = await pool.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE status='approved')::int AS approved_waiting,
+          COUNT(*) FILTER (WHERE status='provisioning')::int AS provisioning,
+          COUNT(*) FILTER (WHERE status='provisioned')::int AS provisioned,
+          COUNT(*) FILTER (WHERE created_owner_id IS NOT NULL)::int AS owners_created,
+          COUNT(*) FILTER (WHERE created_auth_user_id IS NOT NULL)::int AS auth_users_created
+        FROM public.owner_opening_requests
+      `);
+
+      const errorResult = await pool.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE status='failed')::int AS provision_failed,
+          COUNT(*) FILTER (WHERE status='email_failed')::int AS email_failed,
+          COUNT(*) FILTER (WHERE email_status='failed')::int AS email_status_failed,
+          COUNT(*) FILTER (WHERE email_error IS NOT NULL AND email_error <> '')::int AS email_errors
+        FROM public.owner_opening_requests
+      `);
+
       return res.status(200).json({
         ok: true,
         feature: "admin_open_owner",
@@ -890,6 +909,19 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
           by_status: toCountMap(statusResult.rows, "status"),
           by_owner_type: toCountMap(ownerTypeResult.rows, "owner_type"),
           by_email_status: toCountMap(emailStatusResult.rows, "email_status"),
+          provision: provisionResult.rows[0] || {
+            approved_waiting: 0,
+            provisioning: 0,
+            provisioned: 0,
+            owners_created: 0,
+            auth_users_created: 0,
+          },
+          errors: errorResult.rows[0] || {
+            provision_failed: 0,
+            email_failed: 0,
+            email_status_failed: 0,
+            email_errors: 0,
+          },
         },
         contract: {
           owner_types: OWNER_TYPES,
@@ -1889,6 +1921,119 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       url: `/requests/${req.params.id}/send-email`,
       originalUrl: req.originalUrl,
     }, res);
+  });
+
+
+  r.get("/requests/:id/audit", async (req,res)=>{
+    try{
+      const requestId = normalizeRequestId(req.params?.id);
+
+      if(!requestId){
+        return res.status(400).json({
+          ok: false,
+          error: "REQUEST_ID_INVALID",
+        });
+      }
+
+      const requestResult = await pool.query(
+        `
+          SELECT id
+          FROM public.owner_opening_requests
+          WHERE id=$1
+          LIMIT 1
+        `,
+        [requestId]
+      );
+
+      if(!requestResult.rows.length){
+        return res.status(404).json({
+          ok: false,
+          error: "OWNER_OPENING_REQUEST_NOT_FOUND",
+        });
+      }
+
+      const auditResult = await pool.query(
+        `
+          SELECT
+            id,
+            event_type,
+            actor,
+            lead_id,
+            core_user_id,
+            data,
+            created_at
+          FROM public.audit_events
+          WHERE
+            (
+              data->>'entity_type' = 'owner_opening_request'
+              AND (
+                data->>'request_id' = $1::text
+                OR data->>'entity_id' = $1::text
+              )
+            )
+          ORDER BY created_at ASC, id ASC
+        `,
+        [requestId]
+      );
+
+      const messageResult = await pool.query(
+        `
+          SELECT
+            id,
+            status,
+            idempotency_key,
+            data,
+            created_at,
+            updated_at
+          FROM public.messages
+          WHERE
+            data->>'entity_type' = 'owner_opening_request'
+            AND data->>'entity_id' = $1::text
+          ORDER BY created_at ASC, id ASC
+        `,
+        [requestId]
+      );
+
+      const messageIds = messageResult.rows
+        .map((message) => Number(message.id))
+        .filter((id) => Number.isInteger(id) && id > 0);
+
+      let traces = [];
+
+      if(messageIds.length){
+        const traceResult = await pool.query(
+          `
+            SELECT
+              id,
+              message_id,
+              attempt,
+              status,
+              data,
+              created_at
+            FROM public.traces
+            WHERE message_id = ANY($1::bigint[])
+            ORDER BY created_at ASC, id ASC
+          `,
+          [messageIds]
+        );
+
+        traces = traceResult.rows;
+      }
+
+      return res.status(200).json({
+        ok: true,
+        request_id: requestId,
+        audit_events: auditResult.rows,
+        messages: messageResult.rows,
+        traces,
+      });
+    }catch(err){
+      console.error("ADMIN_OPEN_OWNER_AUDIT_ERROR", err);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_OPEN_OWNER_AUDIT_FAILED",
+      });
+    }
   });
 
 
