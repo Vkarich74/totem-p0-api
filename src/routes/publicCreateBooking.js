@@ -106,6 +106,8 @@ export async function publicCreateBooking(req, res) {
       `SELECT id, slug
        FROM public.salons
        WHERE slug = $1
+         AND status = 'active'
+         AND COALESCE(enabled, true) = true
        LIMIT 1`,
       [slug]
     );
@@ -147,11 +149,14 @@ export async function publicCreateBooking(req, res) {
     const servicePk = Number(serviceLink.service_pk);
 
     const masterRes = await client.query(
-      `SELECT id
-       FROM public.master_salon
-       WHERE master_id = $1
-         AND salon_id = $2
-         AND status = 'active'
+      `SELECT ms.id
+       FROM public.master_salon ms
+       JOIN public.masters m
+         ON m.id = ms.master_id
+       WHERE ms.master_id = $1
+         AND ms.salon_id = $2
+         AND ms.status = 'active'
+         AND COALESCE(m.active, true) = true
        LIMIT 1`,
       [master_id, salonId]
     );
