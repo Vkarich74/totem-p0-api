@@ -662,10 +662,11 @@ function buildOwnerOpeningEmailPreview(request){
   const links = request.links_json || {};
   const ownerType = normalizeOwnerType(request.owner_type);
   const ownerLabel = ownerType === "master" ? "мастера" : "салона";
-  const publicUrl = links.public_url || (ownerType && request.slug_final ? `/${ownerType}/${request.slug_final}` : null);
+  const publicUrl = links.public_url || (ownerType && request.slug_final ? `/${ownerType}?slug=${encodeURIComponent(request.slug_final)}` : null);
   const cabinetUrl = links.cabinet_url || (ownerType && request.slug_final ? `#/${ownerType}/${request.slug_final}` : null);
   const appBaseUrl = "https://app.totemv.com";
-  const publicLink = publicUrl && publicUrl.startsWith("http") ? publicUrl : publicUrl ? `${appBaseUrl}${publicUrl.startsWith("/") ? "" : "/"}${publicUrl}` : null;
+  const publicBaseUrl = "https://www.totemv.com";
+  const publicLink = publicUrl && publicUrl.startsWith("http") ? publicUrl : publicUrl ? `${publicBaseUrl}${publicUrl.startsWith("/") ? "" : "/"}${publicUrl}` : null;
   const cabinetLink = cabinetUrl && cabinetUrl.startsWith("http") ? cabinetUrl : cabinetUrl ? `${appBaseUrl}/${cabinetUrl}` : null;
 
   const subject = `TOTEM: доступ ${ownerLabel} создан`;
