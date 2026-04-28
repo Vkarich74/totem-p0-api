@@ -844,6 +844,80 @@ async function getOwnerOpeningRequestForUpdate(db, requestId){
   return result.rows[0] || null;
 }
 
+async function activateOwnerOpeningEntity(db, request){
+  const ownerType = normalizeOwnerType(request?.owner_type);
+  const ownerId = Number(request?.created_owner_id || 0);
+
+  if(!ownerType){
+    const error = new Error("OWNER_TYPE_INVALID");
+    error.code = "OWNER_TYPE_INVALID";
+    throw error;
+  }
+
+  if(!Number.isInteger(ownerId) || ownerId <= 0){
+    const error = new Error("OWNER_OPENING_CREATED_OWNER_ID_MISSING");
+    error.code = "OWNER_OPENING_CREATED_OWNER_ID_MISSING";
+    throw error;
+  }
+
+  if(ownerType === "salon"){
+    const result = await db.query(
+      `
+        UPDATE public.salons
+        SET status='active',
+            enabled=true
+        WHERE id=$1
+        RETURNING id, slug, name, status, enabled
+      `,
+      [ownerId]
+    );
+
+    const salon = result.rows[0] || null;
+
+    if(!salon){
+      const error = new Error("OWNER_OPENING_SALON_NOT_FOUND");
+      error.code = "OWNER_OPENING_SALON_NOT_FOUND";
+      throw error;
+    }
+
+    return {
+      owner_type: ownerType,
+      owner_id: ownerId,
+      salon,
+    };
+  }
+
+  if(ownerType === "master"){
+    const result = await db.query(
+      `
+        UPDATE public.masters
+        SET active=true
+        WHERE id=$1
+        RETURNING id, slug, name, active, user_id
+      `,
+      [ownerId]
+    );
+
+    const master = result.rows[0] || null;
+
+    if(!master){
+      const error = new Error("OWNER_OPENING_MASTER_NOT_FOUND");
+      error.code = "OWNER_OPENING_MASTER_NOT_FOUND";
+      throw error;
+    }
+
+    return {
+      owner_type: ownerType,
+      owner_id: ownerId,
+      master,
+    };
+  }
+
+  const error = new Error("OWNER_TYPE_INVALID");
+  error.code = "OWNER_TYPE_INVALID";
+  throw error;
+}
+
 
 
 export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
@@ -1581,6 +1655,97 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
     }
   });
 
+  r.post("/requests/:id/activate", async (req,res)=>{
+    const requestId = normalizeRequestId(req.params?.id);
+
+    if(!requestId){
+      return res.status(400).json({
+        ok: false,
+        error: "REQUEST_ID_INVALID",
+      });
+    }
+
+    const db = await pool.connect();
+
+    try{
+      const admin = getAdminActor(req);
+
+      await db.query("BEGIN");
+
+      const current = await getOwnerOpeningRequestForUpdate(db, requestId);
+
+      if(!current){
+        await db.query("ROLLBACK");
+        return res.status(404).json({
+          ok: false,
+          error: "OWNER_OPENING_REQUEST_NOT_FOUND",
+        });
+      }
+
+      if(current.status === "activated"){
+        await db.query("COMMIT");
+        return res.status(200).json({
+          ok: true,
+          request: current,
+          idempotent: true,
+        });
+      }
+
+      if(current.status !== "provisioned"){
+        await db.query("ROLLBACK");
+        return res.status(409).json({
+          ok: false,
+          error: "OWNER_OPENING_REQUEST_STATUS_INVALID",
+          status: current.status,
+        });
+      }
+
+      const ownerActivation = await activateOwnerOpeningEntity(db, current);
+
+      const updatedResult = await db.query(
+        `
+          UPDATE public.owner_opening_requests
+          SET status='activated',
+              activated_at=NOW(),
+              updated_at=NOW()
+          WHERE id=$1
+          RETURNING *
+        `,
+        [requestId]
+      );
+
+      const request = updatedResult.rows[0] || current;
+
+      const auditEvent = await writeOwnerOpeningAuditEvent(db, {
+        request,
+        eventType: "owner_opening.activated",
+        admin,
+        data: {
+          created_owner_id: Number(current.created_owner_id || 0),
+          owner_activation: ownerActivation,
+        },
+      });
+
+      await db.query("COMMIT");
+
+      return res.status(200).json({
+        ok: true,
+        request,
+        owner_activation: ownerActivation,
+        audit_event_id: auditEvent?.id ? Number(auditEvent.id) : null,
+      });
+    }catch(err){
+      try{ await db.query("ROLLBACK"); }catch(e){}
+      console.error("ADMIN_OPEN_OWNER_ACTIVATE_REQUEST_ERROR", err);
+      return res.status(500).json({
+        ok: false,
+        error: String(err?.code || err?.message || "ADMIN_OPEN_OWNER_ACTIVATE_REQUEST_FAILED"),
+      });
+    }finally{
+      db.release();
+    }
+  });
+
   r.post("/requests/:id/email-preview", async (req,res)=>{
     const requestId = normalizeRequestId(req.params?.id);
 
@@ -1608,7 +1773,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
-      if(request.status !== "provisioned" && request.status !== "email_ready" && request.status !== "email_sent" && request.status !== "email_failed"){
+      if(request.status !== "activated" && request.status !== "email_ready" && request.status !== "email_sent" && request.status !== "email_failed"){
         await db.query("ROLLBACK");
         return res.status(409).json({
           ok: false,
@@ -1623,7 +1788,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         `
           UPDATE public.owner_opening_requests
           SET status=CASE
-                WHEN status='provisioned' THEN 'email_ready'
+                WHEN status='activated' THEN 'email_ready'
                 ELSE status
               END,
               email_preview_json=$2,
