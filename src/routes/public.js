@@ -86,6 +86,7 @@ export function createPublicRouter(deps) {
           SELECT id, slug, name, active
           FROM masters
           WHERE slug = $1
+            AND COALESCE(active, true) = true
           LIMIT 1
           `,
           [slug]
