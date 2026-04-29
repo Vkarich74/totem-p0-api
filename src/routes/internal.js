@@ -92,19 +92,11 @@ function assertGmailConfig(){
   }
 }
 
-async function sendOtpEmail({to, code}){
+async function sendGmailHtmlEmail({ to, subjectText, htmlBody }){
   assertGmailConfig();
 
   const gmail = google.gmail({ version: "v1", auth: gmailClient });
-  const subject = "=?UTF-8?B?" + Buffer.from("Код входа TOTEM").toString("base64") + "?=";
-  const html = `
-    <div style="font-family:Arial,sans-serif;font-size:16px;color:#111827">
-      <h2>Код входа TOTEM</h2>
-      <p>Ваш код подтверждения:</p>
-      <div style="font-size:32px;font-weight:700;letter-spacing:6px">${code}</div>
-      <p>Код действует ${AUTH_OTP_TTL_MINUTES} минут.</p>
-    </div>
-  `;
+  const subject = "=?UTF-8?B?" + Buffer.from(subjectText).toString("base64") + "?=";
 
   const message = [
     "MIME-Version: 1.0",
@@ -114,7 +106,7 @@ async function sendOtpEmail({to, code}){
     `To: ${to}`,
     `Subject: ${subject}`,
     "",
-    html
+    htmlBody
   ].join("\n");
 
   const raw = Buffer.from(message)
@@ -126,6 +118,49 @@ async function sendOtpEmail({to, code}){
   await gmail.users.messages.send({
     userId: "me",
     requestBody: { raw }
+  });
+}
+
+async function sendOtpEmail({to, code}){
+  const html = `
+    <div style="font-family:Arial,sans-serif;font-size:16px;color:#111827">
+      <h2>Код входа TOTEM</h2>
+      <p>Ваш код подтверждения:</p>
+      <div style="font-size:32px;font-weight:700;letter-spacing:6px">${code}</div>
+      <p>Код действует ${AUTH_OTP_TTL_MINUTES} минут.</p>
+    </div>
+  `;
+
+  await sendGmailHtmlEmail({
+    to,
+    subjectText: "Код входа TOTEM",
+    htmlBody: html
+  });
+}
+
+function buildPasswordResetUrl({ role, slug, login }){
+  return `https://app.totemv.com/#/auth/reset?role=${encodeURIComponent(role)}&slug=${encodeURIComponent(slug)}&login=${encodeURIComponent(login)}`;
+}
+
+async function sendPasswordResetEmail({ to, code, role, slug, login }){
+  const resetUrl = buildPasswordResetUrl({ role, slug, login });
+  const html = `
+    <div style="font-family:Arial,sans-serif;font-size:16px;color:#111827">
+      <h2>Восстановление пароля TOTEM</h2>
+      <p>Кабинет: <strong>${role}</strong> / <strong>${slug}</strong></p>
+      <p>Ваш код подтверждения:</p>
+      <div style="font-size:32px;font-weight:700;letter-spacing:6px">${code}</div>
+      <p>Код действует ${AUTH_OTP_TTL_MINUTES} минут.</p>
+      <p>Ссылка для сброса пароля:</p>
+      <p><a href="${resetUrl}">${resetUrl}</a></p>
+      <p>После смены пароля войдите новым паролем.</p>
+    </div>
+  `;
+
+  await sendGmailHtmlEmail({
+    to,
+    subjectText: "Восстановление пароля TOTEM",
+    htmlBody: html
   });
 }
 
@@ -143,6 +178,41 @@ return raw;
 }
 
 return "master";
+}
+
+function resolveRequestedOwnerRole(body = {}){
+const raw = String(body?.role || body?.owner_type || "").trim().toLowerCase();
+
+if(raw === "salon"){
+return "salon_admin";
+}
+
+if(raw === "master" || raw === "salon_admin"){
+return raw;
+}
+
+return null;
+}
+
+function resolveRequestedOwnerSlugStrict(body = {}){
+const role = resolveRequestedOwnerRole(body);
+const requestedSlug = String(
+body?.owner_slug ||
+(role === "salon_admin" ? body?.salon_slug : role === "master" ? body?.master_slug : null) ||
+body?.slug ||
+""
+).trim().toLowerCase();
+
+if(!requestedSlug){
+return null;
+}
+
+const normalizedSlug = requestedSlug
+.replace(/[^a-z0-9_-]+/g, "-")
+.replace(/-{2,}/g, "-")
+.replace(/^[-_]+|[-_]+$/g, "");
+
+return normalizedSlug || null;
 }
 
 function normalizeRequestedOwnerSlug(role, body = {}){
@@ -468,7 +538,7 @@ async function getAuthUserByTarget(db, target){
 const selectMasterSlug = await authUsersHasColumn(db, "master_slug");
 const selectSalonSlug = await authUsersHasColumn(db, "salon_slug");
 
-const fields = ["id", "role"];
+const fields = ["id", "role", "enabled", "password_hash"];
 if(selectMasterSlug){
 fields.push("master_slug");
 }
@@ -541,8 +611,21 @@ return userRes.rows[0] || null;
 }
 
 
-async function issueAuthOtp(db, { target, purpose, channel }){
-const activeOtpRes = await db.query(`
+async function issueAuthOtp(db, { target, purpose, channel, userId = null, emailContext = null }){
+const hasUserId = Number.isInteger(Number(userId)) && Number(userId) > 0;
+
+const activeOtpRes = await db.query(hasUserId ? `
+  SELECT id, resend_available_at
+  FROM public.auth_otps
+  WHERE target=$1
+    AND purpose=$2
+    AND user_id=$3
+    AND consumed_at IS NULL
+    AND expires_at > NOW()
+  ORDER BY created_at DESC
+  LIMIT 1
+  FOR UPDATE
+` : `
   SELECT id, resend_available_at
   FROM public.auth_otps
   WHERE target=$1
@@ -552,7 +635,7 @@ const activeOtpRes = await db.query(`
   ORDER BY created_at DESC
   LIMIT 1
   FOR UPDATE
-`,[target, purpose]);
+`, hasUserId ? [target, purpose, Number(userId)] : [target, purpose]);
 
 const activeOtp = activeOtpRes.rows[0] || null;
 
@@ -567,47 +650,80 @@ if(activeOtp?.resend_available_at && new Date(activeOtp.resend_available_at).get
 const code = String(Math.floor(100000 + Math.random()*900000));
 const codeHash = await bcrypt.hash(code, 10);
 
-await db.query(`
+await db.query(hasUserId ? `
+  UPDATE public.auth_otps
+  SET consumed_at=NOW()
+  WHERE target=$1
+    AND purpose=$2
+    AND user_id=$3
+    AND consumed_at IS NULL
+` : `
   UPDATE public.auth_otps
   SET consumed_at=NOW()
   WHERE target=$1
     AND purpose=$2
     AND consumed_at IS NULL
-`,[target, purpose]);
+`, hasUserId ? [target, purpose, Number(userId)] : [target, purpose]);
+
+const insertColumns = [
+  "channel",
+  "target",
+  "purpose",
+  "code_hash",
+  "expires_at",
+  "attempts_used",
+  "max_attempts",
+  "blocked_until",
+  "resend_available_at",
+  "consumed_at",
+  "created_at"
+];
+const insertValues = [
+  "$1",
+  "$2",
+  "$3",
+  "$4",
+  `NOW() + ($5 || ' minutes')::interval`,
+  "0",
+  "5",
+  "NULL",
+  `NOW() + ($6 || ' seconds')::interval`,
+  "NULL",
+  "NOW()"
+];
+const insertParams = [channel, target, purpose, codeHash, AUTH_OTP_TTL_MINUTES, AUTH_OTP_RESEND_SECONDS];
+
+if(hasUserId){
+  insertColumns.push("user_id");
+  insertValues.push(`$${insertParams.length + 1}`);
+  insertParams.push(Number(userId));
+}
 
 await db.query(`
   INSERT INTO public.auth_otps(
-    channel,
-    target,
-    purpose,
-    code_hash,
-    expires_at,
-    attempts_used,
-    max_attempts,
-    blocked_until,
-    resend_available_at,
-    consumed_at,
-    created_at
+    ${insertColumns.join(",\n    ")}
   )
   VALUES(
-    $1,
-    $2,
-    $3,
-    $4,
-    NOW() + ($5 || ' minutes')::interval,
-    0,
-    5,
-    NULL,
-    NOW() + ($6 || ' seconds')::interval,
-    NULL,
-    NOW()
+    ${insertValues.join(",\n    ")}
   )
-`,[channel, target, purpose, codeHash, AUTH_OTP_TTL_MINUTES, AUTH_OTP_RESEND_SECONDS]);
+`, insertParams);
 
 console.log("OTP_CODE", target, purpose, code);
 if(channel==="email"){
   Promise.resolve()
-    .then(() => sendOtpEmail({to:target, code}))
+    .then(() => {
+      if(purpose === "password_reset"){
+        return sendPasswordResetEmail({
+          to: target,
+          code,
+          role: String(emailContext?.role || ""),
+          slug: String(emailContext?.slug || ""),
+          login: String(emailContext?.login || target)
+        });
+      }
+
+      return sendOtpEmail({to:target, code});
+    })
     .catch((e) => {
       console.error("EMAIL_SEND_FAILED", e);
     });
@@ -788,9 +904,13 @@ r.post("/auth/login", async (req,res)=>{
 const db = await pool.connect();
 
 try{
-const email = normalizeAuthIdentifier(req.body?.email);
-const phone = normalizePhone(req.body?.phone);
+const authTarget = resolveAuthTarget(req.body || {});
+const email = authTarget?.lookup === "email" ? authTarget.value : null;
+const phone = authTarget?.lookup === "phone" ? authTarget.value : null;
 const password = String(req.body?.password || "");
+const requestedRole = resolveRequestedOwnerRole(req.body || {});
+const requestedOwnerSlug = resolveRequestedOwnerSlugStrict(req.body || {});
+const isOwnerAuth = requestedRole === "master" || requestedRole === "salon_admin";
 
 if((!email && !phone) || !password){
 return res.status(400).json({
@@ -799,7 +919,20 @@ error:"LOGIN_PAYLOAD_INVALID"
 });
 }
 
-const user = await findLoginUser(db, { email, phone });
+let user = null;
+
+if(!isOwnerAuth || !requestedOwnerSlug){
+return res.status(400).json({
+ok:false,
+error:"OWNER_CONTEXT_REQUIRED"
+});
+}
+
+user = await getAuthUserByTargetRoleAndSlug(db, {
+target: authTarget,
+requestedRole,
+requestedOwnerSlug
+});
 
 if(!user || !user.enabled || !user.password_hash){
 return res.status(401).json({
@@ -1422,6 +1555,8 @@ r.post("/auth/start", async (req,res)=>{
               : "login_verify";
     const requestedChannel = String(req.body?.channel || "").trim().toLowerCase();
     const channel = requestedChannel === "email" ? "email" : authTarget?.channel || "whatsapp";
+    const requestedRole = resolveRequestedOwnerRole(req.body || {});
+    const requestedOwnerSlug = resolveRequestedOwnerSlugStrict(req.body || {});
 
     if(!authTarget?.value){
       return res.status(400).json({
@@ -1431,6 +1566,46 @@ r.post("/auth/start", async (req,res)=>{
     }
 
     await db.query("BEGIN");
+
+    if(purpose === "login_verify"){
+      if(!requestedRole || !requestedOwnerSlug){
+        await db.query("ROLLBACK");
+        return res.status(400).json({
+          ok:false,
+          error:"OWNER_CONTEXT_REQUIRED"
+        });
+      }
+
+      const user = await getAuthUserByTargetRoleAndSlug(db, {
+        target: authTarget,
+        requestedRole,
+        requestedOwnerSlug
+      });
+
+      if(!user?.id){
+        await db.query("ROLLBACK");
+        return res.status(404).json({
+          ok:false,
+          error:"AUTH_USER_NOT_FOUND"
+        });
+      }
+
+      const otpResult = await issueAuthOtp(db, {
+        target: authTarget.value,
+        purpose,
+        channel,
+        userId: Number(user.id)
+      });
+
+      if(!otpResult.ok){
+        await db.query("ROLLBACK");
+        return res.status(429).json(otpResult);
+      }
+
+      await db.query("COMMIT");
+
+      return res.json(otpResult);
+    }
 
     const otpResult = await issueAuthOtp(db, {
       target: authTarget.value,
@@ -1467,6 +1642,8 @@ r.post("/auth/verify", async (req,res)=>{
     const requestedPurpose = String(req.body?.purpose || "").trim().toLowerCase();
     const requestedRole = normalizeRequestedAuthRole(req.body?.role || req.body?.owner_type);
     const requestedOwnerSlug = normalizeRequestedOwnerSlug(requestedRole, req.body);
+    const strictRequestedRole = resolveRequestedOwnerRole(req.body || {});
+    const strictRequestedOwnerSlug = resolveRequestedOwnerSlugStrict(req.body || {});
     const requestedChannel = String(req.body?.channel || "").trim().toLowerCase();
     const channel = requestedChannel === "email" ? "email" : authTarget?.channel || "whatsapp";
     const purpose =
@@ -1488,6 +1665,160 @@ r.post("/auth/verify", async (req,res)=>{
     }
 
     await db.query("BEGIN");
+
+    if(purpose === "login_verify"){
+      if(!strictRequestedRole || !strictRequestedOwnerSlug){
+        await db.query("ROLLBACK");
+        return res.status(400).json({
+          ok:false,
+          error:"OWNER_CONTEXT_REQUIRED"
+        });
+      }
+
+      const user = await getAuthUserByTargetRoleAndSlug(db, {
+        target: authTarget,
+        requestedRole: strictRequestedRole,
+        requestedOwnerSlug: strictRequestedOwnerSlug
+      });
+
+      if(!user?.id){
+        await db.query("ROLLBACK");
+        return res.status(404).json({
+          ok:false,
+          error:"AUTH_USER_NOT_FOUND"
+        });
+      }
+
+      const otpRes = await db.query(`
+        SELECT *
+        FROM public.auth_otps
+        WHERE target=$1
+          AND purpose=$2
+          AND user_id=$3
+          AND consumed_at IS NULL
+        ORDER BY created_at DESC
+        LIMIT 1
+        FOR UPDATE
+      `,[authTarget.value, purpose, Number(user.id)]);
+
+      const otp = otpRes.rows[0] || null;
+
+      if(!otp){
+        await db.query("ROLLBACK");
+        return res.status(401).json({
+          ok:false,
+          error:"OTP_INVALID"
+        });
+      }
+
+      if(otp.blocked_until && new Date(otp.blocked_until).getTime() > Date.now()){
+        await db.query("ROLLBACK");
+        return res.status(429).json({
+          ok:false,
+          error:"OTP_BLOCKED",
+          blocked_until: otp.blocked_until
+        });
+      }
+
+      if(otp.expires_at && new Date(otp.expires_at).getTime() <= Date.now()){
+        await db.query("ROLLBACK");
+        return res.status(401).json({
+          ok:false,
+          error:"OTP_EXPIRED"
+        });
+      }
+
+      const attemptsUsed = Number(otp.attempts_used || 0);
+      const maxAttempts = Number(otp.max_attempts || 5);
+
+      if(attemptsUsed >= maxAttempts){
+        await db.query(`
+          UPDATE public.auth_otps
+          SET blocked_until = COALESCE(blocked_until, NOW() + ($2 || ' minutes')::interval)
+          WHERE id=$1
+        `,[otp.id, AUTH_OTP_BLOCK_MINUTES]);
+
+        await db.query("COMMIT");
+        return res.status(429).json({
+          ok:false,
+          error:"OTP_BLOCKED"
+        });
+      }
+
+      const codeOk = await bcrypt.compare(code, String(otp.code_hash || ""));
+
+      if(!codeOk){
+        const updatedAttempts = attemptsUsed + 1;
+        const shouldBlock = updatedAttempts >= maxAttempts;
+
+        const failedUpdate = await db.query(`
+          UPDATE public.auth_otps
+          SET attempts_used=$2,
+              blocked_until=CASE
+                WHEN $3 THEN NOW() + ($4 || ' minutes')::interval
+                ELSE blocked_until
+              END
+          WHERE id=$1
+          RETURNING attempts_used, max_attempts, blocked_until
+        `,[otp.id, updatedAttempts, shouldBlock, AUTH_OTP_BLOCK_MINUTES]);
+
+        await db.query("COMMIT");
+
+        return res.status(401).json({
+          ok:false,
+          error: shouldBlock ? "OTP_BLOCKED" : "OTP_INVALID",
+          attempts_used: Number(failedUpdate.rows[0]?.attempts_used || updatedAttempts),
+          max_attempts: Number(failedUpdate.rows[0]?.max_attempts || maxAttempts),
+          blocked_until: failedUpdate.rows[0]?.blocked_until || null
+        });
+      }
+
+      await db.query(`
+        UPDATE public.auth_otps
+        SET consumed_at=NOW()
+        WHERE id=$1
+          AND user_id=$2
+      `,[otp.id, Number(user.id)]);
+
+      await applyAuthVerificationState(db, Number(user.id), {
+        ...authTarget,
+        channel
+      });
+
+      const session = await createAuthSession(db, Number(user.id));
+
+      const secret = String(process.env.JWT_SECRET || "").trim();
+      if(!secret){
+        throw new Error("JWT_SECRET_NOT_SET");
+      }
+
+      const accessToken = jwt.sign(
+        {
+          user_id: Number(user.id),
+          role: String(user.role),
+          session_id: session.id
+        },
+        secret
+      );
+
+      await db.query("COMMIT");
+
+      return res.json({
+        ok:true,
+        access_token: accessToken,
+        token_type:"Bearer",
+        auth:{
+          user_id:Number(user.id),
+          role:String(user.role),
+          source:"otp_login",
+          session_id:session.id,
+          session_source:"auth_sessions",
+          session_expires_at:session.expires_at,
+          last_seen_at:session.last_seen_at,
+          idle_timeout_at:session.idle_timeout_at
+        }
+      });
+    }
 
     const otpRes = await db.query(`
       SELECT *
@@ -1648,6 +1979,8 @@ r.post("/auth/password/reset/start", async (req,res)=>{
     const authTarget = resolveAuthTarget(req.body || {});
     const requestedChannel = String(req.body?.channel || "").trim().toLowerCase();
     const channel = requestedChannel === "email" ? "email" : authTarget?.channel || "whatsapp";
+    const requestedRole = resolveRequestedOwnerRole(req.body || {});
+    const requestedOwnerSlug = resolveRequestedOwnerSlugStrict(req.body || {});
 
     if(!authTarget?.value){
       return res.status(400).json({
@@ -1656,11 +1989,19 @@ r.post("/auth/password/reset/start", async (req,res)=>{
       });
     }
 
+    if(!requestedRole || !requestedOwnerSlug){
+      return res.status(400).json({
+        ok:false,
+        error:"OWNER_CONTEXT_REQUIRED"
+      });
+    }
+
     await db.query("BEGIN");
 
-    const user = await findLoginUser(db, {
-      email: authTarget.lookup === "email" ? authTarget.value : null,
-      phone: authTarget.lookup === "phone" ? authTarget.value : null
+    const user = await getAuthUserByTargetRoleAndSlug(db, {
+      target: authTarget,
+      requestedRole,
+      requestedOwnerSlug
     });
 
     if(!user || !user.enabled){
@@ -1674,7 +2015,13 @@ r.post("/auth/password/reset/start", async (req,res)=>{
     const otpResult = await issueAuthOtp(db, {
       target: authTarget.value,
       purpose:"password_reset",
-      channel
+      channel,
+      userId: Number(user.id),
+      emailContext: {
+        role: requestedRole,
+        slug: requestedOwnerSlug,
+        login: authTarget.value
+      }
     });
 
     if(!otpResult.ok){
@@ -1706,6 +2053,8 @@ r.post("/auth/password/reset/finish", async (req,res)=>{
     const authTarget = resolveAuthTarget(req.body || {});
     const code = String(req.body?.code || "").trim();
     const password = String(req.body?.password || "");
+    const requestedRole = resolveRequestedOwnerRole(req.body || {});
+    const requestedOwnerSlug = resolveRequestedOwnerSlugStrict(req.body || {});
 
     if(!authTarget?.value || !code){
       return res.status(400).json({
@@ -1721,18 +2070,40 @@ r.post("/auth/password/reset/finish", async (req,res)=>{
       });
     }
 
+    if(!requestedRole || !requestedOwnerSlug){
+      return res.status(400).json({
+        ok:false,
+        error:"OWNER_CONTEXT_REQUIRED"
+      });
+    }
+
     await db.query("BEGIN");
+
+    const user = await getAuthUserByTargetRoleAndSlug(db, {
+      target: authTarget,
+      requestedRole,
+      requestedOwnerSlug
+    });
+
+    if(!user?.id){
+      await db.query("ROLLBACK");
+      return res.status(401).json({
+        ok:false,
+        error:"AUTH_USER_NOT_FOUND"
+      });
+    }
 
     const otpRes = await db.query(`
       SELECT *
       FROM public.auth_otps
       WHERE target=$1
         AND purpose='password_reset'
+        AND user_id=$2
         AND consumed_at IS NULL
       ORDER BY created_at DESC
       LIMIT 1
       FOR UPDATE
-    `,[authTarget.value]);
+    `,[authTarget.value, Number(user.id)]);
 
     const otp = otpRes.rows[0] || null;
 
@@ -1806,24 +2177,6 @@ r.post("/auth/password/reset/finish", async (req,res)=>{
       });
     }
 
-    const userRes = await db.query(`
-      SELECT id, phone, email
-      FROM public.auth_users
-      WHERE ${authTarget.lookup === "email" ? "lower(email)=lower($1)" : "phone=$1"}
-      LIMIT 1
-      FOR UPDATE
-    `,[authTarget.value]);
-
-    const user = userRes.rows[0] || null;
-
-    if(!user){
-      await db.query("ROLLBACK");
-      return res.status(404).json({
-        ok:false,
-        error:"AUTH_USER_NOT_FOUND"
-      });
-    }
-
     const hash = await bcrypt.hash(password, 10);
     const passwordState = await applyPasswordLifecycleState(db, Number(user.id), {
       preferredLoginChannel: authTarget.channel === "email" ? "email" : "whatsapp"
@@ -1846,9 +2199,9 @@ r.post("/auth/password/reset/finish", async (req,res)=>{
     await db.query(`
       UPDATE public.auth_otps
       SET consumed_at=NOW()
-      WHERE target=$1
-        AND consumed_at IS NULL
-    `,[authTarget.value]);
+      WHERE id=$1
+        AND user_id=$2
+    `,[otp.id, Number(user.id)]);
 
     await db.query("COMMIT");
 
