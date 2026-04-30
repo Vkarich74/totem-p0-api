@@ -162,6 +162,62 @@ function buildReconciliationMismatchesWhere(filters = {}) {
   return { where, values, index: indexState.current };
 }
 
+function buildProviderEventsWhere(filters = {}) {
+  const where = [];
+  const values = [];
+  const indexState = { current: 1 };
+
+  if (filters.provider_code !== undefined && filters.provider_code !== null && filters.provider_code !== '') {
+    pushClause(where, values, indexState, 'provider_code', normalizeText(filters.provider_code));
+  }
+
+  if (filters.processing_status !== undefined && filters.processing_status !== null && filters.processing_status !== '') {
+    pushClause(where, values, indexState, 'processing_status', normalizeText(filters.processing_status));
+  }
+
+  if (filters.status_normalized !== undefined && filters.status_normalized !== null && filters.status_normalized !== '') {
+    pushClause(where, values, indexState, 'status_normalized', normalizeText(filters.status_normalized));
+  }
+
+  if (filters.event_type !== undefined && filters.event_type !== null && filters.event_type !== '') {
+    pushClause(where, values, indexState, 'event_type', normalizeText(filters.event_type));
+  }
+
+  if (filters.payment_id !== undefined && filters.payment_id !== null && filters.payment_id !== '') {
+    pushClause(where, values, indexState, 'payment_id', normalizeInt(filters.payment_id));
+  }
+
+  if (filters.booking_id !== undefined && filters.booking_id !== null && filters.booking_id !== '') {
+    pushClause(where, values, indexState, 'booking_id', normalizeInt(filters.booking_id));
+  }
+
+  return { where, values, index: indexState.current };
+}
+
+function buildProviderSettlementsWhere(filters = {}) {
+  const where = [];
+  const values = [];
+  const indexState = { current: 1 };
+
+  if (filters.provider_code !== undefined && filters.provider_code !== null && filters.provider_code !== '') {
+    pushClause(where, values, indexState, 'provider_code', normalizeText(filters.provider_code));
+  }
+
+  if (filters.status !== undefined && filters.status !== null && filters.status !== '') {
+    pushClause(where, values, indexState, 'status', normalizeText(filters.status));
+  }
+
+  if (filters.settlement_source !== undefined && filters.settlement_source !== null && filters.settlement_source !== '') {
+    pushClause(where, values, indexState, 'settlement_source', normalizeText(filters.settlement_source));
+  }
+
+  if (filters.provider_settlement_id !== undefined && filters.provider_settlement_id !== null && filters.provider_settlement_id !== '') {
+    pushClause(where, values, indexState, 'provider_settlement_id', normalizeText(filters.provider_settlement_id));
+  }
+
+  return { where, values, index: indexState.current };
+}
+
 async function buildAdminMoneyCoreOverview(pool) {
   const [
     providerEvents,
@@ -372,6 +428,52 @@ async function listAdminMoneyCoreExceptions(pool, filters = {}) {
   return result.rows;
 }
 
+async function listAdminProviderEvents(pool, filters = {}) {
+  const { where, values, index } = buildProviderEventsWhere(filters);
+  const { limit, offset } = safePagination(filters);
+  values.push(limit);
+  const limitIndex = index;
+  values.push(offset);
+  const offsetIndex = index + 1;
+
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM public.provider_events
+    ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+    ORDER BY id DESC
+    LIMIT $${limitIndex}
+    OFFSET $${offsetIndex}
+    `,
+    values
+  );
+
+  return result.rows;
+}
+
+async function listAdminProviderSettlements(pool, filters = {}) {
+  const { where, values, index } = buildProviderSettlementsWhere(filters);
+  const { limit, offset } = safePagination(filters);
+  values.push(limit);
+  const limitIndex = index;
+  values.push(offset);
+  const offsetIndex = index + 1;
+
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM public.provider_settlements
+    ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+    ORDER BY id DESC
+    LIMIT $${limitIndex}
+    OFFSET $${offsetIndex}
+    `,
+    values
+  );
+
+  return result.rows;
+}
+
 export {
   buildAdminMoneyCoreOverview,
   listAdminOwnerBalances,
@@ -379,4 +481,6 @@ export {
   listAdminPayoutExecutions,
   listAdminReconciliationRuns,
   listAdminMoneyCoreExceptions,
+  listAdminProviderEvents,
+  listAdminProviderSettlements,
 };

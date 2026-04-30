@@ -65,6 +65,8 @@ import {
   listAdminPayoutExecutions,
   listAdminReconciliationRuns,
   listAdminMoneyCoreExceptions,
+  listAdminProviderEvents,
+  listAdminProviderSettlements,
 } from '../../money-core/adminFinance.service.js';
 
 const MONEY_CORE_TABLES = Object.freeze([
@@ -1250,6 +1252,40 @@ function buildMoneyCoreRouter(pool) {
         status: req.query?.status,
         provider_code: req.query?.provider_code,
         severity: req.query?.severity,
+        limit: req.query?.limit,
+        offset: req.query?.offset,
+      });
+      return safeJson(res, 200, { ok: true, data, meta: {} });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/admin/provider-events', async (req, res, next) => {
+    try {
+      const data = await listAdminProviderEvents(pool, {
+        provider_code: req.query?.provider_code,
+        processing_status: req.query?.processing_status,
+        status_normalized: req.query?.status_normalized,
+        event_type: req.query?.event_type,
+        payment_id: req.query?.payment_id,
+        booking_id: req.query?.booking_id,
+        limit: req.query?.limit,
+        offset: req.query?.offset,
+      });
+      return safeJson(res, 200, { ok: true, data, meta: {} });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/admin/settlements', async (req, res, next) => {
+    try {
+      const data = await listAdminProviderSettlements(pool, {
+        provider_code: req.query?.provider_code,
+        status: req.query?.status,
+        settlement_source: req.query?.settlement_source,
+        provider_settlement_id: req.query?.provider_settlement_id,
         limit: req.query?.limit,
         offset: req.query?.offset,
       });
