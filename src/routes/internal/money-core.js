@@ -43,6 +43,14 @@ import {
   getWithdrawRequestById,
   createWithdrawRequest,
 } from '../../money-core/withdrawRequests.service.js';
+import {
+  listPayoutExecutions,
+  getPayoutExecutionById,
+  createPayoutExecution,
+  submitManualPayoutExecution,
+  completePayoutExecution,
+  failPayoutExecution,
+} from '../../money-core/payoutExecutions.service.js';
 
 const MONEY_CORE_TABLES = Object.freeze([
   'money_providers',
@@ -825,6 +833,188 @@ function buildMoneyCoreRouter(pool) {
         request,
       });
     } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/payout-executions', async (req, res, next) => {
+    try {
+      const payouts = await listPayoutExecutions(pool, {
+        owner_type: req.query?.owner_type,
+        owner_id: req.query?.owner_id,
+        status: req.query?.status,
+        withdraw_request_id: req.query?.withdraw_request_id,
+        payout_mode: req.query?.payout_mode,
+        limit: req.query?.limit,
+        offset: req.query?.offset,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        payouts,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/payout-executions/:id', async (req, res, next) => {
+    try {
+      const payout = await getPayoutExecutionById(pool, req.params.id);
+
+      if (!payout) {
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'PAYOUT_EXECUTION_NOT_FOUND',
+        });
+      }
+
+      return safeJson(res, 200, {
+        ok: true,
+        payout,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.post('/money-core/payout-executions', async (req, res, next) => {
+    try {
+      const payout = await createPayoutExecution(pool, req.body || {}, {
+        user_id: req.user?.id ?? req.user?.user_id ?? null,
+        user_type: req.user?.type ?? null,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        payout,
+      });
+    } catch (err) {
+      if (err && String(err.code || '').startsWith('MONEY_CORE_')) {
+        return safeJson(res, err.statusCode || 403, {
+          ok: false,
+          error: err.code,
+          message: err.message,
+        });
+      }
+      if (err && err.statusCode) {
+        return safeJson(res, err.statusCode, {
+          ok: false,
+          error: err.code || 'PAYOUT_EXECUTION_INVALID',
+          message: err.message,
+        });
+      }
+      return next(err);
+    }
+  });
+
+  r.post('/money-core/payout-executions/:id/submit-manual', async (req, res, next) => {
+    try {
+      const payout = await submitManualPayoutExecution(pool, req.params.id, req.body || {}, {
+        user_id: req.user?.id ?? req.user?.user_id ?? null,
+        user_type: req.user?.type ?? null,
+      });
+
+      if (!payout) {
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'PAYOUT_EXECUTION_NOT_FOUND',
+        });
+      }
+
+      return safeJson(res, 200, {
+        ok: true,
+        payout,
+      });
+    } catch (err) {
+      if (err && String(err.code || '').startsWith('MONEY_CORE_')) {
+        return safeJson(res, err.statusCode || 403, {
+          ok: false,
+          error: err.code,
+          message: err.message,
+        });
+      }
+      if (err && err.statusCode) {
+        return safeJson(res, err.statusCode, {
+          ok: false,
+          error: err.code || 'PAYOUT_EXECUTION_INVALID',
+          message: err.message,
+        });
+      }
+      return next(err);
+    }
+  });
+
+  r.post('/money-core/payout-executions/:id/complete', async (req, res, next) => {
+    try {
+      const result = await completePayoutExecution(pool, req.params.id, req.body || {}, {
+        user_id: req.user?.id ?? req.user?.user_id ?? null,
+        user_type: req.user?.type ?? null,
+      });
+
+      if (!result) {
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'PAYOUT_EXECUTION_NOT_FOUND',
+        });
+      }
+
+      return safeJson(res, 200, {
+        ok: true,
+        ...result,
+      });
+    } catch (err) {
+      if (err && String(err.code || '').startsWith('MONEY_CORE_')) {
+        return safeJson(res, err.statusCode || 403, {
+          ok: false,
+          error: err.code,
+          message: err.message,
+        });
+      }
+      if (err && err.statusCode) {
+        return safeJson(res, err.statusCode, {
+          ok: false,
+          error: err.code || 'PAYOUT_EXECUTION_INVALID',
+          message: err.message,
+        });
+      }
+      return next(err);
+    }
+  });
+
+  r.post('/money-core/payout-executions/:id/fail', async (req, res, next) => {
+    try {
+      const result = await failPayoutExecution(pool, req.params.id, req.body || {}, {
+        user_id: req.user?.id ?? req.user?.user_id ?? null,
+        user_type: req.user?.type ?? null,
+      });
+
+      if (!result) {
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'PAYOUT_EXECUTION_NOT_FOUND',
+        });
+      }
+
+      return safeJson(res, 200, {
+        ok: true,
+        ...result,
+      });
+    } catch (err) {
+      if (err && String(err.code || '').startsWith('MONEY_CORE_')) {
+        return safeJson(res, err.statusCode || 403, {
+          ok: false,
+          error: err.code,
+          message: err.message,
+        });
+      }
+      if (err && err.statusCode) {
+        return safeJson(res, err.statusCode, {
+          ok: false,
+          error: err.code || 'PAYOUT_EXECUTION_INVALID',
+          message: err.message,
+        });
+      }
       return next(err);
     }
   });
