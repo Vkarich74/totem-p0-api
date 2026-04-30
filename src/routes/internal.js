@@ -584,7 +584,7 @@ if(!slugColumn){
 return null;
 }
 
-const fields = ["id", "role"];
+const fields = ["id", "role", "enabled"];
 if(selectMasterSlug){
 fields.push("master_slug");
 }
