@@ -738,6 +738,27 @@ return {
 };
 }
 
+async function insertAuthAuditEvent(db, { eventType, actor, userId, data }){
+try{
+await db.query(`
+INSERT INTO public.audit_events(
+event_type,
+actor,
+core_user_id,
+data
+)
+VALUES($1, $2, $3, $4)
+`, [
+  String(eventType || "").trim(),
+  String(actor || "").trim(),
+  Number.isInteger(Number(userId)) ? Number(userId) : null,
+  data || {}
+]);
+}catch(err){
+console.error("AUTH_AUDIT_EVENT_FAILED", err);
+}
+}
+
 async function createAuthUserForRole(db, { target, role, ownerSlug }){
 const hasMasterSlug = await authUsersHasColumn(db, "master_slug");
 const hasSalonSlug = await authUsersHasColumn(db, "salon_slug");
@@ -2016,6 +2037,18 @@ r.post("/auth/password/reset/start", async (req,res)=>{
       }));
     }
 
+    await insertAuthAuditEvent(db, {
+      eventType: "password_reset_requested",
+      actor: "public",
+      userId: Number(user.id),
+      data: {
+        login: authTarget.value,
+        role: requestedRole,
+        slug: requestedOwnerSlug,
+        channel
+      }
+    });
+
     const otpResult = await issueAuthOtp(db, {
       target: authTarget.value,
       purpose:"password_reset",
@@ -2068,6 +2101,17 @@ r.post("/auth/password/reset/finish", async (req,res)=>{
     }
 
     if(!password || password.length < 8){
+      await insertAuthAuditEvent(db, {
+        eventType: "password_reset_failed",
+        actor: "public",
+        userId: null,
+        data: {
+          login: authTarget.value,
+          role: requestedRole,
+          slug: requestedOwnerSlug,
+          reason: "PASSWORD_INVALID"
+        }
+      });
       return res.status(400).json({
         ok:false,
         error:"PASSWORD_INVALID"
@@ -2091,6 +2135,17 @@ r.post("/auth/password/reset/finish", async (req,res)=>{
 
     if(!user?.id){
       await db.query("ROLLBACK");
+      await insertAuthAuditEvent(db, {
+        eventType: "password_reset_failed",
+        actor: "public",
+        userId: null,
+        data: {
+          login: authTarget.value,
+          role: requestedRole,
+          slug: requestedOwnerSlug,
+          reason: "AUTH_USER_NOT_FOUND"
+        }
+      });
       return res.status(401).json({
         ok:false,
         error:"AUTH_USER_NOT_FOUND"
@@ -2113,6 +2168,17 @@ r.post("/auth/password/reset/finish", async (req,res)=>{
 
     if(!otp){
       await db.query("ROLLBACK");
+      await insertAuthAuditEvent(db, {
+        eventType: "password_reset_failed",
+        actor: "public",
+        userId: Number(user.id),
+        data: {
+          login: authTarget.value,
+          role: requestedRole,
+          slug: requestedOwnerSlug,
+          reason: "OTP_INVALID"
+        }
+      });
       return res.status(401).json({
         ok:false,
         error:"OTP_INVALID"
@@ -2121,6 +2187,17 @@ r.post("/auth/password/reset/finish", async (req,res)=>{
 
     if(otp.blocked_until && new Date(otp.blocked_until).getTime() > Date.now()){
       await db.query("ROLLBACK");
+      await insertAuthAuditEvent(db, {
+        eventType: "password_reset_failed",
+        actor: "public",
+        userId: Number(user.id),
+        data: {
+          login: authTarget.value,
+          role: requestedRole,
+          slug: requestedOwnerSlug,
+          reason: "OTP_BLOCKED"
+        }
+      });
       return res.status(429).json({
         ok:false,
         error:"OTP_BLOCKED",
@@ -2130,6 +2207,17 @@ r.post("/auth/password/reset/finish", async (req,res)=>{
 
     if(otp.expires_at && new Date(otp.expires_at).getTime() <= Date.now()){
       await db.query("ROLLBACK");
+      await insertAuthAuditEvent(db, {
+        eventType: "password_reset_failed",
+        actor: "public",
+        userId: Number(user.id),
+        data: {
+          login: authTarget.value,
+          role: requestedRole,
+          slug: requestedOwnerSlug,
+          reason: "OTP_EXPIRED"
+        }
+      });
       return res.status(401).json({
         ok:false,
         error:"OTP_EXPIRED"
@@ -2208,6 +2296,18 @@ r.post("/auth/password/reset/finish", async (req,res)=>{
     `,[otp.id, Number(user.id)]);
 
     await db.query("COMMIT");
+
+    await insertAuthAuditEvent(db, {
+      eventType: "password_changed",
+      actor: "public",
+      userId: Number(user.id),
+      data: {
+        login: authTarget.value,
+        role: requestedRole,
+        slug: requestedOwnerSlug,
+        reason: "password_reset"
+      }
+    });
 
     return res.json({ ok:true });
   }catch(err){
