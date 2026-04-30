@@ -31,6 +31,7 @@ import buildOneTimeChargeHistoryRouter from "./internal/one-time-charge-history.
 import buildProvisionRouter from "./internal/provision.js";
 import buildEntryRouter from "./internal/entry.js";
 import buildTemplatesRouter from "./internal/templates.js";
+import buildMoneyCoreRouter from "./internal/money-core.js";
 
 export function createInternalRouter({ rlInternal } = {}){
 
@@ -58,6 +59,8 @@ adminProtectedContainer.use('/moderation', moderationRouter);
 adminProtectedContainer.use('/messages', messagesRouter);
 const adminOpenOwnerRouter = buildAdminOpenOwnerRouter(pool, internalReadRateLimit);
 adminProtectedContainer.use('/open-owner', adminOpenOwnerRouter);
+const moneyCoreRouter = buildMoneyCoreRouter(pool);
+r.use(moneyCoreRouter);
 
 const AUTH_OTP_TTL_MINUTES = 30;
 const AUTH_OTP_BLOCK_MINUTES = 10;
