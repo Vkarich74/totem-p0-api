@@ -8,6 +8,13 @@ import {
   listProviderEvents,
   getProviderEventById,
 } from '../../money-core/providerEvents.service.js';
+import {
+  createManualSettlement,
+  listProviderSettlements,
+  getProviderSettlementById,
+  confirmBankReceived,
+  failProviderSettlement,
+} from '../../money-core/settlements.service.js';
 
 const MONEY_CORE_TABLES = Object.freeze([
   'money_providers',
@@ -208,6 +215,114 @@ function buildMoneyCoreRouter(pool) {
         reprocessed: false,
         reason: 'MONEY_CORE_READ_ONLY',
         event,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/settlements', async (req, res, next) => {
+    try {
+      const settlements = await listProviderSettlements(pool, {
+        provider_code: req.query?.provider_code,
+        status: req.query?.status,
+        settlement_source: req.query?.settlement_source,
+        limit: req.query?.limit,
+        offset: req.query?.offset,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        settlements,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/settlements/:id', async (req, res, next) => {
+    try {
+      const settlement = await getProviderSettlementById(pool, req.params.id);
+
+      if (!settlement) {
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'SETTLEMENT_NOT_FOUND',
+        });
+      }
+
+      return safeJson(res, 200, {
+        ok: true,
+        settlement,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.post('/money-core/settlements/manual', async (req, res, next) => {
+    try {
+      const settlement = await createManualSettlement(pool, req.body || {}, {
+        user_id: req.user?.id ?? req.user?.user_id ?? null,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        settlement,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.post('/money-core/settlements/:id/confirm-bank-received', async (req, res, next) => {
+    try {
+      const settlement = await confirmBankReceived(
+        pool,
+        req.params.id,
+        req.body || {},
+        {
+          user_id: req.user?.id ?? req.user?.user_id ?? null,
+        }
+      );
+
+      if (!settlement) {
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'SETTLEMENT_NOT_FOUND',
+        });
+      }
+
+      return safeJson(res, 200, {
+        ok: true,
+        settlement,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.post('/money-core/settlements/:id/fail', async (req, res, next) => {
+    try {
+      const settlement = await failProviderSettlement(
+        pool,
+        req.params.id,
+        req.body || {},
+        {
+          user_id: req.user?.id ?? req.user?.user_id ?? null,
+        }
+      );
+
+      if (!settlement) {
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'SETTLEMENT_NOT_FOUND',
+        });
+      }
+
+      return safeJson(res, 200, {
+        ok: true,
+        settlement,
       });
     } catch (err) {
       return next(err);
