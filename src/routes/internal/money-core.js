@@ -38,6 +38,11 @@ import {
   getWithdrawSettings,
   upsertWithdrawSettings,
 } from '../../money-core/withdrawDestinations.service.js';
+import {
+  listWithdrawRequests,
+  getWithdrawRequestById,
+  createWithdrawRequest,
+} from '../../money-core/withdrawRequests.service.js';
 
 const MONEY_CORE_TABLES = Object.freeze([
   'money_providers',
@@ -751,6 +756,75 @@ function buildMoneyCoreRouter(pool) {
           message: err.message,
         });
       }
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/owners/:ownerType/:ownerId/withdraw-requests', async (req, res, next) => {
+    try {
+      const requests = await listWithdrawRequests(pool, req.params.ownerType, req.params.ownerId, {
+        status: req.query?.status,
+        destination_id: req.query?.destination_id,
+        limit: req.query?.limit,
+        offset: req.query?.offset,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        requests,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.post('/money-core/owners/:ownerType/:ownerId/withdraw-requests', async (req, res, next) => {
+    try {
+      const result = await createWithdrawRequest(pool, req.params.ownerType, req.params.ownerId, req.body || {}, {
+        user_id: req.user?.id ?? req.user?.user_id ?? null,
+        user_type: req.user?.type ?? null,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        request: result.request,
+        ledger: result.ledger,
+      });
+    } catch (err) {
+      if (err && String(err.code || '').startsWith('MONEY_CORE_')) {
+        return safeJson(res, err.statusCode || 403, {
+          ok: false,
+          error: err.code,
+          message: err.message,
+        });
+      }
+      if (err && err.statusCode) {
+        return safeJson(res, err.statusCode, {
+          ok: false,
+          error: err.code || 'WITHDRAW_REQUEST_INVALID',
+          message: err.message,
+        });
+      }
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/withdraw-requests/:id', async (req, res, next) => {
+    try {
+      const request = await getWithdrawRequestById(pool, req.params.id);
+
+      if (!request) {
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'WITHDRAW_REQUEST_NOT_FOUND',
+        });
+      }
+
+      return safeJson(res, 200, {
+        ok: true,
+        request,
+      });
+    } catch (err) {
       return next(err);
     }
   });
