@@ -28,6 +28,16 @@ import {
   rebuildOwnerBalanceFromLedger,
   createMoneyLedgerMovement,
 } from '../../money-core/ledger.service.js';
+import {
+  listDestinationProviders,
+  listWithdrawDestinations,
+  getWithdrawDestinationById,
+  createWithdrawDestination,
+  updateWithdrawDestination,
+  archiveWithdrawDestination,
+  getWithdrawSettings,
+  upsertWithdrawSettings,
+} from '../../money-core/withdrawDestinations.service.js';
 
 const MONEY_CORE_TABLES = Object.freeze([
   'money_providers',
@@ -553,6 +563,194 @@ function buildMoneyCoreRouter(pool) {
         });
       }
 
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/destination-providers', async (req, res, next) => {
+    try {
+      const providers = await listDestinationProviders(pool, {
+        method: req.query?.method,
+        enabled: req.query?.enabled,
+        country: req.query?.country,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        providers,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/owners/:ownerType/:ownerId/withdraw-destinations', async (req, res, next) => {
+    try {
+      const destinations = await listWithdrawDestinations(pool, req.params.ownerType, req.params.ownerId, {
+        method: req.query?.method,
+        status: req.query?.status,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        destinations,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.post('/money-core/owners/:ownerType/:ownerId/withdraw-destinations', async (req, res, next) => {
+    try {
+      const destination = await createWithdrawDestination(pool, req.params.ownerType, req.params.ownerId, req.body || {}, {
+        user_id: req.user?.id ?? req.user?.user_id ?? null,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        destination,
+      });
+    } catch (err) {
+      if (err && String(err.code || '').startsWith('MONEY_CORE_')) {
+        return safeJson(res, err.statusCode || 403, {
+          ok: false,
+          error: err.code,
+          message: err.message,
+        });
+      }
+      if (err && err.statusCode) {
+        return safeJson(res, err.statusCode, {
+          ok: false,
+          error: err.code || 'WITHDRAW_DESTINATION_INVALID',
+          message: err.message,
+        });
+      }
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/withdraw-destinations/:id', async (req, res, next) => {
+    try {
+      const destination = await getWithdrawDestinationById(pool, req.params.id);
+      if (!destination) {
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'WITHDRAW_DESTINATION_NOT_FOUND',
+        });
+      }
+
+      return safeJson(res, 200, {
+        ok: true,
+        destination,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.patch('/money-core/withdraw-destinations/:id', async (req, res, next) => {
+    try {
+      const destination = await updateWithdrawDestination(pool, req.params.id, req.body || {}, {
+        user_id: req.user?.id ?? req.user?.user_id ?? null,
+      });
+
+      if (!destination) {
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'WITHDRAW_DESTINATION_NOT_FOUND',
+        });
+      }
+
+      return safeJson(res, 200, {
+        ok: true,
+        destination,
+      });
+    } catch (err) {
+      if (err && String(err.code || '').startsWith('MONEY_CORE_')) {
+        return safeJson(res, err.statusCode || 403, {
+          ok: false,
+          error: err.code,
+          message: err.message,
+        });
+      }
+      if (err && err.statusCode) {
+        return safeJson(res, err.statusCode, {
+          ok: false,
+          error: err.code || 'WITHDRAW_DESTINATION_INVALID',
+          message: err.message,
+        });
+      }
+      return next(err);
+    }
+  });
+
+  r.post('/money-core/withdraw-destinations/:id/archive', async (req, res, next) => {
+    try {
+      const destination = await archiveWithdrawDestination(pool, req.params.id, {
+        user_id: req.user?.id ?? req.user?.user_id ?? null,
+      });
+
+      if (!destination) {
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'WITHDRAW_DESTINATION_NOT_FOUND',
+        });
+      }
+
+      return safeJson(res, 200, {
+        ok: true,
+        destination,
+      });
+    } catch (err) {
+      if (err && String(err.code || '').startsWith('MONEY_CORE_')) {
+        return safeJson(res, err.statusCode || 403, {
+          ok: false,
+          error: err.code,
+          message: err.message,
+        });
+      }
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/owners/:ownerType/:ownerId/withdraw-settings', async (req, res, next) => {
+    try {
+      const settings = await getWithdrawSettings(pool, req.params.ownerType, req.params.ownerId);
+
+      return safeJson(res, 200, {
+        ok: true,
+        settings,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.patch('/money-core/owners/:ownerType/:ownerId/withdraw-settings', async (req, res, next) => {
+    try {
+      const settings = await upsertWithdrawSettings(pool, req.params.ownerType, req.params.ownerId, req.body || {}, {
+        user_id: req.user?.id ?? req.user?.user_id ?? null,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        settings,
+      });
+    } catch (err) {
+      if (err && String(err.code || '').startsWith('MONEY_CORE_')) {
+        return safeJson(res, err.statusCode || 403, {
+          ok: false,
+          error: err.code,
+          message: err.message,
+        });
+      }
+      if (err && err.statusCode) {
+        return safeJson(res, err.statusCode, {
+          ok: false,
+          error: err.code || 'WITHDRAW_SETTINGS_INVALID',
+          message: err.message,
+        });
+      }
       return next(err);
     }
   });
