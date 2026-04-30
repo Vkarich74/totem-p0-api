@@ -15,6 +15,12 @@ import {
   confirmBankReceived,
   failProviderSettlement,
 } from '../../money-core/settlements.service.js';
+import {
+  listSplitAllocations,
+  getSplitAllocationById,
+  previewSettlementSplit,
+  createSettlementSplitAllocations,
+} from '../../money-core/split.service.js';
 
 const MONEY_CORE_TABLES = Object.freeze([
   'money_providers',
@@ -325,6 +331,104 @@ function buildMoneyCoreRouter(pool) {
         settlement,
       });
     } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/split-allocations', async (req, res, next) => {
+    try {
+      const allocations = await listSplitAllocations(pool, {
+        provider_settlement_id: req.query?.provider_settlement_id,
+        payment_id: req.query?.payment_id,
+        booking_id: req.query?.booking_id,
+        owner_type: req.query?.owner_type,
+        owner_id: req.query?.owner_id,
+        status: req.query?.status,
+        limit: req.query?.limit,
+        offset: req.query?.offset,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        allocations,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/split-allocations/:id', async (req, res, next) => {
+    try {
+      const allocation = await getSplitAllocationById(pool, req.params.id);
+
+      if (!allocation) {
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'SPLIT_ALLOCATION_NOT_FOUND',
+        });
+      }
+
+      return safeJson(res, 200, {
+        ok: true,
+        allocation,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.post('/money-core/settlements/:id/split/preview', async (req, res, next) => {
+    try {
+      const preview = await previewSettlementSplit(pool, req.params.id, req.body || {});
+
+      if (!preview) {
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'SETTLEMENT_NOT_FOUND',
+        });
+      }
+
+      return safeJson(res, 200, preview);
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.post('/money-core/settlements/:id/split/apply', async (req, res, next) => {
+    try {
+      const settlement = await createSettlementSplitAllocations(pool, req.params.id, req.body || {}, {
+        user_id: req.user?.id ?? req.user?.user_id ?? null,
+        user_type: req.user?.type ?? null,
+      });
+
+      if (!settlement) {
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'SETTLEMENT_NOT_FOUND',
+        });
+      }
+
+      return safeJson(res, 200, {
+        ok: true,
+        settlement,
+      });
+    } catch (err) {
+      if (err && String(err.code || '').startsWith('MONEY_CORE_')) {
+        return safeJson(res, 403, {
+          ok: false,
+          error: err.code,
+          message: err.message,
+        });
+      }
+
+      if (err && err.statusCode) {
+        return safeJson(res, err.statusCode, {
+          ok: false,
+          error: err.code || 'SPLIT_ALLOCATION_APPLY_FAILED',
+          message: err.message,
+        });
+      }
+
       return next(err);
     }
   });
