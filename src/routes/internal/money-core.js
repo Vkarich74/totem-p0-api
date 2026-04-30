@@ -3,6 +3,11 @@
 import express from 'express';
 import { getMoneyCoreFlags } from '../../money-core/config.js';
 import { buildOwnerMoneyCoreSummary } from '../../money-core/balances.service.js';
+import {
+  createProviderEvent,
+  listProviderEvents,
+  getProviderEventById,
+} from '../../money-core/providerEvents.service.js';
 
 const MONEY_CORE_TABLES = Object.freeze([
   'money_providers',
@@ -119,6 +124,90 @@ function buildMoneyCoreRouter(pool) {
         service: 'money-core',
         flags,
         legacyMap: LEGACY_MAP,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/provider-events', async (req, res, next) => {
+    try {
+      const events = await listProviderEvents(pool, {
+        provider_code: req.query?.provider_code,
+        payment_id: req.query?.payment_id,
+        booking_id: req.query?.booking_id,
+        processing_status: req.query?.processing_status,
+        status_normalized: req.query?.status_normalized,
+        event_type: req.query?.event_type,
+        limit: req.query?.limit,
+        offset: req.query?.offset,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        events,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/provider-events/:id', async (req, res, next) => {
+    try {
+      const event = await getProviderEventById(pool, req.params.id);
+
+      if (!event) {
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'PROVIDER_EVENT_NOT_FOUND',
+        });
+      }
+
+      return safeJson(res, 200, {
+        ok: true,
+        event,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.post('/money-core/provider-events/import', async (req, res, next) => {
+    try {
+      const event = await createProviderEvent(pool, req.body || {});
+
+      if (!event) {
+        return safeJson(res, 409, {
+          ok: false,
+          error: 'PROVIDER_EVENT_CONFLICT_UNRESOLVED',
+        });
+      }
+
+      return safeJson(res, 200, {
+        ok: true,
+        event,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.post('/money-core/provider-events/:id/reprocess', async (req, res, next) => {
+    try {
+      const event = await getProviderEventById(pool, req.params.id);
+
+      if (!event) {
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'PROVIDER_EVENT_NOT_FOUND',
+        });
+      }
+
+      return safeJson(res, 200, {
+        ok: true,
+        reprocessed: false,
+        reason: 'MONEY_CORE_READ_ONLY',
+        event,
       });
     } catch (err) {
       return next(err);
