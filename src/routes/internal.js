@@ -1563,6 +1563,98 @@ r.post("/auth/logout-all", async (req,res)=>{
   }
 });
 
+r.get("/auth/sessions", async (req,res)=>{
+  const db = await pool.connect();
+  try{
+    if(!req.auth?.user_id){
+      return res.status(401).json({
+        ok:false,
+        error:"NO_AUTH"
+      });
+    }
+
+    const result = await db.query(`
+      SELECT id, created_at, last_seen_at, expires_at, ip_address, user_agent
+      FROM public.auth_sessions
+      WHERE user_id = $1
+      AND revoked_at IS NULL
+      ORDER BY last_seen_at DESC
+    `,[Number(req.auth.user_id)]);
+
+    const currentSessionId = String(req.auth.session_id || "");
+
+    return res.json({
+      ok:true,
+      sessions:(result.rows || []).map((session) => ({
+        ...session,
+        current: String(session.id || "") === currentSessionId
+      }))
+    });
+  }catch(err){
+    console.error("AUTH_SESSIONS_ERROR", err);
+    return res.status(500).json({
+      ok:false,
+      error:"AUTH_SESSIONS_FAILED"
+    });
+  }finally{
+    db.release();
+  }
+});
+
+r.post("/auth/sessions/:sessionId/revoke", async (req,res)=>{
+  const db = await pool.connect();
+  try{
+    if(!req.auth?.user_id){
+      return res.status(401).json({
+        ok:false,
+        error:"NO_AUTH"
+      });
+    }
+
+    const sessionId = String(req.params?.sessionId || "").trim();
+
+    if(!sessionId){
+      return res.status(400).json({
+        ok:false,
+        error:"SESSION_ID_REQUIRED"
+      });
+    }
+
+    if(sessionId === String(req.auth.session_id || "")){
+      return res.status(400).json({
+        ok:false,
+        error:"USE_LOGOUT_FOR_CURRENT_SESSION"
+      });
+    }
+
+    const result = await db.query(`
+      UPDATE public.auth_sessions
+      SET revoked_at=NOW(),
+          revoked_reason='session_revoke'
+      WHERE id=$1
+      AND user_id=$2
+      AND revoked_at IS NULL
+    `,[sessionId, Number(req.auth.user_id)]);
+
+    if(!result.rowCount){
+      return res.status(404).json({
+        ok:false,
+        error:"SESSION_NOT_FOUND"
+      });
+    }
+
+    return res.json({ ok:true });
+  }catch(err){
+    console.error("AUTH_SESSION_REVOKE_ERROR", err);
+    return res.status(500).json({
+      ok:false,
+      error:"AUTH_SESSION_REVOKE_FAILED"
+    });
+  }finally{
+    db.release();
+  }
+});
+
 r.post("/auth/start", async (req,res)=>{
   const db = await pool.connect();
   try{
