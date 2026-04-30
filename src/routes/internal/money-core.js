@@ -21,6 +21,13 @@ import {
   previewSettlementSplit,
   createSettlementSplitAllocations,
 } from '../../money-core/split.service.js';
+import {
+  listMoneyLedgerEntries,
+  getMoneyLedgerEntryById,
+  getOwnerMoneyLedger,
+  rebuildOwnerBalanceFromLedger,
+  createMoneyLedgerMovement,
+} from '../../money-core/ledger.service.js';
 
 const MONEY_CORE_TABLES = Object.freeze([
   'money_providers',
@@ -425,6 +432,123 @@ function buildMoneyCoreRouter(pool) {
         return safeJson(res, err.statusCode, {
           ok: false,
           error: err.code || 'SPLIT_ALLOCATION_APPLY_FAILED',
+          message: err.message,
+        });
+      }
+
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/ledger', async (req, res, next) => {
+    try {
+      const entries = await listMoneyLedgerEntries(pool, {
+        owner_type: req.query?.owner_type,
+        owner_id: req.query?.owner_id,
+        money_zone: req.query?.money_zone,
+        direction: req.query?.direction,
+        source_type: req.query?.source_type,
+        source_id: req.query?.source_id,
+        entry_group_id: req.query?.entry_group_id,
+        currency: req.query?.currency,
+        limit: req.query?.limit,
+        offset: req.query?.offset,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        entries,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/ledger/:id', async (req, res, next) => {
+    try {
+      const entry = await getMoneyLedgerEntryById(pool, req.params.id);
+
+      if (!entry) {
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'MONEY_LEDGER_ENTRY_NOT_FOUND',
+        });
+      }
+
+      return safeJson(res, 200, {
+        ok: true,
+        entry,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/owners/:ownerType/:ownerId/ledger', async (req, res, next) => {
+    try {
+      const entries = await getOwnerMoneyLedger(pool, req.params.ownerType, req.params.ownerId, {
+        money_zone: req.query?.money_zone,
+        direction: req.query?.direction,
+        source_type: req.query?.source_type,
+        source_id: req.query?.source_id,
+        limit: req.query?.limit,
+        offset: req.query?.offset,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        entries,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.post('/money-core/owners/:ownerType/:ownerId/balance/rebuild', async (req, res, next) => {
+    try {
+      const balance = await rebuildOwnerBalanceFromLedger(
+        pool,
+        req.params.ownerType,
+        req.params.ownerId,
+        req.body?.currency || 'KGS',
+        {
+          user_id: req.user?.id ?? req.user?.user_id ?? null,
+        }
+      );
+
+      return safeJson(res, 200, {
+        ok: true,
+        balance,
+      });
+    } catch (err) {
+      if (err && String(err.code || '').startsWith('MONEY_CORE_')) {
+        return safeJson(res, err.statusCode || 403, {
+          ok: false,
+          error: err.code,
+          message: err.message,
+        });
+      }
+
+      return next(err);
+    }
+  });
+
+  r.post('/money-core/ledger/movements', async (req, res, next) => {
+    try {
+      const result = await createMoneyLedgerMovement(pool, req.body || {}, {
+        user_id: req.user?.id ?? req.user?.user_id ?? null,
+        user_type: req.user?.type ?? null,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        ...result,
+      });
+    } catch (err) {
+      if (err && String(err.code || '').startsWith('MONEY_CORE_')) {
+        return safeJson(res, err.statusCode || 403, {
+          ok: false,
+          error: err.code,
           message: err.message,
         });
       }
