@@ -51,6 +51,13 @@ import {
   completePayoutExecution,
   failPayoutExecution,
 } from '../../money-core/payoutExecutions.service.js';
+import {
+  listReconciliationRuns,
+  getReconciliationRunById,
+  listReconciliationMismatches,
+  runReconciliation,
+  resolveReconciliationMismatch,
+} from '../../money-core/reconciliation.service.js';
 
 const MONEY_CORE_TABLES = Object.freeze([
   'money_providers',
@@ -1012,6 +1019,133 @@ function buildMoneyCoreRouter(pool) {
         return safeJson(res, err.statusCode, {
           ok: false,
           error: err.code || 'PAYOUT_EXECUTION_INVALID',
+          message: err.message,
+        });
+      }
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/reconciliation', async (req, res, next) => {
+    try {
+      const runs = await listReconciliationRuns(pool, {
+        run_type: req.query?.run_type,
+        status: req.query?.status,
+        provider_code: req.query?.provider_code,
+        limit: req.query?.limit,
+        offset: req.query?.offset,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        runs,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/reconciliation/:id', async (req, res, next) => {
+    try {
+      const run = await getReconciliationRunById(pool, req.params.id);
+
+      if (!run) {
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'RECONCILIATION_RUN_NOT_FOUND',
+        });
+      }
+
+      return safeJson(res, 200, {
+        ok: true,
+        ...run,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/reconciliation-mismatches', async (req, res, next) => {
+    try {
+      const mismatches = await listReconciliationMismatches(pool, {
+        run_id: req.query?.run_id,
+        severity: req.query?.severity,
+        status: req.query?.status,
+        source_type: req.query?.source_type,
+        source_id: req.query?.source_id,
+        limit: req.query?.limit,
+        offset: req.query?.offset,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        mismatches,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.post('/money-core/reconciliation/run', async (req, res, next) => {
+    try {
+      const result = await runReconciliation(pool, req.body || {}, {
+        user_id: req.user?.id ?? req.user?.user_id ?? null,
+        user_type: req.user?.type ?? null,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        ...result,
+      });
+    } catch (err) {
+      if (err && String(err.code || '').startsWith('MONEY_CORE_')) {
+        return safeJson(res, err.statusCode || 403, {
+          ok: false,
+          error: err.code,
+          message: err.message,
+        });
+      }
+      if (err && err.statusCode) {
+        return safeJson(res, err.statusCode, {
+          ok: false,
+          error: err.code || 'RECONCILIATION_INVALID',
+          message: err.message,
+        });
+      }
+      return next(err);
+    }
+  });
+
+  r.post('/money-core/reconciliation-mismatches/:id/resolve', async (req, res, next) => {
+    try {
+      const mismatch = await resolveReconciliationMismatch(pool, req.params.id, req.body || {}, {
+        user_id: req.user?.id ?? req.user?.user_id ?? null,
+        user_type: req.user?.type ?? null,
+      });
+
+      if (!mismatch) {
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'RECONCILIATION_MISMATCH_NOT_FOUND',
+        });
+      }
+
+      return safeJson(res, 200, {
+        ok: true,
+        mismatch,
+      });
+    } catch (err) {
+      if (err && String(err.code || '').startsWith('MONEY_CORE_')) {
+        return safeJson(res, err.statusCode || 403, {
+          ok: false,
+          error: err.code,
+          message: err.message,
+        });
+      }
+      if (err && err.statusCode) {
+        return safeJson(res, err.statusCode, {
+          ok: false,
+          error: err.code || 'RECONCILIATION_INVALID',
           message: err.message,
         });
       }
