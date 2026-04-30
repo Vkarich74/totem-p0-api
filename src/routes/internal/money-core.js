@@ -58,6 +58,14 @@ import {
   runReconciliation,
   resolveReconciliationMismatch,
 } from '../../money-core/reconciliation.service.js';
+import {
+  buildAdminMoneyCoreOverview,
+  listAdminOwnerBalances,
+  listAdminWithdrawRequests,
+  listAdminPayoutExecutions,
+  listAdminReconciliationRuns,
+  listAdminMoneyCoreExceptions,
+} from '../../money-core/adminFinance.service.js';
 
 const MONEY_CORE_TABLES = Object.freeze([
   'money_providers',
@@ -1149,6 +1157,104 @@ function buildMoneyCoreRouter(pool) {
           message: err.message,
         });
       }
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/admin/overview', async (req, res, next) => {
+    try {
+      const data = await buildAdminMoneyCoreOverview(pool);
+      return safeJson(res, 200, {
+        ok: true,
+        data,
+        meta: {},
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/admin/owner-balances', async (req, res, next) => {
+    try {
+      const data = await listAdminOwnerBalances(pool, {
+        owner_type: req.query?.owner_type,
+        owner_id: req.query?.owner_id,
+        status: req.query?.status,
+        provider_code: req.query?.provider_code,
+        severity: req.query?.severity,
+        limit: req.query?.limit,
+        offset: req.query?.offset,
+      });
+      return safeJson(res, 200, { ok: true, data, meta: {} });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/admin/withdraw-requests', async (req, res, next) => {
+    try {
+      const data = await listAdminWithdrawRequests(pool, {
+        owner_type: req.query?.owner_type,
+        owner_id: req.query?.owner_id,
+        status: req.query?.status,
+        provider_code: req.query?.provider_code,
+        severity: req.query?.severity,
+        limit: req.query?.limit,
+        offset: req.query?.offset,
+      });
+      return safeJson(res, 200, { ok: true, data, meta: {} });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/admin/payout-executions', async (req, res, next) => {
+    try {
+      const data = await listAdminPayoutExecutions(pool, {
+        owner_type: req.query?.owner_type,
+        owner_id: req.query?.owner_id,
+        status: req.query?.status,
+        provider_code: req.query?.provider_code,
+        severity: req.query?.severity,
+        limit: req.query?.limit,
+        offset: req.query?.offset,
+      });
+      return safeJson(res, 200, { ok: true, data, meta: {} });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/admin/reconciliation', async (req, res, next) => {
+    try {
+      const data = await listAdminReconciliationRuns(pool, {
+        owner_type: req.query?.owner_type,
+        owner_id: req.query?.owner_id,
+        status: req.query?.status,
+        provider_code: req.query?.provider_code,
+        severity: req.query?.severity,
+        limit: req.query?.limit,
+        offset: req.query?.offset,
+      });
+      return safeJson(res, 200, { ok: true, data, meta: {} });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/admin/exceptions', async (req, res, next) => {
+    try {
+      const data = await listAdminMoneyCoreExceptions(pool, {
+        owner_type: req.query?.owner_type,
+        owner_id: req.query?.owner_id,
+        status: req.query?.status,
+        provider_code: req.query?.provider_code,
+        severity: req.query?.severity,
+        limit: req.query?.limit,
+        offset: req.query?.offset,
+      });
+      return safeJson(res, 200, { ok: true, data, meta: {} });
+    } catch (err) {
       return next(err);
     }
   });
