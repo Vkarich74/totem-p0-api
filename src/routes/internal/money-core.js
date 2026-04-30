@@ -2,6 +2,7 @@
 
 import express from 'express';
 import { getMoneyCoreFlags } from '../../money-core/config.js';
+import { buildOwnerMoneyCoreSummary } from '../../money-core/balances.service.js';
 
 const MONEY_CORE_TABLES = Object.freeze([
   'money_providers',
@@ -119,6 +120,40 @@ function buildMoneyCoreRouter(pool) {
         flags,
         legacyMap: LEGACY_MAP,
       });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/salons/:slug/money-core/summary', async (req, res, next) => {
+    try {
+      const summary = await buildOwnerMoneyCoreSummary(pool, {
+        ownerType: 'salon',
+        slug: req.params.slug,
+      });
+
+      if (!summary.ok) {
+        return safeJson(res, summary.statusCode || 400, summary);
+      }
+
+      return safeJson(res, 200, summary);
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/masters/:slug/money-core/summary', async (req, res, next) => {
+    try {
+      const summary = await buildOwnerMoneyCoreSummary(pool, {
+        ownerType: 'master',
+        slug: req.params.slug,
+      });
+
+      if (!summary.ok) {
+        return safeJson(res, summary.statusCode || 400, summary);
+      }
+
+      return safeJson(res, 200, summary);
     } catch (err) {
       return next(err);
     }
