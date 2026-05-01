@@ -89,6 +89,82 @@ function sanitizeJson(value) {
   return value;
 }
 
+function normalizeActorType(value) {
+  const normalized = normalizeText(value);
+  if (normalized && ['system', 'admin', 'owner', 'provider'].includes(normalized)) {
+    return normalized;
+  }
+  return 'system';
+}
+
+async function insertMoneyAuditEvent(client, payload = {}) {
+  const result = await client.query(
+    `
+    INSERT INTO public.money_audit_events (
+      event_type,
+      actor_type,
+      actor_id,
+      owner_type,
+      owner_id,
+      source_type,
+      source_id,
+      amount,
+      currency,
+      data
+    ) VALUES (
+      $1, $2, $3, $4, $5, $6, $7, $8, 'KGS', $9::jsonb
+    )
+    RETURNING *
+    `,
+    [
+      normalizeText(payload.event_type),
+      normalizeActorType(payload.actor_type),
+      normalizeInt(payload.actor_id),
+      normalizeText(payload.owner_type),
+      normalizeInt(payload.owner_id),
+      normalizeText(payload.source_type),
+      normalizeInt(payload.source_id),
+      normalizeNumber(payload.amount),
+      JSON.stringify(sanitizeJson(payload.data || {})),
+    ]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function insertMoneyReceipt(client, payload = {}) {
+  const result = await client.query(
+    `
+    INSERT INTO public.money_receipts (
+      receipt_type,
+      source_type,
+      source_id,
+      owner_type,
+      owner_id,
+      amount,
+      currency,
+      destination_summary,
+      external_ref,
+      file_url
+    ) VALUES (
+      'payout', 'payout_execution', $1, $2, $3, $4, 'KGS', $5, $6, $7
+    )
+    RETURNING *
+    `,
+    [
+      normalizeInt(payload.source_id),
+      normalizeText(payload.owner_type),
+      normalizeInt(payload.owner_id),
+      normalizeNumber(payload.amount),
+      normalizeText(payload.destination_summary),
+      normalizeText(payload.external_ref),
+      normalizeText(payload.file_url),
+    ]
+  );
+
+  return result.rows[0] || null;
+}
+
 function buildBalanceFromLedgerRows(rows = []) {
   const balance = {
     provider_hold: 0,
@@ -472,6 +548,23 @@ async function createPayoutExecution(pool, input = {}, actor = {}) {
       ]
     );
 
+    await insertMoneyAuditEvent(client, {
+      event_type: 'payout_execution_created',
+      actor_type: actor.user_type,
+      actor_id: actor.user_id,
+      owner_type: withdrawRequest.owner_type,
+      owner_id: withdrawRequest.owner_id,
+      source_type: 'payout_execution',
+      source_id: createResult.rows[0].id,
+      amount,
+      data: {
+        payout: createResult.rows[0],
+        withdraw_request_id: withdrawRequestId,
+        destination_id: withdrawRequest.destination_id,
+        metadata: sanitizeJson(input.metadata_json ?? input.metadata ?? {}),
+      },
+    });
+
     await client.query('COMMIT');
     return createResult.rows[0];
   } catch (error) {
@@ -534,6 +627,23 @@ async function submitManualPayoutExecution(pool, id, input = {}, actor = {}) {
       `,
       [updatedResult.rows[0].withdraw_request_id, payoutId]
     );
+
+    await insertMoneyAuditEvent(client, {
+      event_type: 'payout_execution_submitted',
+      actor_type: actor.user_type,
+      actor_id: actor.user_id,
+      owner_type: payout.owner_type,
+      owner_id: payout.owner_id,
+      source_type: 'payout_execution',
+      source_id: updatedResult.rows[0].id,
+      amount: normalizeNumber(payout.amount),
+      data: {
+        payout: updatedResult.rows[0],
+        previous_status: payout.status,
+        withdraw_request_id: updatedResult.rows[0].withdraw_request_id,
+        payout_provider: normalizeText(input.payout_provider),
+      },
+    });
 
     await client.query('COMMIT');
     return updatedResult.rows[0];
@@ -628,6 +738,35 @@ async function completePayoutExecution(pool, id, input = {}, actor = {}) {
       sanitizeJson(input.metadata_json ?? input.metadata ?? {}),
       actor
     );
+
+    await insertMoneyReceipt(client, {
+      source_id: updatedPayoutResult.rows[0].id,
+      owner_type: payout.owner_type,
+      owner_id: payout.owner_id,
+      amount: normalizeNumber(payout.amount),
+      destination_summary: `provider=${payout.payout_provider}; mode=${payout.payout_mode}; destination_id=${payout.destination_id}`,
+      external_ref: externalRef || bankReference,
+      file_url: normalizeText(input.receipt_url),
+    });
+
+    await insertMoneyAuditEvent(client, {
+      event_type: 'payout_execution_completed',
+      actor_type: actor.user_type,
+      actor_id: actor.user_id,
+      owner_type: payout.owner_type,
+      owner_id: payout.owner_id,
+      source_type: 'payout_execution',
+      source_id: updatedPayoutResult.rows[0].id,
+      amount: normalizeNumber(payout.amount),
+      data: {
+        payout: updatedPayoutResult.rows[0],
+        withdraw_request: updatedWithdrawResult.rows[0],
+        ledger,
+        external_ref: externalRef,
+        bank_reference: bankReference,
+        receipt_url: normalizeText(input.receipt_url),
+      },
+    });
 
     await client.query('COMMIT');
     return {
@@ -724,6 +863,23 @@ async function failPayoutExecution(pool, id, input = {}, actor = {}) {
       sanitizeJson(input.metadata_json ?? input.metadata ?? {}),
       actor
     );
+
+    await insertMoneyAuditEvent(client, {
+      event_type: 'payout_execution_failed',
+      actor_type: actor.user_type,
+      actor_id: actor.user_id,
+      owner_type: payout.owner_type,
+      owner_id: payout.owner_id,
+      source_type: 'payout_execution',
+      source_id: updatedPayoutResult.rows[0].id,
+      amount: normalizeNumber(payout.amount),
+      data: {
+        payout: updatedPayoutResult.rows[0],
+        withdraw_request: updatedWithdrawResult.rows[0],
+        ledger,
+        failure_reason: failureReason,
+      },
+    });
 
     await client.query('COMMIT');
     return {
