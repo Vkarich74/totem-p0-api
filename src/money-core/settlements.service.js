@@ -92,77 +92,91 @@ async function createManualSettlement(pool, input = {}, actor = {}) {
       ? Number(actor.user_id)
       : null;
 
-  const insertResult = await pool.query(
-    `
-    INSERT INTO public.provider_settlements (
-      provider_code,
-      settlement_source,
-      provider_settlement_id,
-      status,
-      amount_gross,
-      amount_fee,
-      amount_net,
-      currency,
-      hold_started_at,
-      hold_until,
-      settlement_eligible_at,
-      requested_at,
-      submitted_at,
-      expected_bank_date,
-      bank_received_at,
-      bank_reference,
-      manual_confirmed_by,
-      manual_confirmed_at,
-      metadata_json,
-      created_at,
-      updated_at
-    ) VALUES (
-      COALESCE($1, 'manual'),
-      COALESCE($2, 'manual'),
-      $3,
-      $4,
-      GREATEST(COALESCE($5, 0), 0),
-      GREATEST(COALESCE($6, 0), 0),
-      GREATEST(COALESCE($7, 0), 0),
-      'KGS',
-      $8::timestamptz,
-      $9::timestamptz,
-      $10::timestamptz,
-      $11::timestamptz,
-      $12::timestamptz,
-      $13::date,
-      $14::timestamptz,
-      $15,
-      $16,
-      CASE WHEN $14::timestamptz IS NOT NULL THEN now() ELSE NULL END,
-      $17::jsonb,
-      now(),
-      now()
-    )
-    RETURNING id
-    `,
-    [
-      normalizeText(input.provider_code) || 'manual',
-      normalizeText(input.settlement_source) || 'manual',
-      normalizeText(input.provider_settlement_id),
-      status,
-      normalizeNumeric(input.amount_gross, 0),
-      normalizeNumeric(input.amount_fee, 0),
-      normalizeNumeric(input.amount_net, 0),
-      input.hold_started_at ?? null,
-      input.hold_until ?? null,
-      input.settlement_eligible_at ?? null,
-      input.requested_at ?? null,
-      input.submitted_at ?? null,
-      input.expected_bank_date ?? null,
-      bankReceivedAt,
-      normalizeText(input.bank_reference),
-      manualConfirmedBy,
-      JSON.stringify(metadataJson),
-    ]
-  );
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-  return fetchSettlementWithItems(pool, insertResult.rows[0].id);
+    const insertResult = await client.query(
+      `
+      INSERT INTO public.provider_settlements (
+        provider_code,
+        settlement_source,
+        provider_settlement_id,
+        status,
+        amount_gross,
+        amount_fee,
+        amount_net,
+        currency,
+        hold_started_at,
+        hold_until,
+        settlement_eligible_at,
+        requested_at,
+        submitted_at,
+        expected_bank_date,
+        bank_received_at,
+        bank_reference,
+        manual_confirmed_by,
+        manual_confirmed_at,
+        metadata_json,
+        created_at,
+        updated_at
+      ) VALUES (
+        COALESCE($1, 'manual'),
+        COALESCE($2, 'manual'),
+        $3,
+        $4,
+        GREATEST(COALESCE($5, 0), 0),
+        GREATEST(COALESCE($6, 0), 0),
+        GREATEST(COALESCE($7, 0), 0),
+        'KGS',
+        $8::timestamptz,
+        $9::timestamptz,
+        $10::timestamptz,
+        $11::timestamptz,
+        $12::timestamptz,
+        $13::date,
+        $14::timestamptz,
+        $15,
+        $16,
+        CASE WHEN $14::timestamptz IS NOT NULL THEN now() ELSE NULL END,
+        $17::jsonb,
+        now(),
+        now()
+      )
+      RETURNING id
+      `,
+      [
+        normalizeText(input.provider_code) || 'manual',
+        normalizeText(input.settlement_source) || 'manual',
+        normalizeText(input.provider_settlement_id),
+        status,
+        normalizeNumeric(input.amount_gross, 0),
+        normalizeNumeric(input.amount_fee, 0),
+        normalizeNumeric(input.amount_net, 0),
+        input.hold_started_at ?? null,
+        input.hold_until ?? null,
+        input.settlement_eligible_at ?? null,
+        input.requested_at ?? null,
+        input.submitted_at ?? null,
+        input.expected_bank_date ?? null,
+        bankReceivedAt,
+        normalizeText(input.bank_reference),
+        manualConfirmedBy,
+        JSON.stringify(metadataJson),
+      ]
+    );
+
+    const settlement = await fetchSettlementWithItems(client, insertResult.rows[0].id);
+    await client.query('COMMIT');
+    return settlement;
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (_) {}
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function listProviderSettlements(pool, filters = {}) {
@@ -224,32 +238,47 @@ async function confirmBankReceived(pool, id, input = {}, actor = {}) {
     return null;
   }
 
-  const settlementResult = await pool.query(
-    `
-    UPDATE public.provider_settlements
-    SET
-      status = 'bank_received',
-      bank_received_at = COALESCE($2::timestamptz, now()),
-      bank_reference = COALESCE($3, bank_reference),
-      manual_confirmed_by = COALESCE($4, manual_confirmed_by),
-      manual_confirmed_at = now(),
-      updated_at = now()
-    WHERE id = $1
-    RETURNING id
-    `,
-    [
-      settlementId,
-      input.bank_received_at ?? null,
-      normalizeText(input.bank_reference),
-      Number.isInteger(Number(actor.user_id)) && Number(actor.user_id) > 0 ? Number(actor.user_id) : null,
-    ]
-  );
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-  if (!settlementResult.rows[0]) {
-    return null;
+    const settlementResult = await client.query(
+      `
+      UPDATE public.provider_settlements
+      SET
+        status = 'bank_received',
+        bank_received_at = COALESCE($2::timestamptz, now()),
+        bank_reference = COALESCE($3, bank_reference),
+        manual_confirmed_by = COALESCE($4, manual_confirmed_by),
+        manual_confirmed_at = now(),
+        updated_at = now()
+      WHERE id = $1
+      RETURNING id
+      `,
+      [
+        settlementId,
+        input.bank_received_at ?? null,
+        normalizeText(input.bank_reference),
+        Number.isInteger(Number(actor.user_id)) && Number(actor.user_id) > 0 ? Number(actor.user_id) : null,
+      ]
+    );
+
+    if (!settlementResult.rows[0]) {
+      await client.query('COMMIT');
+      return null;
+    }
+
+    const settlement = await fetchSettlementWithItems(client, settlementId);
+    await client.query('COMMIT');
+    return settlement;
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (_) {}
+    throw error;
+  } finally {
+    client.release();
   }
-
-  return fetchSettlementWithItems(pool, settlementId);
 }
 
 async function failProviderSettlement(pool, id, input = {}, actor = {}) {
@@ -258,24 +287,39 @@ async function failProviderSettlement(pool, id, input = {}, actor = {}) {
     return null;
   }
 
-  const settlementResult = await pool.query(
-    `
-    UPDATE public.provider_settlements
-    SET
-      status = 'failed',
-      metadata_json = COALESCE(metadata_json, '{}'::jsonb) || jsonb_build_object('failure_reason', COALESCE($2, 'UNKNOWN_FAILURE')),
-      updated_at = now()
-    WHERE id = $1
-    RETURNING id
-    `,
-    [settlementId, normalizeText(input.failure_reason) || 'UNKNOWN_FAILURE']
-  );
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-  if (!settlementResult.rows[0]) {
-    return null;
+    const settlementResult = await client.query(
+      `
+      UPDATE public.provider_settlements
+      SET
+        status = 'failed',
+        metadata_json = COALESCE(metadata_json, '{}'::jsonb) || jsonb_build_object('failure_reason', COALESCE($2, 'UNKNOWN_FAILURE')),
+        updated_at = now()
+      WHERE id = $1
+      RETURNING id
+      `,
+      [settlementId, normalizeText(input.failure_reason) || 'UNKNOWN_FAILURE']
+    );
+
+    if (!settlementResult.rows[0]) {
+      await client.query('COMMIT');
+      return null;
+    }
+
+    const settlement = await fetchSettlementWithItems(client, settlementId);
+    await client.query('COMMIT');
+    return settlement;
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (_) {}
+    throw error;
+  } finally {
+    client.release();
   }
-
-  return fetchSettlementWithItems(pool, settlementId);
 }
 
 export {
