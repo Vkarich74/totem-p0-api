@@ -67,6 +67,8 @@ import {
   listAdminMoneyCoreExceptions,
   listAdminProviderEvents,
   listAdminProviderSettlements,
+  listAdminMoneyReceipts,
+  listAdminMoneyAuditEvents,
 } from '../../money-core/adminFinance.service.js';
 
 const MONEY_CORE_TABLES = Object.freeze([
@@ -1286,6 +1288,43 @@ function buildMoneyCoreRouter(pool) {
         status: req.query?.status,
         settlement_source: req.query?.settlement_source,
         provider_settlement_id: req.query?.provider_settlement_id,
+        limit: req.query?.limit,
+        offset: req.query?.offset,
+      });
+      return safeJson(res, 200, { ok: true, data, meta: {} });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/admin/receipts', async (req, res, next) => {
+    try {
+      const data = await listAdminMoneyReceipts(pool, {
+        receipt_type: req.query?.receipt_type,
+        source_type: req.query?.source_type,
+        source_id: req.query?.source_id,
+        owner_type: req.query?.owner_type,
+        owner_id: req.query?.owner_id,
+        external_ref: req.query?.external_ref,
+        limit: req.query?.limit,
+        offset: req.query?.offset,
+      });
+      return safeJson(res, 200, { ok: true, data, meta: {} });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/admin/audit-events', async (req, res, next) => {
+    try {
+      const data = await listAdminMoneyAuditEvents(pool, {
+        event_type: req.query?.event_type,
+        actor_type: req.query?.actor_type,
+        actor_id: req.query?.actor_id,
+        owner_type: req.query?.owner_type,
+        owner_id: req.query?.owner_id,
+        source_type: req.query?.source_type,
+        source_id: req.query?.source_id,
         limit: req.query?.limit,
         offset: req.query?.offset,
       });

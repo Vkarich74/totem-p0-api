@@ -218,6 +218,74 @@ function buildProviderSettlementsWhere(filters = {}) {
   return { where, values, index: indexState.current };
 }
 
+function buildMoneyReceiptsWhere(filters = {}) {
+  const where = [];
+  const values = [];
+  const indexState = { current: 1 };
+
+  if (filters.receipt_type !== undefined && filters.receipt_type !== null && filters.receipt_type !== '') {
+    pushClause(where, values, indexState, 'receipt_type', normalizeText(filters.receipt_type));
+  }
+
+  if (filters.source_type !== undefined && filters.source_type !== null && filters.source_type !== '') {
+    pushClause(where, values, indexState, 'source_type', normalizeText(filters.source_type));
+  }
+
+  if (filters.source_id !== undefined && filters.source_id !== null && filters.source_id !== '') {
+    pushClause(where, values, indexState, 'source_id', normalizeInt(filters.source_id));
+  }
+
+  if (filters.owner_type !== undefined && filters.owner_type !== null && filters.owner_type !== '') {
+    pushClause(where, values, indexState, 'owner_type', normalizeText(filters.owner_type));
+  }
+
+  if (filters.owner_id !== undefined && filters.owner_id !== null && filters.owner_id !== '') {
+    pushClause(where, values, indexState, 'owner_id', normalizeInt(filters.owner_id));
+  }
+
+  if (filters.external_ref !== undefined && filters.external_ref !== null && filters.external_ref !== '') {
+    pushClause(where, values, indexState, 'external_ref', normalizeText(filters.external_ref));
+  }
+
+  return { where, values, index: indexState.current };
+}
+
+function buildMoneyAuditEventsWhere(filters = {}) {
+  const where = [];
+  const values = [];
+  const indexState = { current: 1 };
+
+  if (filters.event_type !== undefined && filters.event_type !== null && filters.event_type !== '') {
+    pushClause(where, values, indexState, 'event_type', normalizeText(filters.event_type));
+  }
+
+  if (filters.actor_type !== undefined && filters.actor_type !== null && filters.actor_type !== '') {
+    pushClause(where, values, indexState, 'actor_type', normalizeText(filters.actor_type));
+  }
+
+  if (filters.actor_id !== undefined && filters.actor_id !== null && filters.actor_id !== '') {
+    pushClause(where, values, indexState, 'actor_id', normalizeInt(filters.actor_id));
+  }
+
+  if (filters.owner_type !== undefined && filters.owner_type !== null && filters.owner_type !== '') {
+    pushClause(where, values, indexState, 'owner_type', normalizeText(filters.owner_type));
+  }
+
+  if (filters.owner_id !== undefined && filters.owner_id !== null && filters.owner_id !== '') {
+    pushClause(where, values, indexState, 'owner_id', normalizeInt(filters.owner_id));
+  }
+
+  if (filters.source_type !== undefined && filters.source_type !== null && filters.source_type !== '') {
+    pushClause(where, values, indexState, 'source_type', normalizeText(filters.source_type));
+  }
+
+  if (filters.source_id !== undefined && filters.source_id !== null && filters.source_id !== '') {
+    pushClause(where, values, indexState, 'source_id', normalizeInt(filters.source_id));
+  }
+
+  return { where, values, index: indexState.current };
+}
+
 async function buildAdminMoneyCoreOverview(pool) {
   const [
     providerEvents,
@@ -227,6 +295,8 @@ async function buildAdminMoneyCoreOverview(pool) {
     payouts,
     reconciliationRuns,
     reconciliationMismatches,
+    moneyReceipts,
+    moneyAuditEvents,
   ] = await Promise.all([
     pool.query(
       `
@@ -294,6 +364,20 @@ async function buildAdminMoneyCoreOverview(pool) {
       FROM public.money_reconciliation_mismatches
       `
     ),
+    pool.query(
+      `
+      SELECT
+        COUNT(*)::bigint AS total_count
+      FROM public.money_receipts
+      `
+    ),
+    pool.query(
+      `
+      SELECT
+        COUNT(*)::bigint AS total_count
+      FROM public.money_audit_events
+      `
+    ),
   ]);
 
   return {
@@ -304,6 +388,8 @@ async function buildAdminMoneyCoreOverview(pool) {
     payout_executions: payouts.rows[0],
     reconciliation_runs: reconciliationRuns.rows[0],
     reconciliation_mismatches: reconciliationMismatches.rows[0],
+    money_receipts: moneyReceipts.rows[0],
+    money_audit_events: moneyAuditEvents.rows[0],
   };
 }
 
@@ -474,7 +560,55 @@ async function listAdminProviderSettlements(pool, filters = {}) {
   return result.rows;
 }
 
+async function listAdminMoneyReceipts(pool, filters = {}) {
+  const { where, values, index } = buildMoneyReceiptsWhere(filters);
+  const { limit, offset } = safePagination(filters);
+  values.push(limit);
+  const limitIndex = index;
+  values.push(offset);
+  const offsetIndex = index + 1;
+
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM public.money_receipts
+    ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+    ORDER BY id DESC
+    LIMIT $${limitIndex}
+    OFFSET $${offsetIndex}
+    `,
+    values
+  );
+
+  return result.rows;
+}
+
+async function listAdminMoneyAuditEvents(pool, filters = {}) {
+  const { where, values, index } = buildMoneyAuditEventsWhere(filters);
+  const { limit, offset } = safePagination(filters);
+  values.push(limit);
+  const limitIndex = index;
+  values.push(offset);
+  const offsetIndex = index + 1;
+
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM public.money_audit_events
+    ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+    ORDER BY id DESC
+    LIMIT $${limitIndex}
+    OFFSET $${offsetIndex}
+    `,
+    values
+  );
+
+  return result.rows;
+}
+
 export {
+  buildMoneyReceiptsWhere,
+  buildMoneyAuditEventsWhere,
   buildAdminMoneyCoreOverview,
   listAdminOwnerBalances,
   listAdminWithdrawRequests,
@@ -483,4 +617,6 @@ export {
   listAdminMoneyCoreExceptions,
   listAdminProviderEvents,
   listAdminProviderSettlements,
+  listAdminMoneyReceipts,
+  listAdminMoneyAuditEvents,
 };
