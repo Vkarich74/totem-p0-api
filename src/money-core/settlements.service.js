@@ -40,6 +40,49 @@ function sanitizeJson(value) {
   return value;
 }
 
+function normalizeActorType(value) {
+  const normalized = normalizeText(value);
+  if (normalized && ['system', 'admin', 'owner', 'provider'].includes(normalized)) {
+    return normalized;
+  }
+  return 'system';
+}
+
+async function insertMoneyAuditEvent(client, payload = {}) {
+  const result = await client.query(
+    `
+    INSERT INTO public.money_audit_events (
+      event_type,
+      actor_type,
+      actor_id,
+      owner_type,
+      owner_id,
+      source_type,
+      source_id,
+      amount,
+      currency,
+      data
+    ) VALUES (
+      $1, $2, $3, $4, $5, $6, $7, $8, 'KGS', $9::jsonb
+    )
+    RETURNING *
+    `,
+    [
+      normalizeText(payload.event_type),
+      normalizeActorType(payload.actor_type),
+      Number.isFinite(Number(payload.actor_id)) ? Number(payload.actor_id) : null,
+      normalizeText(payload.owner_type),
+      Number.isFinite(Number(payload.owner_id)) ? Number(payload.owner_id) : null,
+      normalizeText(payload.source_type),
+      Number.isFinite(Number(payload.source_id)) ? Number(payload.source_id) : null,
+      normalizeNumeric(payload.amount, null),
+      JSON.stringify(sanitizeJson(payload.data || {})),
+    ]
+  );
+
+  return result.rows[0] || null;
+}
+
 function toSettlementRow(row) {
   if (!row) {
     return null;
@@ -166,6 +209,28 @@ async function createManualSettlement(pool, input = {}, actor = {}) {
       ]
     );
 
+    await insertMoneyAuditEvent(client, {
+      event_type: 'provider_settlement_created',
+      actor_type: actor.user_type,
+      actor_id: actor.user_id,
+      owner_type: null,
+      owner_id: null,
+      source_type: 'provider_settlement',
+      source_id: insertResult.rows[0].id,
+      amount: normalizeNumeric(input.amount_net, 0),
+      data: {
+        provider_code: normalizeText(input.provider_code) || 'manual',
+        settlement_source: normalizeText(input.settlement_source) || 'manual',
+        provider_settlement_id: normalizeText(input.provider_settlement_id),
+        status,
+        amount_gross: normalizeNumeric(input.amount_gross, 0),
+        amount_fee: normalizeNumeric(input.amount_fee, 0),
+        amount_net: normalizeNumeric(input.amount_net, 0),
+        bank_reference: normalizeText(input.bank_reference),
+        metadata: metadataJson,
+      },
+    });
+
     const settlement = await fetchSettlementWithItems(client, insertResult.rows[0].id);
     await client.query('COMMIT');
     return settlement;
@@ -269,6 +334,22 @@ async function confirmBankReceived(pool, id, input = {}, actor = {}) {
     }
 
     const settlement = await fetchSettlementWithItems(client, settlementId);
+    await insertMoneyAuditEvent(client, {
+      event_type: 'provider_settlement_bank_received',
+      actor_type: actor.user_type,
+      actor_id: actor.user_id,
+      owner_type: null,
+      owner_id: null,
+      source_type: 'provider_settlement',
+      source_id: settlementResult.rows[0].id,
+      amount: normalizeNumeric(settlement?.amount_net, null),
+      data: {
+        settlement,
+        bank_received_at: input.bank_received_at ?? null,
+        bank_reference: normalizeText(input.bank_reference),
+        manual_confirmed_by: Number.isInteger(Number(actor.user_id)) && Number(actor.user_id) > 0 ? Number(actor.user_id) : null,
+      },
+    });
     await client.query('COMMIT');
     return settlement;
   } catch (error) {
@@ -310,6 +391,20 @@ async function failProviderSettlement(pool, id, input = {}, actor = {}) {
     }
 
     const settlement = await fetchSettlementWithItems(client, settlementId);
+    await insertMoneyAuditEvent(client, {
+      event_type: 'provider_settlement_failed',
+      actor_type: actor.user_type,
+      actor_id: actor.user_id,
+      owner_type: null,
+      owner_id: null,
+      source_type: 'provider_settlement',
+      source_id: settlementResult.rows[0].id,
+      amount: normalizeNumeric(settlement?.amount_net, null),
+      data: {
+        settlement,
+        failure_reason: normalizeText(input.failure_reason) || 'UNKNOWN_FAILURE',
+      },
+    });
     await client.query('COMMIT');
     return settlement;
   } catch (error) {
