@@ -1,7 +1,14 @@
 'use strict';
 
 import express from 'express';
-import { getMoneyCoreFlags } from '../../money-core/config.js';
+import {
+  getMoneyCoreFlags,
+  assertProviderEventsEnabled,
+  assertProviderSettlementsEnabled,
+  assertWithdrawRequestsEnabled,
+  assertPayoutExecutionsEnabled,
+  assertReconciliationEnabled,
+} from '../../money-core/config.js';
 import { buildOwnerMoneyCoreSummary } from '../../money-core/balances.service.js';
 import {
   createProviderEvent,
@@ -236,6 +243,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/provider-events/import', async (req, res, next) => {
     try {
+      assertProviderEventsEnabled();
       const event = await createProviderEvent(pool, req.body || {});
 
       if (!event) {
@@ -317,6 +325,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/settlements/manual', async (req, res, next) => {
     try {
+      assertProviderSettlementsEnabled();
       const settlement = await createManualSettlement(pool, req.body || {}, {
         user_id: req.user?.id ?? req.user?.user_id ?? null,
       });
@@ -332,6 +341,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/settlements/:id/confirm-bank-received', async (req, res, next) => {
     try {
+      assertProviderSettlementsEnabled();
       const settlement = await confirmBankReceived(
         pool,
         req.params.id,
@@ -359,6 +369,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/settlements/:id/fail', async (req, res, next) => {
     try {
+      assertProviderSettlementsEnabled();
       const settlement = await failProviderSettlement(
         pool,
         req.params.id,
@@ -445,6 +456,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/settlements/:id/split/apply', async (req, res, next) => {
     try {
+      assertProviderSettlementsEnabled();
       const settlement = await createSettlementSplitAllocations(pool, req.params.id, req.body || {}, {
         user_id: req.user?.id ?? req.user?.user_id ?? null,
         user_type: req.user?.type ?? null,
@@ -634,6 +646,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/owners/:ownerType/:ownerId/withdraw-destinations', async (req, res, next) => {
     try {
+      assertWithdrawRequestsEnabled();
       const destination = await createWithdrawDestination(pool, req.params.ownerType, req.params.ownerId, req.body || {}, {
         user_id: req.user?.id ?? req.user?.user_id ?? null,
       });
@@ -682,6 +695,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.patch('/money-core/withdraw-destinations/:id', async (req, res, next) => {
     try {
+      assertWithdrawRequestsEnabled();
       const destination = await updateWithdrawDestination(pool, req.params.id, req.body || {}, {
         user_id: req.user?.id ?? req.user?.user_id ?? null,
       });
@@ -718,6 +732,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/withdraw-destinations/:id/archive', async (req, res, next) => {
     try {
+      assertWithdrawRequestsEnabled();
       const destination = await archiveWithdrawDestination(pool, req.params.id, {
         user_id: req.user?.id ?? req.user?.user_id ?? null,
       });
@@ -760,6 +775,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.patch('/money-core/owners/:ownerType/:ownerId/withdraw-settings', async (req, res, next) => {
     try {
+      assertWithdrawRequestsEnabled();
       const settings = await upsertWithdrawSettings(pool, req.params.ownerType, req.params.ownerId, req.body || {}, {
         user_id: req.user?.id ?? req.user?.user_id ?? null,
       });
@@ -807,6 +823,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/owners/:ownerType/:ownerId/withdraw-requests', async (req, res, next) => {
     try {
+      assertWithdrawRequestsEnabled();
       const result = await createWithdrawRequest(pool, req.params.ownerType, req.params.ownerId, req.body || {}, {
         user_id: req.user?.id ?? req.user?.user_id ?? null,
         user_type: req.user?.type ?? null,
@@ -899,6 +916,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/payout-executions', async (req, res, next) => {
     try {
+      assertPayoutExecutionsEnabled();
       const payout = await createPayoutExecution(pool, req.body || {}, {
         user_id: req.user?.id ?? req.user?.user_id ?? null,
         user_type: req.user?.type ?? null,
@@ -929,6 +947,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/payout-executions/:id/submit-manual', async (req, res, next) => {
     try {
+      assertPayoutExecutionsEnabled();
       const payout = await submitManualPayoutExecution(pool, req.params.id, req.body || {}, {
         user_id: req.user?.id ?? req.user?.user_id ?? null,
         user_type: req.user?.type ?? null,
@@ -966,6 +985,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/payout-executions/:id/complete', async (req, res, next) => {
     try {
+      assertPayoutExecutionsEnabled();
       const result = await completePayoutExecution(pool, req.params.id, req.body || {}, {
         user_id: req.user?.id ?? req.user?.user_id ?? null,
         user_type: req.user?.type ?? null,
@@ -1003,6 +1023,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/payout-executions/:id/fail', async (req, res, next) => {
     try {
+      assertPayoutExecutionsEnabled();
       const result = await failPayoutExecution(pool, req.params.id, req.body || {}, {
         user_id: req.user?.id ?? req.user?.user_id ?? null,
         user_type: req.user?.type ?? null,
@@ -1100,6 +1121,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/reconciliation/run', async (req, res, next) => {
     try {
+      assertReconciliationEnabled();
       const result = await runReconciliation(pool, req.body || {}, {
         user_id: req.user?.id ?? req.user?.user_id ?? null,
         user_type: req.user?.type ?? null,
@@ -1130,6 +1152,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/reconciliation-mismatches/:id/resolve', async (req, res, next) => {
     try {
+      assertReconciliationEnabled();
       const mismatch = await resolveReconciliationMismatch(pool, req.params.id, req.body || {}, {
         user_id: req.user?.id ?? req.user?.user_id ?? null,
         user_type: req.user?.type ?? null,

@@ -82,10 +82,95 @@ function assertMoneyCoreWriteAllowed(env = process.env) {
   return true;
 }
 
+function assertMoneyCoreFeatureEnabled(flagName, errorCode, message, env = process.env) {
+  assertMoneyCoreWriteAllowed(env);
+
+  const flags = getMoneyCoreFlags(env);
+
+  if (!flags[flagName]) {
+    const err = new Error(message);
+    err.code = errorCode;
+    throw err;
+  }
+
+  return true;
+}
+
+function assertProviderEventsEnabled(env = process.env) {
+  return assertMoneyCoreFeatureEnabled(
+    'PROVIDER_EVENTS_ENABLED',
+    'PROVIDER_EVENTS_DISABLED',
+    'Money Core provider events are disabled',
+    env,
+  );
+}
+
+function assertProviderSettlementsEnabled(env = process.env) {
+  return assertMoneyCoreFeatureEnabled(
+    'PROVIDER_SETTLEMENTS_ENABLED',
+    'PROVIDER_SETTLEMENTS_DISABLED',
+    'Money Core provider settlements are disabled',
+    env,
+  );
+}
+
+function assertWithdrawRequestsEnabled(env = process.env) {
+  return assertMoneyCoreFeatureEnabled(
+    'WITHDRAW_REQUESTS_V2_ENABLED',
+    'WITHDRAW_REQUESTS_V2_DISABLED',
+    'Money Core withdraw requests v2 are disabled',
+    env,
+  );
+}
+
+function assertPayoutExecutionsEnabled(env = process.env) {
+  return assertMoneyCoreFeatureEnabled(
+    'PAYOUT_EXECUTIONS_ENABLED',
+    'PAYOUT_EXECUTIONS_DISABLED',
+    'Money Core payout executions are disabled',
+    env,
+  );
+}
+
+function assertReconciliationEnabled(env = process.env) {
+  return assertMoneyCoreFeatureEnabled(
+    'RECONCILIATION_ENABLED',
+    'RECONCILIATION_DISABLED',
+    'Money Core reconciliation is disabled',
+    env,
+  );
+}
+
+function assertAutoPayoutEnabled(env = process.env) {
+  return assertMoneyCoreFeatureEnabled(
+    'AUTO_PAYOUT_ENABLED',
+    'AUTO_PAYOUT_DISABLED',
+    'Money Core auto payout is disabled',
+    env,
+  );
+}
+
+function assertScheduledWithdrawsEnabled(env = process.env) {
+  return assertMoneyCoreFeatureEnabled(
+    'SCHEDULED_WITHDRAWS_ENABLED',
+    'SCHEDULED_WITHDRAWS_DISABLED',
+    'Money Core scheduled withdraws are disabled',
+    env,
+  );
+}
+
 export {
   MONEY_CORE_DEFAULT_FLAGS,
   getMoneyCoreFlags,
   isMoneyCoreEnabled,
   isMoneyCoreReadOnly,
   assertMoneyCoreWriteAllowed,
+  assertMoneyCoreFeatureEnabled,
+  assertProviderEventsEnabled,
+  assertProviderSettlementsEnabled,
+  assertWithdrawRequestsEnabled,
+  assertPayoutExecutionsEnabled,
+  assertReconciliationEnabled,
+  assertAutoPayoutEnabled,
+  assertScheduledWithdrawsEnabled,
 };
