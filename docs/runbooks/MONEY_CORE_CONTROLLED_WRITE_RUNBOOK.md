@@ -203,5 +203,88 @@ Production DB контракт на receipt уже существует:
 - recorded counts сравниваются с baseline;
 - подтверждено, что real salon/master money не затронуты.
 
+## 14. Production Enablement Checklist
+- Перед любым write window должен быть explicit approval.
+- Repo clean и origin synced.
+- Production flags safe/off подтверждены через `/internal/money-core/flags`.
+- Baseline SQL снят до write.
+- Smoke owner synthetic/system, real salon/master money не используется.
+- Выбран только один write-контур на одно окно.
+- Rollback sequence подготовлен до write.
+- Admin token/session проверен.
+- PASS/FAIL критерии известны до запуска.
+- Post-enable readback SQL обязателен.
+- Если любое условие не выполнено — write window не открывать.
+
+## 15. Smoke Matrix
+1. Provider settlement negative smoke:
+   - flags OFF
+   - expected: `403 MONEY_CORE_DISABLED`
+   - DB writes: `0`
+   - status: `completed/pass`
+
+2. Provider settlement positive smoke:
+   - requires explicit write window
+   - flags needed:
+     - `MONEY_CORE_ENABLED=true`
+     - `MONEY_CORE_READ_ONLY=false`
+     - `MONEY_CORE_WRITE_ENABLED=true`
+     - `PROVIDER_SETTLEMENTS_ENABLED=true`
+   - expected tables:
+     - `provider_settlements`
+     - `money_audit_events`
+   - forbidden:
+     - `money_owner_balances`
+     - `money_ledger_entries`
+     - `money_receipts`
+   - status: `deferred`
+
+3. Split apply smoke:
+   - requires provider settlement positive smoke first
+   - use explicit allocations only unless `provider_settlement_items` are proven
+   - expected table:
+     - `money_split_allocations`
+   - forbidden:
+     - `money_owner_balances`
+     - `money_ledger_entries`
+     - `money_receipts`
+   - status: `deferred`
+
+4. Ledger movements runtime proof:
+   - requires global write window plus `MONEY_CORE_LEDGER_MOVEMENTS_ENABLED=false` to prove dedicated gate
+   - expected:
+     - `403 MONEY_CORE_LEDGER_MOVEMENTS_DISABLED`
+   - DB writes: `0`
+   - status: `deferred`
+
+5. Withdraw/payout controlled smoke:
+   - already completed on `system/900001`
+   - real salon/master money touched `0`
+   - status: `completed/pass`
+
+## 16. PASS / FAIL Criteria
+PASS criteria:
+- expected HTTP status returned
+- expected rows created only in allowed tables
+- forbidden tables unchanged
+- balances unchanged unless test explicitly targets balance movement
+- receipts dedupe unchanged
+- duplicates `0 rows`
+- flags rolled back immediately
+- final `/flags` safe/off
+- real salon/master money touched `0`
+- git remains clean unless docs/code patch is expected
+
+FAIL criteria:
+- unexpected `2xx/5xx`
+- HTML error instead of JSON
+- write happened while flags OFF
+- any row appears in forbidden table
+- real salon/master owner touched
+- rollback not completed
+- duplicate receipt appears
+- balance changes outside expected owner
+- unknown audit/receipt side effects
+
 
 
