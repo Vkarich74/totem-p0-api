@@ -73,6 +73,58 @@ function sanitizeJson(value) {
   return value;
 }
 
+function normalizeActorType(value) {
+  const actorType = normalizeText(value);
+  if (actorType === 'system' || actorType === 'admin' || actorType === 'owner' || actorType === 'provider') {
+    return actorType;
+  }
+  return 'system';
+}
+
+async function insertMoneyAuditEvent(client, payload = {}) {
+  const result = await client.query(
+    `
+    INSERT INTO public.money_audit_events (
+      event_type,
+      actor_type,
+      actor_id,
+      owner_type,
+      owner_id,
+      source_type,
+      source_id,
+      amount,
+      currency,
+      data
+    ) VALUES (
+      $1,
+      $2,
+      $3,
+      $4,
+      $5,
+      $6,
+      $7,
+      $8,
+      'KGS',
+      $9::jsonb
+    )
+    RETURNING *
+    `,
+    [
+      normalizeText(payload.event_type),
+      normalizeActorType(payload.actor_type),
+      normalizeInt(payload.actor_id),
+      normalizeText(payload.owner_type),
+      normalizeInt(payload.owner_id),
+      normalizeText(payload.source_type),
+      normalizeInt(payload.source_id),
+      normalizeNumber(payload.amount),
+      JSON.stringify(sanitizeJson(payload.data || {})),
+    ]
+  );
+
+  return result.rows[0] || null;
+}
+
 function buildBalanceFromLedgerRows(rows = []) {
   const balance = {
     provider_hold: 0,
@@ -528,6 +580,27 @@ async function createWithdrawRequest(pool, ownerType, ownerId, input = {}, actor
         entryGroupId,
       ]
     );
+
+    await insertMoneyAuditEvent(client, {
+      event_type: 'withdraw_request_locked',
+      actor_type: actor.user_type,
+      actor_id: actor.user_id,
+      owner_type: owner.owner_type,
+      owner_id: owner.owner_id,
+      source_type: 'withdraw_request',
+      source_id: (updatedRequestResult.rows[0] || request).id,
+      amount,
+      data: {
+        request: updatedRequestResult.rows[0] || request,
+        available_snapshot: availableSnapshot,
+        destination_id: resolvedDestinationId,
+        creation_mode: creationMode,
+        idempotency_key: idempotencyKey,
+        locked_ledger_group_id: entryGroupId,
+        ledger_entry_ids: ledgerEntries.map((row) => row.id),
+        balance: balanceUpsertResult.rows[0],
+      },
+    });
 
     await client.query('COMMIT');
 
