@@ -335,6 +335,13 @@ function buildMoneyCoreRouter(pool) {
         settlement,
       });
     } catch (err) {
+      if (err && String(err.code || "").startsWith("MONEY_CORE_")) {
+        return safeJson(res, err.statusCode || 403, {
+          ok: false,
+          error: err.code,
+          message: err.message,
+        });
+      }
       return next(err);
     }
   });
@@ -363,6 +370,13 @@ function buildMoneyCoreRouter(pool) {
         settlement,
       });
     } catch (err) {
+      if (err && String(err.code || "").startsWith("MONEY_CORE_")) {
+        return safeJson(res, err.statusCode || 403, {
+          ok: false,
+          error: err.code,
+          message: err.message,
+        });
+      }
       return next(err);
     }
   });
@@ -391,6 +405,13 @@ function buildMoneyCoreRouter(pool) {
         settlement,
       });
     } catch (err) {
+      if (err && String(err.code || "").startsWith("MONEY_CORE_")) {
+        return safeJson(res, err.statusCode || 403, {
+          ok: false,
+          error: err.code,
+          message: err.message,
+        });
+      }
       return next(err);
     }
   });
@@ -514,6 +535,13 @@ function buildMoneyCoreRouter(pool) {
         entries,
       });
     } catch (err) {
+      if (err && String(err.code || "").startsWith("MONEY_CORE_")) {
+        return safeJson(res, err.statusCode || 403, {
+          ok: false,
+          error: err.code,
+          message: err.message,
+        });
+      }
       return next(err);
     }
   });
