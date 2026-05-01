@@ -577,6 +577,25 @@ async function resolveReconciliationMismatch(pool, id, input = {}, actor = {}) {
       [mismatchId, status, resolutionNote, normalizeInt(actor.user_id)]
     );
 
+    if (result.rows[0]) {
+      await insertMoneyAuditEvent(client, {
+        event_type: 'reconciliation_mismatch_resolved',
+        actor_type: actor.user_type,
+        actor_id: actor.user_id,
+        owner_type: null,
+        owner_id: null,
+        source_type: 'money_reconciliation_mismatch',
+        source_id: result.rows[0].id,
+        amount: null,
+        data: {
+          mismatch: result.rows[0],
+          status,
+          resolution_note: resolutionNote,
+          resolved_by: normalizeInt(actor.user_id),
+        },
+      });
+    }
+
     await client.query('COMMIT');
     return result.rows[0] || null;
   } catch (error) {
