@@ -559,21 +559,36 @@ async function resolveReconciliationMismatch(pool, id, input = {}, actor = {}) {
     throw error;
   }
 
-  const result = await pool.query(
-    `
-    UPDATE public.money_reconciliation_mismatches
-    SET
-      status = $2,
-      resolution_note = $3,
-      resolved_by = $4,
-      resolved_at = now()
-    WHERE id = $1
-    RETURNING *
-    `,
-    [mismatchId, status, resolutionNote, normalizeInt(actor.user_id)]
-  );
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-  return result.rows[0] || null;
+    const result = await client.query(
+      `
+      UPDATE public.money_reconciliation_mismatches
+      SET
+        status = $2,
+        resolution_note = $3,
+        resolved_by = $4,
+        resolved_at = now()
+      WHERE id = $1
+      RETURNING *
+      `,
+      [mismatchId, status, resolutionNote, normalizeInt(actor.user_id)]
+    );
+
+    await client.query('COMMIT');
+    return result.rows[0] || null;
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (_) {
+      // ignore rollback failure
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export {
