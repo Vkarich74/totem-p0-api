@@ -36,6 +36,56 @@ function normalizeInt(value) {
   return Number.isInteger(numeric) ? numeric : null;
 }
 
+function normalizeActorType(value) {
+  const normalized = normalizeText(value);
+  if (normalized && ['system', 'admin', 'owner', 'provider'].includes(normalized)) {
+    return normalized;
+  }
+  return 'system';
+}
+
+function sanitizeAuditJson(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value;
+  }
+  return {};
+}
+
+async function insertMoneyAuditEvent(client, payload = {}) {
+  const result = await client.query(
+    `
+    INSERT INTO public.money_audit_events (
+      event_type,
+      actor_type,
+      actor_id,
+      owner_type,
+      owner_id,
+      source_type,
+      source_id,
+      amount,
+      currency,
+      data
+    ) VALUES (
+      $1, $2, $3, $4, $5, $6, $7, $8, 'KGS', $9::jsonb
+    )
+    RETURNING *
+    `,
+    [
+      normalizeText(payload.event_type),
+      normalizeActorType(payload.actor_type),
+      normalizeInt(payload.actor_id),
+      normalizeText(payload.owner_type),
+      normalizeInt(payload.owner_id),
+      normalizeText(payload.source_type),
+      normalizeInt(payload.source_id),
+      null,
+      JSON.stringify(sanitizeAuditJson(payload.data || {})),
+    ]
+  );
+
+  return result.rows[0] || null;
+}
+
 function safePagination(filters = {}) {
   const limit = Math.min(Math.max(Number.parseInt(filters.limit, 10) || 100, 1), 500);
   const offset = Math.max(Number.parseInt(filters.offset, 10) || 0, 0);
@@ -411,9 +461,9 @@ async function runReconciliation(pool, input = {}, actor = {}) {
     const mismatchesCount = mismatchInserts.length;
     const completedStatus = mismatchesCount > 0 ? 'completed_with_mismatches' : 'completed';
 
-    const runUpdate = await client.query(
-      `
-      UPDATE public.money_reconciliation_runs
+      const runUpdate = await client.query(
+        `
+        UPDATE public.money_reconciliation_runs
       SET
         status = $2,
         payments_checked = $3,
@@ -435,12 +485,33 @@ async function runReconciliation(pool, input = {}, actor = {}) {
         withdrawsChecked,
         payoutsChecked,
         mismatchesCount,
-      ]
-    );
+        ]
+      );
 
-    await client.query('COMMIT');
-    return {
-      run: runUpdate.rows[0],
+      await insertMoneyAuditEvent(client, {
+        event_type: 'reconciliation_run_completed',
+        actor_type: actor.user_type,
+        actor_id: actor.user_id,
+        owner_type: null,
+        owner_id: null,
+        source_type: 'money_reconciliation_run',
+        source_id: runUpdate.rows[0].id,
+        amount: null,
+        data: {
+          run: runUpdate.rows[0],
+          run_type: runType,
+          provider_code: providerCode,
+          ledger_checked: ledgerChecked,
+          withdraws_checked: withdrawsChecked,
+          payouts_checked: payoutsChecked,
+          mismatches_count: mismatchesCount,
+          mismatch_ids: mismatchInserts.map((row) => row.id),
+        },
+      });
+
+      await client.query('COMMIT');
+      return {
+        run: runUpdate.rows[0],
       mismatches: mismatchInserts,
     };
   } catch (error) {
