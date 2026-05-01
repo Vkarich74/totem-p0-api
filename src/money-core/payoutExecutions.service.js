@@ -133,7 +133,9 @@ async function insertMoneyAuditEvent(client, payload = {}) {
 }
 
 async function insertMoneyReceipt(client, payload = {}) {
-  const result = await client.query(
+  const sourceId = normalizeInt(payload.source_id);
+
+  const insertResult = await client.query(
     `
     INSERT INTO public.money_receipts (
       receipt_type,
@@ -149,10 +151,11 @@ async function insertMoneyReceipt(client, payload = {}) {
     ) VALUES (
       'payout', 'payout_execution', $1, $2, $3, $4, 'KGS', $5, $6, $7
     )
+    ON CONFLICT (receipt_type, source_type, source_id) DO NOTHING
     RETURNING *
     `,
     [
-      normalizeInt(payload.source_id),
+      sourceId,
       normalizeText(payload.owner_type),
       normalizeInt(payload.owner_id),
       normalizeNumber(payload.amount),
@@ -162,7 +165,30 @@ async function insertMoneyReceipt(client, payload = {}) {
     ]
   );
 
-  return result.rows[0] || null;
+  if (insertResult.rows[0]) {
+    return insertResult.rows[0];
+  }
+
+  const existingResult = await client.query(
+    `
+    SELECT *
+    FROM public.money_receipts
+    WHERE receipt_type = 'payout'
+      AND source_type = 'payout_execution'
+      AND source_id = $1
+    LIMIT 1
+    `,
+    [sourceId]
+  );
+
+  if (existingResult.rows[0]) {
+    return existingResult.rows[0];
+  }
+
+  const error = new Error('Receipt dedupe lookup failed');
+  error.code = 'RECEIPT_DEDUPE_LOOKUP_FAILED';
+  error.statusCode = 500;
+  throw error;
 }
 
 function buildBalanceFromLedgerRows(rows = []) {
