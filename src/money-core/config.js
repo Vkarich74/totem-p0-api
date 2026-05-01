@@ -6,6 +6,7 @@ const MONEY_CORE_DEFAULT_FLAGS = Object.freeze({
   PROVIDER_SETTLEMENTS_ENABLED: false,
   WITHDRAW_REQUESTS_V2_ENABLED: false,
   PAYOUT_EXECUTIONS_ENABLED: false,
+  MONEY_CORE_LEDGER_MOVEMENTS_ENABLED: false,
   RECONCILIATION_ENABLED: true,
   AUTO_PAYOUT_ENABLED: false,
   SCHEDULED_WITHDRAWS_ENABLED: false,
@@ -43,6 +44,7 @@ function getMoneyCoreFlags(env = process.env) {
     PROVIDER_SETTLEMENTS_ENABLED: parseBoolean(env.PROVIDER_SETTLEMENTS_ENABLED, MONEY_CORE_DEFAULT_FLAGS.PROVIDER_SETTLEMENTS_ENABLED),
     WITHDRAW_REQUESTS_V2_ENABLED: parseBoolean(env.WITHDRAW_REQUESTS_V2_ENABLED, MONEY_CORE_DEFAULT_FLAGS.WITHDRAW_REQUESTS_V2_ENABLED),
     PAYOUT_EXECUTIONS_ENABLED: parseBoolean(env.PAYOUT_EXECUTIONS_ENABLED, MONEY_CORE_DEFAULT_FLAGS.PAYOUT_EXECUTIONS_ENABLED),
+    MONEY_CORE_LEDGER_MOVEMENTS_ENABLED: parseBoolean(env.MONEY_CORE_LEDGER_MOVEMENTS_ENABLED, MONEY_CORE_DEFAULT_FLAGS.MONEY_CORE_LEDGER_MOVEMENTS_ENABLED),
     RECONCILIATION_ENABLED: parseBoolean(env.RECONCILIATION_ENABLED, MONEY_CORE_DEFAULT_FLAGS.RECONCILIATION_ENABLED),
     AUTO_PAYOUT_ENABLED: parseBoolean(env.AUTO_PAYOUT_ENABLED, MONEY_CORE_DEFAULT_FLAGS.AUTO_PAYOUT_ENABLED),
     SCHEDULED_WITHDRAWS_ENABLED: parseBoolean(env.SCHEDULED_WITHDRAWS_ENABLED, MONEY_CORE_DEFAULT_FLAGS.SCHEDULED_WITHDRAWS_ENABLED),
@@ -132,6 +134,15 @@ function assertPayoutExecutionsEnabled(env = process.env) {
   );
 }
 
+function assertLedgerMovementsEnabled(env = process.env) {
+  return assertMoneyCoreFeatureEnabled(
+    'MONEY_CORE_LEDGER_MOVEMENTS_ENABLED',
+    'MONEY_CORE_LEDGER_MOVEMENTS_DISABLED',
+    'Money Core ledger movements are disabled',
+    env,
+  );
+}
+
 function assertReconciliationEnabled(env = process.env) {
   return assertMoneyCoreFeatureEnabled(
     'RECONCILIATION_ENABLED',
@@ -170,6 +181,7 @@ export {
   assertProviderSettlementsEnabled,
   assertWithdrawRequestsEnabled,
   assertPayoutExecutionsEnabled,
+  assertLedgerMovementsEnabled,
   assertReconciliationEnabled,
   assertAutoPayoutEnabled,
   assertScheduledWithdrawsEnabled,

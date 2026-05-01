@@ -7,6 +7,7 @@ import {
   assertProviderSettlementsEnabled,
   assertWithdrawRequestsEnabled,
   assertPayoutExecutionsEnabled,
+  assertLedgerMovementsEnabled,
   assertReconciliationEnabled,
 } from '../../money-core/config.js';
 import { buildOwnerMoneyCoreSummary } from '../../money-core/balances.service.js';
@@ -617,6 +618,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/ledger/movements', async (req, res, next) => {
     try {
+      assertLedgerMovementsEnabled();
       const result = await createMoneyLedgerMovement(pool, req.body || {}, {
         user_id: req.user?.id ?? req.user?.user_id ?? null,
         user_type: req.user?.type ?? null,
