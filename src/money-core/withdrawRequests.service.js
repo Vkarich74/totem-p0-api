@@ -272,7 +272,7 @@ async function createWithdrawRequest(pool, ownerType, ownerId, input = {}, actor
       [owner.owner_type, owner.owner_id]
     );
 
-    const availableSnapshot = balanceResult.rows[0] ? Number(balanceResult.rows[0].available) : 0;
+    const availableSnapshot = availableBalanceResult.rows[0] ? Number(availableBalanceResult.rows[0].available) : 0;
 
     if (amount > availableSnapshot) {
       const error = new Error('Insufficient available balance');
