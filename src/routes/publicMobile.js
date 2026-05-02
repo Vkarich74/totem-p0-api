@@ -309,4 +309,72 @@ router.get("/salons/:slug/catalog", async (req, res) => {
   }
 });
 
+router.get("/announcements", async (req, res) => {
+  try {
+    const country = String(req.query.country || "").trim();
+    const city = String(req.query.city || "").trim();
+    const audience = String(req.query.audience || "client").trim().toLowerCase() || "client";
+
+    const conditions = [
+      `(status IN ('active', 'published'))`,
+      `(starts_at IS NULL OR starts_at <= NOW())`,
+      `(ends_at IS NULL OR ends_at >= NOW())`,
+      `(audience_type IN ('all', $1))`,
+      `(
+        scope_type = 'global'
+        ${country ? `OR (scope_type = 'country' AND scope_code = $2)` : ""}
+        ${city ? `OR (scope_type = 'city' AND scope_code = $${country ? 3 : 2})` : ""}
+      )`,
+    ];
+
+    const params = [audience];
+
+    if (country) {
+      params.push(country.toUpperCase());
+    }
+
+    if (city) {
+      params.push(city.toLowerCase());
+    }
+
+    const { rows } = await pool.query(
+      `SELECT
+         id,
+         announcement_uid,
+         scope_type,
+         scope_code,
+         audience_type,
+         priority,
+         title_ru,
+         body_ru,
+         title_en,
+         body_en,
+         image_url,
+         action_type,
+         action_url,
+         payload_json,
+         starts_at,
+         ends_at,
+         published_at,
+         created_at
+       FROM public.app_announcements
+       WHERE ${conditions.join("\n         AND ")}
+       ORDER BY priority DESC NULLS LAST,
+                published_at DESC NULLS LAST,
+                created_at DESC`,
+      params
+    );
+
+    return res.status(200).json({
+      ok: true,
+      announcements: rows,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: "PUBLIC_MOBILE_ANNOUNCEMENTS_FAILED",
+    });
+  }
+});
+
 export default router;
