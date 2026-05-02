@@ -5,6 +5,7 @@ import { pool } from "../db.js";
 import { publicCreateBooking } from "./publicCreateBooking.js";
 import { publicMasterAvailability } from "./publicAvailability.js";
 import { publicLifecycle } from "./publicLifecycle.js";
+import mobileRouter from "./publicMobile.js";
 
 // ✅ AUTH ROUTER FROM LIVE PUBLIC LAYER
 import authRouter from "../../routes_public/auth.js";
@@ -35,6 +36,7 @@ export function createPublicRouter(deps) {
    * AUTH
    */
   r.use("/auth", authRouter);
+  r.use("/mobile", mobileRouter);
 
   /**
    * CREATE BOOKING
