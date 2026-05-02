@@ -223,4 +223,90 @@ router.get("/city/:countryCode/:citySlug/home", async (req, res) => {
   }
 });
 
+router.get("/salons/:slug/catalog", async (req, res) => {
+  try {
+    const slug = String(req.params.slug || "").trim();
+
+    if (!slug) {
+      return res.status(400).json({
+        ok: false,
+        error: "SALON_SLUG_REQUIRED",
+      });
+    }
+
+    const salonResult = await pool.query(
+      `SELECT
+         id,
+         slug,
+         name,
+         enabled,
+         status,
+         description,
+         logo_url,
+         cover_url,
+         city,
+         phone,
+         slogan
+       FROM public.salons
+       WHERE slug = $1
+       LIMIT 1`,
+      [slug]
+    );
+
+    if (!salonResult.rows.length) {
+      return res.status(404).json({
+        ok: false,
+        error: "PUBLIC_MOBILE_SALON_NOT_FOUND",
+      });
+    }
+
+    const salon = salonResult.rows[0];
+    const salonId = salon.id;
+
+    const mastersResult = await pool.query(
+      `SELECT
+         m.id,
+         m.slug,
+         m.name,
+         m.active
+       FROM public.masters m
+       JOIN public.master_salon ms ON ms.master_id = m.id
+       JOIN public.salons s ON s.id = ms.salon_id
+       WHERE s.slug = $1
+       ORDER BY m.name ASC`,
+      [slug]
+    );
+
+    const servicesResult = await pool.query(
+      `SELECT
+         sms.salon_id,
+         sms.master_id,
+         sms.service_pk,
+         s.service_id AS catalog_service_id,
+         s.name,
+         sms.price,
+         sms.duration_min,
+         sms.active
+       FROM public.salon_master_services sms
+       JOIN public.services s ON s.id = sms.service_pk
+       WHERE sms.salon_id = $1
+         AND COALESCE(sms.active, true) = true
+       ORDER BY sms.id DESC`,
+      [salonId]
+    );
+
+    return res.status(200).json({
+      ok: true,
+      salon,
+      masters: mastersResult.rows,
+      services: servicesResult.rows,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: "PUBLIC_MOBILE_SALON_CATALOG_FAILED",
+    });
+  }
+});
+
 export default router;
