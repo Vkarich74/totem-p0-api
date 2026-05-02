@@ -377,4 +377,121 @@ router.get("/announcements", async (req, res) => {
   }
 });
 
+router.get("/referral", async (req, res) => {
+  try {
+    const countryCode = String(req.query.country || "").trim().toUpperCase();
+    const citySlug = String(req.query.city || "").trim().toLowerCase();
+
+    const flagResult = await pool.query(
+      `SELECT
+         enabled,
+         status
+       FROM public.mobile_feature_flags
+       WHERE flag_key = $1
+         AND scope_type = 'global'
+         AND scope_code = 'global'
+       LIMIT 1`,
+      ["mobile_referral_enabled"]
+    );
+
+    const flag = flagResult.rows[0] || null;
+    const flagStatus = String(flag?.status || "").trim().toLowerCase();
+    const flagEnabled = Boolean(flag?.enabled) && (flagStatus === "active" || flagStatus === "enabled");
+
+    if (!flag || !flagEnabled) {
+      return res.status(200).json({
+        ok: true,
+        referral: {
+          enabled: false,
+          available: false,
+          reason: "FEATURE_DISABLED",
+        },
+      });
+    }
+
+    let cityId = null;
+
+    if (citySlug) {
+      const cityQuery = countryCode
+        ? `SELECT id FROM public.cities WHERE country_code = $1 AND slug = $2 LIMIT 1`
+        : `SELECT id FROM public.cities WHERE slug = $1 LIMIT 1`;
+      const cityParams = countryCode ? [countryCode, citySlug] : [citySlug];
+
+      const cityResult = await pool.query(cityQuery, cityParams);
+      cityId = cityResult.rows[0]?.id || null;
+    }
+
+    const referralConditions = [
+      `channel = 'mobile'`,
+      `status = 'active'`,
+      `referral_code IS NOT NULL`,
+      `(starts_at IS NULL OR starts_at <= NOW())`,
+      `(expires_at IS NULL OR expires_at > NOW())`,
+      `(max_uses IS NULL OR used_count < max_uses)`,
+    ];
+    const referralParams = [];
+
+    if (countryCode) {
+      referralParams.push(countryCode);
+      referralConditions.push(`(country_code IS NULL OR country_code = $${referralParams.length})`);
+    } else if (!citySlug) {
+      referralConditions.push(`country_code IS NULL`);
+    }
+
+    if (citySlug) {
+      referralParams.push(cityId);
+      referralConditions.push(`(city_id IS NULL OR city_id = $${referralParams.length})`);
+    }
+
+    const referralResult = await pool.query(
+      `SELECT
+         referral_code,
+         country_code,
+         channel
+       FROM public.referral_links
+       WHERE ${referralConditions.join("\n         AND ")}
+       ORDER BY CASE
+                  WHEN city_id IS NOT NULL THEN 2
+                  WHEN country_code IS NOT NULL THEN 1
+                  ELSE 0
+                END DESC,
+                created_at DESC
+       LIMIT 1`,
+      referralParams
+    );
+
+    const referral = referralResult.rows[0] || null;
+
+    if (!referral) {
+      return res.status(200).json({
+        ok: true,
+        referral: {
+          enabled: true,
+          available: false,
+          reason: "NO_ACTIVE_REFERRAL_LINK",
+        },
+      });
+    }
+
+    const referralCode = String(referral.referral_code || "").trim();
+
+    return res.status(200).json({
+      ok: true,
+      referral: {
+        enabled: true,
+        available: true,
+        referral_code: referralCode,
+        country_code: referral.country_code || null,
+        channel: referral.channel || "mobile",
+        share_url: `https://app.totemv.com/#/mobile?ref=${encodeURIComponent(referralCode)}`,
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: "PUBLIC_MOBILE_REFERRAL_FAILED",
+    });
+  }
+});
+
 export default router;
