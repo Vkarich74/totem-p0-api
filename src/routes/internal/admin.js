@@ -16,6 +16,34 @@ function normalizeAuditEntityType(value) {
   return raw;
 }
 
+function normalizeOptionalText(value, maxLength) {
+  const text = String(value ?? "").trim();
+  return text ? text.slice(0, maxLength) : "";
+}
+
+function normalizeOptionalBoolean(value) {
+  return typeof value === "boolean" ? value : null;
+}
+
+function buildWhereClause(filters) {
+  const clauses = [];
+  const values = [];
+
+  for (const filter of Array.isArray(filters) ? filters : []) {
+    if (!filter || !filter.enabled) {
+      continue;
+    }
+
+    values.push(filter.value);
+    clauses.push(String(filter.sql || "").replace("?", `$${values.length}`));
+  }
+
+  return {
+    whereSql: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "",
+    values,
+  };
+}
+
 export default function buildAdminRouter(pool, internalReadRateLimit) {
   const r = express.Router();
   const readLimiter =
@@ -396,6 +424,716 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
       return res.status(500).json({
         ok: false,
         error: "ADMIN_OVERVIEW_FETCH_FAILED",
+      });
+    }
+  });
+
+  r.get("/mobile/overview", readLimiter, async (req, res) => {
+    try {
+      const [
+        feedbackTotalResult,
+        feedbackByStatusResult,
+        dataRequestsTotalResult,
+        dataRequestsByStatusResult,
+        dataRequestsByTypeResult,
+        flagsTotalResult,
+        flagsActiveResult,
+        flagsEnabledResult,
+        flagsItemsResult,
+        referralsLinksTotalResult,
+        referralsEventsTotalResult,
+        referralsEventsByTypeResult,
+        referralsRewardsByStatusResult,
+        notificationsTotalResult,
+        notificationsByStatusResult,
+        announcementsTotalResult,
+        announcementsByStatusResult,
+        recentFeedbackResult,
+        recentDataRequestsResult,
+        recentReferralEventsResult,
+      ] = await Promise.all([
+        pool.query(`SELECT COUNT(*)::int AS total_count FROM public.mobile_feedback_requests`),
+        pool.query(`
+          SELECT
+            COALESCE(status, 'unknown') AS status,
+            COUNT(*)::int AS count
+          FROM public.mobile_feedback_requests
+          GROUP BY COALESCE(status, 'unknown')
+          ORDER BY status ASC
+        `),
+        pool.query(`SELECT COUNT(*)::int AS total_count FROM public.mobile_data_requests`),
+        pool.query(`
+          SELECT
+            COALESCE(status, 'unknown') AS status,
+            COUNT(*)::int AS count
+          FROM public.mobile_data_requests
+          GROUP BY COALESCE(status, 'unknown')
+          ORDER BY status ASC
+        `),
+        pool.query(`
+          SELECT
+            COALESCE(request_type, 'unknown') AS request_type,
+            COUNT(*)::int AS count
+          FROM public.mobile_data_requests
+          GROUP BY COALESCE(request_type, 'unknown')
+          ORDER BY request_type ASC
+        `),
+        pool.query(`SELECT COUNT(*)::int AS total_count FROM public.mobile_feature_flags`),
+        pool.query(`
+          SELECT COUNT(*)::int AS active_count
+          FROM public.mobile_feature_flags
+          WHERE status IN ('active', 'enabled')
+        `),
+        pool.query(`
+          SELECT COUNT(*)::int AS enabled_count
+          FROM public.mobile_feature_flags
+          WHERE enabled = true
+        `),
+        pool.query(`
+          SELECT
+            id,
+            flag_key,
+            scope_type,
+            scope_code,
+            enabled,
+            status,
+            payload_json,
+            description_ru,
+            description_en,
+            created_at,
+            updated_at
+          FROM public.mobile_feature_flags
+          ORDER BY flag_key ASC, scope_type ASC, scope_code ASC
+        `),
+        pool.query(`SELECT COUNT(*)::int AS links_total FROM public.referral_links`),
+        pool.query(`SELECT COUNT(*)::int AS events_total FROM public.referral_events`),
+        pool.query(`
+          SELECT
+            COALESCE(event_type, 'unknown') AS event_type,
+            COUNT(*)::int AS count
+          FROM public.referral_events
+          GROUP BY COALESCE(event_type, 'unknown')
+          ORDER BY event_type ASC
+        `),
+        pool.query(`
+          SELECT
+            COALESCE(reward_status, 'unknown') AS reward_status,
+            COUNT(*)::int AS count
+          FROM public.referral_events
+          GROUP BY COALESCE(reward_status, 'unknown')
+          ORDER BY reward_status ASC
+        `),
+        pool.query(`SELECT COUNT(*)::int AS total_count FROM public.app_notifications`),
+        pool.query(`
+          SELECT
+            COALESCE(status, 'unknown') AS status,
+            COUNT(*)::int AS count
+          FROM public.app_notifications
+          GROUP BY COALESCE(status, 'unknown')
+          ORDER BY status ASC
+        `),
+        pool.query(`SELECT COUNT(*)::int AS total_count FROM public.app_announcements`),
+        pool.query(`
+          SELECT
+            COALESCE(status, 'unknown') AS status,
+            COUNT(*)::int AS count
+          FROM public.app_announcements
+          GROUP BY COALESCE(status, 'unknown')
+          ORDER BY status ASC
+        `),
+        pool.query(`
+          SELECT
+            id,
+            request_uid,
+            status,
+            source,
+            country_code,
+            city_slug,
+            owner_type,
+            owner_slug,
+            contact_name,
+            contact_email,
+            contact_phone,
+            message,
+            payload_json,
+            created_at,
+            updated_at
+          FROM public.mobile_feedback_requests
+          ORDER BY created_at DESC, id DESC
+          LIMIT 10
+        `),
+        pool.query(`
+          SELECT
+            id,
+            request_uid,
+            request_type,
+            status,
+            source,
+            country_code,
+            city_slug,
+            owner_type,
+            owner_slug,
+            contact_name,
+            contact_email,
+            contact_phone,
+            message,
+            payload_json,
+            created_at,
+            updated_at
+          FROM public.mobile_data_requests
+          ORDER BY created_at DESC, id DESC
+          LIMIT 10
+        `),
+        pool.query(`
+          SELECT
+            id,
+            event_uid,
+            referral_link_id,
+            referral_code,
+            event_type,
+            actor_type,
+            actor_id,
+            target_type,
+            target_id,
+            owner_type,
+            owner_id,
+            country_code,
+            city_id,
+            status,
+            reward_status,
+            reward_amount,
+            currency_code,
+            payload_json,
+            created_at
+          FROM public.referral_events
+          ORDER BY created_at DESC, id DESC
+          LIMIT 10
+        `),
+      ]);
+
+      return res.json({
+        ok: true,
+        data: {
+          feedback: {
+            total_count: feedbackTotalResult.rows?.[0]?.total_count || 0,
+            by_status: feedbackByStatusResult.rows || [],
+          },
+          data_requests: {
+            total_count: dataRequestsTotalResult.rows?.[0]?.total_count || 0,
+            by_status: dataRequestsByStatusResult.rows || [],
+            by_request_type: dataRequestsByTypeResult.rows || [],
+          },
+          flags: {
+            total_count: flagsTotalResult.rows?.[0]?.total_count || 0,
+            active_count: flagsActiveResult.rows?.[0]?.active_count || 0,
+            enabled_count: flagsEnabledResult.rows?.[0]?.enabled_count || 0,
+            items: flagsItemsResult.rows || [],
+          },
+          referrals: {
+            links_total: referralsLinksTotalResult.rows?.[0]?.links_total || 0,
+            events_total: referralsEventsTotalResult.rows?.[0]?.events_total || 0,
+            events_by_type: referralsEventsByTypeResult.rows || [],
+            rewards_by_status: referralsRewardsByStatusResult.rows || [],
+          },
+          notifications: {
+            total_count: notificationsTotalResult.rows?.[0]?.total_count || 0,
+            by_status: notificationsByStatusResult.rows || [],
+          },
+          announcements: {
+            total_count: announcementsTotalResult.rows?.[0]?.total_count || 0,
+            by_status: announcementsByStatusResult.rows || [],
+          },
+          recent_feedback: recentFeedbackResult.rows || [],
+          recent_data_requests: recentDataRequestsResult.rows || [],
+          recent_referral_events: recentReferralEventsResult.rows || [],
+        },
+      });
+    } catch (error) {
+      console.error("ADMIN_MOBILE_OVERVIEW_FETCH_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_MOBILE_OVERVIEW_FETCH_FAILED",
+      });
+    }
+  });
+
+  r.get("/mobile/feedback", readLimiter, async (req, res) => {
+    const limit = Math.min(parsePositiveInt(req.query.limit, 50), 100);
+    const offset = parsePositiveInt(req.query.offset, 0);
+    const status = normalizeOptionalText(req.query.status, 32).toLowerCase();
+    const countryCode = normalizeOptionalText(req.query.country, 2).toUpperCase();
+    const citySlug = normalizeOptionalText(req.query.city, 120).toLowerCase();
+
+    try {
+      const { whereSql, values } = buildWhereClause([
+        { enabled: Boolean(status), sql: "status = ?", value: status },
+        { enabled: Boolean(countryCode), sql: "country_code = ?", value: countryCode },
+        { enabled: Boolean(citySlug), sql: "city_slug = ?", value: citySlug },
+      ]);
+
+      const totalResult = await pool.query(
+        `SELECT COUNT(*)::int AS total_count FROM public.mobile_feedback_requests ${whereSql}`,
+        values,
+      );
+
+      const data = await pool.query(
+        `
+        SELECT
+          id,
+          request_uid,
+          status,
+          source,
+          country_code,
+          city_slug,
+          owner_type,
+          owner_slug,
+          contact_name,
+          contact_email,
+          contact_phone,
+          message,
+          payload_json,
+          created_at,
+          updated_at
+        FROM public.mobile_feedback_requests
+        ${whereSql}
+        ORDER BY created_at DESC, id DESC
+        LIMIT $${values.length + 1}
+        OFFSET $${values.length + 2}
+        `,
+        [...values, limit, offset],
+      );
+
+      return res.json({
+        ok: true,
+        data: {
+          items: data.rows,
+          total_count: totalResult.rows?.[0]?.total_count || 0,
+          limit,
+          offset,
+        },
+      });
+    } catch (error) {
+      console.error("ADMIN_MOBILE_FEEDBACK_FETCH_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_MOBILE_FEEDBACK_FETCH_FAILED",
+      });
+    }
+  });
+
+  r.patch("/mobile/feedback/:id/status", async (req, res) => {
+    const id = Number(req.params.id);
+    const status = normalizeOptionalText(req.body?.status, 32).toLowerCase();
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "MOBILE_FEEDBACK_ID_INVALID",
+      });
+    }
+
+    if (!["new", "reviewed", "closed", "spam"].includes(status)) {
+      return res.status(400).json({
+        ok: false,
+        error: "MOBILE_FEEDBACK_STATUS_INVALID",
+      });
+    }
+
+    try {
+      const data = await pool.query(
+        `
+        UPDATE public.mobile_feedback_requests
+        SET status = $2,
+            updated_at = NOW()
+        WHERE id = $1
+        RETURNING id, request_uid, status, created_at, updated_at
+        `,
+        [id, status],
+      );
+
+      if (!data.rows.length) {
+        return res.status(404).json({
+          ok: false,
+          error: "MOBILE_FEEDBACK_NOT_FOUND",
+        });
+      }
+
+      return res.json({
+        ok: true,
+        data: {
+          item: data.rows[0],
+        },
+      });
+    } catch (error) {
+      console.error("ADMIN_MOBILE_FEEDBACK_STATUS_UPDATE_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "MOBILE_FEEDBACK_STATUS_UPDATE_FAILED",
+      });
+    }
+  });
+
+  r.get("/mobile/data-requests", readLimiter, async (req, res) => {
+    const limit = Math.min(parsePositiveInt(req.query.limit, 50), 100);
+    const offset = parsePositiveInt(req.query.offset, 0);
+    const status = normalizeOptionalText(req.query.status, 32).toLowerCase();
+    const countryCode = normalizeOptionalText(req.query.country, 2).toUpperCase();
+    const citySlug = normalizeOptionalText(req.query.city, 120).toLowerCase();
+    const requestType = normalizeOptionalText(req.query.request_type, 32).toLowerCase();
+
+    try {
+      const { whereSql, values } = buildWhereClause([
+        { enabled: Boolean(status), sql: "status = ?", value: status },
+        { enabled: Boolean(countryCode), sql: "country_code = ?", value: countryCode },
+        { enabled: Boolean(citySlug), sql: "city_slug = ?", value: citySlug },
+        { enabled: Boolean(requestType), sql: "request_type = ?", value: requestType },
+      ]);
+
+      const totalResult = await pool.query(
+        `SELECT COUNT(*)::int AS total_count FROM public.mobile_data_requests ${whereSql}`,
+        values,
+      );
+
+      const data = await pool.query(
+        `
+        SELECT
+          id,
+          request_uid,
+          request_type,
+          status,
+          source,
+          country_code,
+          city_slug,
+          owner_type,
+          owner_slug,
+          contact_name,
+          contact_email,
+          contact_phone,
+          message,
+          payload_json,
+          created_at,
+          updated_at
+        FROM public.mobile_data_requests
+        ${whereSql}
+        ORDER BY created_at DESC, id DESC
+        LIMIT $${values.length + 1}
+        OFFSET $${values.length + 2}
+        `,
+        [...values, limit, offset],
+      );
+
+      return res.json({
+        ok: true,
+        data: {
+          items: data.rows,
+          total_count: totalResult.rows?.[0]?.total_count || 0,
+          limit,
+          offset,
+        },
+      });
+    } catch (error) {
+      console.error("ADMIN_MOBILE_DATA_REQUESTS_FETCH_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_MOBILE_DATA_REQUESTS_FETCH_FAILED",
+      });
+    }
+  });
+
+  r.patch("/mobile/data-requests/:id/status", async (req, res) => {
+    const id = Number(req.params.id);
+    const status = normalizeOptionalText(req.body?.status, 32).toLowerCase();
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "MOBILE_DATA_REQUEST_ID_INVALID",
+      });
+    }
+
+    if (!["new", "reviewed", "closed", "spam"].includes(status)) {
+      return res.status(400).json({
+        ok: false,
+        error: "MOBILE_DATA_REQUEST_STATUS_INVALID",
+      });
+    }
+
+    try {
+      const data = await pool.query(
+        `
+        UPDATE public.mobile_data_requests
+        SET status = $2,
+            updated_at = NOW()
+        WHERE id = $1
+        RETURNING id, request_uid, request_type, status, created_at, updated_at
+        `,
+        [id, status],
+      );
+
+      if (!data.rows.length) {
+        return res.status(404).json({
+          ok: false,
+          error: "MOBILE_DATA_REQUEST_NOT_FOUND",
+        });
+      }
+
+      return res.json({
+        ok: true,
+        data: {
+          item: data.rows[0],
+        },
+      });
+    } catch (error) {
+      console.error("ADMIN_MOBILE_DATA_REQUEST_STATUS_UPDATE_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "MOBILE_DATA_REQUEST_STATUS_UPDATE_FAILED",
+      });
+    }
+  });
+
+  r.get("/mobile/referrals", readLimiter, async (req, res) => {
+    const limit = Math.min(parsePositiveInt(req.query.limit, 50), 100);
+    const offset = parsePositiveInt(req.query.offset, 0);
+    const status = normalizeOptionalText(req.query.status, 32).toLowerCase();
+    const countryCode = normalizeOptionalText(req.query.country, 2).toUpperCase();
+    const channel = normalizeOptionalText(req.query.channel, 32).toLowerCase();
+
+    try {
+      const { whereSql, values } = buildWhereClause([
+        { enabled: Boolean(status), sql: "status = ?", value: status },
+        { enabled: Boolean(countryCode), sql: "country_code = ?", value: countryCode },
+        { enabled: Boolean(channel), sql: "channel = ?", value: channel },
+      ]);
+
+      const totalResult = await pool.query(
+        `SELECT COUNT(*)::int AS total_count FROM public.referral_links ${whereSql}`,
+        values,
+      );
+
+      const data = await pool.query(
+        `
+        SELECT
+          id,
+          referral_code,
+          owner_type,
+          owner_id,
+          country_code,
+          city_id,
+          channel,
+          status,
+          used_count,
+          starts_at,
+          expires_at,
+          max_uses,
+          created_at,
+          updated_at
+        FROM public.referral_links
+        ${whereSql}
+        ORDER BY created_at DESC, id DESC
+        LIMIT $${values.length + 1}
+        OFFSET $${values.length + 2}
+        `,
+        [...values, limit, offset],
+      );
+
+      return res.json({
+        ok: true,
+        data: {
+          items: data.rows,
+          total_count: totalResult.rows?.[0]?.total_count || 0,
+          limit,
+          offset,
+        },
+      });
+    } catch (error) {
+      console.error("ADMIN_MOBILE_REFERRALS_FETCH_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_MOBILE_REFERRALS_FETCH_FAILED",
+      });
+    }
+  });
+
+  r.get("/mobile/referral-events", readLimiter, async (req, res) => {
+    const limit = Math.min(parsePositiveInt(req.query.limit, 50), 100);
+    const offset = parsePositiveInt(req.query.offset, 0);
+    const eventType = normalizeOptionalText(req.query.event_type, 64).toLowerCase();
+    const rewardStatus = normalizeOptionalText(req.query.reward_status, 64).toLowerCase();
+    const countryCode = normalizeOptionalText(req.query.country, 2).toUpperCase();
+
+    try {
+      const { whereSql, values } = buildWhereClause([
+        { enabled: Boolean(eventType), sql: "event_type = ?", value: eventType },
+        { enabled: Boolean(rewardStatus), sql: "reward_status = ?", value: rewardStatus },
+        { enabled: Boolean(countryCode), sql: "country_code = ?", value: countryCode },
+      ]);
+
+      const totalResult = await pool.query(
+        `SELECT COUNT(*)::int AS total_count FROM public.referral_events ${whereSql}`,
+        values,
+      );
+
+      const data = await pool.query(
+        `
+        SELECT
+          id,
+          event_uid,
+          referral_link_id,
+          referral_code,
+          event_type,
+          actor_type,
+          actor_id,
+          target_type,
+          target_id,
+          owner_type,
+          owner_id,
+          country_code,
+          city_id,
+          status,
+          reward_status,
+          reward_amount,
+          currency_code,
+          payload_json,
+          created_at
+        FROM public.referral_events
+        ${whereSql}
+        ORDER BY created_at DESC, id DESC
+        LIMIT $${values.length + 1}
+        OFFSET $${values.length + 2}
+        `,
+        [...values, limit, offset],
+      );
+
+      return res.json({
+        ok: true,
+        data: {
+          items: data.rows,
+          total_count: totalResult.rows?.[0]?.total_count || 0,
+          limit,
+          offset,
+        },
+      });
+    } catch (error) {
+      console.error("ADMIN_MOBILE_REFERRAL_EVENTS_FETCH_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_MOBILE_REFERRAL_EVENTS_FETCH_FAILED",
+      });
+    }
+  });
+
+  r.get("/mobile/flags", readLimiter, async (req, res) => {
+    try {
+      const data = await pool.query(
+        `
+        SELECT
+          id,
+          flag_key,
+          scope_type,
+          scope_code,
+          enabled,
+          status,
+          payload_json,
+          description_ru,
+          description_en,
+          created_at,
+          updated_at
+        FROM public.mobile_feature_flags
+        ORDER BY flag_key ASC, scope_type ASC, scope_code ASC
+        `,
+      );
+
+      return res.json({
+        ok: true,
+        data: {
+          items: data.rows,
+        },
+      });
+    } catch (error) {
+      console.error("ADMIN_MOBILE_FLAGS_FETCH_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_MOBILE_FLAGS_FETCH_FAILED",
+      });
+    }
+  });
+
+  r.patch("/mobile/flags/:flagKey", async (req, res) => {
+    const flagKey = normalizeOptionalText(req.params.flagKey, 120);
+    const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+    const enabled = normalizeOptionalBoolean(body.enabled);
+    const statusRaw = normalizeOptionalText(body.status, 32).toLowerCase();
+    const scopeType = normalizeOptionalText(body.scope_type, 80).toLowerCase() || "global";
+    const scopeCode = normalizeOptionalText(body.scope_code, 160) || "global";
+
+    if (!flagKey) {
+      return res.status(400).json({
+        ok: false,
+        error: "MOBILE_FLAG_KEY_INVALID",
+      });
+    }
+
+    if (body.enabled !== undefined && enabled === null) {
+      return res.status(400).json({
+        ok: false,
+        error: "MOBILE_FLAG_ENABLED_INVALID",
+      });
+    }
+
+    if (body.status !== undefined && !["active", "planned", "disabled"].includes(statusRaw)) {
+      return res.status(400).json({
+        ok: false,
+        error: "MOBILE_FLAG_STATUS_INVALID",
+      });
+    }
+
+    const updates = [];
+    const values = [];
+
+    if (body.enabled !== undefined) {
+      values.push(enabled);
+      updates.push(`enabled = $${values.length}`);
+    }
+
+    if (body.status !== undefined) {
+      values.push(statusRaw);
+      updates.push(`status = $${values.length}`);
+    }
+
+    updates.push(`updated_at = NOW()`);
+
+    try {
+      const data = await pool.query(
+        `
+        UPDATE public.mobile_feature_flags
+        SET ${updates.join(", ")}
+        WHERE flag_key = $${values.push(flagKey)}
+          AND scope_type = $${values.push(scopeType)}
+          AND scope_code = $${values.push(scopeCode)}
+        RETURNING id, flag_key, scope_type, scope_code, enabled, status, payload_json, description_ru, description_en, created_at, updated_at
+        `,
+        values,
+      );
+
+      if (!data.rows.length) {
+        return res.status(404).json({
+          ok: false,
+          error: "MOBILE_FLAG_NOT_FOUND",
+        });
+      }
+
+      return res.json({
+        ok: true,
+        data: {
+          item: data.rows[0],
+        },
+      });
+    } catch (error) {
+      console.error("ADMIN_MOBILE_FLAG_UPDATE_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "MOBILE_FLAG_UPDATE_FAILED",
       });
     }
   });
