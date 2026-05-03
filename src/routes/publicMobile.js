@@ -3,6 +3,67 @@ import { pool } from "../db.js";
 
 const router = express.Router();
 
+function normalizeMobileRequestBody(req) {
+  return req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+}
+
+function normalizeMobileSource(value) {
+  const source = String(value || "").trim().toLowerCase();
+  return ["mobile", "pwa", "web"].includes(source) ? source : "mobile";
+}
+
+function normalizeMobileCountry(value) {
+  const country = String(value || "").trim().toUpperCase();
+  return country ? country.slice(0, 2) : null;
+}
+
+function normalizeMobileCity(value) {
+  const city = String(value || "").trim().toLowerCase();
+  if (!city) {
+    return null;
+  }
+
+  return city.slice(0, 120);
+}
+
+function normalizeMobileOwnerType(value) {
+  const ownerType = String(value || "").trim().toLowerCase();
+  return ["salon", "master"].includes(ownerType) ? ownerType : null;
+}
+
+function normalizeMobileText(value, maxLength) {
+  const text = String(value || "").trim();
+  return text ? text.slice(0, maxLength) : null;
+}
+
+function normalizeMobileEmail(value) {
+  const email = String(value || "").trim().toLowerCase();
+  return email ? email.slice(0, 200) : null;
+}
+
+function normalizeMobilePayloadJson(value) {
+  const isPlainObject =
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.prototype.toString.call(value) === "[object Object]";
+
+  const payload = isPlainObject ? value : {};
+  const payloadString = JSON.stringify(payload);
+
+  if (payloadString.length > 2000) {
+    return {
+      error: "PAYLOAD_TOO_LARGE",
+      payload: null,
+    };
+  }
+
+  return {
+    error: null,
+    payload,
+  };
+}
+
 router.get("/config", async (req, res) => {
   try {
     const versionsResult = await pool.query(
@@ -490,6 +551,171 @@ router.get("/referral", async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: "PUBLIC_MOBILE_REFERRAL_FAILED",
+    });
+  }
+});
+
+router.post("/feedback", async (req, res) => {
+  try {
+    const body = normalizeMobileRequestBody(req);
+    const source = normalizeMobileSource(body.source);
+    const countryCode = normalizeMobileCountry(body.country);
+    const citySlug = normalizeMobileCity(body.city);
+    const ownerType = normalizeMobileOwnerType(body.owner_type);
+    const ownerSlug = normalizeMobileText(body.owner_slug, 160);
+    const contactName = normalizeMobileText(body.contact_name, 160);
+    const contactEmail = normalizeMobileEmail(body.contact_email);
+    const contactPhone = normalizeMobileText(body.contact_phone, 60);
+    const message = normalizeMobileText(body.message, 2000);
+    const payloadResult = normalizeMobilePayloadJson(body.payload_json);
+
+    if (payloadResult.error) {
+      return res.status(400).json({
+        ok: false,
+        error: payloadResult.error,
+      });
+    }
+
+    if (!message) {
+      return res.status(400).json({
+        ok: false,
+        error: "MESSAGE_REQUIRED",
+      });
+    }
+
+    const { rows } = await pool.query(
+      `INSERT INTO public.mobile_feedback_requests (
+         source,
+         country_code,
+         city_slug,
+         owner_type,
+         owner_slug,
+         contact_name,
+         contact_email,
+         contact_phone,
+         message,
+         payload_json
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+       RETURNING id, request_uid, status, created_at`,
+      [
+        source,
+        countryCode,
+        citySlug,
+        ownerType,
+        ownerSlug,
+        contactName,
+        contactEmail,
+        contactPhone,
+        message,
+        JSON.stringify(payloadResult.payload),
+      ]
+    );
+
+    const request = rows[0] || null;
+
+    return res.status(200).json({
+      ok: true,
+      request: request
+        ? {
+            id: request.id,
+            request_uid: request.request_uid,
+            status: request.status,
+            created_at: request.created_at,
+          }
+        : null,
+    });
+  } catch (err) {
+    console.error("PUBLIC_MOBILE_FEEDBACK_FAILED", err);
+    return res.status(500).json({
+      ok: false,
+      error: "MOBILE_FEEDBACK_FAILED",
+    });
+  }
+});
+
+router.post("/data-request", async (req, res) => {
+  try {
+    const body = normalizeMobileRequestBody(req);
+    const source = normalizeMobileSource(body.source);
+    const requestTypeRaw = String(body.request_type || "").trim().toLowerCase();
+    const requestType = ["data_access", "data_delete", "data_export", "other"].includes(requestTypeRaw)
+      ? requestTypeRaw
+      : "data_access";
+    const countryCode = normalizeMobileCountry(body.country);
+    const citySlug = normalizeMobileCity(body.city);
+    const ownerType = normalizeMobileOwnerType(body.owner_type);
+    const ownerSlug = normalizeMobileText(body.owner_slug, 160);
+    const contactName = normalizeMobileText(body.contact_name, 160);
+    const contactEmail = normalizeMobileEmail(body.contact_email);
+    const contactPhone = normalizeMobileText(body.contact_phone, 60);
+    const message = normalizeMobileText(body.message, 2000);
+    const payloadResult = normalizeMobilePayloadJson(body.payload_json);
+
+    if (payloadResult.error) {
+      return res.status(400).json({
+        ok: false,
+        error: payloadResult.error,
+      });
+    }
+
+    if (!contactEmail && !contactPhone) {
+      return res.status(400).json({
+        ok: false,
+        error: "CONTACT_REQUIRED",
+      });
+    }
+
+    const { rows } = await pool.query(
+      `INSERT INTO public.mobile_data_requests (
+         request_type,
+         source,
+         country_code,
+         city_slug,
+         owner_type,
+         owner_slug,
+         contact_name,
+         contact_email,
+         contact_phone,
+         message,
+         payload_json
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+       RETURNING id, request_uid, request_type, status, created_at`,
+      [
+        requestType,
+        source,
+        countryCode,
+        citySlug,
+        ownerType,
+        ownerSlug,
+        contactName,
+        contactEmail,
+        contactPhone,
+        message,
+        JSON.stringify(payloadResult.payload),
+      ]
+    );
+
+    const request = rows[0] || null;
+
+    return res.status(200).json({
+      ok: true,
+      request: request
+        ? {
+            id: request.id,
+            request_uid: request.request_uid,
+            request_type: request.request_type,
+            status: request.status,
+            created_at: request.created_at,
+          }
+        : null,
+    });
+  } catch (err) {
+    console.error("PUBLIC_MOBILE_DATA_REQUEST_FAILED", err);
+    return res.status(500).json({
+      ok: false,
+      error: "MOBILE_DATA_REQUEST_FAILED",
     });
   }
 });
