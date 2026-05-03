@@ -64,6 +64,20 @@ function normalizeMobilePayloadJson(value) {
   };
 }
 
+const MOBILE_NOTIFICATION_READER_TYPES = new Set([
+  "client",
+  "salon",
+  "master",
+  "salon_admin",
+  "master_admin",
+  "owner",
+  "auth_user",
+]);
+
+function isAllowedMobileNotificationReaderType(value) {
+  return MOBILE_NOTIFICATION_READER_TYPES.has(String(value || "").trim().toLowerCase());
+}
+
 function buildReferralEventDedupMeta(payloadJson, referralCode, eventType, countryCode, citySlug, source, dateBucket) {
   const contextCandidates = [
     payloadJson?.request_uid,
@@ -459,6 +473,240 @@ router.get("/announcements", async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: "PUBLIC_MOBILE_ANNOUNCEMENTS_FAILED",
+    });
+  }
+});
+
+router.get("/notifications", async (req, res) => {
+  try {
+    const rawReaderType = String(req.query.reader_type || "").trim().toLowerCase();
+    const readerId = String(req.query.reader_id || "").trim();
+    const rawTargetType = String(req.query.target_type || "").trim().toLowerCase();
+    const rawTargetId = String(req.query.target_id || "").trim();
+    const ownerType = String(req.query.owner_type || "").trim().toLowerCase();
+    const ownerId = String(req.query.owner_id || "").trim();
+    const limit = Math.min(parsePositiveInt(req.query.limit, 20), 50);
+
+    const hasReaderIdentity = Boolean(readerId) && isAllowedMobileNotificationReaderType(rawReaderType);
+    const hasTargetScope = Boolean(rawTargetType || rawTargetId);
+    const targetType = rawTargetType || "global";
+    const targetId = rawTargetId || null;
+    const hasOwnerScope = Boolean(ownerType || ownerId);
+
+    const conditions = [
+      `status = 'sent'`,
+      `channel = 'in_app'`,
+      `(expires_at IS NULL OR expires_at > NOW())`,
+    ];
+    const values = [];
+
+    if (hasTargetScope) {
+      values.push(targetType, targetId);
+      conditions.push(
+        `(target_type = 'global' OR (target_type = $${values.length - 1} AND (target_id IS NULL OR CAST(target_id AS TEXT) = $${values.length})))`,
+      );
+    } else {
+      conditions.push(`target_type = 'global'`);
+    }
+
+    if (hasOwnerScope) {
+      values.push(ownerType, ownerId);
+      conditions.push(
+        `(owner_type IS NULL OR (owner_type = $${values.length - 1} AND (owner_id IS NULL OR CAST(owner_id AS TEXT) = $${values.length})))`,
+      );
+    }
+
+    const readJoinSql = hasReaderIdentity
+      ? `LEFT JOIN public.app_notification_reads reads
+           ON reads.notification_id = notifications.id
+          AND reads.reader_type = $${values.length + 1}
+          AND reads.reader_id = $${values.length + 2}`
+      : "";
+
+    const readSelectSql = hasReaderIdentity
+      ? `reads.read_at AS read_at,
+         (reads.read_at IS NOT NULL) AS is_read`
+      : `NULL::timestamptz AS read_at,
+         false AS is_read`;
+
+    if (hasReaderIdentity) {
+      values.push(rawReaderType, readerId);
+    }
+
+    const data = await pool.query(
+      `
+      SELECT
+        notifications.id,
+        notifications.notification_uid,
+        notifications.target_type,
+        notifications.target_id,
+        notifications.owner_type,
+        notifications.owner_id,
+        notifications.channel,
+        notifications.priority,
+        notifications.title_ru,
+        notifications.body_ru,
+        notifications.title_en,
+        notifications.body_en,
+        notifications.action_type,
+        notifications.action_url,
+        notifications.payload_json,
+        notifications.status,
+        notifications.sent_at,
+        notifications.expires_at,
+        notifications.created_at,
+        ${readSelectSql}
+      FROM public.app_notifications notifications
+      ${readJoinSql}
+      WHERE ${conditions.join("\n        AND ")}
+      ORDER BY notifications.priority DESC NULLS LAST,
+               notifications.sent_at DESC NULLS LAST,
+               notifications.created_at DESC,
+               notifications.id DESC
+      LIMIT $${values.length + 1}
+      `,
+      [...values, limit],
+    );
+
+    return res.json({
+      ok: true,
+      notifications: data.rows.map((row) => ({
+        id: row.id,
+        notification_uid: row.notification_uid,
+        target_type: row.target_type,
+        target_id: row.target_id,
+        owner_type: row.owner_type,
+        owner_id: row.owner_id,
+        channel: row.channel,
+        priority: row.priority,
+        title_ru: row.title_ru,
+        body_ru: row.body_ru,
+        title_en: row.title_en,
+        body_en: row.body_en,
+        action_type: row.action_type,
+        action_url: row.action_url,
+        payload_json: row.payload_json,
+        status: row.status,
+        sent_at: row.sent_at,
+        expires_at: row.expires_at,
+        created_at: row.created_at,
+        read_at: row.read_at || null,
+        is_read: Boolean(row.is_read),
+      })),
+    });
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: "PUBLIC_MOBILE_NOTIFICATIONS_FAILED",
+    });
+  }
+});
+
+router.post("/notifications/:notificationUid/read", async (req, res) => {
+  try {
+    const notificationUid = String(req.params.notificationUid || "").trim();
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const readerType = String(body.reader_type || "").trim().toLowerCase();
+    const readerId = String(body.reader_id || "").trim();
+
+    if (!notificationUid) {
+      return res.status(400).json({
+        ok: false,
+        error: "NOTIFICATION_UID_REQUIRED",
+      });
+    }
+
+    if (!readerType) {
+      return res.status(400).json({
+        ok: false,
+        error: "NOTIFICATION_READER_TYPE_REQUIRED",
+      });
+    }
+
+    if (!isAllowedMobileNotificationReaderType(readerType)) {
+      return res.status(400).json({
+        ok: false,
+        error: "NOTIFICATION_READER_TYPE_INVALID",
+      });
+    }
+
+    if (!readerId || readerId.length > 120) {
+      return res.status(400).json({
+        ok: false,
+        error: "NOTIFICATION_READER_ID_REQUIRED",
+      });
+    }
+
+    const data = await pool.query(
+      `
+      WITH notification AS (
+        SELECT id, notification_uid
+        FROM public.app_notifications
+        WHERE notification_uid = $1
+          AND status = 'sent'
+          AND channel = 'in_app'
+          AND (expires_at IS NULL OR expires_at > NOW())
+        LIMIT 1
+      ),
+      upserted AS (
+        INSERT INTO public.app_notification_reads (
+          notification_id,
+          reader_type,
+          reader_id,
+          read_at
+        )
+        SELECT
+          notification.id,
+          $2,
+          $3,
+          NOW()
+        FROM notification
+        ON CONFLICT (notification_id, reader_type, reader_id)
+        DO UPDATE SET read_at = public.app_notification_reads.read_at
+        RETURNING
+          notification_id,
+          reader_type,
+          reader_id,
+          read_at,
+          (xmax = 0) AS created
+      )
+      SELECT
+        upserted.notification_id,
+        notification.notification_uid,
+        upserted.reader_type,
+        upserted.reader_id,
+        upserted.read_at,
+        upserted.created
+      FROM upserted
+      JOIN notification ON notification.id = upserted.notification_id
+      `,
+      [notificationUid, readerType, readerId],
+    );
+
+    const read = data.rows[0] || null;
+
+    if (!read) {
+      return res.status(404).json({
+        ok: false,
+        error: "NOTIFICATION_NOT_FOUND",
+      });
+    }
+
+    return res.json({
+      ok: true,
+      read: {
+        notification_id: read.notification_id,
+        notification_uid: read.notification_uid,
+        reader_type: read.reader_type,
+        reader_id: read.reader_id,
+        read_at: read.read_at,
+        created: Boolean(read.created),
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: "PUBLIC_MOBILE_NOTIFICATION_READ_FAILED",
     });
   }
 });
