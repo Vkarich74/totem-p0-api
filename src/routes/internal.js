@@ -614,6 +614,115 @@ FOR UPDATE
 return userRes.rows[0] || null;
 }
 
+async function listAuthUsersByTargetRole(db, { target, requestedRole }){
+const safeRole = String(requestedRole || "").trim().toLowerCase();
+
+if(!target?.value || !safeRole){
+return [];
+}
+
+const hasPasswordHash = await authUsersHasColumn(db, "password_hash");
+const hasSalonSlug = await authUsersHasColumn(db, "salon_slug");
+const hasMasterSlug = await authUsersHasColumn(db, "master_slug");
+
+const fields = ["id", "role", "enabled"];
+
+if(hasPasswordHash){
+fields.push("password_hash");
+}
+
+if(hasSalonSlug){
+fields.push("salon_slug");
+}
+
+if(hasMasterSlug){
+fields.push("master_slug");
+}
+
+const whereClause = target?.lookup === "email"
+  ? "lower(email)=lower($1)"
+  : "phone=$1";
+
+const userRes = await db.query(`
+SELECT ${fields.join(", ")}
+FROM public.auth_users
+WHERE ${whereClause}
+  AND role=$2
+  AND enabled=true
+ORDER BY id ASC
+FOR UPDATE
+`, [target.value, safeRole]);
+
+return userRes.rows || [];
+}
+
+function getOwnerSlugFromAuthUser(user, requestedRole){
+const safeRole = String(requestedRole || "").trim().toLowerCase();
+const rawSlug = safeRole === "salon_admin" ? user?.salon_slug : safeRole === "master" ? user?.master_slug : "";
+const slug = String(rawSlug || "").trim().toLowerCase();
+return slug;
+}
+
+function buildOwnerContextList(users, requestedRole){
+const safeRole = String(requestedRole || "").trim().toLowerCase();
+const ownerType = safeRole === "salon_admin" ? "salon" : safeRole === "master" ? "master" : "";
+
+if(!ownerType){
+return [];
+}
+
+const contexts = [];
+const seen = new Set();
+
+for(const user of Array.isArray(users) ? users : []){
+const slug = getOwnerSlugFromAuthUser(user, safeRole);
+
+if(!slug){
+continue;
+}
+
+const key = `${safeRole}:${slug}`;
+if(seen.has(key)){
+continue;
+}
+
+seen.add(key);
+contexts.push({
+role: safeRole,
+owner_type: ownerType,
+slug
+});
+}
+
+return contexts;
+}
+
+function buildOwnerAuthContext(user, requestedRole){
+const slug = getOwnerSlugFromAuthUser(user, requestedRole);
+const ownerType = String(requestedRole || "").trim().toLowerCase() === "salon_admin" ? "salon" : String(requestedRole || "").trim().toLowerCase() === "master" ? "master" : "";
+
+if(!slug || !ownerType){
+return null;
+}
+
+const context = {
+role: String(requestedRole || "").trim().toLowerCase(),
+owner_type: ownerType,
+slug,
+owner_slug: slug
+};
+
+if(ownerType === "salon"){
+context.salon_slug = slug;
+}
+
+if(ownerType === "master"){
+context.master_slug = slug;
+}
+
+return context;
+}
+
 
 async function issueAuthOtp(db, { target, purpose, channel, userId = null, emailContext = null }){
 const hasUserId = Number.isInteger(Number(userId)) && Number(userId) > 0;
@@ -947,18 +1056,65 @@ error:"LOGIN_PAYLOAD_INVALID"
 let user = null;
 
 if(isOwnerAuth){
-if(!requestedOwnerSlug){
-return res.status(400).json({
-ok:false,
-error:"OWNER_CONTEXT_REQUIRED"
-});
-}
+if(requestedOwnerSlug){
+  user = await getAuthUserByTargetRoleAndSlug(db, {
+    target: authTarget,
+    requestedRole,
+    requestedOwnerSlug
+  });
+}else{
+  const candidates = await listAuthUsersByTargetRole(db, {
+    target: authTarget,
+    requestedRole
+  });
 
-user = await getAuthUserByTargetRoleAndSlug(db, {
-target: authTarget,
-requestedRole,
-requestedOwnerSlug
-});
+  if(!candidates.length){
+    return res.status(401).json({
+      ok:false,
+      error:"INVALID_CREDENTIALS"
+    });
+  }
+
+  const matchedUsers = [];
+
+  for(const candidate of candidates){
+    if(!candidate?.password_hash){
+      continue;
+    }
+
+    const passwordOk = await bcrypt.compare(password, candidate.password_hash);
+    if(passwordOk){
+      matchedUsers.push(candidate);
+    }
+  }
+
+  if(!matchedUsers.length){
+    return res.status(401).json({
+      ok:false,
+      error:"INVALID_CREDENTIALS"
+    });
+  }
+
+  const contexts = buildOwnerContextList(matchedUsers, requestedRole);
+
+  if(!contexts.length){
+    return res.status(400).json({
+      ok:false,
+      error:"OWNER_CONTEXT_REQUIRED"
+    });
+  }
+
+  if(contexts.length > 1){
+    return res.status(409).json({
+      ok:false,
+      error:"MULTIPLE_OWNER_CONTEXTS",
+      contexts
+    });
+  }
+
+  const selectedSlug = contexts[0].slug;
+  user = matchedUsers.find((candidate) => getOwnerSlugFromAuthUser(candidate, requestedRole) === selectedSlug) || matchedUsers[0];
+}
 } else {
 user = await findLoginUser(db, { email, phone });
 }
@@ -1021,7 +1177,8 @@ session_id: session.id,
 session_source: "auth_sessions",
 session_expires_at: session.expires_at,
 last_seen_at: session.last_seen_at,
-idle_timeout_at: session.idle_timeout_at
+idle_timeout_at: session.idle_timeout_at,
+...(isOwnerAuth ? buildOwnerAuthContext(user, requestedRole) : {})
 }
 });
 }catch(err){
@@ -1691,7 +1848,7 @@ r.post("/auth/start", async (req,res)=>{
     await db.query("BEGIN");
 
     if(purpose === "login_verify"){
-      if(!requestedRole || !requestedOwnerSlug){
+      if(!requestedRole){
         await db.query("ROLLBACK");
         return res.status(400).json({
           ok:false,
@@ -1699,11 +1856,58 @@ r.post("/auth/start", async (req,res)=>{
         });
       }
 
-      const user = await getAuthUserByTargetRoleAndSlug(db, {
-        target: authTarget,
-        requestedRole,
-        requestedOwnerSlug
-      });
+      let user = null;
+      let authContext = null;
+
+      if(requestedOwnerSlug){
+        user = await getAuthUserByTargetRoleAndSlug(db, {
+          target: authTarget,
+          requestedRole,
+          requestedOwnerSlug
+        });
+
+        authContext = user ? buildOwnerAuthContext(user, requestedRole) : null;
+      }else{
+        const candidates = await listAuthUsersByTargetRole(db, {
+          target: authTarget,
+          requestedRole
+        });
+
+        if(!candidates.length){
+          await db.query("ROLLBACK");
+          return res.status(404).json({
+            ok:false,
+            error:"AUTH_USER_NOT_FOUND"
+          });
+        }
+
+        const contexts = buildOwnerContextList(candidates, requestedRole);
+
+        if(!contexts.length){
+          await db.query("ROLLBACK");
+          return res.status(400).json({
+            ok:false,
+            error:"OWNER_CONTEXT_REQUIRED"
+          });
+        }
+
+        if(contexts.length > 1){
+          await db.query("ROLLBACK");
+          return res.status(409).json({
+            ok:false,
+            error:"MULTIPLE_OWNER_CONTEXTS",
+            contexts
+          });
+        }
+
+        authContext = contexts[0];
+
+        user = await getAuthUserByTargetRoleAndSlug(db, {
+          target: authTarget,
+          requestedRole,
+          requestedOwnerSlug: authContext.slug
+        });
+      }
 
       if(!user?.id){
         await db.query("ROLLBACK");
@@ -1727,7 +1931,10 @@ r.post("/auth/start", async (req,res)=>{
 
       await db.query("COMMIT");
 
-      return res.json(otpResult);
+      return res.json({
+        ...otpResult,
+        auth_context: authContext || buildOwnerAuthContext(user, requestedRole)
+      });
     }
 
     const otpResult = await issueAuthOtp(db, {
@@ -1790,7 +1997,7 @@ r.post("/auth/verify", async (req,res)=>{
     await db.query("BEGIN");
 
     if(purpose === "login_verify"){
-      if(!strictRequestedRole || !strictRequestedOwnerSlug){
+      if(!strictRequestedRole){
         await db.query("ROLLBACK");
         return res.status(400).json({
           ok:false,
@@ -1798,11 +2005,58 @@ r.post("/auth/verify", async (req,res)=>{
         });
       }
 
-      const user = await getAuthUserByTargetRoleAndSlug(db, {
-        target: authTarget,
-        requestedRole: strictRequestedRole,
-        requestedOwnerSlug: strictRequestedOwnerSlug
-      });
+      let user = null;
+      let authContext = null;
+
+      if(strictRequestedOwnerSlug){
+        user = await getAuthUserByTargetRoleAndSlug(db, {
+          target: authTarget,
+          requestedRole: strictRequestedRole,
+          requestedOwnerSlug: strictRequestedOwnerSlug
+        });
+
+        authContext = user ? buildOwnerAuthContext(user, strictRequestedRole) : null;
+      }else{
+        const candidates = await listAuthUsersByTargetRole(db, {
+          target: authTarget,
+          requestedRole: strictRequestedRole
+        });
+
+        if(!candidates.length){
+          await db.query("ROLLBACK");
+          return res.status(404).json({
+            ok:false,
+            error:"AUTH_USER_NOT_FOUND"
+          });
+        }
+
+        const contexts = buildOwnerContextList(candidates, strictRequestedRole);
+
+        if(!contexts.length){
+          await db.query("ROLLBACK");
+          return res.status(400).json({
+            ok:false,
+            error:"OWNER_CONTEXT_REQUIRED"
+          });
+        }
+
+        if(contexts.length > 1){
+          await db.query("ROLLBACK");
+          return res.status(409).json({
+            ok:false,
+            error:"MULTIPLE_OWNER_CONTEXTS",
+            contexts
+          });
+        }
+
+        authContext = contexts[0];
+
+        user = await getAuthUserByTargetRoleAndSlug(db, {
+          target: authTarget,
+          requestedRole: strictRequestedRole,
+          requestedOwnerSlug: authContext.slug
+        });
+      }
 
       if(!user?.id){
         await db.query("ROLLBACK");
@@ -1938,8 +2192,10 @@ r.post("/auth/verify", async (req,res)=>{
           session_source:"auth_sessions",
           session_expires_at:session.expires_at,
           last_seen_at:session.last_seen_at,
-          idle_timeout_at:session.idle_timeout_at
-        }
+          idle_timeout_at:session.idle_timeout_at,
+          ...(authContext || buildOwnerAuthContext(user, strictRequestedRole) || {})
+        },
+        auth_context: authContext || buildOwnerAuthContext(user, strictRequestedRole)
       });
     }
 
