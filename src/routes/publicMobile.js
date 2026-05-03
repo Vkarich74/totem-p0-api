@@ -64,6 +64,31 @@ function normalizeMobilePayloadJson(value) {
   };
 }
 
+function buildReferralEventDedupMeta(payloadJson, referralCode, eventType, countryCode, citySlug, source, dateBucket) {
+  const contextCandidates = [
+    payloadJson?.request_uid,
+    payloadJson?.booking_uid,
+    payloadJson?.booking_id,
+    payloadJson?.client_uid,
+    payloadJson?.session_id,
+  ];
+  const contextKey = contextCandidates.find((value) => String(value || "").trim()) || "daily";
+  const referralEventKey = [
+    String(referralCode || "").trim(),
+    String(eventType || "").trim(),
+    String(countryCode || "").trim() || "global",
+    String(citySlug || "").trim() || "global",
+    String(source || "").trim() || "mobile",
+    String(dateBucket || "").trim(),
+    String(contextKey || "").trim(),
+  ].join(":");
+
+  return {
+    contextKey,
+    referralEventKey,
+  };
+}
+
 router.get("/config", async (req, res) => {
   try {
     const versionsResult = await pool.query(
@@ -749,6 +774,7 @@ router.post("/referral/events", async (req, res) => {
     const body = req.body && typeof req.body === "object" ? req.body : {};
     const referralCode = String(body.referral_code || "").trim();
     const eventType = String(body.event_type || "").trim();
+    const source = String(body.source || "").trim().toLowerCase() || "mobile";
 
     if (!referralCode) {
       return res.status(400).json({
@@ -771,39 +797,18 @@ router.post("/referral/events", async (req, res) => {
       });
     }
 
-    const rawPayload = body.payload_json;
-    const isPlainObject =
-      rawPayload !== null &&
-      typeof rawPayload === "object" &&
-      !Array.isArray(rawPayload) &&
-      Object.prototype.toString.call(rawPayload) === "[object Object]";
+    const normalizedPayload = normalizeMobilePayloadJson(body.payload_json);
 
-    const sanitizePayload = (value) => {
-      if (Array.isArray(value) || value === null || typeof value !== "object") {
-        return {};
-      }
+    if (normalizedPayload.error) {
+      return res.status(400).json({
+        ok: false,
+        error: normalizedPayload.error,
+      });
+    }
 
-      const result = {};
+    const payloadObject = normalizedPayload.payload;
 
-      for (const [key, entry] of Object.entries(value)) {
-        if (["phone", "email", "name"].includes(String(key).toLowerCase())) {
-          continue;
-        }
-
-        if (entry && typeof entry === "object") {
-          result[key] = sanitizePayload(entry);
-        } else {
-          result[key] = entry;
-        }
-      }
-
-      return result;
-    };
-
-    const payloadObject = isPlainObject ? sanitizePayload(rawPayload) : {};
-    const payloadString = JSON.stringify(payloadObject);
-
-    if (payloadString.length > 2000) {
+    if (JSON.stringify(payloadObject).length > 2000) {
       return res.status(400).json({
         ok: false,
         error: "PAYLOAD_TOO_LARGE",
@@ -843,8 +848,56 @@ router.post("/referral/events", async (req, res) => {
       cityId = cityResult.rows[0]?.id || null;
     }
 
-    const countryValue = String(body.country || "").trim().toUpperCase();
-    const countryCode = countryValue ? countryValue.slice(0, 2) : String(link.country_code || "").trim().toUpperCase() || null;
+    const countryCode = String(body.country || "").trim().toUpperCase();
+    const countryValue = String(countryCode || "").trim().slice(0, 2);
+    const countryCodeValue = countryValue ? countryValue : String(link.country_code || "").trim().toUpperCase() || null;
+    const sourceValue = source || "mobile";
+    const dateBucket = new Date().toISOString().slice(0, 10);
+    const dedupMeta = buildReferralEventDedupMeta(payloadObject, referralCode, eventType, countryCodeValue, citySlug, sourceValue, dateBucket);
+
+    const existingEventResult = await pool.query(
+      `SELECT
+         id,
+         event_uid,
+         event_type,
+         status,
+         reward_status,
+         created_at
+       FROM public.referral_events
+       WHERE referral_code = $1
+         AND event_type = $2
+         AND payload_json->>'referral_event_key' = $3
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [referralCode, eventType, dedupMeta.referralEventKey]
+    );
+
+    const existingEvent = existingEventResult.rows[0] || null;
+
+    if (existingEvent) {
+      return res.status(200).json({
+        ok: true,
+        event: {
+          id: existingEvent.id,
+          event_uid: existingEvent.event_uid,
+          event_type: existingEvent.event_type,
+          status: existingEvent.status,
+          reward_status: existingEvent.reward_status,
+          created_at: existingEvent.created_at,
+          duplicate: true,
+        },
+      });
+    }
+
+    const payloadWithDedup = {
+      ...payloadObject,
+      referral_event_key: dedupMeta.referralEventKey,
+      dedup: {
+        strategy: "referral_code_event_context_day",
+        date_bucket: dateBucket,
+        context_key: dedupMeta.contextKey,
+      },
+    };
 
     const insertResult = await pool.query(
       `INSERT INTO public.referral_events (
@@ -885,9 +938,9 @@ router.post("/referral/events", async (req, res) => {
         eventType,
         link.owner_type || null,
         link.owner_id || null,
-        countryCode,
+        countryCodeValue,
         cityId,
-        payloadString,
+        JSON.stringify(payloadWithDedup),
       ]
     );
 
