@@ -324,8 +324,9 @@ export async function resolveBookingEntryTarget(db, ownerType, slug) {
   }
 
   const access = buildEntryAccessSnapshot(resolvedOwner);
+  const contract = buildEntryContract(resolvedOwner, access);
 
-  if (!access.can_book || !access.entry_allowed || !access.qr_allowed) {
+  if (!access.can_book || !contract.entry_allowed || !contract.qr_allowed) {
     throw createBookingTargetError("QR_NOT_AVAILABLE");
   }
 
