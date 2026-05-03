@@ -111,6 +111,55 @@ function safeJson(res, statusCode, payload) {
   return res.status(statusCode).json(payload);
 }
 
+async function resolveMoneyCoreOwnerBySlug(pool, ownerType, slug) {
+  const normalizedOwnerType = String(ownerType || '').trim().toLowerCase();
+  const normalizedSlug = String(slug || '').trim();
+
+  if (normalizedOwnerType !== 'salon' && normalizedOwnerType !== 'master') {
+    return {
+      ok: false,
+      statusCode: 400,
+      error: 'OWNER_TYPE_INVALID',
+    };
+  }
+
+  if (!normalizedSlug) {
+    return {
+      ok: false,
+      statusCode: 400,
+      error: 'SLUG_REQUIRED',
+    };
+  }
+
+  const ownerQuery =
+    normalizedOwnerType === 'salon'
+      ? await pool.query(
+          'SELECT id, slug, name, enabled, status FROM public.salons WHERE slug = $1 LIMIT 1',
+          [normalizedSlug]
+        )
+      : await pool.query(
+          'SELECT id, slug, name, active FROM public.masters WHERE slug = $1 LIMIT 1',
+          [normalizedSlug]
+        );
+
+  const ownerRow = ownerQuery.rows[0] || null;
+
+  if (!ownerRow) {
+    return {
+      ok: false,
+      statusCode: 404,
+      error: 'OWNER_NOT_FOUND',
+    };
+  }
+
+  return {
+    ok: true,
+    owner_type: normalizedOwnerType,
+    owner_id: ownerRow.id,
+    owner: ownerRow,
+  };
+}
+
 function buildMoneyCoreRouter(pool) {
   const r = express.Router();
 
@@ -1383,6 +1432,386 @@ function buildMoneyCoreRouter(pool) {
       });
       return safeJson(res, 200, { ok: true, data, meta: {} });
     } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/salons/:slug/money-core/withdraw-destinations', async (req, res, next) => {
+    try {
+      const owner = await resolveMoneyCoreOwnerBySlug(pool, 'salon', req.params.slug);
+
+      if (!owner.ok) {
+        return safeJson(res, owner.statusCode || 400, {
+          ok: false,
+          error: owner.error,
+        });
+      }
+
+      const destinations = await listWithdrawDestinations(pool, owner.owner_type, owner.owner_id, {
+        method: req.query?.method,
+        status: req.query?.status,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        destinations,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.post('/salons/:slug/money-core/withdraw-destinations', async (req, res, next) => {
+    try {
+      const owner = await resolveMoneyCoreOwnerBySlug(pool, 'salon', req.params.slug);
+
+      if (!owner.ok) {
+        return safeJson(res, owner.statusCode || 400, {
+          ok: false,
+          error: owner.error,
+        });
+      }
+
+      const destination = await createWithdrawDestination(pool, owner.owner_type, owner.owner_id, req.body || {}, {
+        user_id: req.user?.id ?? req.user?.user_id ?? null,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        destination,
+      });
+    } catch (err) {
+      if (err && String(err.code || '').startsWith('MONEY_CORE_')) {
+        return safeJson(res, err.statusCode || 403, {
+          ok: false,
+          error: err.code,
+          message: err.message,
+        });
+      }
+      if (err && err.statusCode) {
+        return safeJson(res, err.statusCode, {
+          ok: false,
+          error: err.code || 'WITHDRAW_DESTINATION_INVALID',
+          message: err.message,
+        });
+      }
+      return next(err);
+    }
+  });
+
+  r.get('/salons/:slug/money-core/withdraw-settings', async (req, res, next) => {
+    try {
+      const owner = await resolveMoneyCoreOwnerBySlug(pool, 'salon', req.params.slug);
+
+      if (!owner.ok) {
+        return safeJson(res, owner.statusCode || 400, {
+          ok: false,
+          error: owner.error,
+        });
+      }
+
+      const settings = await getWithdrawSettings(pool, owner.owner_type, owner.owner_id);
+
+      return safeJson(res, 200, {
+        ok: true,
+        settings,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.patch('/salons/:slug/money-core/withdraw-settings', async (req, res, next) => {
+    try {
+      const owner = await resolveMoneyCoreOwnerBySlug(pool, 'salon', req.params.slug);
+
+      if (!owner.ok) {
+        return safeJson(res, owner.statusCode || 400, {
+          ok: false,
+          error: owner.error,
+        });
+      }
+
+      const settings = await upsertWithdrawSettings(pool, owner.owner_type, owner.owner_id, req.body || {}, {
+        user_id: req.user?.id ?? req.user?.user_id ?? null,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        settings,
+      });
+    } catch (err) {
+      if (err && String(err.code || '').startsWith('MONEY_CORE_')) {
+        return safeJson(res, err.statusCode || 403, {
+          ok: false,
+          error: err.code,
+          message: err.message,
+        });
+      }
+      if (err && err.statusCode) {
+        return safeJson(res, err.statusCode, {
+          ok: false,
+          error: err.code || 'WITHDRAW_SETTINGS_INVALID',
+          message: err.message,
+        });
+      }
+      return next(err);
+    }
+  });
+
+  r.get('/salons/:slug/money-core/withdraw-requests', async (req, res, next) => {
+    try {
+      const owner = await resolveMoneyCoreOwnerBySlug(pool, 'salon', req.params.slug);
+
+      if (!owner.ok) {
+        return safeJson(res, owner.statusCode || 400, {
+          ok: false,
+          error: owner.error,
+        });
+      }
+
+      const requests = await listWithdrawRequests(pool, owner.owner_type, owner.owner_id, {
+        status: req.query?.status,
+        destination_id: req.query?.destination_id,
+        limit: req.query?.limit,
+        offset: req.query?.offset,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        requests,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.post('/salons/:slug/money-core/withdraw-requests', async (req, res, next) => {
+    try {
+      const owner = await resolveMoneyCoreOwnerBySlug(pool, 'salon', req.params.slug);
+
+      if (!owner.ok) {
+        return safeJson(res, owner.statusCode || 400, {
+          ok: false,
+          error: owner.error,
+        });
+      }
+
+      const result = await createWithdrawRequest(pool, owner.owner_type, owner.owner_id, req.body || {}, {
+        user_id: req.user?.id ?? req.user?.user_id ?? null,
+        user_type: req.user?.type ?? null,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        request: result.request,
+        ledger: result.ledger,
+      });
+    } catch (err) {
+      if (err && String(err.code || '').startsWith('MONEY_CORE_')) {
+        return safeJson(res, err.statusCode || 403, {
+          ok: false,
+          error: err.code,
+          message: err.message,
+        });
+      }
+      if (err && err.statusCode) {
+        return safeJson(res, err.statusCode, {
+          ok: false,
+          error: err.code || 'WITHDRAW_REQUEST_INVALID',
+          message: err.message,
+        });
+      }
+      return next(err);
+    }
+  });
+
+  r.get('/masters/:slug/money-core/withdraw-destinations', async (req, res, next) => {
+    try {
+      const owner = await resolveMoneyCoreOwnerBySlug(pool, 'master', req.params.slug);
+
+      if (!owner.ok) {
+        return safeJson(res, owner.statusCode || 400, {
+          ok: false,
+          error: owner.error,
+        });
+      }
+
+      const destinations = await listWithdrawDestinations(pool, owner.owner_type, owner.owner_id, {
+        method: req.query?.method,
+        status: req.query?.status,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        destinations,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.post('/masters/:slug/money-core/withdraw-destinations', async (req, res, next) => {
+    try {
+      const owner = await resolveMoneyCoreOwnerBySlug(pool, 'master', req.params.slug);
+
+      if (!owner.ok) {
+        return safeJson(res, owner.statusCode || 400, {
+          ok: false,
+          error: owner.error,
+        });
+      }
+
+      const destination = await createWithdrawDestination(pool, owner.owner_type, owner.owner_id, req.body || {}, {
+        user_id: req.user?.id ?? req.user?.user_id ?? null,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        destination,
+      });
+    } catch (err) {
+      if (err && String(err.code || '').startsWith('MONEY_CORE_')) {
+        return safeJson(res, err.statusCode || 403, {
+          ok: false,
+          error: err.code,
+          message: err.message,
+        });
+      }
+      if (err && err.statusCode) {
+        return safeJson(res, err.statusCode, {
+          ok: false,
+          error: err.code || 'WITHDRAW_DESTINATION_INVALID',
+          message: err.message,
+        });
+      }
+      return next(err);
+    }
+  });
+
+  r.get('/masters/:slug/money-core/withdraw-settings', async (req, res, next) => {
+    try {
+      const owner = await resolveMoneyCoreOwnerBySlug(pool, 'master', req.params.slug);
+
+      if (!owner.ok) {
+        return safeJson(res, owner.statusCode || 400, {
+          ok: false,
+          error: owner.error,
+        });
+      }
+
+      const settings = await getWithdrawSettings(pool, owner.owner_type, owner.owner_id);
+
+      return safeJson(res, 200, {
+        ok: true,
+        settings,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.patch('/masters/:slug/money-core/withdraw-settings', async (req, res, next) => {
+    try {
+      const owner = await resolveMoneyCoreOwnerBySlug(pool, 'master', req.params.slug);
+
+      if (!owner.ok) {
+        return safeJson(res, owner.statusCode || 400, {
+          ok: false,
+          error: owner.error,
+        });
+      }
+
+      const settings = await upsertWithdrawSettings(pool, owner.owner_type, owner.owner_id, req.body || {}, {
+        user_id: req.user?.id ?? req.user?.user_id ?? null,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        settings,
+      });
+    } catch (err) {
+      if (err && String(err.code || '').startsWith('MONEY_CORE_')) {
+        return safeJson(res, err.statusCode || 403, {
+          ok: false,
+          error: err.code,
+          message: err.message,
+        });
+      }
+      if (err && err.statusCode) {
+        return safeJson(res, err.statusCode, {
+          ok: false,
+          error: err.code || 'WITHDRAW_SETTINGS_INVALID',
+          message: err.message,
+        });
+      }
+      return next(err);
+    }
+  });
+
+  r.get('/masters/:slug/money-core/withdraw-requests', async (req, res, next) => {
+    try {
+      const owner = await resolveMoneyCoreOwnerBySlug(pool, 'master', req.params.slug);
+
+      if (!owner.ok) {
+        return safeJson(res, owner.statusCode || 400, {
+          ok: false,
+          error: owner.error,
+        });
+      }
+
+      const requests = await listWithdrawRequests(pool, owner.owner_type, owner.owner_id, {
+        status: req.query?.status,
+        destination_id: req.query?.destination_id,
+        limit: req.query?.limit,
+        offset: req.query?.offset,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        requests,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.post('/masters/:slug/money-core/withdraw-requests', async (req, res, next) => {
+    try {
+      const owner = await resolveMoneyCoreOwnerBySlug(pool, 'master', req.params.slug);
+
+      if (!owner.ok) {
+        return safeJson(res, owner.statusCode || 400, {
+          ok: false,
+          error: owner.error,
+        });
+      }
+
+      const result = await createWithdrawRequest(pool, owner.owner_type, owner.owner_id, req.body || {}, {
+        user_id: req.user?.id ?? req.user?.user_id ?? null,
+        user_type: req.user?.type ?? null,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        request: result.request,
+        ledger: result.ledger,
+      });
+    } catch (err) {
+      if (err && String(err.code || '').startsWith('MONEY_CORE_')) {
+        return safeJson(res, err.statusCode || 403, {
+          ok: false,
+          error: err.code,
+          message: err.message,
+        });
+      }
+      if (err && err.statusCode) {
+        return safeJson(res, err.statusCode, {
+          ok: false,
+          error: err.code || 'WITHDRAW_REQUEST_INVALID',
+          message: err.message,
+        });
+      }
       return next(err);
     }
   });
