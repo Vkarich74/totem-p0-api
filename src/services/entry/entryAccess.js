@@ -216,7 +216,10 @@ async function findMasterEntryCore(db, slug) {
        LIMIT 1
      ) oi ON TRUE
      WHERE m.slug = $1
-     ORDER BY au.id ASC NULLS LAST
+     ORDER BY
+       CASE WHEN au.id = m.user_id THEN 0 ELSE 1 END ASC,
+       CASE WHEN au.enabled = TRUE THEN 0 ELSE 1 END ASC,
+       au.id ASC NULLS LAST
      LIMIT 1`,
     [slug]
   );
