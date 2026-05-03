@@ -324,13 +324,14 @@ export async function resolveBookingEntryTarget(db, ownerType, slug) {
   }
 
   const access = buildEntryAccessSnapshot(resolvedOwner);
-  const contract = buildEntryContract(resolvedOwner, access);
-
-  if (!access.can_book || !contract.entry_allowed || !contract.qr_allowed) {
-    throw createBookingTargetError("QR_NOT_AVAILABLE");
-  }
 
   if (safeType === "salon") {
+    const contract = buildEntryContract(resolvedOwner, access);
+
+    if (!access.can_book || !contract.entry_allowed || !contract.qr_allowed) {
+      throw createBookingTargetError("QR_NOT_AVAILABLE");
+    }
+
     const bookingUrl = buildSalonBookingAbsoluteUrl(resolvedOwner.canonical_slug);
 
     return {
@@ -342,6 +343,14 @@ export async function resolveBookingEntryTarget(db, ownerType, slug) {
       booking_url: bookingUrl,
       qr_target_url: bookingUrl
     };
+  }
+
+  if (
+    resolvedOwner.lifecycle_state !== "active" ||
+    resolvedOwner.source?.master_active === false ||
+    resolvedOwner.source?.auth_enabled === false
+  ) {
+    throw createBookingTargetError("QR_NOT_AVAILABLE");
   }
 
   const relationResult = await db.query(
@@ -374,6 +383,19 @@ export async function resolveBookingEntryTarget(db, ownerType, slug) {
 
   if (!relation || activeServiceLinks <= 0) {
     throw createBookingTargetError("MASTER_BOOKING_CONTEXT_NOT_READY");
+  }
+
+  const salonOwner = await resolveEntryOwner(db, "salon", relation.salon_slug);
+
+  if (!salonOwner) {
+    throw createBookingTargetError("MASTER_BOOKING_CONTEXT_NOT_READY");
+  }
+
+  const salonAccess = buildEntryAccessSnapshot(salonOwner);
+  const salonContract = buildEntryContract(salonOwner, salonAccess);
+
+  if (!salonAccess.can_book || !salonContract.entry_allowed || !salonContract.qr_allowed) {
+    throw createBookingTargetError("QR_NOT_AVAILABLE");
   }
 
   const bookingUrl = buildMasterBookingAbsoluteUrl(relation.salon_slug, resolvedOwner.owner_id);
