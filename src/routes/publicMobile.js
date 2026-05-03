@@ -41,6 +41,11 @@ function normalizeMobileEmail(value) {
   return email ? email.slice(0, 200) : null;
 }
 
+function parsePositiveInt(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 function normalizeMobilePayloadJson(value) {
   const isPlainObject =
     value !== null &&
