@@ -494,4 +494,200 @@ router.get("/referral", async (req, res) => {
   }
 });
 
+router.post("/referral/events", async (req, res) => {
+  try {
+    const flagResult = await pool.query(
+      `SELECT
+         enabled,
+         status
+       FROM public.mobile_feature_flags
+       WHERE flag_key = $1
+         AND scope_type = 'global'
+         AND scope_code = 'global'
+       LIMIT 1`,
+      ["mobile_referral_enabled"]
+    );
+
+    const flag = flagResult.rows[0] || null;
+    const flagStatus = String(flag?.status || "").trim().toLowerCase();
+    const flagEnabled = Boolean(flag?.enabled) && (flagStatus === "active" || flagStatus === "enabled");
+
+    if (!flag || !flagEnabled) {
+      return res.status(200).json({
+        ok: true,
+        recorded: false,
+        reason: "FEATURE_DISABLED",
+      });
+    }
+
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const referralCode = String(body.referral_code || "").trim();
+    const eventType = String(body.event_type || "").trim();
+
+    if (!referralCode) {
+      return res.status(400).json({
+        ok: false,
+        error: "REFERRAL_CODE_REQUIRED",
+      });
+    }
+
+    if (referralCode.length > 120) {
+      return res.status(400).json({
+        ok: false,
+        error: "REFERRAL_CODE_REQUIRED",
+      });
+    }
+
+    if (!["link_opened", "booking_started"].includes(eventType)) {
+      return res.status(400).json({
+        ok: false,
+        error: "INVALID_EVENT_TYPE",
+      });
+    }
+
+    const rawPayload = body.payload_json;
+    const isPlainObject =
+      rawPayload !== null &&
+      typeof rawPayload === "object" &&
+      !Array.isArray(rawPayload) &&
+      Object.prototype.toString.call(rawPayload) === "[object Object]";
+
+    const sanitizePayload = (value) => {
+      if (Array.isArray(value) || value === null || typeof value !== "object") {
+        return {};
+      }
+
+      const result = {};
+
+      for (const [key, entry] of Object.entries(value)) {
+        if (["phone", "email", "name"].includes(String(key).toLowerCase())) {
+          continue;
+        }
+
+        if (entry && typeof entry === "object") {
+          result[key] = sanitizePayload(entry);
+        } else {
+          result[key] = entry;
+        }
+      }
+
+      return result;
+    };
+
+    const payloadObject = isPlainObject ? sanitizePayload(rawPayload) : {};
+    const payloadString = JSON.stringify(payloadObject);
+
+    if (payloadString.length > 2000) {
+      return res.status(400).json({
+        ok: false,
+        error: "PAYLOAD_TOO_LARGE",
+      });
+    }
+
+    const linkResult = await pool.query(
+      `SELECT id, referral_code, owner_type, owner_id, country_code, city_id, channel
+       FROM public.referral_links
+       WHERE referral_code = $1
+         AND channel = 'mobile'
+         AND status = 'active'
+         AND (starts_at IS NULL OR starts_at <= now())
+         AND (expires_at IS NULL OR expires_at > now())
+         AND (max_uses IS NULL OR used_count < max_uses)
+       LIMIT 1`,
+      [referralCode]
+    );
+
+    const link = linkResult.rows[0] || null;
+
+    if (!link) {
+      return res.status(404).json({
+        ok: false,
+        error: "REFERRAL_LINK_NOT_FOUND",
+      });
+    }
+
+    let cityId = null;
+    const citySlug = String(body.city || "").trim().toLowerCase();
+
+    if (citySlug) {
+      const cityResult = await pool.query(
+        `SELECT id FROM public.cities WHERE slug = $1 LIMIT 1`,
+        [citySlug]
+      );
+      cityId = cityResult.rows[0]?.id || null;
+    }
+
+    const countryValue = String(body.country || "").trim().toUpperCase();
+    const countryCode = countryValue ? countryValue.slice(0, 2) : String(link.country_code || "").trim().toUpperCase() || null;
+
+    const insertResult = await pool.query(
+      `INSERT INTO public.referral_events (
+         event_uid,
+         referral_link_id,
+         referral_code,
+         event_type,
+         actor_type,
+         actor_id,
+         target_type,
+         target_id,
+         owner_type,
+         owner_id,
+         country_code,
+         city_id,
+         status,
+         reward_status,
+         reward_amount,
+         currency_code,
+         payload_json
+       )
+       VALUES (
+         gen_random_uuid()::text,
+         $1, $2, $3,
+         'anonymous', NULL,
+         'anonymous', NULL,
+         $4, $5, $6, $7,
+         'recorded',
+         'none',
+         NULL,
+         NULL,
+         $8::jsonb
+       )
+       RETURNING id, event_uid, event_type, status, reward_status, created_at`,
+      [
+        link.id,
+        referralCode,
+        eventType,
+        link.owner_type || null,
+        link.owner_id || null,
+        countryCode,
+        cityId,
+        payloadString,
+      ]
+    );
+
+    const event = insertResult.rows[0] || null;
+
+    return res.status(200).json({
+      ok: true,
+      recorded: true,
+      event: event
+        ? {
+            id: event.id,
+            event_uid: event.event_uid,
+            event_type: event.event_type,
+            status: event.status,
+            reward_status: event.reward_status,
+            created_at: event.created_at,
+          }
+        : null,
+    });
+  } catch (err) {
+    console.error("PUBLIC_MOBILE_REFERRAL_EVENT_FAILED", err);
+    return res.status(500).json({
+      ok: false,
+      error: "REFERRAL_EVENT_FAILED",
+    });
+  }
+});
+
 export default router;
