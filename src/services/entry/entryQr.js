@@ -1,4 +1,6 @@
 import { buildResolvedEntryContract } from "./entryAccess.js";
+import { resolveBookingEntryTarget } from "./entryAccess.js";
+import { buildQrContract } from "./qrService.js";
 
 const DEFAULT_QR_IMAGE_SIZE = 512;
 const DEFAULT_QR_MARGIN = 0;
@@ -87,20 +89,53 @@ export async function fetchQrPngBuffer(payload, options = {}) {
 }
 
 export async function buildResolvedQrImage(db, ownerType, slug, baseUrl = null, options = {}) {
-  const resolved = await buildResolvedEntryContract(db, ownerType, slug, baseUrl);
+  const target = String(options.target || "public").trim().toLowerCase() === "booking" ? "booking" : "public";
+  let resolved = null;
+  let qrContract = null;
 
-  if (!resolved) {
-    return null;
-  }
+  if (target === "booking") {
+    const bookingTarget = await resolveBookingEntryTarget(db, ownerType, slug);
 
-  if (!resolved.contract.qr_allowed) {
-    return {
-      resolved,
-      qr: null
+    if (!bookingTarget) {
+      return null;
+    }
+
+    resolved = {
+      owner: bookingTarget,
+      contract: {
+        owner_type: bookingTarget.owner_type,
+        owner_id: bookingTarget.owner_id,
+        canonical_slug: bookingTarget.canonical_slug,
+        qr_allowed: true
+      }
     };
+
+    qrContract = buildQrContract({
+      ...bookingTarget,
+      qr_target_type: "booking_entry",
+      qr_target_url: bookingTarget.booking_url
+    });
+  } else {
+    resolved = await buildResolvedEntryContract(db, ownerType, slug, baseUrl);
+
+    if (!resolved) {
+      return null;
+    }
+
+    if (!resolved.contract.qr_allowed) {
+      return {
+        resolved,
+        qr: null
+      };
+    }
+
+    qrContract = buildQrContract({
+      owner_type: resolved.contract.owner_type,
+      canonical_slug: resolved.contract.canonical_slug
+    });
   }
 
-  const payload = resolved.contract.public_absolute_url;
+  const payload = qrContract.qr.qr_target_url;
 
   const qr = await fetchQrPngBuffer(payload, options);
 
@@ -109,8 +144,9 @@ export async function buildResolvedQrImage(db, ownerType, slug, baseUrl = null, 
     qr,
     meta: {
       payload,
-      owner_type: resolved.contract.owner_type,
-      canonical_slug: resolved.contract.canonical_slug
+      owner_type: qrContract.qr.owner_type,
+      canonical_slug: qrContract.qr.canonical_slug,
+      qr_target_type: qrContract.qr.qr_target_type
     }
   };
 }

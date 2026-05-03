@@ -1,4 +1,10 @@
-import { buildEntryContract, validateOwnerType, validateCanonicalSlug } from "./entryContract.js";
+import {
+  buildEntryContract,
+  buildMasterBookingAbsoluteUrl,
+  buildSalonBookingAbsoluteUrl,
+  validateOwnerType,
+  validateCanonicalSlug
+} from "./entryContract.js";
 
 function normalizeText(value){
   return String(value || "").trim();
@@ -239,6 +245,13 @@ async function findBillingState(db, ownerType, ownerId) {
   return normalizeBillingState(row.blocked_at ? "blocked" : row.subscription_status);
 }
 
+function createBookingTargetError(code) {
+  const err = new Error(code);
+  err.code = code;
+  err.statusCode = 403;
+  return err;
+}
+
 export async function resolveEntryOwner(db, ownerType, slug) {
   const safeType = validateOwnerType(ownerType);
   const safeSlug = validateCanonicalSlug(slug);
@@ -301,8 +314,85 @@ export async function buildResolvedEntryContract(db, ownerType, slug, baseUrl = 
   };
 }
 
+export async function resolveBookingEntryTarget(db, ownerType, slug) {
+  const safeType = validateOwnerType(ownerType);
+  const safeSlug = validateCanonicalSlug(slug);
+  const resolvedOwner = await resolveEntryOwner(db, safeType, safeSlug);
+
+  if (!resolvedOwner) {
+    return null;
+  }
+
+  const access = buildEntryAccessSnapshot(resolvedOwner);
+
+  if (!access.can_book || !access.entry_allowed || !access.qr_allowed) {
+    throw createBookingTargetError("QR_NOT_AVAILABLE");
+  }
+
+  if (safeType === "salon") {
+    const bookingUrl = buildSalonBookingAbsoluteUrl(resolvedOwner.canonical_slug);
+
+    return {
+      owner_type: "salon",
+      owner_id: resolvedOwner.owner_id,
+      canonical_slug: resolvedOwner.canonical_slug,
+      qr_target_type: "booking_entry",
+      salon_slug: resolvedOwner.canonical_slug,
+      booking_url: bookingUrl,
+      qr_target_url: bookingUrl
+    };
+  }
+
+  const relationResult = await db.query(
+    `SELECT
+       s.id AS salon_id,
+       s.slug AS salon_slug,
+       COUNT(sms.id)::int AS active_service_links
+     FROM public.masters m
+     JOIN public.master_salon ms
+       ON ms.master_id = m.id
+     JOIN public.salons s
+       ON s.id = ms.salon_id
+     LEFT JOIN public.salon_master_services sms
+       ON sms.master_id = m.id
+      AND sms.salon_id = s.id
+      AND COALESCE(sms.active, true) = true
+     WHERE m.id = $1
+       AND COALESCE(m.active, true) = true
+       AND COALESCE(ms.status, 'active') = 'active'
+       AND COALESCE(s.enabled, true) = true
+       AND COALESCE(s.status, 'active') = 'active'
+     GROUP BY s.id, s.slug
+     ORDER BY active_service_links DESC, s.slug ASC
+     LIMIT 1`,
+    [resolvedOwner.owner_id]
+  );
+
+  const relation = relationResult.rows[0] || null;
+  const activeServiceLinks = Number(relation?.active_service_links || 0) || 0;
+
+  if (!relation || activeServiceLinks <= 0) {
+    throw createBookingTargetError("MASTER_BOOKING_CONTEXT_NOT_READY");
+  }
+
+  const bookingUrl = buildMasterBookingAbsoluteUrl(relation.salon_slug, resolvedOwner.owner_id);
+
+  return {
+    owner_type: "master",
+    owner_id: resolvedOwner.owner_id,
+    canonical_slug: resolvedOwner.canonical_slug,
+    qr_target_type: "booking_entry",
+    master_id: resolvedOwner.owner_id,
+    salon_slug: relation.salon_slug,
+    active_service_links: activeServiceLinks,
+    booking_url: bookingUrl,
+    qr_target_url: bookingUrl
+  };
+}
+
 export default {
   buildEntryAccessSnapshot,
   resolveEntryOwner,
-  buildResolvedEntryContract
+  buildResolvedEntryContract,
+  resolveBookingEntryTarget
 };

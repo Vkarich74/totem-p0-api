@@ -1,11 +1,25 @@
 import express from "express";
 import { requireAuth } from "../../middleware/requireAuth.js";
-import { buildResolvedEntryContract } from "../../services/entry/entryAccess.js";
+import { buildResolvedEntryContract, resolveBookingEntryTarget } from "../../services/entry/entryAccess.js";
 import { buildResolvedQrImage } from "../../services/entry/entryQr.js";
 import { buildCabinetAuthSnapshot } from "../../services/entry/entryAuth.js";
 import { buildEntryValidationSnapshot } from "../../services/entry/entryValidation.js";
 import { buildEntryHandoffPackage } from "../../services/entry/entryHandoff.js";
 import { buildQrContract } from "../../services/entry/qrService.js"; // ✅ NEW
+
+function normalizeQrTarget(value) {
+  const target = String(value || "public").trim().toLowerCase();
+
+  if (target === "booking") {
+    return "booking";
+  }
+
+  if (target === "public") {
+    return "public";
+  }
+
+  return null;
+}
 
 function readBaseUrl(req){
   const explicit = process.env.PUBLIC_WEB_BASE_URL || process.env.APP_BASE_URL || process.env.PUBLIC_APP_BASE_URL || "";
@@ -45,12 +59,47 @@ export default function buildEntryRouter(pool){
 
   // ✅ FIXED: QR PAYLOAD через qrService
   r.get("/entry/:ownerType/:slug/qr-payload", requireAuth, async (req, res) => {
+    const target = normalizeQrTarget(req.query.target);
+
     try {
       const { ownerType, slug } = req.params;
 
+      if (!target) {
+        return res.status(400).json({ ok: false, code: "QR_TARGET_INVALID" });
+      }
+
+      if (target === "public") {
+        const resolved = await buildResolvedEntryContract(pool, ownerType, slug, readBaseUrl(req));
+
+        if (!resolved) {
+          return res.status(404).json({ ok: false, code: "NOT_FOUND" });
+        }
+
+        if (!resolved.contract.qr_allowed) {
+          return res.status(403).json({ ok: false, code: "QR_NOT_AVAILABLE" });
+        }
+
+        const qr = buildQrContract({
+          owner_type: ownerType,
+          canonical_slug: slug
+        });
+
+        return res.status(200).json({
+          ok: true,
+          ...qr.qr
+        });
+      }
+
+      const bookingTarget = await resolveBookingEntryTarget(pool, ownerType, slug);
+
+      if (!bookingTarget) {
+        return res.status(404).json({ ok: false, code: "NOT_FOUND" });
+      }
+
       const qr = buildQrContract({
-        owner_type: ownerType,
-        canonical_slug: slug
+        ...bookingTarget,
+        qr_target_type: "booking_entry",
+        qr_target_url: bookingTarget.booking_url
       });
 
       return res.status(200).json({
@@ -60,37 +109,44 @@ export default function buildEntryRouter(pool){
 
     } catch (err) {
       const code = err?.code || "ENTRY_QR_PAYLOAD_FAILED";
+      if (target === "booking" && (code === "MASTER_BOOKING_CONTEXT_NOT_READY" || code === "QR_NOT_AVAILABLE")) {
+        return res.status(403).json({ ok: false, code: "QR_NOT_AVAILABLE" });
+      }
       const status = code === "INVALID_OWNER_TYPE" || code === "INVALID_CANONICAL_SLUG" ? 400 : 500;
       return res.status(status).json({ ok: false, code });
     }
   });
 
   r.get("/entry/:ownerType/:slug/qr.png", requireAuth, async (req, res) => {
+    const target = normalizeQrTarget(req.query.target);
+
     try {
       const { ownerType, slug } = req.params;
-      const resolvedQr = await buildResolvedQrImage(pool, ownerType, slug, readBaseUrl(req));
+
+      if (!target) {
+        return res.status(400).json({ ok: false, code: "QR_TARGET_INVALID" });
+      }
+
+      const resolvedQr = await buildResolvedQrImage(pool, ownerType, slug, readBaseUrl(req), { target });
 
       if (!resolvedQr) {
         return res.status(404).json({ ok: false, code: "NOT_FOUND" });
       }
 
-      if (!resolvedQr.resolved.contract.qr_allowed || !resolvedQr.qr) {
+      if (!resolvedQr.qr) {
         return res.status(403).json({ ok: false, code: "QR_NOT_AVAILABLE" });
       }
 
-      // ✅ header теперь консистентен с qrService
-      const qrContract = buildQrContract({
-        owner_type: ownerType,
-        canonical_slug: slug
-      });
-
       res.setHeader("Content-Type", resolvedQr.qr.contentType);
       res.setHeader("Cache-Control", "public, max-age=300");
-      res.setHeader("X-Totem-Qr-Payload", qrContract.qr.qr_target_url);
+      res.setHeader("X-Totem-Qr-Payload", resolvedQr.meta?.payload || "");
 
       return res.status(200).send(resolvedQr.qr.buffer);
     } catch (err) {
       const code = err?.code || "ENTRY_QR_IMAGE_FAILED";
+      if (target === "booking" && (code === "MASTER_BOOKING_CONTEXT_NOT_READY" || code === "QR_NOT_AVAILABLE")) {
+        return res.status(403).json({ ok: false, code: "QR_NOT_AVAILABLE" });
+      }
       const status = err?.status || (code === "INVALID_OWNER_TYPE" || code === "INVALID_CANONICAL_SLUG" ? 400 : 500);
       return res.status(status).json({ ok: false, code });
     }

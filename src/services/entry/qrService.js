@@ -1,5 +1,7 @@
 // C:\Work\totem-p0-api\src\services\entry\qrService.js
 
+import { resolveCanonicalBookingAppBaseUrl } from './entryContract.js';
+
 const WEB_BASE = (process.env.WEB_BASE || 'https://www.totemv.com').replace(/\/+$/, '');
 
 function normalizeOwnerType(value) {
@@ -28,6 +30,48 @@ function normalizeSlug(value) {
 
 function buildPublicUrl({ ownerType, canonicalSlug }) {
   return `${WEB_BASE}/${ownerType}/${canonicalSlug}`;
+}
+
+function normalizeTargetType(value) {
+  const targetType = String(value || '').trim().toLowerCase();
+
+  if (targetType === 'booking_entry') {
+    return 'booking_entry';
+  }
+
+  return 'public_page';
+}
+
+function normalizeBookingTargetUrl(url) {
+  const normalizedUrl = String(url || '').trim();
+
+  if (!normalizedUrl) {
+    throw new Error('QR_SERVICE_ERROR: booking qr target url required');
+  }
+
+  const appBase = resolveCanonicalBookingAppBaseUrl();
+  const forbiddenFragments = [
+    'token=',
+    'client_token=',
+    '/#/client',
+    '/#/auth',
+    '/#/salon',
+    '/#/master'
+  ];
+
+  if (!normalizedUrl.startsWith(appBase)) {
+    throw new Error('QR_SERVICE_ERROR: booking qr target must use app base');
+  }
+
+  if (!normalizedUrl.includes('/#/booking?')) {
+    throw new Error('QR_SERVICE_ERROR: booking qr target must point to booking');
+  }
+
+  if (forbiddenFragments.some((fragment) => normalizedUrl.includes(fragment))) {
+    throw new Error('QR_SERVICE_ERROR: forbidden booking qr target');
+  }
+
+  return normalizedUrl.replace(/\/+$/, '');
 }
 
 /**
@@ -65,11 +109,65 @@ export function buildQrPayload(input = {}) {
   };
 }
 
-export function assertQrTargetAllowed(url) {
+export function buildBookingQrPayload(input = {}) {
+  const ownerType = input.owner_type ? normalizeOwnerType(input.owner_type) : null;
+  const canonicalSlug = input.canonical_slug ? normalizeSlug(input.canonical_slug) : null;
+  const bookingUrl = normalizeBookingTargetUrl(input.qr_target_url || input.booking_url);
+
+  return {
+    ok: true,
+    qr: {
+      owner_type: ownerType,
+      owner_id: input.owner_id ?? null,
+      canonical_slug: canonicalSlug,
+
+      qr_scope: 'booking_only',
+      qr_target_type: 'booking_entry',
+      qr_target_url: bookingUrl,
+      booking_url: bookingUrl,
+
+      ...(input.salon_slug ? { salon_slug: input.salon_slug } : {}),
+      ...(typeof input.master_id !== 'undefined' ? { master_id: input.master_id } : {}),
+      ...(typeof input.active_service_links !== 'undefined' ? { active_service_links: input.active_service_links } : {}),
+
+      entry_version: 'v1',
+      generated_at: new Date().toISOString()
+    }
+  };
+}
+
+export function assertQrTargetAllowed(url, targetType = 'public_page') {
   const normalizedUrl = String(url || '').trim();
+  const normalizedTargetType = normalizeTargetType(targetType);
 
   if (!normalizedUrl) {
     throw new Error('QR_SERVICE_ERROR: qr target url required');
+  }
+
+  if (normalizedTargetType === 'booking_entry') {
+    const appBase = resolveCanonicalBookingAppBaseUrl();
+    const forbiddenFragments = [
+      'token=',
+      'client_token=',
+      '/#/client',
+      '/#/auth',
+      '/#/salon',
+      '/#/master'
+    ];
+
+    if (!normalizedUrl.startsWith(appBase)) {
+      throw new Error('QR_SERVICE_ERROR: booking qr target must use app base');
+    }
+
+    if (!normalizedUrl.includes('/#/booking?')) {
+      throw new Error('QR_SERVICE_ERROR: booking qr target must point to booking');
+    }
+
+    if (forbiddenFragments.some((fragment) => normalizedUrl.includes(fragment))) {
+      throw new Error('QR_SERVICE_ERROR: forbidden booking qr target');
+    }
+
+    return true;
   }
 
   if (normalizedUrl.includes('/#/')) {
@@ -84,15 +182,19 @@ export function assertQrTargetAllowed(url) {
 }
 
 export function buildQrContract(input = {}) {
-  const result = buildQrPayload(input);
+  const targetType = normalizeTargetType(input.qr_target_type);
+  const result = targetType === 'booking_entry'
+    ? buildBookingQrPayload(input)
+    : buildQrPayload(input);
 
-  assertQrTargetAllowed(result.qr.qr_target_url);
+  assertQrTargetAllowed(result.qr.qr_target_url, result.qr.qr_target_type);
 
   return result;
 }
 
 export default {
   buildQrPayload,
+  buildBookingQrPayload,
   buildQrContract,
   assertQrTargetAllowed
 };

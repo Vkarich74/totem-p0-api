@@ -16,6 +16,42 @@ function normalizeBaseUrl(baseUrl){
   return value.replace(/\/+$/g, "");
 }
 
+function isValidAbsoluteUrl(value){
+  try{
+    new URL(String(value || "").trim());
+    return true;
+  }catch(e){
+    return false;
+  }
+}
+
+export function isForbiddenBookingAppBaseUrl(value){
+  const normalizedValue = normalizeBaseUrl(value);
+
+  if(!normalizedValue || !isValidAbsoluteUrl(normalizedValue)){
+    return true;
+  }
+
+  try{
+    const parsedUrl = new URL(normalizedValue);
+    const hostname = String(parsedUrl.hostname || "").toLowerCase();
+    const pathname = String(parsedUrl.pathname || "").toLowerCase();
+    const hash = String(parsedUrl.hash || "").toLowerCase();
+
+    if(hostname === "api.totemv.com" || hostname.endsWith(".api.totemv.com")){
+      return true;
+    }
+
+    if(pathname.startsWith("/internal") || pathname.startsWith("/api") || hash.includes("/internal") || hash.includes("/api")){
+      return true;
+    }
+
+    return false;
+  }catch(e){
+    return true;
+  }
+}
+
 function normalizeSlugInput(slug){
   return normalizeText(slug).toLowerCase();
 }
@@ -58,6 +94,21 @@ export function resolveCanonicalPublicBaseUrl(baseUrl = null){
   return normalizeBaseUrl(resolvedBaseUrl);
 }
 
+export function resolveCanonicalBookingAppBaseUrl(baseUrl = null){
+  const candidates = [
+    baseUrl,
+    process.env.PUBLIC_APP_BASE_URL || "",
+    process.env.APP_BASE_URL || ""
+  ];
+
+  const resolvedBaseUrl = candidates
+    .map((candidate) => normalizeBaseUrl(candidate))
+    .find((candidate) => candidate && !isForbiddenBookingAppBaseUrl(candidate))
+    || "https://app.totemv.com";
+
+  return normalizeBaseUrl(resolvedBaseUrl);
+}
+
 export function buildPublicUrl(ownerType, slug){
   const safeType = validateOwnerType(ownerType);
   const safeSlug = validateCanonicalSlug(slug);
@@ -77,6 +128,28 @@ export function buildPublicAbsoluteUrl(ownerType, slug, baseUrl = null){
   const resolvedBaseUrl = resolveCanonicalPublicBaseUrl(baseUrl);
 
   return `${resolvedBaseUrl}${publicUrl}`;
+}
+
+export function buildSalonBookingAbsoluteUrl(salonSlug, baseUrl = null){
+  const safeSlug = validateCanonicalSlug(salonSlug);
+  const resolvedBaseUrl = resolveCanonicalBookingAppBaseUrl(baseUrl);
+
+  return `${resolvedBaseUrl}/#/booking?salon=${encodeURIComponent(safeSlug)}`;
+}
+
+export function buildMasterBookingAbsoluteUrl(salonSlug, masterId, baseUrl = null){
+  const safeSlug = validateCanonicalSlug(salonSlug);
+  const safeMasterId = normalizeText(masterId);
+
+  if(!safeMasterId){
+    const err = new Error("BOOKING_MASTER_ID_REQUIRED");
+    err.code = "BOOKING_MASTER_ID_REQUIRED";
+    throw err;
+  }
+
+  const resolvedBaseUrl = resolveCanonicalBookingAppBaseUrl(baseUrl);
+
+  return `${resolvedBaseUrl}/#/booking?salon=${encodeURIComponent(safeSlug)}&master=${encodeURIComponent(safeMasterId)}`;
 }
 
 export function buildCabinetAbsoluteUrl(ownerType, slug, baseUrl = null){
@@ -156,5 +229,9 @@ export default {
   buildPublicAbsoluteUrl,
   buildCabinetAbsoluteUrl,
   buildAuthLoginUrl,
-  buildEntryContract
+  buildEntryContract,
+  isForbiddenBookingAppBaseUrl,
+  resolveCanonicalBookingAppBaseUrl,
+  buildSalonBookingAbsoluteUrl,
+  buildMasterBookingAbsoluteUrl
 };
