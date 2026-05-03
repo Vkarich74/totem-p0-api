@@ -46,15 +46,130 @@ function parsePositiveInt(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function normalizeMobilePayloadJson(value) {
+const MOBILE_PAYLOAD_BLOCKLIST_KEYS = new Set([
+  "email",
+  "phone",
+  "name",
+  "contact_email",
+  "contact_phone",
+  "contact_name",
+  "client_name",
+  "client_phone",
+  "address",
+  "token",
+  "password",
+  "authorization",
+  "bearer",
+  "card",
+  "bank",
+  "account",
+]);
+
+// Public mobile payload_json must not store direct contact/payment/auth identifiers. Contact fields are stored only in explicit contact_* columns where required.
+function isBlockedMobilePayloadKey(key) {
+  const normalizedKey = String(key || "").trim().toLowerCase();
+
+  if (MOBILE_PAYLOAD_BLOCKLIST_KEYS.has(normalizedKey)) {
+    return true;
+  }
+
+  return [
+    "token",
+    "password",
+    "authorization",
+    "bearer",
+    "secret",
+    "card",
+    "bank",
+    "account",
+  ].some((fragment) => normalizedKey.includes(fragment));
+}
+
+function sanitizeMobilePayloadValue(value, depth = 0, maxDepth = 4) {
+  if (depth > maxDepth) {
+    return undefined;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  const valueType = typeof value;
+
+  if (valueType === "string") {
+    return value;
+  }
+
+  if (valueType === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+
+  if (valueType === "boolean") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    const sanitized = [];
+
+    for (const item of value) {
+      const nextValue = sanitizeMobilePayloadValue(item, depth + 1, maxDepth);
+      if (nextValue !== undefined) {
+        sanitized.push(nextValue);
+      }
+    }
+
+    return sanitized;
+  }
+
+  const isPlainObject =
+    value !== null &&
+    valueType === "object" &&
+    Object.prototype.toString.call(value) === "[object Object]";
+
+  if (!isPlainObject) {
+    return undefined;
+  }
+
+  const sanitized = {};
+
+  for (const [key, nextValue] of Object.entries(value)) {
+    if (isBlockedMobilePayloadKey(key)) {
+      continue;
+    }
+
+    const sanitizedValue = sanitizeMobilePayloadValue(nextValue, depth + 1, maxDepth);
+    if (sanitizedValue !== undefined) {
+      sanitized[key] = sanitizedValue;
+    }
+  }
+
+  return sanitized;
+}
+
+function normalizeMobilePayloadJson(value, sourceValue) {
   const isPlainObject =
     value !== null &&
     typeof value === "object" &&
     !Array.isArray(value) &&
     Object.prototype.toString.call(value) === "[object Object]";
 
-  const payload = isPlainObject ? value : {};
-  const payloadString = JSON.stringify(payload);
+  if (!isPlainObject) {
+    return {
+      error: null,
+      payload: {},
+    };
+  }
+
+  const payload = sanitizeMobilePayloadValue(value, 0, 4) || {};
+  const normalizedSource = normalizeMobileSource(sourceValue || payload.source);
+  const payloadWithMeta = {
+    ...payload,
+    source: normalizedSource,
+    privacy_version: "mobile_privacy_v1",
+    taxonomy_version: "mobile_taxonomy_v1",
+    pii_sanitized: true,
+  };
+  const payloadString = JSON.stringify(payloadWithMeta);
 
   if (payloadString.length > 2000) {
     return {
@@ -65,7 +180,7 @@ function normalizeMobilePayloadJson(value) {
 
   return {
     error: null,
-    payload,
+    payload: payloadWithMeta,
   };
 }
 
@@ -845,7 +960,7 @@ router.post("/feedback", async (req, res) => {
     const contactEmail = normalizeMobileEmail(body.contact_email);
     const contactPhone = normalizeMobileText(body.contact_phone, 60);
     const message = normalizeMobileText(body.message, 2000);
-    const payloadResult = normalizeMobilePayloadJson(body.payload_json);
+    const payloadResult = normalizeMobilePayloadJson(body.payload_json, source);
 
     if (payloadResult.error) {
       return res.status(400).json({
@@ -928,7 +1043,7 @@ router.post("/data-request", async (req, res) => {
     const contactEmail = normalizeMobileEmail(body.contact_email);
     const contactPhone = normalizeMobileText(body.contact_phone, 60);
     const message = normalizeMobileText(body.message, 2000);
-    const payloadResult = normalizeMobilePayloadJson(body.payload_json);
+    const payloadResult = normalizeMobilePayloadJson(body.payload_json, source);
 
     if (payloadResult.error) {
       return res.status(400).json({
@@ -1050,7 +1165,7 @@ router.post("/referral/events", async (req, res) => {
       });
     }
 
-    const normalizedPayload = normalizeMobilePayloadJson(body.payload_json);
+    const normalizedPayload = normalizeMobilePayloadJson(body.payload_json, source);
 
     if (normalizedPayload.error) {
       return res.status(400).json({
