@@ -44,6 +44,263 @@ function buildWhereClause(filters) {
   };
 }
 
+function normalizeJsonObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function buildMobileCrmSourceConfig(sourceType) {
+  if (sourceType === "feedback") {
+    return {
+      table: "public.mobile_feedback_requests",
+      selectRequestTypeExpression: "NULL::text AS request_type",
+      notFoundError: "MOBILE_FEEDBACK_NOT_FOUND",
+      routeError: "MOBILE_FEEDBACK_ROUTE_CRM_FAILED",
+      idempotencyPrefix: "mobile_feedback",
+      runtimePrefix: "mobile_feedback",
+      messageRuntimePrefix: "mobile_feedback_message",
+    };
+  }
+
+  return {
+    table: "public.mobile_data_requests",
+    selectRequestTypeExpression: "request_type",
+    notFoundError: "MOBILE_DATA_REQUEST_NOT_FOUND",
+    routeError: "MOBILE_DATA_REQUEST_ROUTE_CRM_FAILED",
+    idempotencyPrefix: "mobile_data_request",
+    runtimePrefix: "mobile_data_request",
+    messageRuntimePrefix: "mobile_data_request_message",
+  };
+}
+
+function buildMobileCrmLeadData(sourceType, sourceRow, runtimeId, nowIso, sourcePayloadJson) {
+  const base = {
+    id: runtimeId,
+    lead_type: "client",
+    status: "new",
+    name:
+      sourceRow?.contact_name ||
+      (sourceType === "feedback"
+        ? `Mobile feedback #${sourceRow.id}`
+        : `Mobile data request #${sourceRow.id}`),
+    phone: sourceRow?.contact_phone || "",
+    email: sourceRow?.contact_email || "",
+    assigned_to: "admin",
+    notes_count: 1,
+    mobile_request: {
+      type: sourceType,
+      id: sourceRow.id,
+      request_uid: sourceRow.request_uid,
+      country_code: sourceRow.country_code || null,
+      city_slug: sourceRow.city_slug || null,
+      owner_type: sourceRow.owner_type || null,
+      owner_slug: sourceRow.owner_slug || null,
+      message: sourceRow.message || "",
+      payload_json: sourcePayloadJson,
+      created_at: nowIso,
+      updated_at: nowIso,
+    },
+    created_at: nowIso,
+    updated_at: nowIso,
+  };
+
+  if (sourceType === "data_request") {
+    base.source = "mobile_data_request";
+    base.mobile_request.request_type = sourceRow.request_type || "data_access";
+  } else {
+    base.source = "mobile_feedback";
+  }
+
+  return base;
+}
+
+function buildMobileCrmMessageData(sourceType, sourceRow, leadRuntimeId, messageRuntimeId, nowIso, sourcePayloadJson) {
+  return {
+    id: messageRuntimeId,
+    status: "queued",
+    channel: "internal",
+    recipient_type: "lead",
+    recipient_id: leadRuntimeId,
+    lead_id: leadRuntimeId,
+    subject: sourceType === "feedback" ? "Mobile feedback" : "Mobile data request",
+    body: sourceRow?.message || "",
+    source: "admin_mobile_route_crm",
+    mobile_request: {
+      type: sourceType,
+      id: sourceRow.id,
+      request_uid: sourceRow.request_uid,
+      request_type: sourceType === "data_request" ? sourceRow.request_type || "data_access" : undefined,
+      country_code: sourceRow.country_code || null,
+      city_slug: sourceRow.city_slug || null,
+      owner_type: sourceRow.owner_type || null,
+      owner_slug: sourceRow.owner_slug || null,
+      message: sourceRow.message || "",
+      payload_json: sourcePayloadJson,
+      created_at: nowIso,
+      updated_at: nowIso,
+    },
+    created_at: nowIso,
+    updated_at: nowIso,
+  };
+}
+
+async function routeMobileRequestToCrm(db, sourceType, sourceId) {
+  const config = buildMobileCrmSourceConfig(sourceType);
+  const nowIso = new Date().toISOString();
+
+  const sourceResult = await db.query(
+    `
+    SELECT
+      id,
+      request_uid,
+      ${config.selectRequestTypeExpression},
+      status,
+      source,
+      country_code,
+      city_slug,
+      owner_type,
+      owner_slug,
+      contact_name,
+      contact_email,
+      contact_phone,
+      message,
+      payload_json,
+      created_at,
+      updated_at
+    FROM ${config.table}
+    WHERE id = $1
+    LIMIT 1
+    FOR UPDATE
+    `,
+    [sourceId],
+  );
+
+  const sourceRow = sourceResult.rows?.[0] || null;
+
+  if (!sourceRow) {
+    return {
+      notFound: true,
+      error: config.notFoundError,
+    };
+  }
+
+  const sourcePayloadJson = normalizeJsonObject(sourceRow.payload_json);
+  const leadIdempotencyKey = `${config.idempotencyPrefix}:${sourceRow.id}:crm`;
+  const messageIdempotencyKey = `${config.idempotencyPrefix}:${sourceRow.id}:crm_message`;
+  const leadRuntimeId = `${config.runtimePrefix}_${sourceRow.id}`;
+  const messageRuntimeId = `${config.messageRuntimePrefix}_${sourceRow.id}`;
+
+  const leadData = buildMobileCrmLeadData(sourceType, sourceRow, leadRuntimeId, nowIso, sourcePayloadJson);
+  const messageData = buildMobileCrmMessageData(sourceType, sourceRow, leadRuntimeId, messageRuntimeId, nowIso, sourcePayloadJson);
+
+  const existingLeadResult = await db.query(
+    `
+    SELECT id, idempotency_key, data
+    FROM public.leads
+    WHERE idempotency_key = $1
+    LIMIT 1
+    `,
+    [leadIdempotencyKey],
+  );
+
+  let leadRow = existingLeadResult.rows?.[0] || null;
+  let leadCreated = false;
+
+  if (!leadRow) {
+    const insertedLeadResult = await db.query(
+      `
+      INSERT INTO public.leads (status, idempotency_key, data)
+      VALUES ($1, $2, $3::jsonb)
+      RETURNING id, idempotency_key, data
+      `,
+      ["new", leadIdempotencyKey, JSON.stringify(leadData)],
+    );
+
+    leadRow = insertedLeadResult.rows?.[0] || null;
+    leadCreated = true;
+  }
+
+  const leadDbId = leadRow?.id || null;
+  const leadRuntimeValue = String(normalizeJsonObject(leadRow?.data).id || leadRuntimeId);
+
+  const existingMessageResult = await db.query(
+    `
+    SELECT id, lead_id, idempotency_key, data
+    FROM public.messages
+    WHERE idempotency_key = $1
+    LIMIT 1
+    `,
+    [messageIdempotencyKey],
+  );
+
+  let messageRow = existingMessageResult.rows?.[0] || null;
+  let messageCreated = false;
+
+  if (!messageRow) {
+    const insertedMessageResult = await db.query(
+      `
+      INSERT INTO public.messages (
+        lead_id,
+        moderation_case_id,
+        status,
+        idempotency_key,
+        data
+      )
+      VALUES ($1, NULL, $2, $3, $4::jsonb)
+      RETURNING id, lead_id, idempotency_key, data
+      `,
+      [leadDbId, "queued", messageIdempotencyKey, JSON.stringify(messageData)],
+    );
+
+    messageRow = insertedMessageResult.rows?.[0] || null;
+    messageCreated = true;
+  }
+
+  const messageDbId = messageRow?.id || null;
+  const messageRuntimeValue = String(normalizeJsonObject(messageRow?.data).id || messageRuntimeId);
+  const routingStatus = leadCreated || messageCreated ? "created" : "existing";
+
+  const routingPayload = {
+    lead_db_id: leadDbId,
+    lead_runtime_id: leadRuntimeValue,
+    message_db_id: messageDbId,
+    message_runtime_id: messageRuntimeValue,
+    routed_at: nowIso,
+    routed_by: "admin_mobile",
+    routing_status: routingStatus,
+  };
+
+  await db.query(
+    `
+    UPDATE ${config.table}
+    SET payload_json = jsonb_set(
+          COALESCE(payload_json, '{}'::jsonb) || '{"routing": {}}'::jsonb,
+          '{routing,crm}',
+          $2::jsonb,
+          true
+        ),
+        updated_at = NOW()
+    WHERE id = $1
+    `,
+    [sourceRow.id, JSON.stringify(routingPayload)],
+  );
+
+  return {
+    source_type: sourceType,
+    source_id: sourceRow.id,
+    lead: {
+      id: leadDbId,
+      runtime_id: leadRuntimeValue,
+      created: leadCreated,
+    },
+    message: {
+      id: messageDbId,
+      runtime_id: messageRuntimeValue,
+      created: messageCreated,
+    },
+    routing: routingPayload,
+  };
+}
+
 export default function buildAdminRouter(pool, internalReadRateLimit) {
   const r = express.Router();
   const readLimiter =
@@ -889,6 +1146,98 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
         ok: false,
         error: "MOBILE_DATA_REQUEST_STATUS_UPDATE_FAILED",
       });
+    }
+  });
+
+  r.post("/mobile/feedback/:id/route-crm", async (req, res) => {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "MOBILE_FEEDBACK_ID_INVALID",
+      });
+    }
+
+    const db = await pool.connect();
+
+    try {
+      await db.query("BEGIN");
+
+      const result = await routeMobileRequestToCrm(db, "feedback", id);
+
+      if (result?.notFound) {
+        await db.query("ROLLBACK");
+        return res.status(404).json({
+          ok: false,
+          error: "MOBILE_FEEDBACK_NOT_FOUND",
+        });
+      }
+
+      await db.query("COMMIT");
+
+      return res.json({
+        ok: true,
+        data: result,
+      });
+    } catch (error) {
+      try {
+        await db.query("ROLLBACK");
+      } catch (rollbackError) {}
+
+      console.error("ADMIN_MOBILE_FEEDBACK_ROUTE_CRM_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "MOBILE_FEEDBACK_ROUTE_CRM_FAILED",
+      });
+    } finally {
+      db.release();
+    }
+  });
+
+  r.post("/mobile/data-requests/:id/route-crm", async (req, res) => {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "MOBILE_DATA_REQUEST_ID_INVALID",
+      });
+    }
+
+    const db = await pool.connect();
+
+    try {
+      await db.query("BEGIN");
+
+      const result = await routeMobileRequestToCrm(db, "data_request", id);
+
+      if (result?.notFound) {
+        await db.query("ROLLBACK");
+        return res.status(404).json({
+          ok: false,
+          error: "MOBILE_DATA_REQUEST_NOT_FOUND",
+        });
+      }
+
+      await db.query("COMMIT");
+
+      return res.json({
+        ok: true,
+        data: result,
+      });
+    } catch (error) {
+      try {
+        await db.query("ROLLBACK");
+      } catch (rollbackError) {}
+
+      console.error("ADMIN_MOBILE_DATA_REQUEST_ROUTE_CRM_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "MOBILE_DATA_REQUEST_ROUTE_CRM_FAILED",
+      });
+    } finally {
+      db.release();
     }
   });
 
