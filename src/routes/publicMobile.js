@@ -36,6 +36,28 @@ function normalizeMobileText(value, maxLength) {
   return text ? text.slice(0, maxLength) : null;
 }
 
+function normalizeMobileRoute(value) {
+  const route = normalizeMobileText(value, 300);
+
+  if (!route) {
+    return null;
+  }
+
+  const lower = route.toLowerCase();
+  if (
+    lower.includes("token=") ||
+    lower.includes("client_token=") ||
+    lower.includes("access_token=") ||
+    lower.includes("password=") ||
+    lower.includes("authorization=") ||
+    lower.includes("bearer")
+  ) {
+    return null;
+  }
+
+  return route.split("?")[0] || null;
+}
+
 function normalizeMobileEmail(value) {
   const email = String(value || "").trim().toLowerCase();
   return email ? email.slice(0, 200) : null;
@@ -197,6 +219,34 @@ const MOBILE_NOTIFICATION_READER_TYPES = new Set([
 function isAllowedMobileNotificationReaderType(value) {
   return MOBILE_NOTIFICATION_READER_TYPES.has(String(value || "").trim().toLowerCase());
 }
+
+const MOBILE_EVENT_TYPES = new Set([
+  "mobile_open",
+  "city_open",
+  "salon_card_open",
+  "master_card_open",
+  "booking_entry_open",
+  "owner_login_open",
+  "owner_login_success",
+  "client_cabinet_open",
+  "repeat_booking_open",
+  "referral_open",
+  "feedback_submit",
+  "data_request_submit",
+]);
+
+const MOBILE_EVENT_TARGET_TYPES = new Set([
+  "mobile",
+  "city",
+  "salon",
+  "master",
+  "booking",
+  "client",
+  "owner_login",
+  "referral",
+  "feedback",
+  "data_request",
+]);
 
 function buildReferralEventDedupMeta(payloadJson, referralCode, eventType, countryCode, citySlug, source, dateBucket) {
   const contextCandidates = [
@@ -1109,6 +1159,100 @@ router.post("/data-request", async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: "MOBILE_DATA_REQUEST_FAILED",
+    });
+  }
+});
+
+router.post("/events", async (req, res) => {
+  try {
+    const body = normalizeMobileRequestBody(req);
+    const eventType = String(body.event_type || "").trim().toLowerCase();
+    const source = normalizeMobileSource(body.source);
+    const countryCode = normalizeMobileCountry(body.country);
+    const citySlug = normalizeMobileCity(body.city);
+    const ownerType = normalizeMobileOwnerType(body.owner_type);
+    const ownerSlug = normalizeMobileText(body.owner_slug, 160);
+    const targetTypeRaw = String(body.target_type || "").trim().toLowerCase();
+    const targetType = targetTypeRaw && MOBILE_EVENT_TARGET_TYPES.has(targetTypeRaw) ? targetTypeRaw : null;
+    const targetId = normalizeMobileText(body.target_id, 120);
+    const route = normalizeMobileRoute(body.route);
+    const sessionKey = normalizeMobileText(body.session_key, 160);
+    const payloadResult = normalizeMobilePayloadJson(body.payload_json, source);
+
+    if (!MOBILE_EVENT_TYPES.has(eventType)) {
+      return res.status(400).json({
+        ok: false,
+        error: "INVALID_MOBILE_EVENT_TYPE",
+      });
+    }
+
+    if (targetTypeRaw && !targetType) {
+      return res.status(400).json({
+        ok: false,
+        error: "INVALID_MOBILE_EVENT_TARGET_TYPE",
+      });
+    }
+
+    if (payloadResult.error) {
+      return res.status(400).json({
+        ok: false,
+        error: payloadResult.error,
+      });
+    }
+
+    const { rows } = await pool.query(
+      `INSERT INTO public.mobile_events (
+         event_type,
+         source,
+         country_code,
+         city_slug,
+         owner_type,
+         owner_slug,
+         target_type,
+         target_id,
+         route,
+         session_key,
+         status,
+         payload_json
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)
+       RETURNING id, event_uid, event_type, status, created_at`,
+      [
+        eventType,
+        source,
+        countryCode,
+        citySlug,
+        ownerType,
+        ownerSlug,
+        targetType,
+        targetId,
+        route,
+        sessionKey,
+        "recorded",
+        JSON.stringify(payloadResult.payload),
+      ]
+    );
+
+    const event = rows[0] || null;
+
+    return res.status(200).json({
+      ok: true,
+      recorded: true,
+      event: event
+        ? {
+            id: event.id,
+            event_uid: event.event_uid,
+            event_type: event.event_type,
+            status: event.status,
+            created_at: event.created_at,
+          }
+        : null,
+    });
+  } catch (err) {
+    console.error("PUBLIC_MOBILE_EVENTS_FAILED", err);
+    return res.status(500).json({
+      ok: false,
+      error: "MOBILE_EVENT_FAILED",
     });
   }
 });

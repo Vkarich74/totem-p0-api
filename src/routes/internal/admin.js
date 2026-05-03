@@ -701,6 +701,9 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
         referralsEventsTotalResult,
         referralsEventsByTypeResult,
         referralsRewardsByStatusResult,
+        mobileEventsTotalResult,
+        mobileEventsByTypeResult,
+        recentMobileEventsResult,
         notificationsTotalResult,
         notificationsByStatusResult,
         announcementsTotalResult,
@@ -779,6 +782,37 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
           FROM public.referral_events
           GROUP BY COALESCE(reward_status, 'unknown')
           ORDER BY reward_status ASC
+        `),
+        pool.query(`SELECT COUNT(*)::int AS total_count FROM public.mobile_events`),
+        pool.query(`
+          SELECT
+            COALESCE(event_type, 'unknown') AS event_type,
+            COUNT(*)::int AS count
+          FROM public.mobile_events
+          GROUP BY COALESCE(event_type, 'unknown')
+          ORDER BY event_type ASC
+        `),
+        pool.query(`
+          SELECT
+            id,
+            event_uid,
+            event_type,
+            source,
+            country_code,
+            city_slug,
+            owner_type,
+            owner_slug,
+            target_type,
+            target_id,
+            route,
+            session_key,
+            status,
+            payload_json,
+            occurred_at,
+            created_at
+          FROM public.mobile_events
+          ORDER BY created_at DESC, id DESC
+          LIMIT 10
         `),
         pool.query(`SELECT COUNT(*)::int AS total_count FROM public.app_notifications`),
         pool.query(`
@@ -892,6 +926,10 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
             events_by_type: referralsEventsByTypeResult.rows || [],
             rewards_by_status: referralsRewardsByStatusResult.rows || [],
           },
+          mobile_events: {
+            total_count: mobileEventsTotalResult.rows?.[0]?.total_count || 0,
+            by_event_type: mobileEventsByTypeResult.rows || [],
+          },
           notifications: {
             total_count: notificationsTotalResult.rows?.[0]?.total_count || 0,
             by_status: notificationsByStatusResult.rows || [],
@@ -903,6 +941,7 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
           recent_feedback: recentFeedbackResult.rows || [],
           recent_data_requests: recentDataRequestsResult.rows || [],
           recent_referral_events: recentReferralEventsResult.rows || [],
+          recent_mobile_events: recentMobileEventsResult.rows || [],
         },
       });
     } catch (error) {
@@ -1368,6 +1407,81 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
       return res.status(500).json({
         ok: false,
         error: "ADMIN_MOBILE_REFERRAL_EVENTS_FETCH_FAILED",
+      });
+    }
+  });
+
+  r.get("/mobile/events", readLimiter, async (req, res) => {
+    const limit = Math.min(parsePositiveInt(req.query.limit, 50), 100);
+    const offset = parsePositiveInt(req.query.offset, 0);
+    const eventType = normalizeOptionalText(req.query.event_type, 64).toLowerCase();
+    const countryCode = normalizeOptionalText(req.query.country, 2).toUpperCase();
+    const citySlug = normalizeOptionalText(req.query.city, 120).toLowerCase();
+    const ownerType = normalizeOptionalText(req.query.owner_type, 32).toLowerCase();
+    const ownerSlug = normalizeOptionalText(req.query.owner_slug, 160).toLowerCase();
+    const targetType = normalizeOptionalText(req.query.target_type, 32).toLowerCase();
+    const source = normalizeOptionalText(req.query.source, 32).toLowerCase();
+    const status = normalizeOptionalText(req.query.status, 32).toLowerCase();
+
+    try {
+      const { whereSql, values } = buildWhereClause([
+        { enabled: Boolean(eventType), sql: "event_type = ?", value: eventType },
+        { enabled: Boolean(countryCode), sql: "country_code = ?", value: countryCode },
+        { enabled: Boolean(citySlug), sql: "city_slug = ?", value: citySlug },
+        { enabled: Boolean(ownerType), sql: "owner_type = ?", value: ownerType },
+        { enabled: Boolean(ownerSlug), sql: "owner_slug = ?", value: ownerSlug },
+        { enabled: Boolean(targetType), sql: "target_type = ?", value: targetType },
+        { enabled: Boolean(source), sql: "source = ?", value: source },
+        { enabled: Boolean(status), sql: "status = ?", value: status },
+      ]);
+
+      const totalResult = await pool.query(
+        `SELECT COUNT(*)::int AS total_count FROM public.mobile_events ${whereSql}`,
+        values,
+      );
+
+      const data = await pool.query(
+        `
+        SELECT
+          id,
+          event_uid,
+          event_type,
+          source,
+          country_code,
+          city_slug,
+          owner_type,
+          owner_slug,
+          target_type,
+          target_id,
+          route,
+          session_key,
+          status,
+          payload_json,
+          occurred_at,
+          created_at
+        FROM public.mobile_events
+        ${whereSql}
+        ORDER BY created_at DESC, id DESC
+        LIMIT $${values.length + 1}
+        OFFSET $${values.length + 2}
+        `,
+        [...values, limit, offset],
+      );
+
+      return res.json({
+        ok: true,
+        data: {
+          items: data.rows,
+          total_count: totalResult.rows?.[0]?.total_count || 0,
+          limit,
+          offset,
+        },
+      });
+    } catch (error) {
+      console.error("ADMIN_MOBILE_EVENTS_FETCH_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_MOBILE_EVENTS_FETCH_FAILED",
       });
     }
   });
