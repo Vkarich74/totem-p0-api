@@ -1,5 +1,10 @@
 import express from "express";
 import crypto from "crypto";
+import {
+countUnread,
+listNotificationsForTarget,
+markNotificationRead
+} from "../../services/notifications/notificationService.js";
 
 export default function buildMastersRouter(pool, internalReadRateLimit){
 
@@ -772,6 +777,137 @@ error:"MASTER_FETCH_FAILED"
 
 }
 
+});
+
+/*
+MASTER NOTIFICATIONS
+*/
+r.get("/masters/:slug/notifications", internalReadRateLimit, async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const master = await pool.query(
+`SELECT id FROM masters WHERE slug=$1`,
+[slug]
+);
+
+if(!master.rows.length){
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const masterId = master.rows[0].id;
+
+if(!hasMasterOwnership(req, masterId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
+const limitValue = Number.parseInt(String(req.query.limit ?? 20), 10);
+const limit = Number.isFinite(limitValue) && limitValue > 0 ? Math.min(limitValue, 100) : 20;
+const readerId = String(masterId);
+
+const items = await listNotificationsForTarget(pool,{
+target_type:"master",
+target_id:String(masterId),
+channel:"in_app",
+status:"sent",
+limit
+});
+
+const unread_count = await countUnread(pool,{
+reader_type:"master",
+reader_id:String(masterId),
+target_type:"master",
+target_id:String(masterId)
+});
+
+const notificationIds = items
+.map((item)=>item?.id)
+.filter((id)=>Number.isInteger(Number(id)) && Number(id) > 0)
+.map((id)=>Number(id));
+
+let readsByNotificationId = new Map();
+
+if(notificationIds.length){
+const readsRes = await pool.query(
+`
+SELECT notification_id, read_at
+FROM public.app_notification_reads
+WHERE reader_type='master'
+AND reader_id=$1
+AND notification_id = ANY($2::bigint[])
+`,
+[readerId, notificationIds]
+);
+
+readsByNotificationId = new Map(
+(readsRes.rows || []).map((row)=>[String(row.notification_id), row.read_at || null])
+);
+}
+
+return res.json({
+ok:true,
+notifications:items.map((item)=>{
+const readAt = readsByNotificationId.get(String(item.id)) || item.read_at || null;
+
+return {
+...item,
+read_at:readAt,
+is_read:Boolean(readAt)
+};
+}),
+unread_count
+});
+}catch(err){
+console.error("MASTER_NOTIFICATIONS_ERROR",err);
+return res.status(500).json({ok:false,error:"MASTER_NOTIFICATIONS_FETCH_FAILED"});
+}
+});
+
+r.post("/masters/:slug/notifications/:notificationUid/read", internalReadRateLimit, async (req,res)=>{
+
+const { slug, notificationUid } = req.params;
+
+try{
+
+const master = await pool.query(
+`SELECT id FROM masters WHERE slug=$1`,
+[slug]
+);
+
+if(!master.rows.length){
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const masterId = master.rows[0].id;
+
+if(!hasMasterOwnership(req, masterId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
+const safeNotificationUid = String(notificationUid || "").trim();
+if(!safeNotificationUid){
+return res.status(400).json({ok:false,error:"NOTIFICATION_UID_REQUIRED"});
+}
+
+const read = await markNotificationRead(pool, safeNotificationUid,{
+reader_type:"master",
+reader_id:String(masterId)
+});
+
+if(!read){
+return res.status(404).json({ok:false,error:"NOTIFICATION_NOT_FOUND"});
+}
+
+return res.json({
+ok:true,
+read
+});
+}catch(err){
+console.error("MASTER_NOTIFICATION_READ_ERROR",err);
+return res.status(500).json({ok:false,error:"MASTER_NOTIFICATION_READ_FAILED"});
+}
 });
 
 /*

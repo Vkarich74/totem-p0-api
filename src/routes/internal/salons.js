@@ -1,4 +1,9 @@
 import express from "express";
+import {
+countUnread,
+listNotificationsForTarget,
+markNotificationRead
+} from "../../services/notifications/notificationService.js";
 
 export default function buildSalonsRouter(pool, internalReadRateLimit){
 
@@ -662,6 +667,135 @@ error:"SALON_FETCH_FAILED"
 
 }
 
+});
+
+/* SALON NOTIFICATIONS */
+r.get("/salons/:slug/notifications", internalReadRateLimit, async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id FROM salons WHERE slug=$1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+if(!hasSalonOwnership(req, salonId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
+const limitValue = Number.parseInt(String(req.query.limit ?? 20), 10);
+const limit = Number.isFinite(limitValue) && limitValue > 0 ? Math.min(limitValue, 100) : 20;
+const readerId = String(salonId);
+
+const items = await listNotificationsForTarget(pool,{
+target_type:"salon",
+target_id:String(salonId),
+channel:"in_app",
+status:"sent",
+limit
+});
+
+const unread_count = await countUnread(pool,{
+reader_type:"salon",
+reader_id:String(salonId),
+target_type:"salon",
+target_id:String(salonId)
+});
+
+const notificationIds = items
+.map((item)=>item?.id)
+.filter((id)=>Number.isInteger(Number(id)) && Number(id) > 0)
+.map((id)=>Number(id));
+
+let readsByNotificationId = new Map();
+
+if(notificationIds.length){
+const readsRes = await pool.query(
+`
+SELECT notification_id, read_at
+FROM public.app_notification_reads
+WHERE reader_type='salon'
+AND reader_id=$1
+AND notification_id = ANY($2::bigint[])
+`,
+[readerId, notificationIds]
+);
+
+readsByNotificationId = new Map(
+(readsRes.rows || []).map((row)=>[String(row.notification_id), row.read_at || null])
+);
+}
+
+return res.json({
+ok:true,
+notifications:items.map((item)=>{
+const readAt = readsByNotificationId.get(String(item.id)) || item.read_at || null;
+
+return {
+...item,
+read_at:readAt,
+is_read:Boolean(readAt)
+};
+}),
+unread_count
+});
+}catch(err){
+console.error("SALON_NOTIFICATIONS_ERROR",err);
+return res.status(500).json({ok:false,error:"SALON_NOTIFICATIONS_FETCH_FAILED"});
+}
+});
+
+r.post("/salons/:slug/notifications/:notificationUid/read", internalReadRateLimit, async (req,res)=>{
+
+const { slug, notificationUid } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id FROM salons WHERE slug=$1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+if(!hasSalonOwnership(req, salonId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
+const safeNotificationUid = String(notificationUid || "").trim();
+if(!safeNotificationUid){
+return res.status(400).json({ok:false,error:"NOTIFICATION_UID_REQUIRED"});
+}
+
+const read = await markNotificationRead(pool, safeNotificationUid,{
+reader_type:"salon",
+reader_id:String(salonId)
+});
+
+if(!read){
+return res.status(404).json({ok:false,error:"NOTIFICATION_NOT_FOUND"});
+}
+
+return res.json({
+ok:true,
+read
+});
+}catch(err){
+console.error("SALON_NOTIFICATION_READ_ERROR",err);
+return res.status(500).json({ok:false,error:"SALON_NOTIFICATION_READ_FAILED"});
+}
 });
 
 /* SALON MASTERS */
