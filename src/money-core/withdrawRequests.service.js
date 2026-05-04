@@ -2,6 +2,7 @@
 
 import { randomUUID } from 'crypto';
 import { assertMoneyCoreWriteAllowed } from './config.js';
+import { createNotification } from '../services/notifications/notificationService.js';
 
 const ALLOWED_OWNER_TYPES = new Set(['salon', 'master', 'platform', 'system']);
 const ALLOWED_CREATION_MODES = new Set(['manual', 'scheduled', 'admin', 'system']);
@@ -123,6 +124,60 @@ async function insertMoneyAuditEvent(client, payload = {}) {
   );
 
   return result.rows[0] || null;
+}
+
+async function createMoneyOwnerNotification(client, payload = {}) {
+  const ownerType = normalizeText(payload.owner_type);
+
+  if (!['salon', 'master'].includes(ownerType)) {
+    return null;
+  }
+
+  const notificationSavepoint = 'money_notification';
+
+  try {
+    await client.query(`SAVEPOINT ${notificationSavepoint}`);
+
+    const notification = await createNotification(client, {
+      target_type: ownerType,
+      target_id: String(payload.owner_id),
+      owner_type: ownerType,
+      owner_id: payload.owner_id,
+      channel: 'in_app',
+      priority: 'normal',
+      title_ru: normalizeText(payload.title_ru),
+      body_ru: normalizeText(payload.body_ru),
+      action_type: 'money',
+      action_url: null,
+      status: 'sent',
+      payload_json: payload.payload_json || {},
+    });
+
+    await client.query(`RELEASE SAVEPOINT ${notificationSavepoint}`);
+    return notification;
+  } catch (err) {
+    try {
+      await client.query(`ROLLBACK TO SAVEPOINT ${notificationSavepoint}`);
+    } catch (rollbackError) {
+      console.error('MONEY_NOTIFICATION_ERROR', {
+        event_type: payload.event_type,
+        owner_type: ownerType,
+        owner_id: payload.owner_id,
+        source_id: payload.source_id,
+        error: rollbackError?.message || rollbackError,
+      });
+    }
+
+    console.error('MONEY_NOTIFICATION_ERROR', {
+      event_type: payload.event_type,
+      owner_type: ownerType,
+      owner_id: payload.owner_id,
+      source_id: payload.source_id,
+      error: err?.message || err,
+    });
+
+    return null;
+  }
 }
 
 function buildBalanceFromLedgerRows(rows = []) {
@@ -599,6 +654,26 @@ async function createWithdrawRequest(pool, ownerType, ownerId, input = {}, actor
         locked_ledger_group_id: entryGroupId,
         ledger_entry_ids: ledgerEntries.map((row) => row.id),
         balance: balanceUpsertResult.rows[0],
+      },
+    });
+
+    await createMoneyOwnerNotification(client, {
+      event_type: 'withdraw_request_locked',
+      source_type: 'withdraw_request',
+      source_id: (updatedRequestResult.rows[0] || request).id,
+      owner_type: owner.owner_type,
+      owner_id: owner.owner_id,
+      title_ru: 'Заявка на вывод создана',
+      body_ru: `Заявка на вывод ${amount} ${currency} создана и заблокирована в балансе.`,
+      payload_json: {
+        event_type: 'withdraw_request_locked',
+        source_type: 'withdraw_request',
+        source_id: (updatedRequestResult.rows[0] || request).id,
+        owner_type: owner.owner_type,
+        owner_id: owner.owner_id,
+        amount,
+        currency,
+        status: 'locked',
       },
     });
 

@@ -2,6 +2,7 @@
 
 import { randomUUID } from 'crypto';
 import { assertMoneyCoreWriteAllowed } from './config.js';
+import { createNotification } from '../services/notifications/notificationService.js';
 
 const ALLOWED_PAYOUT_STATUSES = new Set([
   'draft',
@@ -130,6 +131,60 @@ async function insertMoneyAuditEvent(client, payload = {}) {
   );
 
   return result.rows[0] || null;
+}
+
+async function createMoneyOwnerNotification(client, payload = {}) {
+  const ownerType = normalizeText(payload.owner_type);
+
+  if (!['salon', 'master'].includes(ownerType)) {
+    return null;
+  }
+
+  const notificationSavepoint = 'money_notification';
+
+  try {
+    await client.query(`SAVEPOINT ${notificationSavepoint}`);
+
+    const notification = await createNotification(client, {
+      target_type: ownerType,
+      target_id: String(payload.owner_id),
+      owner_type: ownerType,
+      owner_id: payload.owner_id,
+      channel: 'in_app',
+      priority: 'normal',
+      title_ru: normalizeText(payload.title_ru),
+      body_ru: normalizeText(payload.body_ru),
+      action_type: 'money',
+      action_url: null,
+      status: 'sent',
+      payload_json: payload.payload_json || {},
+    });
+
+    await client.query(`RELEASE SAVEPOINT ${notificationSavepoint}`);
+    return notification;
+  } catch (err) {
+    try {
+      await client.query(`ROLLBACK TO SAVEPOINT ${notificationSavepoint}`);
+    } catch (rollbackError) {
+      console.error('MONEY_NOTIFICATION_ERROR', {
+        event_type: payload.event_type,
+        owner_type: ownerType,
+        owner_id: payload.owner_id,
+        source_id: payload.source_id,
+        error: rollbackError?.message || rollbackError,
+      });
+    }
+
+    console.error('MONEY_NOTIFICATION_ERROR', {
+      event_type: payload.event_type,
+      owner_type: ownerType,
+      owner_id: payload.owner_id,
+      source_id: payload.source_id,
+      error: err?.message || err,
+    });
+
+    return null;
+  }
 }
 
 async function insertMoneyReceipt(client, payload = {}) {
@@ -591,6 +646,26 @@ async function createPayoutExecution(pool, input = {}, actor = {}) {
       },
     });
 
+    await createMoneyOwnerNotification(client, {
+      event_type: 'payout_execution_created',
+      source_type: 'payout_execution',
+      source_id: createResult.rows[0].id,
+      owner_type: withdrawRequest.owner_type,
+      owner_id: withdrawRequest.owner_id,
+      title_ru: 'Выплата создана',
+      body_ru: `Выплата ${amount} KGS создана.`,
+      payload_json: {
+        event_type: 'payout_execution_created',
+        source_type: 'payout_execution',
+        source_id: createResult.rows[0].id,
+        owner_type: withdrawRequest.owner_type,
+        owner_id: withdrawRequest.owner_id,
+        amount,
+        currency: 'KGS',
+        status: 'draft',
+      },
+    });
+
     await client.query('COMMIT');
     return createResult.rows[0];
   } catch (error) {
@@ -620,6 +695,8 @@ async function submitManualPayoutExecution(pool, id, input = {}, actor = {}) {
     if (!payout) {
       return null;
     }
+
+    const amount = normalizeNumber(payout.amount);
 
     if (!ALLOWED_SUBMIT_STATUSES.has(String(payout.status || '').trim().toLowerCase())) {
       const error = new Error('Payout execution cannot be submitted');
@@ -662,12 +739,32 @@ async function submitManualPayoutExecution(pool, id, input = {}, actor = {}) {
       owner_id: payout.owner_id,
       source_type: 'payout_execution',
       source_id: updatedResult.rows[0].id,
-      amount: normalizeNumber(payout.amount),
+      amount,
       data: {
         payout: updatedResult.rows[0],
         previous_status: payout.status,
         withdraw_request_id: updatedResult.rows[0].withdraw_request_id,
         payout_provider: normalizeText(input.payout_provider),
+      },
+    });
+
+    await createMoneyOwnerNotification(client, {
+      event_type: 'payout_execution_submitted',
+      source_type: 'payout_execution',
+      source_id: updatedResult.rows[0].id,
+      owner_type: payout.owner_type,
+      owner_id: payout.owner_id,
+      title_ru: 'Выплата отправлена в обработку',
+      body_ru: `Выплата ${amount} KGS отправлена в обработку.`,
+      payload_json: {
+        event_type: 'payout_execution_submitted',
+        source_type: 'payout_execution',
+        source_id: updatedResult.rows[0].id,
+        owner_type: payout.owner_type,
+        owner_id: payout.owner_id,
+        amount,
+        currency: 'KGS',
+        status: 'submitted',
       },
     });
 
@@ -794,6 +891,26 @@ async function completePayoutExecution(pool, id, input = {}, actor = {}) {
       },
     });
 
+    await createMoneyOwnerNotification(client, {
+      event_type: 'payout_execution_completed',
+      source_type: 'payout_execution',
+      source_id: updatedPayoutResult.rows[0].id,
+      owner_type: payout.owner_type,
+      owner_id: payout.owner_id,
+      title_ru: 'Выплата завершена',
+      body_ru: `Выплата ${amount} KGS завершена.`,
+      payload_json: {
+        event_type: 'payout_execution_completed',
+        source_type: 'payout_execution',
+        source_id: updatedPayoutResult.rows[0].id,
+        owner_type: payout.owner_type,
+        owner_id: payout.owner_id,
+        amount,
+        currency: 'KGS',
+        status: 'completed',
+      },
+    });
+
     await client.query('COMMIT');
     return {
       payout: updatedPayoutResult.rows[0],
@@ -904,6 +1021,26 @@ async function failPayoutExecution(pool, id, input = {}, actor = {}) {
         withdraw_request: updatedWithdrawResult.rows[0],
         ledger,
         failure_reason: failureReason,
+      },
+    });
+
+    await createMoneyOwnerNotification(client, {
+      event_type: 'payout_execution_failed',
+      source_type: 'payout_execution',
+      source_id: updatedPayoutResult.rows[0].id,
+      owner_type: payout.owner_type,
+      owner_id: payout.owner_id,
+      title_ru: 'Выплата не прошла',
+      body_ru: `Выплата ${amount} KGS не прошла. Проверьте причину в финансовом разделе.`,
+      payload_json: {
+        event_type: 'payout_execution_failed',
+        source_type: 'payout_execution',
+        source_id: updatedPayoutResult.rows[0].id,
+        owner_type: payout.owner_type,
+        owner_id: payout.owner_id,
+        amount,
+        currency: 'KGS',
+        status: 'failed',
       },
     });
 
