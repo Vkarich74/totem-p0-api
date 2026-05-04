@@ -953,6 +953,216 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
     }
   });
 
+  r.get("/notifications", readLimiter, async (req, res) => {
+    const limit = Math.min(parsePositiveInt(req.query.limit, 50), 200);
+    const offset = parsePositiveInt(req.query.offset, 0);
+    const targetType = normalizeOptionalText(req.query.target_type, 80).toLowerCase();
+    const targetId = normalizeOptionalText(req.query.target_id, 120);
+    const ownerType = normalizeOptionalText(req.query.owner_type, 80).toLowerCase();
+    const ownerId = normalizeOptionalText(req.query.owner_id, 120);
+    const channel = normalizeOptionalText(req.query.channel, 32).toLowerCase();
+    const status = normalizeOptionalText(req.query.status, 32).toLowerCase();
+    const priority = normalizeOptionalText(req.query.priority, 32).toLowerCase();
+
+    try {
+      const { whereSql, values } = buildWhereClause([
+        { enabled: Boolean(targetType), sql: "target_type = ?", value: targetType },
+        { enabled: Boolean(targetId), sql: "target_id = ?", value: targetId },
+        { enabled: Boolean(ownerType), sql: "owner_type = ?", value: ownerType },
+        { enabled: Boolean(ownerId), sql: "owner_id = ?", value: ownerId },
+        { enabled: Boolean(channel), sql: "channel = ?", value: channel },
+        { enabled: Boolean(status), sql: "status = ?", value: status },
+        { enabled: Boolean(priority), sql: "priority = ?", value: priority },
+      ]);
+
+      const totalResult = await pool.query(
+        `SELECT COUNT(*)::int AS total_count FROM public.app_notifications ${whereSql}`,
+        values,
+      );
+
+      const data = await pool.query(
+        `
+        SELECT
+          id,
+          notification_uid,
+          target_type,
+          target_id,
+          owner_type,
+          owner_id,
+          channel,
+          priority,
+          title_ru,
+          body_ru,
+          title_en,
+          body_en,
+          action_type,
+          action_url,
+          payload_json,
+          status,
+          scheduled_at,
+          sent_at,
+          expires_at,
+          created_at,
+          updated_at
+        FROM public.app_notifications
+        ${whereSql}
+        ORDER BY created_at DESC, id DESC
+        LIMIT $${values.length + 1}
+        OFFSET $${values.length + 2}
+        `,
+        [...values, limit, offset],
+      );
+
+      return res.json({
+        ok: true,
+        data: {
+          items: data.rows,
+          total_count: totalResult.rows?.[0]?.total_count || 0,
+          limit,
+          offset,
+        },
+      });
+    } catch (error) {
+      console.error("ADMIN_NOTIFICATIONS_FETCH_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_NOTIFICATIONS_FETCH_FAILED",
+      });
+    }
+  });
+
+  r.get("/notifications/deliveries", readLimiter, async (req, res) => {
+    const limit = Math.min(parsePositiveInt(req.query.limit, 50), 200);
+    const offset = parsePositiveInt(req.query.offset, 0);
+    const notificationIdRaw = normalizeOptionalText(req.query.notification_id, 32);
+    const notificationId = notificationIdRaw && Number.isInteger(Number(notificationIdRaw)) && Number(notificationIdRaw) > 0 ? Number(notificationIdRaw) : null;
+    const channel = normalizeOptionalText(req.query.channel, 32).toLowerCase();
+    const status = normalizeOptionalText(req.query.status, 32).toLowerCase();
+    const provider = normalizeOptionalText(req.query.provider, 80).toLowerCase();
+
+    try {
+      const { whereSql, values } = buildWhereClause([
+        { enabled: notificationId !== null, sql: "notification_id = ?", value: notificationId },
+        { enabled: Boolean(channel), sql: "channel = ?", value: channel },
+        { enabled: Boolean(status), sql: "status = ?", value: status },
+        { enabled: Boolean(provider), sql: "provider = ?", value: provider },
+      ]);
+
+      const totalResult = await pool.query(
+        `SELECT COUNT(*)::int AS total_count FROM public.notification_deliveries ${whereSql}`,
+        values,
+      );
+
+      const data = await pool.query(
+        `
+        SELECT
+          id,
+          notification_id,
+          delivery_uid,
+          channel,
+          provider,
+          target,
+          status,
+          attempt_count,
+          last_error,
+          sent_at,
+          delivered_at,
+          failed_at,
+          created_at,
+          updated_at
+        FROM public.notification_deliveries
+        ${whereSql}
+        ORDER BY created_at DESC, id DESC
+        LIMIT $${values.length + 1}
+        OFFSET $${values.length + 2}
+        `,
+        [...values, limit, offset],
+      );
+
+      return res.json({
+        ok: true,
+        data: {
+          items: data.rows,
+          total_count: totalResult.rows?.[0]?.total_count || 0,
+          limit,
+          offset,
+        },
+      });
+    } catch (error) {
+      console.error("ADMIN_NOTIFICATION_DELIVERIES_FETCH_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_NOTIFICATION_DELIVERIES_FETCH_FAILED",
+      });
+    }
+  });
+
+  r.get("/notifications/push-subscriptions", readLimiter, async (req, res) => {
+    const limit = Math.min(parsePositiveInt(req.query.limit, 50), 200);
+    const offset = parsePositiveInt(req.query.offset, 0);
+    const userType = normalizeOptionalText(req.query.user_type, 80).toLowerCase();
+    const userId = normalizeOptionalText(req.query.user_id, 120);
+    const platform = normalizeOptionalText(req.query.platform, 32).toLowerCase();
+    const enabledRaw = normalizeOptionalText(req.query.enabled, 8).toLowerCase();
+    const enabled = enabledRaw === "true" ? true : enabledRaw === "false" ? false : null;
+
+    try {
+      const { whereSql, values } = buildWhereClause([
+        { enabled: Boolean(userType), sql: "user_type = ?", value: userType },
+        { enabled: Boolean(userId), sql: "user_id = ?", value: userId },
+        { enabled: Boolean(platform), sql: "platform = ?", value: platform },
+        { enabled: enabled !== null, sql: "enabled = ?", value: enabled },
+      ]);
+
+      const totalResult = await pool.query(
+        `SELECT COUNT(*)::int AS total_count FROM public.push_subscriptions ${whereSql}`,
+        values,
+      );
+
+      const data = await pool.query(
+        `
+        SELECT
+          id,
+          subscription_uid,
+          user_type,
+          user_id,
+          device_id,
+          platform,
+          endpoint,
+          user_agent,
+          enabled,
+          created_at,
+          last_seen_at,
+          revoked_at,
+          CASE WHEN p256dh IS NOT NULL AND p256dh <> '' THEN true ELSE false END AS has_p256dh,
+          CASE WHEN auth IS NOT NULL AND auth <> '' THEN true ELSE false END AS has_auth
+        FROM public.push_subscriptions
+        ${whereSql}
+        ORDER BY last_seen_at DESC NULLS LAST, id DESC
+        LIMIT $${values.length + 1}
+        OFFSET $${values.length + 2}
+        `,
+        [...values, limit, offset],
+      );
+
+      return res.json({
+        ok: true,
+        data: {
+          items: data.rows,
+          total_count: totalResult.rows?.[0]?.total_count || 0,
+          limit,
+          offset,
+        },
+      });
+    } catch (error) {
+      console.error("ADMIN_PUSH_SUBSCRIPTIONS_FETCH_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_PUSH_SUBSCRIPTIONS_FETCH_FAILED",
+      });
+    }
+  });
+
   r.get("/mobile/feedback", readLimiter, async (req, res) => {
     const limit = Math.min(parsePositiveInt(req.query.limit, 50), 100);
     const offset = parsePositiveInt(req.query.offset, 0);
