@@ -1411,6 +1411,65 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
     }
   });
 
+  r.patch("/mobile/referral-events/:id/reward-status", async (req, res) => {
+    const id = Number.parseInt(String(req.params.id ?? ""), 10);
+    const rewardStatus = normalizeOptionalText(req.body?.reward_status, 32).toLowerCase();
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "INVALID_REFERRAL_EVENT_ID",
+      });
+    }
+
+    if (!["none", "pending", "approved", "rejected", "cancelled"].includes(rewardStatus)) {
+      return res.status(400).json({
+        ok: false,
+        error: "INVALID_REWARD_STATUS",
+      });
+    }
+
+    try {
+      const data = await pool.query(
+        `
+        UPDATE public.referral_events
+        SET reward_status = $2
+        WHERE id = $1
+        RETURNING
+          id,
+          referral_code,
+          event_type,
+          status,
+          reward_status,
+          reward_amount,
+          currency_code,
+          created_at
+        `,
+        [id, rewardStatus],
+      );
+
+      const event = data.rows[0] || null;
+
+      if (!event) {
+        return res.status(404).json({
+          ok: false,
+          error: "REFERRAL_EVENT_NOT_FOUND",
+        });
+      }
+
+      return res.json({
+        ok: true,
+        event,
+      });
+    } catch (error) {
+      console.error("ADMIN_MOBILE_REFERRAL_EVENT_REWARD_STATUS_UPDATE_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_MOBILE_REFERRAL_EVENT_REWARD_STATUS_UPDATE_FAILED",
+      });
+    }
+  });
+
   r.get("/mobile/events", readLimiter, async (req, res) => {
     const limit = Math.min(parsePositiveInt(req.query.limit, 50), 100);
     const offset = parsePositiveInt(req.query.offset, 0);
