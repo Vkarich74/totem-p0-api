@@ -1,5 +1,6 @@
 import { pool } from "../db.js";
 import crypto from "crypto";
+import { createNotification } from "../services/notifications/notificationService.js";
 
 function normalizeKgMobilePhone(value) {
   const raw = String(value || "").trim();
@@ -388,6 +389,84 @@ export async function publicCreateBooking(req, res) {
     );
 
     const clientCabinetUrl = buildClientCabinetUrl(finalClientId, cabinetToken.token);
+
+    try {
+      await createNotification(client, {
+        target_type: "client",
+        target_id: String(finalClientId),
+        owner_type: "salon",
+        owner_id: salonId,
+        channel: "in_app",
+        priority: "normal",
+        title_ru: "Запись создана",
+        body_ru: "Ваша запись создана и ожидает подтверждения.",
+        action_type: "booking",
+        action_url: clientCabinetUrl,
+        status: "sent",
+        payload_json: {
+          booking_id,
+          salon_id: salonId,
+          salon_slug: salonSlug,
+          master_id,
+          service_id: servicePk,
+          start_at,
+          end_at,
+          price
+        }
+      });
+
+      await createNotification(client, {
+        target_type: "master",
+        target_id: String(master_id),
+        owner_type: "salon",
+        owner_id: salonId,
+        channel: "in_app",
+        priority: "normal",
+        title_ru: "Новая запись",
+        body_ru: "К вам создана новая запись.",
+        action_type: "booking",
+        action_url: `/master/${master_id}/dashboard`,
+        status: "sent",
+        payload_json: {
+          booking_id,
+          salon_id: salonId,
+          salon_slug: salonSlug,
+          master_id,
+          client_id: finalClientId,
+          service_id: servicePk,
+          start_at,
+          end_at,
+          price
+        }
+      });
+
+      await createNotification(client, {
+        target_type: "salon",
+        target_id: String(salonId),
+        owner_type: "salon",
+        owner_id: salonId,
+        channel: "in_app",
+        priority: "normal",
+        title_ru: "Новая запись в салон",
+        body_ru: "В салоне создана новая запись.",
+        action_type: "booking",
+        action_url: `/salon/${salonSlug}/dashboard`,
+        status: "sent",
+        payload_json: {
+          booking_id,
+          salon_id: salonId,
+          salon_slug: salonSlug,
+          master_id,
+          client_id: finalClientId,
+          service_id: servicePk,
+          start_at,
+          end_at,
+          price
+        }
+      });
+    } catch (error) {
+      console.error("BOOKING_CREATED_NOTIFICATION_ERROR", error);
+    }
 
     const responseBody = {
       ok: true,
