@@ -389,6 +389,17 @@ export async function publicCreateBooking(req, res) {
     );
 
     const clientCabinetUrl = buildClientCabinetUrl(finalClientId, cabinetToken.token);
+    const bookingNotificationPayload = {
+      booking_id: Number(booking_id),
+      salon_id: Number(salonId),
+      salon_slug: String(salonSlug),
+      master_id: Number(master_id),
+      client_id: Number(finalClientId),
+      service_id: Number(servicePk),
+      start_at: new Date(start_at).toISOString(),
+      end_at: new Date(end_at).toISOString(),
+      price: Number(price)
+    };
 
     await client.query("SAVEPOINT booking_created_notifications");
 
@@ -405,16 +416,7 @@ export async function publicCreateBooking(req, res) {
         action_type: "booking",
         action_url: clientCabinetUrl,
         status: "sent",
-        payload_json: {
-          booking_id,
-          salon_id: salonId,
-          salon_slug: salonSlug,
-          master_id,
-          service_id: servicePk,
-          start_at,
-          end_at,
-          price
-        }
+        payload_json: bookingNotificationPayload
       });
 
       await createNotification(client, {
@@ -429,17 +431,7 @@ export async function publicCreateBooking(req, res) {
         action_type: "booking",
         action_url: `/master/${master_id}/dashboard`,
         status: "sent",
-        payload_json: {
-          booking_id,
-          salon_id: salonId,
-          salon_slug: salonSlug,
-          master_id,
-          client_id: finalClientId,
-          service_id: servicePk,
-          start_at,
-          end_at,
-          price
-        }
+        payload_json: bookingNotificationPayload
       });
 
       await createNotification(client, {
@@ -454,17 +446,7 @@ export async function publicCreateBooking(req, res) {
         action_type: "booking",
         action_url: `/salon/${salonSlug}/dashboard`,
         status: "sent",
-        payload_json: {
-          booking_id,
-          salon_id: salonId,
-          salon_slug: salonSlug,
-          master_id,
-          client_id: finalClientId,
-          service_id: servicePk,
-          start_at,
-          end_at,
-          price
-        }
+        payload_json: bookingNotificationPayload
       });
 
       await client.query("RELEASE SAVEPOINT booking_created_notifications");
