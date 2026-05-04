@@ -2,6 +2,7 @@ import express from "express";
 import { pool } from "../db.js";
 import { getLeadDbIdById } from "./admin.leads.js";
 import { getCaseDbIdById } from "./admin.moderation.js";
+import { createNotification } from "../services/notifications/notificationService.js";
 
 const router = express.Router();
 const messages = new Map();
@@ -407,6 +408,54 @@ router.post("/send", async (req, res) => {
       status: "linked",
       attempt: 1,
     });
+
+    if (channel === "internal" && ["client", "master", "salon"].includes(recipient_type)) {
+      const notificationTitle = normalizeText(req.body?.title_ru || req.body?.title || "Сообщение от TOTEM");
+      const notificationBody = body_preview || "Новое сообщение";
+      const notificationPayload = {
+        message_id: id,
+        message_db_id: Number(dbId),
+        recipient_type,
+        recipient_id: String(recipient_id),
+        source: "admin_messages",
+        channel,
+        sent_by: "admin",
+      };
+
+      await db.query("SAVEPOINT admin_message_notification");
+
+      try {
+        await createNotification(db, {
+          target_type: recipient_type,
+          target_id: String(recipient_id),
+          owner_type: recipient_type === "client" ? null : recipient_type,
+          owner_id: recipient_type === "client" ? null : Number(recipient_id),
+          channel: "in_app",
+          priority: "normal",
+          title_ru: notificationTitle,
+          body_ru: notificationBody,
+          action_type: "admin_message",
+          action_url:
+            recipient_type === "master"
+              ? `/master/${recipient_id}/dashboard`
+              : recipient_type === "salon"
+                ? `/salon/${recipient_id}/dashboard`
+                : null,
+          status: "sent",
+          payload_json: notificationPayload,
+        });
+
+        await db.query("RELEASE SAVEPOINT admin_message_notification");
+      } catch (error) {
+        try {
+          await db.query("ROLLBACK TO SAVEPOINT admin_message_notification");
+        } catch (notificationRollbackError) {
+          console.error("ADMIN_MESSAGE_NOTIFICATION_ERROR", notificationRollbackError);
+        }
+
+        console.error("ADMIN_MESSAGE_NOTIFICATION_ERROR", error);
+      }
+    }
 
     await db.query("COMMIT");
 
