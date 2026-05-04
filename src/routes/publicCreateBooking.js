@@ -390,6 +390,8 @@ export async function publicCreateBooking(req, res) {
 
     const clientCabinetUrl = buildClientCabinetUrl(finalClientId, cabinetToken.token);
 
+    await client.query("SAVEPOINT booking_created_notifications");
+
     try {
       await createNotification(client, {
         target_type: "client",
@@ -464,7 +466,15 @@ export async function publicCreateBooking(req, res) {
           price
         }
       });
+
+      await client.query("RELEASE SAVEPOINT booking_created_notifications");
     } catch (error) {
+      try {
+        await client.query("ROLLBACK TO SAVEPOINT booking_created_notifications");
+      } catch (notificationRollbackError) {
+        console.error("BOOKING_CREATED_NOTIFICATION_ROLLBACK_ERROR", notificationRollbackError);
+      }
+
       console.error("BOOKING_CREATED_NOTIFICATION_ERROR", error);
     }
 
