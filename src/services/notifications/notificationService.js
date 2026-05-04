@@ -181,7 +181,7 @@ export async function createNotification(pool, input = {}) {
       $14::jsonb,
       $15,
       $16::timestamptz,
-      CASE WHEN $15 = 'sent' AND $17 IS NULL THEN NOW() ELSE $17::timestamptz END,
+      CASE WHEN $15 = 'sent' AND $17::timestamptz IS NULL THEN NOW() ELSE $17::timestamptz END,
       $18::timestamptz
     )
     RETURNING
