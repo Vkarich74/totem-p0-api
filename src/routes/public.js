@@ -14,6 +14,11 @@ import authRouter from "../../routes_public/auth.js";
 import buildPublicAccessGuard from "../middleware/publicAccessGuard.js";
 import { TEMPLATE_VERSION_V1 } from "../contracts/templates/templateConstants.js";
 import { getPublishedSource } from "../services/templates/templateDocumentService.js";
+import {
+  countUnread,
+  listNotificationsForTarget,
+  markNotificationRead
+} from "../services/notifications/notificationService.js";
 
 function hashClientCabinetToken(token) {
   return crypto.createHash("sha256").update(String(token || "")).digest("hex");
@@ -21,6 +26,44 @@ function hashClientCabinetToken(token) {
 
 function buildClientPersonalLink(clientId, token) {
   return `#/client/${clientId}/${token}`;
+}
+
+async function verifyClientCabinetAccess(db, clientId, token) {
+  if (!Number.isInteger(clientId) || clientId <= 0) {
+    return { ok: false, status: 400, error: "INVALID_CLIENT_ID" };
+  }
+
+  const safeToken = String(token || "").trim();
+  if (!safeToken) {
+    return { ok: false, status: 400, error: "CLIENT_TOKEN_REQUIRED" };
+  }
+
+  const tokenHash = hashClientCabinetToken(safeToken);
+
+  const tokenRes = await db.query(
+    `
+    SELECT
+      id,
+      client_id,
+      booking_id,
+      token_last4,
+      purpose,
+      created_at
+    FROM client_access_tokens
+    WHERE client_id = $1
+      AND token_hash = $2
+      AND purpose = 'cabinet'
+      AND revoked_at IS NULL
+    LIMIT 1
+    `,
+    [clientId, tokenHash]
+  );
+
+  if (!tokenRes.rows.length) {
+    return { ok: false, status: 403, error: "INVALID_CLIENT_TOKEN" };
+  }
+
+  return { ok: true, token: tokenRes.rows[0] };
 }
 
 /**
@@ -582,6 +625,129 @@ export function createPublicRouter(deps) {
       } catch (err) {
         console.error("PUBLIC_CLIENT_CABINET_ERROR", err);
         return res.status(500).json({ ok: false, error: "CLIENT_CABINET_FETCH_FAILED" });
+      } finally {
+        db.release();
+      }
+    }
+  );
+
+  /**
+   * CLIENT NOTIFICATIONS
+   */
+  r.get(
+    "/clients/:clientId/:token/notifications",
+    async (req, res) => {
+      const db = await pool.connect();
+
+      try {
+        const clientId = Number.parseInt(String(req.params.clientId || ""), 10);
+        const token = String(req.params.token || "").trim();
+        const access = await verifyClientCabinetAccess(db, clientId, token);
+
+        if (!access.ok) {
+          return res.status(access.status || 400).json({ ok: false, error: access.error });
+        }
+
+        const limitValue = Number.parseInt(String(req.query.limit ?? 20), 10);
+        const limit = Number.isFinite(limitValue) && limitValue > 0 ? Math.min(limitValue, 100) : 20;
+        const readerId = String(clientId);
+
+        const items = await listNotificationsForTarget(db, {
+          target_type: "client",
+          target_id: readerId,
+          channel: "in_app",
+          status: "sent",
+          limit,
+        });
+
+        const unread_count = await countUnread(db, {
+          reader_type: "client",
+          reader_id: readerId,
+          target_type: "client",
+          target_id: readerId,
+        });
+
+        const notificationIds = items
+          .map((item) => item?.id)
+          .filter((id) => Number.isInteger(Number(id)) && Number(id) > 0)
+          .map((id) => Number(id));
+
+        let readsByNotificationId = new Map();
+
+        if (notificationIds.length) {
+          const readsRes = await db.query(
+            `
+            SELECT notification_id, read_at
+            FROM public.app_notification_reads
+            WHERE reader_type = 'client'
+              AND reader_id = $1
+              AND notification_id = ANY($2::bigint[])
+            `,
+            [readerId, notificationIds]
+          );
+
+          readsByNotificationId = new Map(
+            (readsRes.rows || []).map((row) => [String(row.notification_id), row.read_at || null])
+          );
+        }
+
+        return res.json({
+          ok: true,
+          notifications: items.map((item) => {
+            const readAt = readsByNotificationId.get(String(item.id)) || item.read_at || null;
+
+            return {
+              ...item,
+              read_at: readAt,
+              is_read: Boolean(readAt),
+            };
+          }),
+          unread_count,
+        });
+      } catch (err) {
+        console.error("PUBLIC_CLIENT_NOTIFICATIONS_ERROR", err);
+        return res.status(500).json({ ok: false, error: "CLIENT_NOTIFICATIONS_FETCH_FAILED" });
+      } finally {
+        db.release();
+      }
+    }
+  );
+
+  r.post(
+    "/clients/:clientId/:token/notifications/:notificationUid/read",
+    async (req, res) => {
+      const db = await pool.connect();
+
+      try {
+        const clientId = Number.parseInt(String(req.params.clientId || ""), 10);
+        const token = String(req.params.token || "").trim();
+        const access = await verifyClientCabinetAccess(db, clientId, token);
+
+        if (!access.ok) {
+          return res.status(access.status || 400).json({ ok: false, error: access.error });
+        }
+
+        const notificationUid = String(req.params.notificationUid || "").trim();
+        if (!notificationUid) {
+          return res.status(400).json({ ok: false, error: "NOTIFICATION_UID_REQUIRED" });
+        }
+
+        const read = await markNotificationRead(db, notificationUid, {
+          reader_type: "client",
+          reader_id: String(clientId),
+        });
+
+        if (!read) {
+          return res.status(404).json({ ok: false, error: "NOTIFICATION_NOT_FOUND" });
+        }
+
+        return res.json({
+          ok: true,
+          read,
+        });
+      } catch (err) {
+        console.error("PUBLIC_CLIENT_NOTIFICATION_READ_ERROR", err);
+        return res.status(500).json({ ok: false, error: "CLIENT_NOTIFICATION_READ_FAILED" });
       } finally {
         db.release();
       }
