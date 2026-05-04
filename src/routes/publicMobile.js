@@ -1366,6 +1366,7 @@ router.post("/referral/events", async (req, res) => {
     const sourceValue = source || "mobile";
     const dateBucket = new Date().toISOString().slice(0, 10);
     const dedupMeta = buildReferralEventDedupMeta(payloadObject, referralCode, eventType, countryCodeValue, citySlug, sourceValue, dateBucket);
+    const rewardStatus = eventType === "booking_started" ? "pending" : "none";
 
     const existingEventResult = await pool.query(
       `SELECT
@@ -1438,10 +1439,10 @@ router.post("/referral/events", async (req, res) => {
          'anonymous', NULL,
          $4, $5, $6, $7,
          'recorded',
-         'none',
+         $8,
          NULL,
          NULL,
-         $8::jsonb
+         $9::jsonb
        )
        RETURNING id, event_uid, event_type, status, reward_status, created_at`,
       [
@@ -1452,6 +1453,7 @@ router.post("/referral/events", async (req, res) => {
         link.owner_id || null,
         countryCodeValue,
         cityId,
+        rewardStatus,
         JSON.stringify(payloadWithDedup),
       ]
     );
