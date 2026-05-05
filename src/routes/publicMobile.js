@@ -273,6 +273,47 @@ function buildReferralEventDedupMeta(payloadJson, referralCode, eventType, count
   };
 }
 
+function buildReferralAntiFraudMeta({ payloadJson, link, eventType, dedupMeta }) {
+  const reasons = [];
+  const ownerType = String(link?.owner_type || "").trim();
+  const ownerId = String(link?.owner_id || "").trim();
+  const payloadOwnerType = String(payloadJson?.owner_type || "").trim();
+  const payloadOwnerId = String(payloadJson?.owner_id || "").trim();
+  const payloadActorOwnerType = String(payloadJson?.actor_owner_type || "").trim();
+  const payloadActorOwnerId = String(payloadJson?.actor_owner_id || "").trim();
+  const payloadReferrerOwnerType = String(payloadJson?.referrer_owner_type || "").trim();
+  const payloadReferrerOwnerId = String(payloadJson?.referrer_owner_id || "").trim();
+
+  const ownerMatch =
+    Boolean(ownerType && ownerId) &&
+    (
+      (payloadOwnerType === ownerType && payloadOwnerId === ownerId) ||
+      (payloadActorOwnerType === ownerType && payloadActorOwnerId === ownerId) ||
+      (payloadReferrerOwnerType === ownerType && payloadReferrerOwnerId === ownerId)
+    );
+
+  if (ownerMatch) {
+    reasons.push("owner_match");
+  }
+
+  if (String(eventType || "").trim() !== "booking_started") {
+    reasons.push("reward_not_eligible_event_type");
+  }
+
+  if (!dedupMeta?.contextKey || String(dedupMeta.contextKey).trim() === "daily") {
+    reasons.push("missing_context_key");
+  }
+
+  return {
+    duplicate_key: dedupMeta?.referralEventKey || null,
+    reward_eligible: String(eventType || "").trim() === "booking_started",
+    review_required: Boolean(reasons.length),
+    self_referral_possible: ownerMatch,
+    owner_match: ownerMatch,
+    reasons,
+  };
+}
+
 router.get("/config", async (req, res) => {
   try {
     const versionsResult = await pool.query(
@@ -1367,6 +1408,7 @@ router.post("/referral/events", async (req, res) => {
     const dateBucket = new Date().toISOString().slice(0, 10);
     const dedupMeta = buildReferralEventDedupMeta(payloadObject, referralCode, eventType, countryCodeValue, citySlug, sourceValue, dateBucket);
     const rewardStatus = eventType === "booking_started" ? "pending" : "none";
+    const antiFraud = buildReferralAntiFraudMeta({ payloadJson: payloadObject, link, eventType, dedupMeta });
 
     const existingEventResult = await pool.query(
       `SELECT
@@ -1405,6 +1447,7 @@ router.post("/referral/events", async (req, res) => {
     const payloadWithDedup = {
       ...payloadObject,
       referral_event_key: dedupMeta.referralEventKey,
+      anti_fraud: antiFraud,
       dedup: {
         strategy: "referral_code_event_context_day",
         date_bucket: dateBucket,
