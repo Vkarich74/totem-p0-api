@@ -1,5 +1,9 @@
 import express from "express";
 import { pool } from "../db.js";
+import {
+  revokeAnonymousMobilePushSubscription,
+  saveAnonymousMobilePushSubscription,
+} from "../services/push/webPushService.js";
 
 const router = express.Router();
 
@@ -1294,6 +1298,69 @@ router.post("/events", async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: "MOBILE_EVENT_FAILED",
+    });
+  }
+});
+
+router.post("/push-subscriptions", async (req, res) => {
+  try {
+    const body = normalizeMobileRequestBody(req);
+    const result = await saveAnonymousMobilePushSubscription(pool, body);
+
+    if (!result.ok) {
+      return res.status(result.status || 400).json({
+        ok: false,
+        error: result.error || "PUSH_SUBSCRIPTION_SAVE_FAILED",
+      });
+    }
+
+    return res.status(200).json({
+      ok: true,
+      subscription_uid: result.subscription_uid,
+      enabled: Boolean(result.enabled),
+    });
+  } catch (err) {
+    console.error("PUBLIC_MOBILE_PUSH_SUBSCRIPTION_SAVE_ERROR", err);
+    return res.status(500).json({
+      ok: false,
+      error: "PUSH_SUBSCRIPTION_SAVE_FAILED",
+    });
+  }
+});
+
+router.delete("/push-subscriptions/:device_id", async (req, res) => {
+  try {
+    const body = normalizeMobileRequestBody(req);
+    const deviceId = String(req.params.device_id || "").trim();
+
+    if (!deviceId) {
+      return res.status(400).json({
+        ok: false,
+        error: "PUSH_SUBSCRIPTION_DEVICE_ID_REQUIRED",
+      });
+    }
+
+    const result = await revokeAnonymousMobilePushSubscription(pool, {
+      reader_id: body.reader_id,
+      device_id: deviceId,
+    });
+
+    if (!result.ok) {
+      return res.status(result.status || 400).json({
+        ok: false,
+        error: result.error || "PUSH_SUBSCRIPTION_REVOKE_FAILED",
+      });
+    }
+
+    return res.status(200).json({
+      ok: true,
+      revoked: Boolean(result.revoked),
+    });
+  } catch (err) {
+    console.error("PUBLIC_MOBILE_PUSH_SUBSCRIPTION_REVOKE_ERROR", err);
+    return res.status(500).json({
+      ok: false,
+      error: "PUSH_SUBSCRIPTION_REVOKE_FAILED",
     });
   }
 });
