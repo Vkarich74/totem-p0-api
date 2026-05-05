@@ -19,6 +19,7 @@ import {
   listNotificationsForTarget,
   markNotificationRead
 } from "../services/notifications/notificationService.js";
+import { getWebPushPublicConfig } from "../services/push/webPushService.js";
 
 function hashClientCabinetToken(token) {
   return crypto.createHash("sha256").update(String(token || "")).digest("hex");
@@ -80,6 +81,21 @@ export function createPublicRouter(deps) {
    */
   r.use("/auth", authRouter);
   r.use("/mobile", mobileRouter);
+
+  /**
+   * WEB PUSH CONFIG
+   */
+  r.get("/push/config", async (req, res) => {
+    try {
+      return res.json(getWebPushPublicConfig());
+    } catch (error) {
+      console.error("PUBLIC_PUSH_CONFIG_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "PUBLIC_PUSH_CONFIG_FAILED"
+      });
+    }
+  });
 
   /**
    * CREATE BOOKING
