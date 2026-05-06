@@ -112,6 +112,7 @@ try {
 const {
 date_from: dateFromRaw = "",
 date_to: dateToRaw = "",
+environment: environmentRaw = "production",
 provider: providerRaw = "",
 payment_status: paymentStatusRaw = "",
 payout_status: payoutStatusRaw = "",
@@ -124,6 +125,10 @@ limit: limitRaw = "100"
 const filters = {
 date_from: String(dateFromRaw || "").trim(),
 date_to: String(dateToRaw || "").trim(),
+environment: (() => {
+const normalized = String(environmentRaw || "").trim().toLowerCase();
+return ["production", "test", "all"].includes(normalized) ? normalized : "production";
+})(),
 provider: String(providerRaw || "").trim(),
 payment_status: String(paymentStatusRaw || "").trim(),
 payout_status: String(payoutStatusRaw || "").trim(),
@@ -168,6 +173,18 @@ whereParts.push(`COALESCE(po.status, 'no_payout') = ${pushParam(filters.payout_s
 
 if (filters.booking_status && filters.booking_status.toLowerCase() !== "all") {
 whereParts.push(`COALESCE(b.status, 'unknown') = ${pushParam(filters.booking_status)}`);
+}
+
+if (filters.environment === "production") {
+whereParts.push(`COALESCE(b.is_test, false) = false`);
+whereParts.push(`COALESCE(p.is_test, false) = false`);
+whereParts.push(`(po.id IS NULL OR COALESCE(po.is_test, false) = false)`);
+} else if (filters.environment === "test") {
+whereParts.push(`(
+COALESCE(b.is_test, false) = true
+OR COALESCE(p.is_test, false) = true
+OR COALESCE(po.is_test, false) = true
+)`);
 }
 
 const numericFilter = (value) => /^\d+$/.test(String(value || "").trim()) ? String(value).trim() : "";
