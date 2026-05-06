@@ -31,7 +31,15 @@ export async function publicLifecycle(req, res) {
     const currentStatus = rows[0].status;
 
     if (action === "complete") {
-      if (currentStatus !== "confirmed" && currentStatus !== "reserved") {
+      if (currentStatus === "reserved") {
+        return res.status(409).json({
+          ok: false,
+          error: "BOOKING_PAYMENT_REQUIRED",
+          status: currentStatus,
+        });
+      }
+
+      if (currentStatus !== "confirmed") {
         return res.status(409).json({
           ok: false,
           error: "INVALID_STATUS",

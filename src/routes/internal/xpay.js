@@ -158,6 +158,16 @@ console.error("XPAY_PAYMENT_EVENT_WRITE_FAILED",err?.message || err);
 }
 }
 
+async function setBookingConfirmedIfNeeded(client, bookingId){
+await client.query(`
+UPDATE public.bookings
+SET status='confirmed',
+confirmed_at=COALESCE(confirmed_at, NOW())
+WHERE id=$1
+AND status IN ('reserved','pending')
+`,[bookingId]);
+}
+
 async function verifyAndUpdatePaymentStatus({ paymentId, qrTransactionId }){
 if(typeof checkDynamicQRStatus !== "function"){
 return {
@@ -275,6 +285,10 @@ nextStatus
 ]);
 
 updatedPayment = updated.rows[0];
+
+if(updatedPayment.status === "confirmed"){
+await setBookingConfirmedIfNeeded(client, updatedPayment.booking_id);
+}
 }
 
 await client.query("COMMIT");
@@ -437,6 +451,10 @@ nextStatus
 ]);
 
 updatedPayment = updated.rows[0];
+
+if(updatedPayment.status === "confirmed"){
+await setBookingConfirmedIfNeeded(client, updatedPayment.booking_id);
+}
 }
 
 await client.query("COMMIT");
