@@ -329,10 +329,8 @@ export default function buildFinanceEngineRouter(pool){
         SELECT COUNT(*)::int AS v
         FROM payments p
         LEFT JOIN settlement_items si ON si.payment_id=p.id
-        LEFT JOIN payouts po ON po.booking_id=p.booking_id
         WHERE p.status='confirmed'
         AND si.id IS NULL
-        AND po.id IS NULL
       `);
 
       const settlementsPendingCount = settlementsPending.rows[0].v;
@@ -364,14 +362,19 @@ export default function buildFinanceEngineRouter(pool){
         b.id AS booking_id,
         b.master_id,
         b.salon_id,
-        b.status as booking_status
+        b.status as booking_status,
+        po.id AS payout_id,
+        po.settlement_period_id AS payout_settlement_period_id,
+        po.gross_amount AS payout_gross_amount,
+        po.take_rate_bps AS payout_take_rate_bps,
+        po.platform_fee AS payout_platform_fee,
+        po.provider_amount AS payout_provider_amount
         FROM payments p
         JOIN bookings b ON b.id=p.booking_id
         LEFT JOIN settlement_items si ON si.payment_id=p.id
-        LEFT JOIN payouts po ON po.booking_id=b.id
+        LEFT JOIN payouts po ON po.booking_id=b.id AND po.payment_id=p.id
         WHERE p.status='confirmed'
         AND si.id IS NULL
-        AND po.id IS NULL
         ORDER BY p.id ASC
         FOR UPDATE OF p SKIP LOCKED
         LIMIT 500
@@ -405,11 +408,12 @@ export default function buildFinanceEngineRouter(pool){
           const salonPercent = parseInt(terms.salon_percent || 0,10);
           const platformPercent = parseInt(terms.platform_percent || 0,10);
 
-          const masterAmount = Math.floor(p.amount * masterPercent / 100);
-          const salonAmount = Math.floor(p.amount * salonPercent / 100);
-          const platformAmount = p.amount - masterAmount - salonAmount;
+          const totalAmount = p.payout_id ? Number(p.payout_gross_amount || p.amount || 0) : Number(p.amount || 0);
+          const masterAmount = Math.floor(totalAmount * masterPercent / 100);
+          const salonAmount = Math.floor(totalAmount * salonPercent / 100);
+          const platformAmount = p.payout_id ? Number(p.payout_platform_fee || 0) : totalAmount - masterAmount - salonAmount;
 
-          let settlementId = periodCache.get(p.salon_id);
+          let settlementId = p.payout_id ? Number(p.payout_settlement_period_id || 0) : periodCache.get(p.salon_id);
 
           if(!settlementId){
 
@@ -437,6 +441,8 @@ export default function buildFinanceEngineRouter(pool){
             periodCache.set(p.salon_id, settlementId);
           }
 
+          periodCache.set(p.salon_id, settlementId);
+
           await db.query(`
             INSERT INTO settlement_items(
               settlement_id,payment_id,booking_id,master_id,
@@ -448,28 +454,30 @@ export default function buildFinanceEngineRouter(pool){
             p.payment_id,
             p.booking_id,
             p.master_id,
-            p.amount,
+            totalAmount,
             masterAmount,
             platformAmount
           ]);
 
-          await db.query(`
-            INSERT INTO payouts(
-              booking_id,amount,status,created_at,payment_id,
-              settlement_period_id,gross_amount,take_rate_bps,
-              platform_fee,provider_amount
-            )
-            VALUES($1,$2,'created',NOW(),$3,$4,$5,$6,$7,$8)
-          `,[
-            p.booking_id,
-            masterAmount,
-            p.payment_id,
-            settlementId,
-            p.amount,
-            platformPercent * 100,
-            platformAmount,
-            masterAmount + salonAmount
-          ]);
+          if(!p.payout_id){
+            await db.query(`
+              INSERT INTO payouts(
+                booking_id,amount,status,created_at,payment_id,
+                settlement_period_id,gross_amount,take_rate_bps,
+                platform_fee,provider_amount
+              )
+              VALUES($1,$2,'created',NOW(),$3,$4,$5,$6,$7,$8)
+            `,[
+              p.booking_id,
+              masterAmount,
+              p.payment_id,
+              settlementId,
+              totalAmount,
+              platformPercent * 100,
+              platformAmount,
+              masterAmount + salonAmount
+            ]);
+          }
 
           settlementsProcessed += 1;
 
