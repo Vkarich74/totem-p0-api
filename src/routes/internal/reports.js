@@ -1,33 +1,9 @@
 import express from "express";
+import AdminRuntimeGuard from "../../middleware/AdminRuntimeGuard.js";
 
 export default function buildReportsRouter(pool, internalReadRateLimit){
 
 const r = express.Router();
-
-function requirePaymentsSummaryAuth(req, res) {
-const userId = String(req?.auth?.user_id || "").trim();
-if (!userId) {
-res.status(401).json({ ok: false, error: "NO_AUTH" });
-return false;
-}
-
-const role = String(req?.auth?.role || "").toLowerCase();
-const allowedRoles = new Set([
-"admin",
-"super_admin",
-"owner_admin",
-"platform_admin",
-"system",
-"internal"
-]);
-
-if (!allowedRoles.has(role)) {
-res.status(403).json({ ok: false, error: "FORBIDDEN" });
-return false;
-}
-
-return true;
-}
 
 /* PLATFORM FINANCE REPORT */
 r.get("/reports/platform/finance", internalReadRateLimit, async (req,res)=>{
@@ -130,10 +106,8 @@ error:"RECONCILIATION_REPORT_FAILED"
 });
 
 /* PAYMENTS SUMMARY REPORT */
-r.get("/reports/payments-summary", internalReadRateLimit, async (req, res) => {
+r.get("/reports/payments-summary", internalReadRateLimit, AdminRuntimeGuard, async (req, res) => {
 try {
-
-if (!requirePaymentsSummaryAuth(req, res)) return;
 
 const {
 date_from: dateFromRaw = "",
