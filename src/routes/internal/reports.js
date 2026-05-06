@@ -239,7 +239,12 @@ SELECT
   COALESCE(SUM(payment_amount) FILTER (WHERE provider = 'xpay' AND payment_status = 'confirmed' AND payment_is_active = true), 0) AS xpay_confirmed_gross,
   COALESCE(SUM(payment_amount) FILTER (WHERE payment_status = 'pending' AND payment_is_active = true), 0) AS pending_gross,
   COALESCE(SUM(platform_fee) FILTER (WHERE payment_status = 'confirmed' AND payment_is_active = true), 0) AS platform_fee,
+  COALESCE(SUM(platform_fee) FILTER (WHERE payout_id IS NOT NULL), 0) AS platform_revenue_accrued,
+  COALESCE(SUM(platform_fee) FILTER (WHERE provider IN ('direct', 'cash') AND payout_id IS NOT NULL), 0) AS direct_platform_receivable,
+  COALESCE(SUM(platform_fee) FILTER (WHERE provider = 'xpay' AND payout_id IS NOT NULL), 0) AS xpay_platform_pending_or_retained,
+  0::numeric AS platform_collected_actual_proven,
   COALESCE(SUM(provider_amount) FILTER (WHERE payment_status = 'confirmed' AND payment_is_active = true), 0) AS owner_amount,
+  COALESCE(SUM(provider_amount) FILTER (WHERE payout_id IS NOT NULL), 0) AS owner_provider_payable,
   COALESCE(SUM(provider_amount) FILTER (WHERE provider = 'direct' AND payment_status = 'confirmed' AND payment_is_active = true), 0) AS direct_owner_amount,
   COALESCE(SUM(provider_amount) FILTER (WHERE provider = 'direct' AND payment_status = 'confirmed' AND payment_is_active = true AND payout_status = 'paid'), 0) AS direct_paid_out,
   COALESCE(SUM(provider_amount) FILTER (WHERE provider = 'direct' AND payment_status = 'confirmed' AND payment_is_active = true), 0)
@@ -341,7 +346,7 @@ const summary = summaryRes.rows[0] || {};
 res.json({
 ok: true,
 filters,
-summary: {
+  summary: {
   payments_count: Number(summary.payments_count || 0),
   confirmed_count: Number(summary.confirmed_count || 0),
   pending_count: Number(summary.pending_count || 0),
@@ -350,7 +355,12 @@ summary: {
   xpay_confirmed_gross: summary.xpay_confirmed_gross || 0,
   pending_gross: summary.pending_gross || 0,
   platform_fee: summary.platform_fee || 0,
+  platform_revenue_accrued: summary.platform_revenue_accrued || 0,
+  direct_platform_receivable: summary.direct_platform_receivable || 0,
+  xpay_platform_pending_or_retained: summary.xpay_platform_pending_or_retained || 0,
+  platform_collected_actual_proven: summary.platform_collected_actual_proven || 0,
   owner_amount: summary.owner_amount || 0,
+  owner_provider_payable: summary.owner_provider_payable || 0,
   direct_owner_amount: summary.direct_owner_amount || 0,
   direct_paid_out: summary.direct_paid_out || 0,
   direct_remaining: summary.direct_remaining || 0,
