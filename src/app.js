@@ -88,11 +88,35 @@ app.use((req, res, next) => {
 
 /* ================= ROOT ================= */
 
+function getRuntimeMetadata() {
+  return {
+    git_sha: String(process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_SHA || process.env.COMMIT_SHA || ""),
+    git_commit: String(process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_COMMIT || process.env.SOURCE_VERSION || ""),
+    build_id: String(process.env.RAILWAY_DEPLOYMENT_ID || process.env.BUILD_ID || process.env.RENDER_GIT_COMMIT || ""),
+    build_time: String(process.env.BUILD_TIME || process.env.RAILWAY_DEPLOYMENT_CREATED_AT || ""),
+    node_env: String(process.env.NODE_ENV || ""),
+  };
+}
+
 app.get("/", (req, res) => res.status(200).send("OK"));
 app.get("/health", (req, res) =>
   res.status(200).json({
     ok: true,
     redis: redis ? redis.status : "disabled",
+  })
+);
+app.get("/version", (req, res) =>
+  res.status(200).json({
+    ok: true,
+    service: "totem-p0-api",
+    runtime: getRuntimeMetadata(),
+  })
+);
+app.get("/build", (req, res) =>
+  res.status(200).json({
+    ok: true,
+    service: "totem-p0-api",
+    runtime: getRuntimeMetadata(),
   })
 );
 
@@ -153,11 +177,19 @@ app.use(
 
 /* ================= AUTO FINANCE LOOP ================= */
 
-const INTERNAL_API_TOKEN =
-  process.env.INTERNAL_API_TOKEN ||
-  "9f3c7a8e2b6d4c1f9a8e7d6c5b4a3928172635445566778899aabbccddeeff00";
+const AUTO_FINANCE_LOOP_ENABLED = String(process.env.AUTO_FINANCE_LOOP_ENABLED || "").toLowerCase() === "true";
+const INTERNAL_API_TOKEN = String(process.env.INTERNAL_API_TOKEN || "").trim();
 
 async function runFinanceLoop() {
+  if (!AUTO_FINANCE_LOOP_ENABLED) {
+    return;
+  }
+
+  if (!INTERNAL_API_TOKEN) {
+    console.warn("FINANCE_LOOP_SKIPPED_NO_INTERNAL_API_TOKEN");
+    return;
+  }
+
   try {
     const res = await fetch(
       "https://totem-p0-api-production.up.railway.app/internal/finance/run/full",
@@ -177,11 +209,15 @@ async function runFinanceLoop() {
   }
 }
 
-/* run every 5 minutes */
-setInterval(runFinanceLoop, 300000);
+if (AUTO_FINANCE_LOOP_ENABLED) {
+  /* run every 5 minutes */
+  setInterval(runFinanceLoop, 300000);
 
-/* first run after startup delay */
-setTimeout(runFinanceLoop, 15000);
+  /* first run after startup delay */
+  setTimeout(runFinanceLoop, 15000);
+} else {
+  console.log("FINANCE_LOOP_DISABLED");
+}
 
 /* ================= START ================= */
 
