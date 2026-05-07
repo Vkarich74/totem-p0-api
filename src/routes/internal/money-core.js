@@ -1463,6 +1463,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/salons/:slug/money-core/withdraw-destinations', async (req, res, next) => {
     try {
+      assertWithdrawRequestsEnabled();
       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'salon', req.params.slug);
 
       if (!owner.ok) {
@@ -1523,6 +1524,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.patch('/salons/:slug/money-core/withdraw-settings', async (req, res, next) => {
     try {
+      assertWithdrawRequestsEnabled();
       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'salon', req.params.slug);
 
       if (!owner.ok) {
@@ -1588,6 +1590,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/salons/:slug/money-core/withdraw-requests', async (req, res, next) => {
     try {
+      assertWithdrawRequestsEnabled();
       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'salon', req.params.slug);
 
       if (!owner.ok) {
@@ -1653,6 +1656,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/masters/:slug/money-core/withdraw-destinations', async (req, res, next) => {
     try {
+      assertWithdrawRequestsEnabled();
       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'master', req.params.slug);
 
       if (!owner.ok) {
@@ -1713,6 +1717,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.patch('/masters/:slug/money-core/withdraw-settings', async (req, res, next) => {
     try {
+      assertWithdrawRequestsEnabled();
       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'master', req.params.slug);
 
       if (!owner.ok) {
@@ -1778,6 +1783,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/masters/:slug/money-core/withdraw-requests', async (req, res, next) => {
     try {
+      assertWithdrawRequestsEnabled();
       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'master', req.params.slug);
 
       if (!owner.ok) {
