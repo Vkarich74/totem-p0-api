@@ -34,6 +34,41 @@ LIMIT 1
   );
 }
 
+function getDirectPaymentLabelRu(provider, status, hasPayment) {
+  if (!hasPayment) {
+    return "Оплата не выбрана";
+  }
+
+  const normalizedProvider = String(provider || "").trim().toLowerCase();
+  const normalizedStatus = String(status || "").trim().toLowerCase();
+
+  if (normalizedStatus === "pending" && normalizedProvider === "direct") {
+    return "Наличные ожидают подтверждения";
+  }
+
+  if (normalizedStatus === "confirmed" && normalizedProvider === "direct") {
+    return "Оплата наличными подтверждена";
+  }
+
+  if (normalizedStatus === "failed") {
+    return "Оплата не прошла";
+  }
+
+  if (normalizedStatus === "refunded") {
+    return "Оплата возвращена";
+  }
+
+  if (normalizedStatus === "pending" && normalizedProvider === "xpay") {
+    return "Ожидаем оплату XPAY";
+  }
+
+  if (normalizedStatus === "confirmed" && normalizedProvider === "xpay") {
+    return "Оплата получена";
+  }
+
+  return "Оплата не выбрана";
+}
+
 export default function buildPaymentsRouter({
   pool,
   getSalonWalletId,
@@ -41,6 +76,237 @@ export default function buildPaymentsRouter({
   setBookingConfirmedIfNeeded
 }) {
   const r = Router();
+
+  async function confirmDirectPendingCashPayment(db, input = {}) {
+    const bookingId = Number(input.booking_id ?? input.bookingId ?? null);
+    const paymentId = Number(input.payment_id ?? input.paymentId ?? null);
+
+    if (!Number.isInteger(bookingId) && !Number.isInteger(paymentId)) {
+      return {
+        ok: false,
+        error: "BOOKING_ID_REQUIRED"
+      };
+    }
+
+    let bookingRow = null;
+    let paymentRow = null;
+
+    if (Number.isInteger(paymentId)) {
+      const paymentRes = await db.query(
+        `
+SELECT
+id,
+booking_id,
+provider,
+status,
+amount,
+is_active,
+created_at
+FROM payments
+WHERE id=$1
+FOR UPDATE
+LIMIT 1
+`,
+        [paymentId]
+      );
+
+      if (!paymentRes.rows.length) {
+        return {
+          ok: false,
+          error: "DIRECT_PENDING_PAYMENT_NOT_FOUND"
+        };
+      }
+
+      paymentRow = paymentRes.rows[0];
+
+      const bookingRes = await db.query(
+        `
+SELECT
+id,
+salon_id,
+status
+FROM bookings
+WHERE id=$1
+FOR UPDATE
+LIMIT 1
+`,
+        [paymentRow.booking_id]
+      );
+
+      if (!bookingRes.rows.length) {
+        return {
+          ok: false,
+          error: "DIRECT_PENDING_PAYMENT_NOT_FOUND"
+        };
+      }
+
+      bookingRow = bookingRes.rows[0];
+    } else {
+      const bookingRes = await db.query(
+        `
+SELECT
+id,
+salon_id,
+status
+FROM bookings
+WHERE id=$1
+FOR UPDATE
+LIMIT 1
+`,
+        [bookingId]
+      );
+
+      if (!bookingRes.rows.length) {
+        return {
+          ok: false,
+          error: "DIRECT_PENDING_PAYMENT_NOT_FOUND"
+        };
+      }
+
+      bookingRow = bookingRes.rows[0];
+
+      const paymentRes = await db.query(
+        `
+SELECT
+id,
+booking_id,
+provider,
+status,
+amount,
+is_active,
+created_at
+FROM payments
+WHERE booking_id=$1
+AND is_active=true
+ORDER BY updated_at DESC NULLS LAST, id DESC
+FOR UPDATE
+LIMIT 1
+`,
+        [bookingRow.id]
+      );
+
+      if (!paymentRes.rows.length) {
+        return {
+          ok: false,
+          error: "DIRECT_PENDING_PAYMENT_NOT_FOUND"
+        };
+      }
+
+      paymentRow = paymentRes.rows[0];
+    }
+
+    const activeProvider = String(paymentRow.provider || "").trim().toLowerCase();
+    const activeStatus = String(paymentRow.status || "").trim().toLowerCase();
+
+    if (activeProvider !== "direct") {
+      return {
+        ok: false,
+        error: "ACTIVE_PAYMENT_NOT_DIRECT",
+        payment: normalizePaymentRow(paymentRow)
+      };
+    }
+
+    if (activeStatus === "confirmed") {
+      return {
+        ok: true,
+        reused: true,
+        idempotent: true,
+        payment: normalizePaymentRow(paymentRow),
+        payment_label_ru: "Оплата наличными подтверждена"
+      };
+    }
+
+    if (activeStatus !== "pending") {
+      return {
+        ok: false,
+        error: "PAYMENT_NOT_CONFIRMABLE",
+        payment: normalizePaymentRow(paymentRow)
+      };
+    }
+
+    const updated = await db.query(
+      `
+UPDATE payments
+SET
+status='confirmed',
+updated_at=now()
+WHERE id=$1
+AND provider='direct'
+AND status='pending'
+AND is_active=true
+RETURNING
+id,
+booking_id,
+provider,
+status,
+amount,
+created_at
+`,
+      [paymentRow.id]
+    );
+
+    if (!updated.rows.length) {
+      return {
+        ok: false,
+        error: "PAYMENT_NOT_CONFIRMABLE",
+        payment: normalizePaymentRow(paymentRow)
+      };
+    }
+
+    const confirmedPayment = updated.rows[0];
+    const amountCents = parsePositiveAmount(confirmedPayment.amount);
+
+    if (!amountCents) {
+      return {
+        ok: false,
+        error: "PAYMENT_NOT_CONFIRMABLE",
+        payment: normalizePaymentRow(confirmedPayment)
+      };
+    }
+
+    const salonWallet = await getSalonWalletId(db, bookingRow.salon_id);
+    const systemWalletId = await getSystemWalletId(db);
+
+    /* force exact payment ledger state */
+    await db.query(
+      `
+DELETE FROM totem_test.ledger_entries
+WHERE reference_type='payment'
+AND reference_id=$1
+`,
+      [String(confirmedPayment.id)]
+    );
+
+    await db.query(
+      `
+INSERT INTO totem_test.ledger_entries(
+wallet_id,
+direction,
+amount_cents,
+reference_type,
+reference_id,
+purpose
+)
+VALUES
+($1,'debit',$3,'payment',$4,'main'),
+($2,'credit',$3,'payment',$4,'main')
+`,
+      [systemWalletId, salonWallet, amountCents, String(confirmedPayment.id)]
+    );
+
+    await setBookingConfirmedIfNeeded(db, bookingRow.id);
+
+    return {
+      ok: true,
+      confirmed: true,
+      payment: {
+        ...confirmedPayment,
+        amount: amountCents,
+        is_active: true
+      },
+      payment_label_ru: "Оплата наличными подтверждена"
+    };
+  }
 
   r.post("/payments/direct/pending", async (req, res) => {
     const { booking_id, service_price } = req.body || {};
@@ -138,6 +404,207 @@ RETURNING id,booking_id,amount,status,provider,created_at
       return res.status(500).json({
         ok: false,
         error: "DIRECT_PAYMENT_PENDING_FAILED"
+      });
+    } finally {
+      db.release();
+    }
+  });
+
+  r.post("/payments/direct/salon/confirm-cash", async (req, res) => {
+    const db = await pool.connect();
+
+    try {
+      await db.query("BEGIN");
+
+      const body = req.body || {};
+      const result = await confirmDirectPendingCashPayment(db, body);
+
+      if (!result.ok) {
+        await db.query("ROLLBACK");
+
+        if (result.error === "BOOKING_ID_REQUIRED") {
+          return res.status(400).json({ ok: false, error: result.error });
+        }
+
+        if (
+          result.error === "DIRECT_PENDING_PAYMENT_NOT_FOUND" ||
+          result.error === "ACTIVE_PAYMENT_NOT_DIRECT" ||
+          result.error === "PAYMENT_NOT_CONFIRMABLE"
+        ) {
+          const statusCode = result.error === "DIRECT_PENDING_PAYMENT_NOT_FOUND" ? 404 : 409;
+          return res.status(statusCode).json({ ok: false, error: result.error, payment: result.payment || null });
+        }
+
+        return res.status(400).json({ ok: false, error: result.error || "CONFIRM_CASH_FAILED" });
+      }
+
+      if (String(body.salon_slug || "").trim()) {
+        const bookingId = Number(body.booking_id ?? body.bookingId ?? result.payment?.booking_id ?? null);
+        if (Number.isInteger(bookingId) && bookingId > 0) {
+          const salonCheck = await db.query(
+            `
+SELECT
+b.id,
+s.slug
+FROM bookings b
+JOIN salons s ON s.id=b.salon_id
+WHERE b.id=$1
+FOR UPDATE
+LIMIT 1
+`,
+            [bookingId]
+          );
+
+          if (!salonCheck.rows.length) {
+            await db.query("ROLLBACK");
+            return res.status(404).json({ ok: false, error: "DIRECT_PENDING_PAYMENT_NOT_FOUND" });
+          }
+
+          if (String(salonCheck.rows[0].slug || "").trim() !== String(body.salon_slug || "").trim()) {
+            await db.query("ROLLBACK");
+            return res.status(403).json({ ok: false, error: "SALON_SLUG_MISMATCH" });
+          }
+        }
+      }
+
+      await db.query("COMMIT");
+
+      return res.json({
+        ok: true,
+        owner_type: "salon",
+        confirmed: Boolean(result.confirmed),
+        reused: Boolean(result.reused),
+        idempotent: Boolean(result.idempotent),
+        payment: result.payment,
+        payment_label_ru: result.payment_label_ru,
+        cash_pending_alert: false
+      });
+    } catch (err) {
+      try {
+        await db.query("ROLLBACK");
+      } catch (rollbackErr) {
+        console.error("DIRECT_SALON_CONFIRM_CASH_ROLLBACK_ERROR", rollbackErr);
+      }
+
+      if (String(err?.message || "") === "SALON_WALLET_NOT_FOUND") {
+        return res.status(400).json({ ok: false, error: "SALON_WALLET_NOT_FOUND" });
+      }
+
+      if (String(err?.message || "") === "SYSTEM_WALLET_NOT_FOUND") {
+        return res.status(400).json({ ok: false, error: "SYSTEM_WALLET_NOT_FOUND" });
+      }
+
+      console.error("DIRECT_SALON_CONFIRM_CASH_ERROR", err);
+      return res.status(500).json({
+        ok: false,
+        error: "DIRECT_SALON_CONFIRM_CASH_FAILED"
+      });
+    } finally {
+      db.release();
+    }
+  });
+
+  r.post("/payments/direct/master/confirm-cash", async (req, res) => {
+    const db = await pool.connect();
+
+    try {
+      await db.query("BEGIN");
+
+      const body = req.body || {};
+      const result = await confirmDirectPendingCashPayment(db, body);
+
+      if (!result.ok) {
+        await db.query("ROLLBACK");
+
+        if (result.error === "BOOKING_ID_REQUIRED") {
+          return res.status(400).json({ ok: false, error: result.error });
+        }
+
+        if (result.error === "DIRECT_PENDING_PAYMENT_NOT_FOUND") {
+          return res.status(404).json({ ok: false, error: result.error });
+        }
+
+        if (
+          result.error === "ACTIVE_PAYMENT_NOT_DIRECT" ||
+          result.error === "PAYMENT_NOT_CONFIRMABLE"
+        ) {
+          return res.status(409).json({ ok: false, error: result.error, payment: result.payment || null });
+        }
+
+        if (result.error === "MASTER_SLUG_MISMATCH") {
+          return res.status(403).json({ ok: false, error: result.error });
+        }
+
+        if (
+          result.error === "SALON_WALLET_NOT_FOUND" ||
+          result.error === "SYSTEM_WALLET_NOT_FOUND"
+        ) {
+          return res.status(400).json({ ok: false, error: result.error });
+        }
+
+        return res.status(400).json({ ok: false, error: result.error || "CONFIRM_CASH_FAILED" });
+      }
+
+      if (String(body.master_slug || "").trim()) {
+        const bookingId = Number(body.booking_id ?? body.bookingId ?? result.payment?.booking_id ?? null);
+        if (Number.isInteger(bookingId) && bookingId > 0) {
+          const masterCheck = await db.query(
+            `
+SELECT
+b.id,
+m.slug
+FROM bookings b
+JOIN masters m ON m.id=b.master_id
+WHERE b.id=$1
+FOR UPDATE
+LIMIT 1
+`,
+            [bookingId]
+          );
+
+          if (!masterCheck.rows.length) {
+            await db.query("ROLLBACK");
+            return res.status(404).json({ ok: false, error: "DIRECT_PENDING_PAYMENT_NOT_FOUND" });
+          }
+
+          if (String(masterCheck.rows[0].slug || "").trim() !== String(body.master_slug || "").trim()) {
+            await db.query("ROLLBACK");
+            return res.status(403).json({ ok: false, error: "MASTER_SLUG_MISMATCH" });
+          }
+        }
+      }
+
+      await db.query("COMMIT");
+
+      return res.json({
+        ok: true,
+        owner_type: "master",
+        confirmed: Boolean(result.confirmed),
+        reused: Boolean(result.reused),
+        idempotent: Boolean(result.idempotent),
+        payment: result.payment,
+        payment_label_ru: result.payment_label_ru,
+        cash_pending_alert: false
+      });
+    } catch (err) {
+      try {
+        await db.query("ROLLBACK");
+      } catch (rollbackErr) {
+        console.error("DIRECT_MASTER_CONFIRM_CASH_ROLLBACK_ERROR", rollbackErr);
+      }
+
+      if (String(err?.message || "") === "SALON_WALLET_NOT_FOUND") {
+        return res.status(400).json({ ok: false, error: "SALON_WALLET_NOT_FOUND" });
+      }
+
+      if (String(err?.message || "") === "SYSTEM_WALLET_NOT_FOUND") {
+        return res.status(400).json({ ok: false, error: "SYSTEM_WALLET_NOT_FOUND" });
+      }
+
+      console.error("DIRECT_MASTER_CONFIRM_CASH_ERROR", err);
+      return res.status(500).json({
+        ok: false,
+        error: "DIRECT_MASTER_CONFIRM_CASH_FAILED"
       });
     } finally {
       db.release();
