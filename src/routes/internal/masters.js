@@ -991,6 +991,34 @@ SELECT client_id FROM bookings WHERE master_id=$1
 )
 `,[masterId]);
 
+const cashPendingExposure = await pool.query(`
+SELECT
+COUNT(*) FILTER (
+  WHERE pay.provider = 'direct'
+    AND pay.status = 'pending'
+    AND pay.is_active = true
+)::int AS cash_pending_exposure_count,
+COALESCE(SUM(pay.amount) FILTER (
+  WHERE pay.provider = 'direct'
+    AND pay.status = 'pending'
+    AND pay.is_active = true
+), 0) AS cash_pending_exposure_amount
+FROM bookings b
+LEFT JOIN LATERAL (
+  SELECT
+    p.provider,
+    p.status,
+    p.is_active,
+    p.amount
+  FROM public.payments p
+  WHERE p.booking_id=b.id
+    AND p.is_active=true
+  ORDER BY p.updated_at DESC NULLS LAST, p.id DESC
+  LIMIT 1
+) pay ON true
+WHERE b.master_id=$1
+`,[masterId]);
+
 const billing_access = await getMasterBillingAccess(pool, masterId);
 
 res.json({
@@ -998,7 +1026,9 @@ ok:true,
 metrics:{
 bookings_today:bookingsToday.rows[0].v,
 bookings_week:bookingsWeek.rows[0].v,
-clients_total:clientsTotal.rows[0].v
+clients_total:clientsTotal.rows[0].v,
+cash_pending_exposure_count:Number(cashPendingExposure.rows[0].cash_pending_exposure_count || 0),
+cash_pending_exposure_amount:cashPendingExposure.rows[0].cash_pending_exposure_amount || 0
 },
 billing_access
 });
