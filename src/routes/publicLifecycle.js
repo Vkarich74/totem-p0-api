@@ -1,6 +1,41 @@
 import { pool } from "../db.js";
 import { createNotification } from "../services/notifications/notificationService.js";
 
+function getPublicLifecyclePaymentLabelRu(provider, status, hasPayment) {
+  if (!hasPayment) {
+    return "Оплата не выбрана";
+  }
+
+  const normalizedProvider = String(provider || "").trim().toLowerCase();
+  const normalizedStatus = String(status || "").trim().toLowerCase();
+
+  if (normalizedProvider === "direct" && normalizedStatus === "pending") {
+    return "Наличные ожидают подтверждения";
+  }
+
+  if (normalizedProvider === "direct" && normalizedStatus === "confirmed") {
+    return "Оплата наличными подтверждена";
+  }
+
+  if (normalizedProvider === "xpay" && normalizedStatus === "pending") {
+    return "Ожидаем оплату XPAY";
+  }
+
+  if (normalizedProvider === "xpay" && normalizedStatus === "confirmed") {
+    return "Оплата получена";
+  }
+
+  if (normalizedStatus === "failed") {
+    return "Оплата не прошла";
+  }
+
+  if (normalizedStatus === "refunded") {
+    return "Оплата возвращена";
+  }
+
+  return "Оплата не выбрана";
+}
+
 export async function publicLifecycle(req, res) {
   try {
     const { salon_id } = req.tenant;
@@ -31,6 +66,40 @@ export async function publicLifecycle(req, res) {
     const currentStatus = rows[0].status;
 
     if (action === "complete") {
+      const paymentRes = await pool.query(
+        `
+        SELECT
+          id,
+          provider,
+          status,
+          is_active
+        FROM payments
+        WHERE booking_id = $1
+          AND provider = 'direct'
+          AND status = 'pending'
+          AND is_active = true
+        ORDER BY updated_at DESC NULLS LAST, id DESC
+        LIMIT 1
+        `,
+        [bookingId]
+      );
+
+      if (paymentRes.rows.length) {
+        const paymentRow = paymentRes.rows[0];
+
+        return res.status(409).json({
+          ok: false,
+          error: "CASH_PAYMENT_PENDING_CONFIRMATION",
+          message_ru: "Нельзя завершить визит: наличные ожидают подтверждения.",
+          payment_label_ru: getPublicLifecyclePaymentLabelRu(
+            paymentRow.provider,
+            paymentRow.status,
+            Boolean(paymentRow.id)
+          ),
+          cash_pending_alert: true
+        });
+      }
+
       if (currentStatus === "reserved") {
         return res.status(409).json({
           ok: false,

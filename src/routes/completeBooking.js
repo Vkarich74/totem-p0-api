@@ -32,6 +32,41 @@ function mustInternalAuth(req) {
   return { ok: true };
 }
 
+function getCompleteBookingPaymentLabelRu(provider, status, hasPayment) {
+  if (!hasPayment) {
+    return "Оплата не выбрана";
+  }
+
+  const normalizedProvider = String(provider || "").trim().toLowerCase();
+  const normalizedStatus = String(status || "").trim().toLowerCase();
+
+  if (normalizedProvider === "direct" && normalizedStatus === "pending") {
+    return "Наличные ожидают подтверждения";
+  }
+
+  if (normalizedProvider === "direct" && normalizedStatus === "confirmed") {
+    return "Оплата наличными подтверждена";
+  }
+
+  if (normalizedProvider === "xpay" && normalizedStatus === "pending") {
+    return "Ожидаем оплату XPAY";
+  }
+
+  if (normalizedProvider === "xpay" && normalizedStatus === "confirmed") {
+    return "Оплата получена";
+  }
+
+  if (normalizedStatus === "failed") {
+    return "Оплата не прошла";
+  }
+
+  if (normalizedStatus === "refunded") {
+    return "Оплата возвращена";
+  }
+
+  return "Оплата не выбрана";
+}
+
 export async function completeBooking(req, res) {
   const auth = mustInternalAuth(req);
   if (!auth.ok)
@@ -119,6 +154,35 @@ export async function completeBooking(req, res) {
     if (!Number.isFinite(amount) || amount <= 0) {
       await client.query("ROLLBACK");
       return res.status(400).json({ ok: false, error: "INVALID_AMOUNT" });
+    }
+
+    const pendingCash = await client.query(
+      `SELECT id, booking_id, provider, status, is_active
+         FROM public.payments
+        WHERE booking_id = $1
+          AND provider = 'direct'
+          AND status = 'pending'
+          AND is_active = true
+        ORDER BY updated_at DESC NULLS LAST, id DESC
+        LIMIT 1
+        FOR UPDATE`,
+      [bookingId]
+    );
+
+    if (pendingCash.rows.length > 0) {
+      const paymentRow = pendingCash.rows[0];
+      await client.query("ROLLBACK");
+      return res.status(409).json({
+        ok: false,
+        error: "CASH_PAYMENT_PENDING_CONFIRMATION",
+        message_ru: "Нельзя завершить визит: наличные ожидают подтверждения.",
+        payment_label_ru: getCompleteBookingPaymentLabelRu(
+          paymentRow.provider,
+          paymentRow.status,
+          Boolean(paymentRow.id)
+        ),
+        cash_pending_alert: true,
+      });
     }
 
     // deactivate previous active payments
