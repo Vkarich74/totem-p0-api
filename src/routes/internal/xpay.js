@@ -521,6 +521,7 @@ error:"XPAY_DYNAMIC_DISABLED_UNTIL_PROVIDER_ACTIVATION"
 }
 
 const bookingId = parsePositiveInteger(req.body?.booking_id);
+const replacePending = req.body?.replace_pending === true || String(req.body?.replace_pending || "").toLowerCase() === "true";
 
 if(!bookingId){
 return res.status(400).json({
@@ -604,14 +605,68 @@ FOR UPDATE
 
 if(existingPayment.rows.length){
 const existing = existingPayment.rows[0];
+const existingProvider = String(existing.provider || "").toLowerCase();
+const existingStatus = String(existing.status || "").toLowerCase();
 
-if(existing.status === "confirmed"){
+if(existingStatus === "confirmed"){
 await client.query("ROLLBACK");
 
 return res.status(409).json({
 ok:false,
 error:"BOOKING_ALREADY_PAID",
 payment:normalizePaymentRow(existing)
+});
+}
+
+if(existingStatus === "pending" && existingProvider === "direct"){
+if(!replacePending){
+await client.query("ROLLBACK");
+
+return res.status(409).json({
+ok:false,
+error:"ACTIVE_PAYMENT_EXISTS",
+payment:normalizePaymentRow(existing)
+});
+}
+
+const replaced = await client.query(`
+UPDATE payments
+SET
+is_active=false,
+updated_at=now()
+WHERE id=$1
+AND provider='direct'
+AND status='pending'
+AND is_active=true
+RETURNING id
+`,[
+existing.id
+]);
+
+if(!replaced.rows.length){
+await client.query("ROLLBACK");
+
+return res.status(409).json({
+ok:false,
+error:"ACTIVE_PAYMENT_EXISTS",
+payment:normalizePaymentRow(existing)
+});
+}
+}
+
+if(existingStatus === "pending" && existingProvider === "xpay"){
+if(existing.qr_transaction_id){
+await client.query("ROLLBACK");
+
+return res.json({
+ok:true,
+reused:true,
+payment:normalizePaymentRow(existing),
+payment_id:existing.id,
+qr_transaction_id:existing.qr_transaction_id,
+transaction_id:existing.qr_transaction_id,
+qr_code:null,
+qr_image:null
 });
 }
 
@@ -622,6 +677,17 @@ ok:false,
 error:"ACTIVE_PAYMENT_EXISTS",
 payment:normalizePaymentRow(existing)
 });
+}
+
+if(existingStatus === "pending"){
+await client.query("ROLLBACK");
+
+return res.status(409).json({
+ok:false,
+error:"ACTIVE_PAYMENT_EXISTS",
+payment:normalizePaymentRow(existing)
+});
+}
 }
 
 const payment = await client.query(`
