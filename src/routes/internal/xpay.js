@@ -607,6 +607,7 @@ if(existingPayment.rows.length){
 const existing = existingPayment.rows[0];
 const existingProvider = String(existing.provider || "").toLowerCase();
 const existingStatus = String(existing.status || "").toLowerCase();
+let replacedDirectPending = false;
 
 if(existingStatus === "confirmed"){
 await client.query("ROLLBACK");
@@ -652,6 +653,8 @@ error:"ACTIVE_PAYMENT_EXISTS",
 payment:normalizePaymentRow(existing)
 });
 }
+
+replacedDirectPending = true;
 }
 
 if(existingStatus === "pending" && existingProvider === "xpay"){
@@ -679,7 +682,7 @@ payment:normalizePaymentRow(existing)
 });
 }
 
-if(existingStatus === "pending"){
+if(existingStatus === "pending" && !replacedDirectPending){
 await client.query("ROLLBACK");
 
 return res.status(409).json({
