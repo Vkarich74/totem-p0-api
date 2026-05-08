@@ -171,6 +171,41 @@ return null;
 return salon.rows[0];
 }
 
+function getBookingPaymentLabelRu(provider, status, hasPayment){
+if(!hasPayment){
+return "Оплата не выбрана";
+}
+
+const normalizedProvider = String(provider || "").trim().toLowerCase();
+const normalizedStatus = String(status || "").trim().toLowerCase();
+
+if(normalizedStatus === "failed"){
+return "Оплата не прошла";
+}
+
+if(normalizedStatus === "refunded"){
+return "Оплата возвращена";
+}
+
+if(normalizedProvider === "direct" && normalizedStatus === "pending"){
+return "Наличные ожидают подтверждения";
+}
+
+if(normalizedProvider === "direct" && normalizedStatus === "confirmed"){
+return "Оплата наличными подтверждена";
+}
+
+if(normalizedProvider === "xpay" && normalizedStatus === "pending"){
+return "Ожидаем оплату XPAY";
+}
+
+if(normalizedProvider === "xpay" && normalizedStatus === "confirmed"){
+return "Оплата получена";
+}
+
+return "Оплата не выбрана";
+}
+
 
 function buildBillingAccessPayload(billing){
 if(!billing){
@@ -1586,16 +1621,44 @@ b.id,
 b.start_at,
 b.status,
 c.name,
-c.phone
+c.phone,
+pay.id AS payment_id,
+pay.provider AS payment_provider,
+pay.status AS payment_status,
+COALESCE(pay.is_active, false) AS payment_is_active,
+pay.amount AS payment_amount
 FROM bookings b
 LEFT JOIN clients c ON c.id=b.client_id
+LEFT JOIN LATERAL (
+SELECT
+p.id,
+p.provider,
+p.status,
+p.is_active,
+p.amount
+FROM public.payments p
+WHERE p.booking_id=b.id
+AND p.is_active=true
+ORDER BY p.updated_at DESC NULLS LAST, p.id DESC
+LIMIT 1
+) pay ON true
 WHERE b.salon_id=$1
 ORDER BY b.start_at DESC
 `,[salonId]);
 
+const bookingsRows = bookings.rows.map((booking)=>({
+...booking,
+payment_label_ru:getBookingPaymentLabelRu(
+booking.payment_provider,
+booking.payment_status,
+Boolean(booking.payment_id)
+),
+cash_pending_alert:String(booking.payment_provider || "").toLowerCase()==="direct" && String(booking.payment_status || "").toLowerCase()==="pending" && Boolean(booking.payment_is_active)
+}));
+
 res.json({
 ok:true,
-bookings:bookings.rows
+bookings:bookingsRows
 });
 
 }catch(err){

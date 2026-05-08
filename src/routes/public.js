@@ -29,6 +29,41 @@ function buildClientPersonalLink(clientId, token) {
   return `#/client/${clientId}/${token}`;
 }
 
+function getClientPaymentLabelRu(provider, status, hasPayment) {
+  if (!hasPayment) {
+    return "Оплата не выбрана";
+  }
+
+  const normalizedProvider = String(provider || "").trim().toLowerCase();
+  const normalizedStatus = String(status || "").trim().toLowerCase();
+
+  if (normalizedStatus === "failed") {
+    return "Оплата не прошла";
+  }
+
+  if (normalizedStatus === "refunded") {
+    return "Оплата возвращена";
+  }
+
+  if (normalizedProvider === "direct" && normalizedStatus === "pending") {
+    return "Наличные ожидают подтверждения";
+  }
+
+  if (normalizedProvider === "direct" && normalizedStatus === "confirmed") {
+    return "Оплата наличными подтверждена";
+  }
+
+  if (normalizedProvider === "xpay" && normalizedStatus === "pending") {
+    return "Ожидаем оплату XPAY";
+  }
+
+  if (normalizedProvider === "xpay" && normalizedStatus === "confirmed") {
+    return "Оплата получена";
+  }
+
+  return "Оплата не выбрана";
+}
+
 async function verifyClientCabinetAccess(db, clientId, token) {
   if (!Number.isInteger(clientId) || clientId <= 0) {
     return { ok: false, status: 400, error: "INVALID_CLIENT_ID" };
@@ -549,16 +584,43 @@ export function createPublicRouter(deps) {
             b.end_at,
             b.status,
             b.price_snapshot,
-            b.created_at
+            b.created_at,
+            pay.id AS payment_id,
+            pay.provider AS payment_provider,
+            pay.status AS payment_status,
+            COALESCE(pay.is_active, false) AS payment_is_active,
+            pay.amount AS payment_amount
           FROM bookings b
           LEFT JOIN salons salon ON salon.id = b.salon_id
           LEFT JOIN masters m ON m.id = b.master_id
           LEFT JOIN services s ON s.id = b.service_id
+          LEFT JOIN LATERAL (
+            SELECT
+              p.id,
+              p.provider,
+              p.status,
+              p.is_active,
+              p.amount
+            FROM public.payments p
+            WHERE p.booking_id = b.id
+              AND p.is_active = true
+            ORDER BY p.updated_at DESC NULLS LAST, p.id DESC
+            LIMIT 1
+          ) pay ON true
           WHERE b.client_id = $1
           ORDER BY b.start_at DESC, b.id DESC
           `,
           [clientId]
         );
+
+        const bookings = bookingsRes.rows.map((booking) => ({
+          ...booking,
+          payment_label_ru: getClientPaymentLabelRu(
+            booking.payment_provider,
+            booking.payment_status,
+            Boolean(booking.payment_id)
+          )
+        }));
 
         const mastersRes = await db.query(
           `
@@ -626,7 +688,7 @@ export function createPublicRouter(deps) {
         return res.json({
           ok: true,
           client: clientRes.rows[0],
-          bookings: bookingsRes.rows,
+          bookings,
           masters: mastersRes.rows,
           salons: salonsRes.rows,
           stats: statsRes.rows[0] || {
