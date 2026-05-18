@@ -103,6 +103,35 @@ async function resolveCanonicalRecipientId(db, recipientType, recipientId) {
   return row?.id !== null && row?.id !== undefined ? String(row.id) : safeRecipientId;
 }
 
+async function persistNotificationBridgeResult(db, messageDbId, result) {
+  if (!messageDbId) {
+    return;
+  }
+
+  try {
+    await db.query(
+      `
+      UPDATE public.messages
+      SET
+        data = jsonb_set(
+          COALESCE(data, '{}'::jsonb),
+          '{notification_bridge}',
+          $2::jsonb,
+          true
+        ),
+        updated_at = NOW()
+      WHERE id = $1
+      `,
+      [messageDbId, JSON.stringify(result || { attempted: false, reason: "NO_RESULT" })],
+    );
+  } catch (error) {
+    console.error("ADMIN_MESSAGE_NOTIFICATION_BRIDGE_RESULT_PERSIST_FAILED", {
+      message_db_id: messageDbId,
+      error: String(error?.message || error || "BRIDGE_RESULT_PERSIST_FAILED").slice(0, 500),
+    });
+  }
+}
+
 function validateMessageSendBody(body) {
   const channel = normalizeChannel(body?.channel);
   const direction = normalizeDirection(body?.direction || "outbound");
@@ -389,8 +418,10 @@ router.post("/send", async (req, res) => {
     let notificationBridgeResult = {
       attempted: false,
       ok: false,
-      reason: "NOT_ATTEMPTED",
+      reason: "BRIDGE_NOT_ATTEMPTED_YET",
+      bridge: "admin_internal_message",
     };
+    let canonicalRecipientId = null;
 
     await db.query("BEGIN");
 
@@ -419,6 +450,17 @@ router.post("/send", async (req, res) => {
 
     messages.set(id, messageItem);
     const dbId = await persistMessage(messageItem, "create", db);
+    const messageDbId = Number(dbId);
+    notificationBridgeResult = {
+      attempted: false,
+      ok: false,
+      reason: "BRIDGE_NOT_ATTEMPTED_YET",
+      bridge: "admin_internal_message",
+      message_db_id: messageDbId,
+      recipient_type,
+      recipient_id,
+    };
+    await persistNotificationBridgeResult(db, messageDbId, notificationBridgeResult);
 
     await logMessageAudit(db, dbId, "message_sent", {
       action: "send",
@@ -440,14 +482,42 @@ router.post("/send", async (req, res) => {
       attempt: 1,
     });
 
-    if (channel === "internal" && ["client", "master", "salon"].includes(recipient_type)) {
-      let canonicalRecipientId = null;
+    if (channel !== "internal") {
+      notificationBridgeResult = {
+        attempted: false,
+        ok: false,
+        reason: "CHANNEL_NOT_INTERNAL",
+        bridge: "admin_internal_message",
+        message_db_id: messageDbId,
+        recipient_type,
+        recipient_id,
+      };
+      await persistNotificationBridgeResult(db, messageDbId, notificationBridgeResult);
+    } else if (!["client", "master", "salon"].includes(recipient_type)) {
+      notificationBridgeResult = {
+        attempted: false,
+        ok: false,
+        reason: "RECIPIENT_TYPE_NOT_PUSH_TARGET",
+        bridge: "admin_internal_message",
+        message_db_id: messageDbId,
+        recipient_type,
+        recipient_id,
+      };
+      await persistNotificationBridgeResult(db, messageDbId, notificationBridgeResult);
+    } else {
+      canonicalRecipientId = await resolveCanonicalRecipientId(db, recipient_type, recipient_id);
       notificationBridgeResult = {
         attempted: true,
         ok: false,
-        reason: "PENDING",
+        reason: "CREATE_NOTIFICATION_IN_PROGRESS",
+        bridge: "admin_internal_message",
+        message_db_id: messageDbId,
+        recipient_type,
+        recipient_id,
+        canonical_recipient_id: canonicalRecipientId,
       };
-      canonicalRecipientId = await resolveCanonicalRecipientId(db, recipient_type, recipient_id);
+      await persistNotificationBridgeResult(db, messageDbId, notificationBridgeResult);
+
       const notificationTitle =
         normalizeText(req.body?.title_ru || req.body?.subject || req.body?.title) ||
         "Сообщение от администратора";
@@ -458,7 +528,7 @@ router.post("/send", async (req, res) => {
       const notificationPayload = {
         message_id: id,
         message_uid: id,
-        message_db_id: Number(dbId),
+        message_db_id: messageDbId,
         recipient_type,
         recipient_id: String(recipient_id),
         canonical_recipient_id: canonicalRecipientId,
@@ -495,7 +565,13 @@ router.post("/send", async (req, res) => {
           ok: true,
           notification_id: notification?.id ?? null,
           notification_uid: notification?.notification_uid ?? null,
+          bridge: "admin_internal_message",
+          message_db_id: messageDbId,
+          recipient_type,
+          recipient_id,
+          canonical_recipient_id: canonicalRecipientId,
         };
+        await persistNotificationBridgeResult(db, messageDbId, notificationBridgeResult);
 
         await db.query("RELEASE SAVEPOINT admin_message_notification");
       } catch (error) {
@@ -515,59 +591,15 @@ router.post("/send", async (req, res) => {
           attempted: true,
           ok: false,
           error: String(error?.message || error || "ADMIN_MESSAGE_NOTIFICATION_BRIDGE_FAILED").slice(0, 500),
+          bridge: "admin_internal_message",
+          message_db_id: messageDbId,
+          recipient_type,
+          recipient_id,
+          canonical_recipient_id: canonicalRecipientId,
         };
+        await persistNotificationBridgeResult(db, messageDbId, notificationBridgeResult);
         console.error("ADMIN_MESSAGE_NOTIFICATION_ERROR", error);
       }
-    }
-
-    try {
-      const bridgeResultForPersist = {
-        attempted: Boolean(notificationBridgeResult?.attempted),
-        ok: Boolean(notificationBridgeResult?.ok),
-        recipient_type,
-        recipient_id,
-        canonical_recipient_id: String(canonicalRecipientId || recipient_id),
-        message_db_id: Number(dbId),
-        bridge: "admin_internal_message",
-      };
-
-      if (notificationBridgeResult?.reason) {
-        bridgeResultForPersist.reason = notificationBridgeResult.reason;
-      }
-
-      if (notificationBridgeResult?.error) {
-        bridgeResultForPersist.error = notificationBridgeResult.error;
-      }
-
-      if (notificationBridgeResult?.notification_id !== undefined) {
-        bridgeResultForPersist.notification_id = notificationBridgeResult.notification_id;
-      }
-
-      if (notificationBridgeResult?.notification_uid !== undefined) {
-        bridgeResultForPersist.notification_uid = notificationBridgeResult.notification_uid;
-      }
-
-      await db.query(
-        `
-          UPDATE public.messages
-          SET data = jsonb_set(
-            COALESCE(data, '{}'::jsonb),
-            '{notification_bridge}',
-            $2::jsonb,
-            true
-          ),
-          updated_at = NOW()
-          WHERE id = $1
-        `,
-        [Number(dbId), JSON.stringify(bridgeResultForPersist)],
-      );
-    } catch (bridgePersistError) {
-      console.error("ADMIN_MESSAGE_NOTIFICATION_BRIDGE_RESULT_PERSIST_FAILED", {
-        message_db_id: Number(dbId),
-        recipient_type,
-        recipient_id,
-        error: String(bridgePersistError?.message || bridgePersistError || "BRIDGE_RESULT_PERSIST_FAILED").slice(0, 500),
-      });
     }
 
     await db.query("COMMIT");
