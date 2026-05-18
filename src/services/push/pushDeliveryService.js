@@ -286,6 +286,8 @@ export async function dispatchNotificationPushDeliveries(pool, notification) {
 
   const payload = JSON.stringify(buildPushPayload(notification));
   const notificationId = Number(notification.id || 0) || null;
+  const targetType = normalizeText(notification?.target_type, 64) || null;
+  const targetId = normalizeText(notification?.target_id, 255) || null;
   const target = buildTargetKey(notification);
   const results = [];
 
