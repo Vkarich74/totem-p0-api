@@ -103,9 +103,65 @@ async function resolveCanonicalRecipientId(db, recipientType, recipientId) {
   return row?.id !== null && row?.id !== undefined ? String(row.id) : safeRecipientId;
 }
 
+async function resolvePersistedMessageDbId(db, messageItem, fallbackDbId) {
+  const numericFallback = Number(fallbackDbId);
+  if (Number.isFinite(numericFallback) && numericFallback > 0) {
+    return numericFallback;
+  }
+
+  const runtimeId = normalizeText(messageItem?.id);
+  if (runtimeId) {
+    const directLookup = await db.query(
+      `
+      SELECT id
+      FROM public.messages
+      WHERE data->>'id' = $1
+      ORDER BY id DESC
+      LIMIT 1
+      `,
+      [runtimeId],
+    );
+
+    const directId = Number(directLookup.rows?.[0]?.id);
+    if (Number.isFinite(directId) && directId > 0) {
+      return directId;
+    }
+  }
+
+  const recipientType = normalizeText(messageItem?.recipient_type);
+  const recipientId = normalizeText(messageItem?.recipient_id);
+  const bodyPreview = normalizeText(messageItem?.body_preview);
+
+  if (recipientType && recipientId && bodyPreview) {
+    const fallbackLookup = await db.query(
+      `
+      SELECT id
+      FROM public.messages
+      WHERE data->>'recipient_type' = $1
+        AND data->>'recipient_id' = $2
+        AND COALESCE(data->>'body_preview', '') = $3
+      ORDER BY id DESC
+      LIMIT 1
+      `,
+      [recipientType, recipientId, bodyPreview],
+    );
+
+    const fallbackId = Number(fallbackLookup.rows?.[0]?.id);
+    if (Number.isFinite(fallbackId) && fallbackId > 0) {
+      return fallbackId;
+    }
+  }
+
+  return null;
+}
+
 async function persistNotificationBridgeResult(db, messageDbId, result) {
   if (!messageDbId) {
-    return;
+    console.error("ADMIN_MESSAGE_NOTIFICATION_BRIDGE_RESULT_NO_MESSAGE_ID", {
+      message_db_id: messageDbId,
+      result: result || null,
+    });
+    return { ok: false, noMessageId: true };
   }
 
   try {
@@ -124,11 +180,32 @@ async function persistNotificationBridgeResult(db, messageDbId, result) {
       `,
       [messageDbId, JSON.stringify(result || { attempted: false, reason: "NO_RESULT" })],
     );
+
+    const verify = await db.query(
+      `
+      SELECT data->'notification_bridge' AS notification_bridge
+      FROM public.messages
+      WHERE id = $1
+      LIMIT 1
+      `,
+      [messageDbId],
+    );
+
+    if (!verify.rows?.[0]?.notification_bridge) {
+      console.error("ADMIN_MESSAGE_NOTIFICATION_BRIDGE_RESULT_VERIFY_NULL", {
+        message_db_id: messageDbId,
+        result: result || null,
+      });
+      return { ok: false, verifyNull: true };
+    }
+
+    return { ok: true };
   } catch (error) {
     console.error("ADMIN_MESSAGE_NOTIFICATION_BRIDGE_RESULT_PERSIST_FAILED", {
       message_db_id: messageDbId,
       error: String(error?.message || error || "BRIDGE_RESULT_PERSIST_FAILED").slice(0, 500),
     });
+    return { ok: false, error: String(error?.message || error || "BRIDGE_RESULT_PERSIST_FAILED").slice(0, 500) };
   }
 }
 
@@ -421,6 +498,7 @@ router.post("/send", async (req, res) => {
       reason: "BRIDGE_NOT_ATTEMPTED_YET",
       bridge: "admin_internal_message",
     };
+    let notificationBridgePersisted = false;
     let canonicalRecipientId = null;
 
     await db.query("BEGIN");
@@ -450,17 +528,40 @@ router.post("/send", async (req, res) => {
 
     messages.set(id, messageItem);
     const dbId = await persistMessage(messageItem, "create", db);
-    const messageDbId = Number(dbId);
-    notificationBridgeResult = {
-      attempted: false,
-      ok: false,
-      reason: "BRIDGE_NOT_ATTEMPTED_YET",
-      bridge: "admin_internal_message",
-      message_db_id: messageDbId,
-      recipient_type,
-      recipient_id,
-    };
-    await persistNotificationBridgeResult(db, messageDbId, notificationBridgeResult);
+    const messageDbId = await resolvePersistedMessageDbId(db, messageItem, dbId);
+    if (messageDbId === null) {
+      notificationBridgeResult = {
+        attempted: false,
+        ok: false,
+        reason: "MESSAGE_DB_ID_NOT_RESOLVED",
+        bridge: "admin_internal_message",
+        message_db_id: null,
+        recipient_type,
+        recipient_id,
+      };
+      const persistResult = await persistNotificationBridgeResult(db, messageDbId, notificationBridgeResult);
+      notificationBridgePersisted = Boolean(persistResult?.ok);
+    } else {
+      notificationBridgeResult = {
+        attempted: false,
+        ok: false,
+        reason: "BRIDGE_NOT_ATTEMPTED_YET",
+        bridge: "admin_internal_message",
+        message_db_id: messageDbId,
+        recipient_type,
+        recipient_id,
+      };
+      const persistResult = await persistNotificationBridgeResult(db, messageDbId, notificationBridgeResult);
+      notificationBridgePersisted = Boolean(persistResult?.ok);
+      if (!notificationBridgePersisted) {
+        notificationBridgeResult.reason = persistResult?.noMessageId
+          ? "MESSAGE_DB_ID_NOT_RESOLVED"
+          : "BRIDGE_RESULT_VERIFY_NULL";
+      }
+      if (!notificationBridgePersisted && persistResult?.verifyNull) {
+        notificationBridgeResult.reason = "BRIDGE_RESULT_VERIFY_NULL";
+      }
+    }
 
     await logMessageAudit(db, dbId, "message_sent", {
       action: "send",
@@ -492,7 +593,16 @@ router.post("/send", async (req, res) => {
         recipient_type,
         recipient_id,
       };
-      await persistNotificationBridgeResult(db, messageDbId, notificationBridgeResult);
+      const persistResult = await persistNotificationBridgeResult(db, messageDbId, notificationBridgeResult);
+      notificationBridgePersisted = Boolean(persistResult?.ok);
+      if (!notificationBridgePersisted) {
+        notificationBridgeResult.reason = persistResult?.noMessageId
+          ? "MESSAGE_DB_ID_NOT_RESOLVED"
+          : "BRIDGE_RESULT_VERIFY_NULL";
+      }
+      if (!notificationBridgePersisted && persistResult?.verifyNull) {
+        notificationBridgeResult.reason = "BRIDGE_RESULT_VERIFY_NULL";
+      }
     } else if (!["client", "master", "salon"].includes(recipient_type)) {
       notificationBridgeResult = {
         attempted: false,
@@ -503,7 +613,16 @@ router.post("/send", async (req, res) => {
         recipient_type,
         recipient_id,
       };
-      await persistNotificationBridgeResult(db, messageDbId, notificationBridgeResult);
+      const persistResult = await persistNotificationBridgeResult(db, messageDbId, notificationBridgeResult);
+      notificationBridgePersisted = Boolean(persistResult?.ok);
+      if (!notificationBridgePersisted) {
+        notificationBridgeResult.reason = persistResult?.noMessageId
+          ? "MESSAGE_DB_ID_NOT_RESOLVED"
+          : "BRIDGE_RESULT_VERIFY_NULL";
+      }
+      if (!notificationBridgePersisted && persistResult?.verifyNull) {
+        notificationBridgeResult.reason = "BRIDGE_RESULT_VERIFY_NULL";
+      }
     } else {
       canonicalRecipientId = await resolveCanonicalRecipientId(db, recipient_type, recipient_id);
       notificationBridgeResult = {
@@ -516,7 +635,18 @@ router.post("/send", async (req, res) => {
         recipient_id,
         canonical_recipient_id: canonicalRecipientId,
       };
-      await persistNotificationBridgeResult(db, messageDbId, notificationBridgeResult);
+      {
+        const persistResult = await persistNotificationBridgeResult(db, messageDbId, notificationBridgeResult);
+        notificationBridgePersisted = Boolean(persistResult?.ok);
+        if (!notificationBridgePersisted) {
+          notificationBridgeResult.reason = persistResult?.noMessageId
+            ? "MESSAGE_DB_ID_NOT_RESOLVED"
+            : "BRIDGE_RESULT_VERIFY_NULL";
+        }
+        if (!notificationBridgePersisted && persistResult?.verifyNull) {
+          notificationBridgeResult.reason = "BRIDGE_RESULT_VERIFY_NULL";
+        }
+      }
 
       const notificationTitle =
         normalizeText(req.body?.title_ru || req.body?.subject || req.body?.title) ||
@@ -571,7 +701,18 @@ router.post("/send", async (req, res) => {
           recipient_id,
           canonical_recipient_id: canonicalRecipientId,
         };
-        await persistNotificationBridgeResult(db, messageDbId, notificationBridgeResult);
+        {
+          const persistResult = await persistNotificationBridgeResult(db, messageDbId, notificationBridgeResult);
+          notificationBridgePersisted = Boolean(persistResult?.ok);
+          if (!notificationBridgePersisted) {
+            notificationBridgeResult.reason = persistResult?.noMessageId
+              ? "MESSAGE_DB_ID_NOT_RESOLVED"
+              : "BRIDGE_RESULT_VERIFY_NULL";
+          }
+          if (!notificationBridgePersisted && persistResult?.verifyNull) {
+            notificationBridgeResult.reason = "BRIDGE_RESULT_VERIFY_NULL";
+          }
+        }
 
         await db.query("RELEASE SAVEPOINT admin_message_notification");
       } catch (error) {
@@ -597,7 +738,18 @@ router.post("/send", async (req, res) => {
           recipient_id,
           canonical_recipient_id: canonicalRecipientId,
         };
-        await persistNotificationBridgeResult(db, messageDbId, notificationBridgeResult);
+        {
+          const persistResult = await persistNotificationBridgeResult(db, messageDbId, notificationBridgeResult);
+          notificationBridgePersisted = Boolean(persistResult?.ok);
+          if (!notificationBridgePersisted) {
+            notificationBridgeResult.reason = persistResult?.noMessageId
+              ? "MESSAGE_DB_ID_NOT_RESOLVED"
+              : "BRIDGE_RESULT_VERIFY_NULL";
+          }
+          if (!notificationBridgePersisted && persistResult?.verifyNull) {
+            notificationBridgeResult.reason = "BRIDGE_RESULT_VERIFY_NULL";
+          }
+        }
         console.error("ADMIN_MESSAGE_NOTIFICATION_ERROR", error);
       }
     }
@@ -608,6 +760,8 @@ router.post("/send", async (req, res) => {
       ok: true,
       data: sanitizeMessageForResponse(messageItem),
       notification_bridge: notificationBridgeResult,
+      notification_bridge_persisted: Boolean(notificationBridgePersisted),
+      message_db_id: messageDbId,
       meta: {},
     });
   } catch (error) {
