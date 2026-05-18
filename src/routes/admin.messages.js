@@ -635,18 +635,6 @@ router.post("/send", async (req, res) => {
         recipient_id,
         canonical_recipient_id: canonicalRecipientId,
       };
-      {
-        const persistResult = await persistNotificationBridgeResult(db, messageDbId, notificationBridgeResult);
-        notificationBridgePersisted = Boolean(persistResult?.ok);
-        if (!notificationBridgePersisted) {
-          notificationBridgeResult.reason = persistResult?.noMessageId
-            ? "MESSAGE_DB_ID_NOT_RESOLVED"
-            : "BRIDGE_RESULT_VERIFY_NULL";
-        }
-        if (!notificationBridgePersisted && persistResult?.verifyNull) {
-          notificationBridgeResult.reason = "BRIDGE_RESULT_VERIFY_NULL";
-        }
-      }
 
       const notificationTitle =
         normalizeText(req.body?.title_ru || req.body?.subject || req.body?.title) ||
@@ -701,6 +689,34 @@ router.post("/send", async (req, res) => {
           recipient_id,
           canonical_recipient_id: canonicalRecipientId,
         };
+        try {
+          await db.query("RELEASE SAVEPOINT admin_message_notification");
+        } catch (releaseError) {
+          console.error("ADMIN_MESSAGE_NOTIFICATION_BRIDGE_RELEASE_FAILED", {
+            message_db_id: messageDbId,
+            recipient_type,
+            recipient_id,
+            error: String(releaseError?.message || releaseError || "SAVEPOINT_RELEASE_FAILED").slice(0, 500),
+          });
+
+          try {
+            await db.query("ROLLBACK TO SAVEPOINT admin_message_notification");
+          } catch (notificationRollbackError) {
+            console.error("ADMIN_MESSAGE_NOTIFICATION_BRIDGE_ROLLBACK_FAILED", notificationRollbackError);
+          }
+
+          notificationBridgeResult = {
+            attempted: true,
+            ok: false,
+            error: `SAVEPOINT_RELEASE_FAILED: ${String(releaseError?.message || releaseError || "SAVEPOINT_RELEASE_FAILED").slice(0, 500)}`,
+            bridge: "admin_internal_message",
+            message_db_id: messageDbId,
+            recipient_type,
+            recipient_id,
+            canonical_recipient_id: canonicalRecipientId,
+          };
+        }
+
         {
           const persistResult = await persistNotificationBridgeResult(db, messageDbId, notificationBridgeResult);
           notificationBridgePersisted = Boolean(persistResult?.ok);
@@ -713,13 +729,11 @@ router.post("/send", async (req, res) => {
             notificationBridgeResult.reason = "BRIDGE_RESULT_VERIFY_NULL";
           }
         }
-
-        await db.query("RELEASE SAVEPOINT admin_message_notification");
       } catch (error) {
         try {
           await db.query("ROLLBACK TO SAVEPOINT admin_message_notification");
         } catch (notificationRollbackError) {
-          console.error("ADMIN_MESSAGE_NOTIFICATION_ERROR", notificationRollbackError);
+          console.error("ADMIN_MESSAGE_NOTIFICATION_BRIDGE_ROLLBACK_FAILED", notificationRollbackError);
         }
 
         console.error("ADMIN_MESSAGE_NOTIFICATION_BRIDGE_FAILED", {
