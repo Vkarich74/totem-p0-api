@@ -1,7 +1,7 @@
 import webPush from "web-push";
 import { getWebPushPublicConfig } from "./webPushService.js";
 
-const DELIVERY_CHANNEL = "web_push";
+const DELIVERY_CHANNEL = "push";
 const DELIVERY_PROVIDER = "web-push";
 const MAX_ERROR_LENGTH = 1000;
 
