@@ -177,17 +177,18 @@ async function persistDeliveryRow(pool, values, context = {}) {
 async function logSkippedDelivery(pool, notification, reason) {
   const notificationId = Number(notification?.id || 0) || null;
   const target = buildTargetKey(notification) || normalizeText(notification?.target_type, 64) || "global";
+  const dbReason = String(reason || "PUSH_NOT_CONFIGURED");
   const result = await persistDeliveryRow(
     pool,
     {
       notificationId,
-      deliveryUid: buildDeliveryUid(notification, { subscription_uid: reason }, "skipped"),
+      deliveryUid: buildDeliveryUid(notification, { subscription_uid: dbReason }, "skipped"),
       channel: DELIVERY_CHANNEL,
       provider: DELIVERY_PROVIDER,
       target,
-      status: "skipped",
+      status: "failed",
       attemptCount: 0,
-      lastError: normalizeText(reason, MAX_ERROR_LENGTH),
+      lastError: normalizeText(dbReason, MAX_ERROR_LENGTH),
       sentAt: null,
       deliveredAt: null,
       failedAt: null,
@@ -275,12 +276,12 @@ export async function dispatchNotificationPushDeliveries(pool, notification) {
 
   const vapidConfig = getVapidConfigOrNull();
   if (!vapidConfig) {
-    return logSkippedDelivery(pool, notification, "PUSH_DISABLED");
+    return logSkippedDelivery(pool, notification, "PUSH_NOT_CONFIGURED");
   }
 
   const subscriptions = await getSubscriptionsForNotification(pool, notification);
   if (!subscriptions.length) {
-    return logSkippedDelivery(pool, notification, "NO_ACTIVE_PUSH_SUBSCRIPTIONS");
+    return logSkippedDelivery(pool, notification, "NO_ACTIVE_PUSH_SUBSCRIPTION");
   }
 
   const payload = JSON.stringify(buildPushPayload(notification));
