@@ -236,11 +236,32 @@ export async function createNotification(pool, input = {}) {
 
   if (notification) {
     try {
+      console.info("PUSH_DELIVERY_DISPATCH_START", {
+        notification_id: notification.id || null,
+        notification_uid: notification.notification_uid || null,
+        target_type: notification.target_type || null,
+        target_id: notification.target_id || null,
+        channel: notification.channel || null,
+        action_type: notification.action_type || null,
+      });
       await dispatchNotificationPushDeliveries(pool, notification);
+      console.info("PUSH_DELIVERY_DISPATCH_DONE", {
+        notification_id: notification.id || null,
+        result: {
+          ok: true,
+          target_type: notification.target_type || null,
+          target_id: notification.target_id || null,
+          channel: notification.channel || null,
+          action_type: notification.action_type || null,
+        },
+      });
     } catch (error) {
       try {
         console.error("NOTIFICATION_PUSH_DELIVERY_FAILED", {
+          notification_id: notification.id || null,
           notification_uid: notification.notification_uid || null,
+          target_type: notification.target_type || null,
+          target_id: notification.target_id || null,
           error: String(error?.message || error || "PUSH_DELIVERY_FAILED").slice(0, 500),
         });
       } catch {
