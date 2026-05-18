@@ -1,3 +1,5 @@
+import { dispatchNotificationPushDeliveries } from "../push/pushDeliveryService.js";
+
 export function normalizeText(value, maxLength = 255) {
   const text = String(value ?? "").trim();
 
@@ -230,7 +232,24 @@ export async function createNotification(pool, input = {}) {
   ];
 
   const result = await pool.query(query, params);
-  return result.rows[0] || null;
+  const notification = result.rows[0] || null;
+
+  if (notification) {
+    try {
+      await dispatchNotificationPushDeliveries(pool, notification);
+    } catch (error) {
+      try {
+        console.error("NOTIFICATION_PUSH_DELIVERY_FAILED", {
+          notification_uid: notification.notification_uid || null,
+          error: String(error?.message || error || "PUSH_DELIVERY_FAILED").slice(0, 500),
+        });
+      } catch {
+        /* no-op */
+      }
+    }
+  }
+
+  return notification;
 }
 
 export async function createManyNotifications(pool, items = []) {
