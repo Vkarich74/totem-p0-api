@@ -154,12 +154,32 @@ async function insertDeliveryRow(pool, values) {
   );
 }
 
+async function persistDeliveryRow(pool, values, context = {}) {
+  try {
+    await insertDeliveryRow(pool, values);
+    return { ok: true };
+  } catch (error) {
+    const logPayload = {
+      notification_id: values?.notificationId ?? null,
+      notification_uid: context?.notificationUid ?? null,
+      target_type: context?.targetType ?? null,
+      target_id: context?.targetId ?? null,
+      status: values?.status ?? null,
+      reason: values?.lastError ?? null,
+      error: String(error?.message || error || "PUSH_DELIVERY_ROW_INSERT_FAILED").slice(0, MAX_ERROR_LENGTH),
+    };
+
+    console.error("PUSH_DELIVERY_ROW_INSERT_FAILED", logPayload);
+    return { ok: false, error: logPayload.error };
+  }
+}
+
 async function logSkippedDelivery(pool, notification, reason) {
   const notificationId = Number(notification?.id || 0) || null;
   const target = buildTargetKey(notification) || normalizeText(notification?.target_type, 64) || "global";
-
-  try {
-    await insertDeliveryRow(pool, {
+  const result = await persistDeliveryRow(
+    pool,
+    {
       notificationId,
       deliveryUid: buildDeliveryUid(notification, { subscription_uid: reason }, "skipped"),
       channel: DELIVERY_CHANNEL,
@@ -171,13 +191,16 @@ async function logSkippedDelivery(pool, notification, reason) {
       sentAt: null,
       deliveredAt: null,
       failedAt: null,
-    });
-  } catch {
-    /* no-op */
-  }
+    },
+    {
+      notificationUid: normalizeText(notification?.notification_uid, 255) || null,
+      targetType: normalizeText(notification?.target_type, 64) || null,
+      targetId: normalizeText(notification?.target_id, 255) || null,
+    },
+  );
 
   return {
-    ok: true,
+    ok: Boolean(result?.ok),
     skipped: true,
     reason,
   };
@@ -280,7 +303,7 @@ export async function dispatchNotificationPushDeliveries(pool, notification) {
         payload,
       );
 
-      await insertDeliveryRow(pool, {
+      const deliveryRowResult = await persistDeliveryRow(pool, {
         notificationId,
         deliveryUid,
         channel: DELIVERY_CHANNEL,
@@ -292,30 +315,39 @@ export async function dispatchNotificationPushDeliveries(pool, notification) {
         sentAt: new Date().toISOString(),
         deliveredAt: null,
         failedAt: null,
+      }, {
+        notificationUid: normalizeText(notification?.notification_uid, 255) || null,
+        targetType,
+        targetId,
       });
 
-      results.push({ ok: true, subscription_uid: subscription.subscription_uid || null, status: "sent" });
+      results.push({
+        ok: Boolean(deliveryRowResult?.ok),
+        subscription_uid: subscription.subscription_uid || null,
+        status: deliveryRowResult?.ok ? "sent" : "sent_row_failed",
+        delivery_row_persisted: Boolean(deliveryRowResult?.ok),
+      });
     } catch (error) {
       const statusCode = Number(error?.statusCode || error?.status || 0) || null;
       const safeError = safeErrorMessage(error);
 
-      try {
-        await insertDeliveryRow(pool, {
-          notificationId,
-          deliveryUid,
-          channel: DELIVERY_CHANNEL,
-          provider: DELIVERY_PROVIDER,
-          target,
-          status: "failed",
-          attemptCount: 1,
-          lastError: safeError,
-          sentAt: null,
-          deliveredAt: null,
-          failedAt: new Date().toISOString(),
-        });
-      } catch {
-        /* no-op */
-      }
+      const deliveryRowResult = await persistDeliveryRow(pool, {
+        notificationId,
+        deliveryUid,
+        channel: DELIVERY_CHANNEL,
+        provider: DELIVERY_PROVIDER,
+        target,
+        status: "failed",
+        attemptCount: 1,
+        lastError: safeError,
+        sentAt: null,
+        deliveredAt: null,
+        failedAt: new Date().toISOString(),
+      }, {
+        notificationUid: normalizeText(notification?.notification_uid, 255) || null,
+        targetType,
+        targetId,
+      });
 
       if (statusCode === 404 || statusCode === 410) {
         await revokeSubscriptionIfExpired(pool, subscription);
@@ -324,8 +356,9 @@ export async function dispatchNotificationPushDeliveries(pool, notification) {
       results.push({
         ok: false,
         subscription_uid: subscription.subscription_uid || null,
-        status: "failed",
+        status: deliveryRowResult?.ok ? "failed" : "failed_row_failed",
         error: safeError,
+        delivery_row_persisted: Boolean(deliveryRowResult?.ok),
       });
     }
   }
