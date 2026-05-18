@@ -77,6 +77,32 @@ function buildBodyPreview(body, templateKey) {
   return normalizeText(template?.body).slice(0, 240);
 }
 
+async function resolveCanonicalRecipientId(db, recipientType, recipientId) {
+  const safeRecipientId = normalizeText(recipientId);
+
+  if (!safeRecipientId) {
+    return null;
+  }
+
+  if (recipientType !== "master" && recipientType !== "salon") {
+    return safeRecipientId;
+  }
+
+  const table = recipientType === "master" ? "public.masters" : "public.salons";
+  const result = await db.query(
+    `
+      SELECT id
+      FROM ${table}
+      WHERE id::text = $1 OR slug = $1
+      LIMIT 1
+    `,
+    [safeRecipientId],
+  );
+
+  const row = result.rows?.[0] || null;
+  return row?.id !== null && row?.id !== undefined ? String(row.id) : safeRecipientId;
+}
+
 function validateMessageSendBody(body) {
   const channel = normalizeChannel(body?.channel);
   const direction = normalizeDirection(body?.direction || "outbound");
@@ -410,13 +436,20 @@ router.post("/send", async (req, res) => {
     });
 
     if (channel === "internal" && ["client", "master", "salon"].includes(recipient_type)) {
-      const notificationTitle = normalizeText(req.body?.title_ru || req.body?.title || "Сообщение от TOTEM");
-      const notificationBody = body_preview || "Новое сообщение";
+      const canonicalRecipientId = await resolveCanonicalRecipientId(db, recipient_type, recipient_id);
+      const notificationTitle =
+        normalizeText(req.body?.title_ru || req.body?.subject || req.body?.title) ||
+        "Сообщение от администратора";
+      const notificationBody =
+        normalizeText(req.body?.body_ru || req.body?.body || req.body?.text || req.body?.body_preview) ||
+        body_preview ||
+        "Новое внутреннее сообщение";
       const notificationPayload = {
         message_id: id,
         message_db_id: Number(dbId),
         recipient_type,
         recipient_id: String(recipient_id),
+        canonical_recipient_id: canonicalRecipientId,
         source: "admin_messages",
         channel,
         sent_by: "admin",
@@ -427,9 +460,9 @@ router.post("/send", async (req, res) => {
       try {
         await createNotification(db, {
           target_type: recipient_type,
-          target_id: String(recipient_id),
+          target_id: String(canonicalRecipientId || recipient_id),
           owner_type: recipient_type === "client" ? null : recipient_type,
-          owner_id: recipient_type === "client" ? null : Number(recipient_id),
+          owner_id: recipient_type === "client" ? null : String(canonicalRecipientId || recipient_id),
           channel: "in_app",
           priority: "normal",
           title_ru: notificationTitle,
@@ -437,9 +470,9 @@ router.post("/send", async (req, res) => {
           action_type: "admin_message",
           action_url:
             recipient_type === "master"
-              ? `/master/${recipient_id}/dashboard`
+              ? `/master/${canonicalRecipientId || recipient_id}/dashboard`
               : recipient_type === "salon"
-                ? `/salon/${recipient_id}/dashboard`
+                ? `/salon/${canonicalRecipientId || recipient_id}/dashboard`
                 : null,
           status: "sent",
           payload_json: notificationPayload,
@@ -453,6 +486,12 @@ router.post("/send", async (req, res) => {
           console.error("ADMIN_MESSAGE_NOTIFICATION_ERROR", notificationRollbackError);
         }
 
+        console.error("ADMIN_MESSAGE_NOTIFICATION_BRIDGE_FAILED", {
+          message_db_id: Number(dbId),
+          recipient_type,
+          recipient_id,
+          error: String(error?.message || error || "ADMIN_MESSAGE_NOTIFICATION_BRIDGE_FAILED").slice(0, 500),
+        });
         console.error("ADMIN_MESSAGE_NOTIFICATION_ERROR", error);
       }
     }
