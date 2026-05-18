@@ -5,6 +5,10 @@ countUnread,
 listNotificationsForTarget,
 markNotificationRead
 } from "../../services/notifications/notificationService.js";
+import {
+revokeOwnerPushSubscription,
+saveOwnerPushSubscription
+} from "../../services/push/webPushService.js";
 
 export default function buildMastersRouter(pool, internalReadRateLimit){
 
@@ -942,6 +946,98 @@ read
 }catch(err){
 console.error("MASTER_NOTIFICATION_READ_ERROR",err);
 return res.status(500).json({ok:false,error:"MASTER_NOTIFICATION_READ_FAILED"});
+}
+});
+
+r.post("/masters/:slug/push-subscriptions", internalReadRateLimit, async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const master = await pool.query(
+`SELECT id FROM masters WHERE slug=$1`,
+[slug]
+);
+
+if(!master.rows.length){
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const masterId = master.rows[0].id;
+
+if(!hasMasterOwnership(req, masterId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
+const body = req.body && typeof req.body === "object" ? req.body : {};
+const result = await saveOwnerPushSubscription(pool,{
+user_type:"master",
+user_id:String(masterId),
+device_id:body.device_id,
+platform:body.platform,
+subscription:body.subscription,
+user_agent:body.user_agent
+});
+
+if(!result.ok){
+return res.status(result.status || 400).json({ok:false,error:result.error || "PUSH_SUBSCRIPTION_SAVE_FAILED"});
+}
+
+return res.json({
+ok:true,
+user_type:"master",
+user_id:String(masterId),
+device_id:result.device_id,
+enabled:true
+});
+}catch(err){
+console.error("MASTER_PUSH_SUBSCRIPTION_SAVE_ERROR",err);
+return res.status(500).json({ok:false,error:"PUSH_SUBSCRIPTION_SAVE_FAILED"});
+}
+});
+
+r.delete("/masters/:slug/push-subscriptions/:device_id", internalReadRateLimit, async (req,res)=>{
+
+const { slug, device_id } = req.params;
+
+try{
+
+const master = await pool.query(
+`SELECT id FROM masters WHERE slug=$1`,
+[slug]
+);
+
+if(!master.rows.length){
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const masterId = master.rows[0].id;
+
+if(!hasMasterOwnership(req, masterId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
+const result = await revokeOwnerPushSubscription(pool,{
+user_type:"master",
+user_id:String(masterId),
+device_id
+});
+
+if(!result.ok){
+return res.status(result.status || 400).json({ok:false,error:result.error || "PUSH_SUBSCRIPTION_REVOKE_FAILED"});
+}
+
+return res.json({
+ok:true,
+user_type:"master",
+user_id:String(masterId),
+device_id:String(device_id || ""),
+revoked:Boolean(result.revoked)
+});
+}catch(err){
+console.error("MASTER_PUSH_SUBSCRIPTION_REVOKE_ERROR",err);
+return res.status(500).json({ok:false,error:"PUSH_SUBSCRIPTION_REVOKE_FAILED"});
 }
 });
 
