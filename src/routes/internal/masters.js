@@ -1725,6 +1725,100 @@ error:"MASTER_BOOKINGS_FETCH_FAILED"
 });
 
 /*
+MASTER PENDING CASH BOOKINGS
+*/
+r.get("/masters/:slug/pending-cash-bookings", internalReadRateLimit, async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const master = await pool.query(
+`SELECT id FROM masters WHERE slug=$1`,
+[slug]
+);
+
+if(!master.rows.length){
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const masterId = master.rows[0].id;
+
+if(!hasMasterOwnership(req, masterId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
+const pendingCash = await pool.query(`
+SELECT
+b.id,
+b.start_at,
+b.start_at AS datetime_start,
+b.status,
+s.name AS service_name,
+sal.name AS salon_name,
+b.price_snapshot,
+pay.id AS payment_id,
+pay.provider AS payment_provider,
+pay.status AS payment_status,
+COALESCE(pay.is_active, false) AS payment_is_active,
+pay.amount AS payment_amount
+FROM bookings b
+LEFT JOIN services s ON s.id=b.service_id
+LEFT JOIN salons sal ON sal.id=b.salon_id
+LEFT JOIN LATERAL (
+SELECT
+p.id,
+p.provider,
+p.status,
+p.is_active,
+p.amount
+FROM public.payments p
+WHERE p.booking_id=b.id
+AND p.is_active=true
+ORDER BY p.updated_at DESC NULLS LAST, p.id DESC
+LIMIT 1
+) pay ON true
+WHERE b.master_id=$1
+AND pay.provider='direct'
+AND pay.status='pending'
+AND pay.is_active=true
+ORDER BY b.start_at DESC
+`,[masterId]);
+
+const bookingsRows = pendingCash.rows.map((booking)=>({
+...booking,
+payment_label_ru:getBookingPaymentLabelRu(
+booking.payment_provider,
+booking.payment_status,
+Boolean(booking.payment_id)
+),
+cash_pending_alert:true
+}));
+
+const amount = bookingsRows.reduce((sum, booking)=>{
+const value = Number(booking.payment_amount ?? booking.price_snapshot ?? 0);
+return sum + (Number.isFinite(value) ? value : 0);
+},0);
+
+return res.json({
+ok:true,
+bookings:bookingsRows,
+count:bookingsRows.length,
+amount
+});
+}catch(err){
+
+console.error("MASTER_PENDING_CASH_BOOKINGS_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"MASTER_PENDING_CASH_BOOKINGS_FAILED"
+});
+
+}
+});
+
+/*
 MASTER CLIENTS
 */
 r.get("/masters/:slug/clients", internalReadRateLimit, async (req,res)=>{
