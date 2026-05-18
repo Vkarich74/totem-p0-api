@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { createNotification } from "../../services/notifications/notificationService.js";
 
 function parsePositiveAmount(value) {
   const amount = Number(value);
@@ -17,6 +18,22 @@ function normalizePaymentRow(row) {
     status: row.status,
     provider: row.provider,
     created_at: row.created_at
+  };
+}
+
+function normalizeBookingNotificationContext(row) {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    salon_id: row.salon_id,
+    salon_slug: row.salon_slug || null,
+    master_id: row.master_id || null,
+    master_slug: row.master_slug || null,
+    client_id: row.client_id || null,
+    status: row.status || null
   };
 }
 
@@ -122,11 +139,17 @@ LIMIT 1
       const bookingRes = await db.query(
         `
 SELECT
-id,
-salon_id,
-status
-FROM bookings
-WHERE id=$1
+ b.id,
+ b.salon_id,
+ s.slug AS salon_slug,
+ b.master_id,
+ m.slug AS master_slug,
+ b.client_id,
+ b.status
+FROM bookings b
+LEFT JOIN salons s ON s.id = b.salon_id
+LEFT JOIN masters m ON m.id = b.master_id
+WHERE b.id=$1
 FOR UPDATE
 LIMIT 1
 `,
@@ -145,11 +168,17 @@ LIMIT 1
       const bookingRes = await db.query(
         `
 SELECT
-id,
-salon_id,
-status
-FROM bookings
-WHERE id=$1
+ b.id,
+ b.salon_id,
+ s.slug AS salon_slug,
+ b.master_id,
+ m.slug AS master_slug,
+ b.client_id,
+ b.status
+FROM bookings b
+LEFT JOIN salons s ON s.id = b.salon_id
+LEFT JOIN masters m ON m.id = b.master_id
+WHERE b.id=$1
 FOR UPDATE
 LIMIT 1
 `,
@@ -212,6 +241,7 @@ LIMIT 1
         reused: true,
         idempotent: true,
         payment: normalizePaymentRow(paymentRow),
+        booking: normalizeBookingNotificationContext(bookingRow),
         payment_label_ru: "Оплата наличными подтверждена"
       };
     }
@@ -299,6 +329,7 @@ VALUES
     return {
       ok: true,
       confirmed: true,
+      booking: normalizeBookingNotificationContext(bookingRow),
       payment: {
         ...confirmedPayment,
         amount: amountCents,
@@ -306,6 +337,99 @@ VALUES
       },
       payment_label_ru: "Оплата наличными подтверждена"
     };
+  }
+
+  async function emitCashConfirmNotifications(db, input = {}) {
+    const booking = input.booking || null;
+    const payment = input.payment || null;
+    const confirmedBy = String(input.confirmed_by || "").trim().toLowerCase();
+    const source = String(input.source || "confirm_cash").trim() || "confirm_cash";
+
+    if (!booking || !payment) {
+      return null;
+    }
+
+    const paymentProvider = String(payment.provider || "direct").trim().toLowerCase() || "direct";
+    const paymentStatus = String(payment.status || "confirmed").trim().toLowerCase() || "confirmed";
+    const amount = Number(payment.amount || 0);
+    const paymentId = Number(payment.id || payment.payment_id || 0) || null;
+    const bookingId = Number(booking.id || booking.booking_id || 0) || null;
+    const salonId = Number(booking.salon_id || 0) || null;
+    const masterId = Number(booking.master_id || 0) || null;
+    const clientId = Number(booking.client_id || 0) || null;
+    const salonSlug = String(booking.salon_slug || "").trim() || null;
+    const masterSlug = String(booking.master_slug || "").trim() || null;
+
+    const payloadJson = {
+      booking_id: bookingId,
+      payment_id: paymentId,
+      payment_provider: paymentProvider,
+      payment_status: paymentStatus,
+      salon_id: salonId,
+      salon_slug: salonSlug,
+      master_id: masterId,
+      master_slug: masterSlug,
+      client_id: clientId,
+      amount,
+      source,
+      confirmed_by: confirmedBy || null
+    };
+
+    const makeBody = (titleRu, actionType, actionUrl) => ({
+      target_type: null,
+      owner_type: "salon",
+      owner_id: salonId,
+      channel: "in_app",
+      priority: "normal",
+      title_ru: titleRu,
+      body_ru: "Оплата наличными подтверждена.",
+      action_type: actionType,
+      action_url: actionUrl,
+      status: "sent",
+      payload_json: payloadJson
+    });
+
+    const notificationItems = [
+      {
+        ...makeBody("Оплата наличными подтверждена", "payment", null),
+        target_type: "client",
+        owner_id: salonId
+      },
+      {
+        ...makeBody("Оплата наличными подтверждена", "payment", salonSlug ? `#/salon/${salonSlug}/dashboard` : null),
+        target_type: "salon"
+      },
+      {
+        ...makeBody("Оплата наличными подтверждена", "payment", masterSlug ? `#/master/${masterSlug}/dashboard` : null),
+        target_type: "master"
+      }
+    ];
+
+    await db.query("SAVEPOINT cash_confirm_notifications");
+
+    try {
+      for (const item of notificationItems) {
+        await createNotification(db, item);
+      }
+
+      await db.query("RELEASE SAVEPOINT cash_confirm_notifications");
+      return true;
+    } catch (error) {
+      try {
+        await db.query("ROLLBACK TO SAVEPOINT cash_confirm_notifications");
+      } catch (rollbackError) {
+        console.error("CASH_CONFIRM_NOTIFICATION_ROLLBACK_ERROR", rollbackError);
+      }
+
+      console.error("CASH_CONFIRM_NOTIFICATION_ERROR", {
+        booking_id: bookingId,
+        payment_id: paymentId,
+        confirmed_by: confirmedBy,
+        error: error?.message || error
+      });
+
+      return false;
+    }
   }
 
   r.post("/payments/direct/pending", async (req, res) => {
@@ -467,6 +591,15 @@ LIMIT 1
         }
       }
 
+      if (Boolean(result.confirmed)) {
+        await emitCashConfirmNotifications(db, {
+          booking: result.booking,
+          payment: result.payment,
+          confirmed_by: "salon",
+          source: "confirm_cash"
+        });
+      }
+
       await db.query("COMMIT");
 
       return res.json({
@@ -572,6 +705,15 @@ LIMIT 1
             return res.status(403).json({ ok: false, error: "MASTER_SLUG_MISMATCH" });
           }
         }
+      }
+
+      if (Boolean(result.confirmed)) {
+        await emitCashConfirmNotifications(db, {
+          booking: result.booking,
+          payment: result.payment,
+          confirmed_by: "master",
+          source: "confirm_cash"
+        });
       }
 
       await db.query("COMMIT");

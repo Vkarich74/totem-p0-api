@@ -36,6 +36,25 @@ function getPublicLifecyclePaymentLabelRu(provider, status, hasPayment) {
   return "Оплата не выбрана";
 }
 
+function buildLifecycleActionUrl(booking, targetType) {
+  const salonSlug = String(booking?.salon_slug || "").trim();
+  const masterSlug = String(booking?.master_slug || "").trim();
+
+  if (targetType === "salon" && salonSlug) {
+    return `#/salon/${salonSlug}/dashboard`;
+  }
+
+  if (targetType === "master" && masterSlug) {
+    return `#/master/${masterSlug}/dashboard`;
+  }
+
+  if (targetType === "client") {
+    return null;
+  }
+
+  return null;
+}
+
 export async function publicLifecycle(req, res) {
   try {
     const { salon_id } = req.tenant;
@@ -52,9 +71,21 @@ export async function publicLifecycle(req, res) {
 
     const { rows } = await pool.query(
       `
-      SELECT id, status, salon_id, salon_slug, master_id, client_id, service_id, start_at, end_at, price_snapshot
-      FROM bookings
-      WHERE id = $1 AND salon_id = $2
+      SELECT
+        b.id,
+        b.status,
+        b.salon_id,
+        b.salon_slug,
+        b.master_id,
+        m.slug AS master_slug,
+        b.client_id,
+        b.service_id,
+        b.start_at,
+        b.end_at,
+        b.price_snapshot
+      FROM bookings b
+      LEFT JOIN masters m ON m.id = b.master_id
+      WHERE b.id = $1 AND b.salon_id = $2
       `,
       [bookingId, salon_id]
     );
@@ -147,6 +178,7 @@ export async function publicLifecycle(req, res) {
           title_ru: "Запись завершена",
           body_ru: "Ваша запись завершена. Спасибо за визит.",
           action_type: "booking",
+          action_url: buildLifecycleActionUrl(booking, "client"),
           status: "sent",
           payload_json: notificationPayload,
         });
@@ -161,6 +193,7 @@ export async function publicLifecycle(req, res) {
           title_ru: "Запись завершена",
           body_ru: "Запись отмечена как завершённая.",
           action_type: "booking",
+          action_url: buildLifecycleActionUrl(booking, "master"),
           status: "sent",
           payload_json: notificationPayload,
         });
@@ -175,6 +208,7 @@ export async function publicLifecycle(req, res) {
           title_ru: "Запись завершена",
           body_ru: "Запись в салоне завершена.",
           action_type: "booking",
+          action_url: buildLifecycleActionUrl(booking, "salon"),
           status: "sent",
           payload_json: notificationPayload,
         });
@@ -224,6 +258,7 @@ export async function publicLifecycle(req, res) {
           title_ru: "Запись отменена",
           body_ru: "Ваша запись была отменена.",
           action_type: "booking",
+          action_url: buildLifecycleActionUrl(booking, "client"),
           status: "sent",
           payload_json: notificationPayload,
         });
@@ -238,6 +273,7 @@ export async function publicLifecycle(req, res) {
           title_ru: "Запись отменена",
           body_ru: "Запись к вам была отменена.",
           action_type: "booking",
+          action_url: buildLifecycleActionUrl(booking, "master"),
           status: "sent",
           payload_json: notificationPayload,
         });
@@ -252,6 +288,7 @@ export async function publicLifecycle(req, res) {
           title_ru: "Запись отменена",
           body_ru: "Запись в салоне была отменена.",
           action_type: "booking",
+          action_url: buildLifecycleActionUrl(booking, "salon"),
           status: "sent",
           payload_json: notificationPayload,
         });
