@@ -51,6 +51,51 @@ LIMIT 1
   );
 }
 
+async function findBookingConfirmationContext(db, bookingId, { lock = false } = {}) {
+  const lockClause = lock ? " FOR UPDATE" : "";
+
+  const bookingRes = await db.query(
+    `
+SELECT
+ b.id,
+ b.salon_id,
+ b.master_id,
+ b.client_id,
+ b.status
+FROM bookings b
+WHERE b.id=$1
+${lockClause}
+LIMIT 1
+`,
+    [bookingId]
+  );
+
+  if (!bookingRes.rows.length) {
+    return null;
+  }
+
+  const contextRes = await db.query(
+    `
+SELECT
+ b.id,
+ b.salon_id,
+ s.slug AS salon_slug,
+ b.master_id,
+ m.slug AS master_slug,
+ b.client_id,
+ b.status
+FROM bookings b
+LEFT JOIN salons s ON s.id = b.salon_id
+LEFT JOIN masters m ON m.id = b.master_id
+WHERE b.id=$1
+LIMIT 1
+`,
+    [bookingId]
+  );
+
+  return contextRes.rows[0] || bookingRes.rows[0];
+}
+
 function getDirectPaymentLabelRu(provider, status, hasPayment) {
   if (!hasPayment) {
     return "Оплата не выбрана";
@@ -136,63 +181,31 @@ LIMIT 1
 
       paymentRow = paymentRes.rows[0];
 
-      const bookingRes = await db.query(
-        `
-SELECT
- b.id,
- b.salon_id,
- s.slug AS salon_slug,
- b.master_id,
- m.slug AS master_slug,
- b.client_id,
- b.status
-FROM bookings b
-LEFT JOIN salons s ON s.id = b.salon_id
-LEFT JOIN masters m ON m.id = b.master_id
-WHERE b.id=$1
-FOR UPDATE
-LIMIT 1
-`,
-        [paymentRow.booking_id]
-      );
+      const bookingContext = await findBookingConfirmationContext(db, paymentRow.booking_id, {
+        lock: true
+      });
 
-      if (!bookingRes.rows.length) {
+      if (!bookingContext) {
         return {
           ok: false,
           error: "DIRECT_PENDING_PAYMENT_NOT_FOUND"
         };
       }
 
-      bookingRow = bookingRes.rows[0];
+      bookingRow = bookingContext;
     } else {
-      const bookingRes = await db.query(
-        `
-SELECT
- b.id,
- b.salon_id,
- s.slug AS salon_slug,
- b.master_id,
- m.slug AS master_slug,
- b.client_id,
- b.status
-FROM bookings b
-LEFT JOIN salons s ON s.id = b.salon_id
-LEFT JOIN masters m ON m.id = b.master_id
-WHERE b.id=$1
-FOR UPDATE
-LIMIT 1
-`,
-        [bookingId]
-      );
+      const bookingContext = await findBookingConfirmationContext(db, bookingId, {
+        lock: true
+      });
 
-      if (!bookingRes.rows.length) {
+      if (!bookingContext) {
         return {
           ok: false,
           error: "DIRECT_PENDING_PAYMENT_NOT_FOUND"
         };
       }
 
-      bookingRow = bookingRes.rows[0];
+      bookingRow = bookingContext;
 
       const paymentRes = await db.query(
         `
