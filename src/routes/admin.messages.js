@@ -441,12 +441,13 @@ router.post("/send", async (req, res) => {
     });
 
     if (channel === "internal" && ["client", "master", "salon"].includes(recipient_type)) {
+      let canonicalRecipientId = null;
       notificationBridgeResult = {
         attempted: true,
         ok: false,
         reason: "PENDING",
       };
-      const canonicalRecipientId = await resolveCanonicalRecipientId(db, recipient_type, recipient_id);
+      canonicalRecipientId = await resolveCanonicalRecipientId(db, recipient_type, recipient_id);
       const notificationTitle =
         normalizeText(req.body?.title_ru || req.body?.subject || req.body?.title) ||
         "Сообщение от администратора";
@@ -517,6 +518,56 @@ router.post("/send", async (req, res) => {
         };
         console.error("ADMIN_MESSAGE_NOTIFICATION_ERROR", error);
       }
+    }
+
+    try {
+      const bridgeResultForPersist = {
+        attempted: Boolean(notificationBridgeResult?.attempted),
+        ok: Boolean(notificationBridgeResult?.ok),
+        recipient_type,
+        recipient_id,
+        canonical_recipient_id: String(canonicalRecipientId || recipient_id),
+        message_db_id: Number(dbId),
+        bridge: "admin_internal_message",
+      };
+
+      if (notificationBridgeResult?.reason) {
+        bridgeResultForPersist.reason = notificationBridgeResult.reason;
+      }
+
+      if (notificationBridgeResult?.error) {
+        bridgeResultForPersist.error = notificationBridgeResult.error;
+      }
+
+      if (notificationBridgeResult?.notification_id !== undefined) {
+        bridgeResultForPersist.notification_id = notificationBridgeResult.notification_id;
+      }
+
+      if (notificationBridgeResult?.notification_uid !== undefined) {
+        bridgeResultForPersist.notification_uid = notificationBridgeResult.notification_uid;
+      }
+
+      await db.query(
+        `
+          UPDATE public.messages
+          SET data = jsonb_set(
+            COALESCE(data, '{}'::jsonb),
+            '{notification_bridge}',
+            $2::jsonb,
+            true
+          ),
+          updated_at = NOW()
+          WHERE id = $1
+        `,
+        [Number(dbId), JSON.stringify(bridgeResultForPersist)],
+      );
+    } catch (bridgePersistError) {
+      console.error("ADMIN_MESSAGE_NOTIFICATION_BRIDGE_RESULT_PERSIST_FAILED", {
+        message_db_id: Number(dbId),
+        recipient_type,
+        recipient_id,
+        error: String(bridgePersistError?.message || bridgePersistError || "BRIDGE_RESULT_PERSIST_FAILED").slice(0, 500),
+      });
     }
 
     await db.query("COMMIT");
