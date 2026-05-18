@@ -386,6 +386,11 @@ router.post("/send", async (req, res) => {
     const status = normalizeStatus(req.body?.status || "sent") || "sent";
     const trace_id = normalizeText(req.body?.trace_id) || null;
     const now = new Date().toISOString();
+    let notificationBridgeResult = {
+      attempted: false,
+      ok: false,
+      reason: "NOT_ATTEMPTED",
+    };
 
     await db.query("BEGIN");
 
@@ -436,6 +441,11 @@ router.post("/send", async (req, res) => {
     });
 
     if (channel === "internal" && ["client", "master", "salon"].includes(recipient_type)) {
+      notificationBridgeResult = {
+        attempted: true,
+        ok: false,
+        reason: "PENDING",
+      };
       const canonicalRecipientId = await resolveCanonicalRecipientId(db, recipient_type, recipient_id);
       const notificationTitle =
         normalizeText(req.body?.title_ru || req.body?.subject || req.body?.title) ||
@@ -446,11 +456,13 @@ router.post("/send", async (req, res) => {
         "Новое внутреннее сообщение";
       const notificationPayload = {
         message_id: id,
+        message_uid: id,
         message_db_id: Number(dbId),
         recipient_type,
         recipient_id: String(recipient_id),
         canonical_recipient_id: canonicalRecipientId,
         source: "admin_messages",
+        bridge: "admin_internal_message",
         channel,
         sent_by: "admin",
       };
@@ -458,7 +470,7 @@ router.post("/send", async (req, res) => {
       await db.query("SAVEPOINT admin_message_notification");
 
       try {
-        await createNotification(db, {
+        const notification = await createNotification(db, {
           target_type: recipient_type,
           target_id: String(canonicalRecipientId || recipient_id),
           owner_type: recipient_type === "client" ? null : recipient_type,
@@ -467,7 +479,7 @@ router.post("/send", async (req, res) => {
           priority: "normal",
           title_ru: notificationTitle,
           body_ru: notificationBody,
-          action_type: "admin_message",
+          action_type: "message",
           action_url:
             recipient_type === "master"
               ? `/master/${canonicalRecipientId || recipient_id}/dashboard`
@@ -477,6 +489,12 @@ router.post("/send", async (req, res) => {
           status: "sent",
           payload_json: notificationPayload,
         });
+        notificationBridgeResult = {
+          attempted: true,
+          ok: true,
+          notification_id: notification?.id ?? null,
+          notification_uid: notification?.notification_uid ?? null,
+        };
 
         await db.query("RELEASE SAVEPOINT admin_message_notification");
       } catch (error) {
@@ -492,6 +510,11 @@ router.post("/send", async (req, res) => {
           recipient_id,
           error: String(error?.message || error || "ADMIN_MESSAGE_NOTIFICATION_BRIDGE_FAILED").slice(0, 500),
         });
+        notificationBridgeResult = {
+          attempted: true,
+          ok: false,
+          error: String(error?.message || error || "ADMIN_MESSAGE_NOTIFICATION_BRIDGE_FAILED").slice(0, 500),
+        };
         console.error("ADMIN_MESSAGE_NOTIFICATION_ERROR", error);
       }
     }
@@ -501,6 +524,7 @@ router.post("/send", async (req, res) => {
     return res.json({
       ok: true,
       data: sanitizeMessageForResponse(messageItem),
+      notification_bridge: notificationBridgeResult,
       meta: {},
     });
   } catch (error) {
