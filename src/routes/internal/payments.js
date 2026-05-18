@@ -388,8 +388,9 @@ VALUES
       confirmed_by: confirmedBy || null
     };
 
-    const makeBody = (titleRu, actionType, actionUrl) => ({
+    const makeBody = (titleRu, actionType, actionUrl, targetId) => ({
       target_type: null,
+      target_id: targetId,
       owner_type: "salon",
       owner_id: salonId,
       channel: "in_app",
@@ -404,16 +405,16 @@ VALUES
 
     const notificationItems = [
       {
-        ...makeBody("Оплата наличными подтверждена", "payment", null),
+        ...makeBody("Оплата наличными подтверждена", "payment", null, String(clientId)),
         target_type: "client",
         owner_id: salonId
       },
       {
-        ...makeBody("Оплата наличными подтверждена", "payment", salonSlug ? `#/salon/${salonSlug}/dashboard` : null),
+        ...makeBody("Оплата наличными подтверждена", "payment", salonSlug ? `#/salon/${salonSlug}/dashboard` : null, String(salonId)),
         target_type: "salon"
       },
       {
-        ...makeBody("Оплата наличными подтверждена", "payment", masterSlug ? `#/master/${masterSlug}/dashboard` : null),
+        ...makeBody("Оплата наличными подтверждена", "payment", masterSlug ? `#/master/${masterSlug}/dashboard` : null, String(masterId)),
         target_type: "master"
       }
     ];
