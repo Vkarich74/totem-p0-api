@@ -1,4 +1,5 @@
 import express from "express";
+import { retryNotificationDelivery } from "../../services/push/pushDeliveryService.js";
 
 function parsePositiveInt(value, fallback) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
@@ -1093,6 +1094,52 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
       return res.status(500).json({
         ok: false,
         error: "ADMIN_NOTIFICATION_DELIVERIES_FETCH_FAILED",
+      });
+    }
+  });
+
+  r.post("/notifications/deliveries/:id/retry", async (req, res) => {
+    try {
+      const retryResult = await retryNotificationDelivery(pool, req.params.id, {
+        actor: req.user || req.admin || null,
+        reason: String(req.body?.reason || req.body?.note || "").trim() || null,
+      });
+
+      return res.json({
+        ok: true,
+        source_delivery_id: retryResult?.source_delivery_id || Number(req.params.id) || null,
+        retry: retryResult?.retry || null,
+      });
+    } catch (error) {
+      const code = String(error?.code || "").trim();
+      const statusCode = Number(error?.statusCode || 0) || null;
+
+      if (code === "DELIVERY_NOT_FOUND") {
+        return res.status(404).json({ ok: false, error: code });
+      }
+
+      if (code === "NOTIFICATION_NOT_FOUND") {
+        return res.status(404).json({ ok: false, error: code });
+      }
+
+      if (
+        code === "DELIVERY_NOT_RETRYABLE" ||
+        code === "DELIVERY_RETRY_LIMIT_REACHED" ||
+        code === "DELIVERY_RETRY_UNSUPPORTED_PROVIDER"
+      ) {
+        return res.status(400).json({ ok: false, error: code });
+      }
+
+      console.error("ADMIN_NOTIFICATION_DELIVERY_RETRY_FAILED", {
+        delivery_id: req.params.id,
+        error: String(error?.message || error || "DELIVERY_RETRY_FAILED").slice(0, 500),
+        status_code: statusCode,
+        code: code || null,
+      });
+
+      return res.status(500).json({
+        ok: false,
+        error: "DELIVERY_RETRY_FAILED",
       });
     }
   });
