@@ -1134,7 +1134,6 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
           created_at,
           last_seen_at,
           revoked_at,
-          updated_at,
           CASE WHEN p256dh IS NOT NULL AND p256dh <> '' THEN true ELSE false END AS has_p256dh,
           CASE WHEN auth IS NOT NULL AND auth <> '' THEN true ELSE false END AS has_auth
         FROM public.push_subscriptions
@@ -1149,7 +1148,10 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
       return res.json({
         ok: true,
         data: {
-          items: data.rows,
+          items: data.rows.map((row) => ({
+            ...row,
+            updated_at: row.updated_at ?? row.created_at,
+          })),
           total_count: totalResult.rows?.[0]?.total_count || 0,
           limit,
           offset,
