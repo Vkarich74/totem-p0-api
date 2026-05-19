@@ -951,12 +951,16 @@ export function createPublicRouter(deps) {
           return res.status(access.status || 400).json({ ok: false, error: access.error });
         }
 
-        const deviceId = String(req.query.device_id ?? req.query.deviceId ?? "").trim();
+        const hasDeviceId =
+          Object.prototype.hasOwnProperty.call(req.query || {}, "device_id") ||
+          Object.prototype.hasOwnProperty.call(req.query || {}, "deviceId");
+        const deviceId = hasDeviceId
+          ? String(req.query.device_id ?? req.query.deviceId ?? "").trim()
+          : undefined;
 
-        const status = await getClientPushSubscriptionStatus(db, {
-          clientId,
-          deviceId: deviceId || null,
-        });
+        const status = await getClientPushSubscriptionStatus(db, hasDeviceId
+          ? { clientId, deviceId }
+          : { clientId });
 
         if (!status.ok) {
           return res.status(status.status || 400).json({ ok: false, error: status.error });

@@ -303,7 +303,8 @@ function normalizeClientPushStatusInput(input = {}) {
     return {
       ok: true,
       clientId: clientIdRaw,
-      deviceId: null,
+      deviceId: undefined,
+      deviceIdProvided: false,
     };
   }
 
@@ -317,6 +318,7 @@ function normalizeClientPushStatusInput(input = {}) {
     ok: true,
     clientId: clientIdRaw,
     deviceId,
+    deviceIdProvided: true,
   };
 }
 
@@ -689,10 +691,13 @@ export async function getClientPushSubscriptionStatus(pool, input = {}) {
 
   const values = [String(normalized.clientId)];
   let filterSql = "user_type = 'client' AND user_id = $1";
+  let limitSql = "";
 
-  if (normalized.deviceId) {
+  if (normalized.deviceIdProvided) {
     values.push(normalized.deviceId);
     filterSql += ` AND device_id = $2`;
+  } else {
+    limitSql = " LIMIT 50";
   }
 
   const result = await pool.query(
@@ -711,6 +716,7 @@ export async function getClientPushSubscriptionStatus(pool, input = {}) {
     FROM public.push_subscriptions
     WHERE ${filterSql}
     ORDER BY last_seen_at DESC NULLS LAST, created_at DESC NULLS LAST, device_id ASC
+    ${limitSql}
     `,
     values
   );
@@ -718,7 +724,7 @@ export async function getClientPushSubscriptionStatus(pool, input = {}) {
   return {
     ok: true,
     client_id: String(normalized.clientId),
-    device_id: normalized.deviceId,
+    device_id: normalized.deviceId ?? null,
     subscriptions: result.rows.map((row) => ({
       subscription_uid: row.subscription_uid,
       user_type: row.user_type,
