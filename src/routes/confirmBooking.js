@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import pkg from "pg";
+import { createNotification } from "../services/notifications/notificationService.js";
 
 const { Pool } = pkg;
 
@@ -28,6 +29,122 @@ function mustInternalAuth(req) {
     return { ok: false, code: 401, error: "INTERNAL_KEY_REQUIRED" };
   if (provided !== required)
     return { ok: false, code: 403, error: "INTERNAL_KEY_INVALID" };
+
+  return { ok: true };
+}
+
+async function loadBookingConfirmedNotificationContext(db, bookingId){
+  const result = await db.query(`
+SELECT
+b.id,
+b.salon_id,
+s.slug AS salon_slug,
+b.master_id,
+m.slug AS master_slug,
+b.client_id
+FROM public.bookings b
+LEFT JOIN public.salons s ON s.id = b.salon_id
+LEFT JOIN public.masters m ON m.id = b.master_id
+WHERE b.id = $1
+LIMIT 1
+`,[bookingId]);
+
+  return result.rows[0] || null;
+}
+
+function buildBookingConfirmedActionUrl(context, targetType){
+  if(targetType === "master" && String(context?.master_slug || "").trim()){
+    return `#/master/${String(context.master_slug).trim()}/dashboard`;
+  }
+
+  if(targetType === "salon" && String(context?.salon_slug || "").trim()){
+    return `#/salon/${String(context.salon_slug).trim()}/dashboard`;
+  }
+
+  return null;
+}
+
+async function emitBookingConfirmedNotification(poolLike, context, meta = {}){
+  if(!poolLike || typeof poolLike.query !== "function"){
+    return { ok: false, error: "POOL_REQUIRED" };
+  }
+
+  const bookingId = Number(context?.id ?? meta?.booking_id ?? 0) || null;
+  const salonId = Number(context?.salon_id ?? meta?.salon_id ?? 0) || null;
+  const masterId = Number(context?.master_id ?? meta?.master_id ?? 0) || null;
+  const clientId = Number(context?.client_id ?? meta?.client_id ?? 0) || null;
+
+  if(!bookingId || !salonId || !masterId || !clientId){
+    return { ok: false, skipped: true, reason: "BOOKING_CONFIRMATION_CONTEXT_MISSING" };
+  }
+
+  const payloadJson = {
+    booking_id: bookingId,
+    salon_id: salonId,
+    salon_slug: String(context?.salon_slug || meta?.salon_slug || "").trim() || null,
+    master_id: masterId,
+    client_id: clientId,
+    source: String(meta?.source || "direct_confirm").trim() || "direct_confirm",
+    payment_id: meta?.payment_id ?? null,
+    qr_transaction_id: meta?.qr_transaction_id ?? null
+  };
+
+  const items = [
+    {
+      target_type: "client",
+      target_id: String(clientId),
+      owner_type: "salon",
+      owner_id: salonId,
+      channel: "in_app",
+      priority: "normal",
+      title_ru: "Запись подтверждена",
+      body_ru: "Ваша запись подтверждена.",
+      action_type: "booking",
+      action_url: null,
+      status: "sent",
+      payload_json: payloadJson
+    },
+    {
+      target_type: "master",
+      target_id: String(masterId),
+      owner_type: "salon",
+      owner_id: salonId,
+      channel: "in_app",
+      priority: "normal",
+      title_ru: "Запись подтверждена",
+      body_ru: "Запись подтверждена.",
+      action_type: "booking",
+      action_url: buildBookingConfirmedActionUrl(context, "master"),
+      status: "sent",
+      payload_json: payloadJson
+    },
+    {
+      target_type: "salon",
+      target_id: String(salonId),
+      owner_type: "salon",
+      owner_id: salonId,
+      channel: "in_app",
+      priority: "normal",
+      title_ru: "Запись подтверждена",
+      body_ru: "Запись подтверждена.",
+      action_type: "booking",
+      action_url: buildBookingConfirmedActionUrl(context, "salon"),
+      status: "sent",
+      payload_json: payloadJson
+    }
+  ];
+
+  for(const item of items){
+    try{
+      await createNotification(poolLike, item);
+    }catch(error){
+      console.error("BOOKING_CONFIRMED_NOTIFICATION_ERROR", {
+        booking_id: bookingId,
+        target_type: item.target_type,
+        error: error?.message || error
+      });
+    }
+  }
 
   return { ok: true };
 }
@@ -118,11 +235,21 @@ export async function confirmBooking(req, res) {
       `UPDATE public.bookings
           SET status = 'confirmed',
               confirmed_at = NOW()
-        WHERE id = $1`,
+        WHERE id = $1
+        RETURNING id`,
       [bookingId]
     );
 
+    const bookingConfirmedContext = await loadBookingConfirmedNotificationContext(client, bookingId);
+
     await client.query("COMMIT");
+
+    if (bookingConfirmedContext) {
+      await emitBookingConfirmedNotification(pool, bookingConfirmedContext, {
+        booking_id: bookingId,
+        source: "direct_confirm"
+      });
+    }
 
     return res.status(200).json({ ok: true, status: "confirmed" });
 

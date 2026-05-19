@@ -1268,12 +1268,18 @@ return wallet.rows[0].id;
 }
 
 async function setBookingConfirmedIfNeeded(db, bookingId){
-await db.query(`
+const result = await db.query(`
 UPDATE bookings
 SET status='confirmed'
 WHERE id=$1
 AND status IN ('reserved','pending')
+RETURNING id
 `,[bookingId]);
+
+return {
+changed: result.rowCount > 0,
+booking_id: Number(bookingId)
+};
 }
 
 const paymentsRouter = buildPaymentsRouter({

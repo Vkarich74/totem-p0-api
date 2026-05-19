@@ -1,4 +1,5 @@
 import express from "express";
+import { createNotification } from "../../services/notifications/notificationService.js";
 
 export default function buildXpayRouter({
 pool,
@@ -159,13 +160,135 @@ console.error("XPAY_PAYMENT_EVENT_WRITE_FAILED",err?.message || err);
 }
 
 async function setBookingConfirmedIfNeeded(client, bookingId){
-await client.query(`
+const result = await client.query(`
 UPDATE public.bookings
 SET status='confirmed',
 confirmed_at=COALESCE(confirmed_at, NOW())
 WHERE id=$1
 AND status IN ('reserved','pending')
+RETURNING id
 `,[bookingId]);
+
+return {
+changed: result.rowCount > 0,
+booking_id: Number(bookingId)
+};
+}
+
+async function loadBookingConfirmedNotificationContext(client, bookingId){
+const result = await client.query(`
+SELECT
+b.id,
+b.salon_id,
+s.slug AS salon_slug,
+b.master_id,
+m.slug AS master_slug,
+b.client_id
+FROM public.bookings b
+LEFT JOIN public.salons s ON s.id = b.salon_id
+LEFT JOIN public.masters m ON m.id = b.master_id
+WHERE b.id=$1
+LIMIT 1
+`,[bookingId]);
+
+return result.rows[0] || null;
+}
+
+function buildBookingConfirmedActionUrl(context, targetType){
+if(targetType === "master" && String(context?.master_slug || "").trim()){
+return `#/master/${String(context.master_slug).trim()}/dashboard`;
+}
+
+if(targetType === "salon" && String(context?.salon_slug || "").trim()){
+return `#/salon/${String(context.salon_slug).trim()}/dashboard`;
+}
+
+return null;
+}
+
+async function emitBookingConfirmedNotification(poolLike, context, meta = {}){
+if(!poolLike || typeof poolLike.query !== "function"){
+return { ok:false, error:"POOL_REQUIRED" };
+}
+
+const bookingId = Number(context?.id ?? meta?.booking_id ?? 0) || null;
+const salonId = Number(context?.salon_id ?? meta?.salon_id ?? 0) || null;
+const masterId = Number(context?.master_id ?? meta?.master_id ?? 0) || null;
+const clientId = Number(context?.client_id ?? meta?.client_id ?? 0) || null;
+
+if(!bookingId || !salonId || !masterId || !clientId){
+return { ok:false, skipped:true, reason:"BOOKING_CONFIRMATION_CONTEXT_MISSING" };
+}
+
+const payloadJson = {
+booking_id: bookingId,
+salon_id: salonId,
+salon_slug: String(context?.salon_slug || meta?.salon_slug || "").trim() || null,
+master_id: masterId,
+client_id: clientId,
+source: String(meta?.source || "xpay_dynamic").trim() || "xpay_dynamic",
+payment_id: meta?.payment_id ?? null,
+qr_transaction_id: meta?.qr_transaction_id ?? null
+};
+
+const items = [
+{
+target_type: "client",
+target_id: String(clientId),
+owner_type: "salon",
+owner_id: salonId,
+channel: "in_app",
+priority: "normal",
+title_ru: "Запись подтверждена",
+body_ru: "Ваша запись подтверждена.",
+action_type: "booking",
+action_url: null,
+status: "sent",
+payload_json: payloadJson
+},
+{
+target_type: "master",
+target_id: String(masterId),
+owner_type: "salon",
+owner_id: salonId,
+channel: "in_app",
+priority: "normal",
+title_ru: "Запись подтверждена",
+body_ru: "Запись подтверждена.",
+action_type: "booking",
+action_url: buildBookingConfirmedActionUrl(context, "master"),
+status: "sent",
+payload_json: payloadJson
+},
+{
+target_type: "salon",
+target_id: String(salonId),
+owner_type: "salon",
+owner_id: salonId,
+channel: "in_app",
+priority: "normal",
+title_ru: "Запись подтверждена",
+body_ru: "Запись подтверждена.",
+action_type: "booking",
+action_url: buildBookingConfirmedActionUrl(context, "salon"),
+status: "sent",
+payload_json: payloadJson
+}
+];
+
+for(const item of items){
+  try{
+    await createNotification(poolLike, item);
+  }catch(error){
+    console.error("BOOKING_CONFIRMED_NOTIFICATION_ERROR",{
+      booking_id: bookingId,
+      target_type: item.target_type,
+      error: error?.message || error
+    });
+  }
+}
+
+return { ok:true };
 }
 
 async function verifyAndUpdatePaymentStatus({ paymentId, qrTransactionId }){
@@ -263,6 +386,7 @@ nextStatus = "failed";
 }
 
 let updatedPayment = paymentRow;
+let bookingConfirmedContext = null;
 
 if(nextStatus !== paymentRow.status){
 const updated = await client.query(`
@@ -287,7 +411,11 @@ nextStatus
 updatedPayment = updated.rows[0];
 
 if(updatedPayment.status === "confirmed"){
-await setBookingConfirmedIfNeeded(client, updatedPayment.booking_id);
+const bookingConfirmedResult = await setBookingConfirmedIfNeeded(client, updatedPayment.booking_id);
+
+if(bookingConfirmedResult?.changed){
+bookingConfirmedContext = await loadBookingConfirmedNotificationContext(client, updatedPayment.booking_id);
+}
 }
 }
 
@@ -301,6 +429,19 @@ xpay_status:xpayStatus,
 totem_status:updatedPayment.status,
 provider_response:providerStatus
 });
+
+if(bookingConfirmedContext){
+await emitBookingConfirmedNotification(pool, bookingConfirmedContext,{
+booking_id: updatedPayment.booking_id,
+salon_id: bookingConfirmedContext.salon_id,
+salon_slug: bookingConfirmedContext.salon_slug,
+master_id: bookingConfirmedContext.master_id,
+client_id: bookingConfirmedContext.client_id,
+source: "xpay_dynamic",
+payment_id: updatedPayment.id,
+qr_transaction_id: transactionId
+});
+}
 
 return {
 ok:true,
@@ -429,6 +570,7 @@ nextStatus = "confirmed";
 }
 
 let updatedPayment = paymentRow;
+let bookingConfirmedContext = null;
 
 if(nextStatus !== paymentRow.status){
 const updated = await client.query(`
@@ -453,7 +595,11 @@ nextStatus
 updatedPayment = updated.rows[0];
 
 if(updatedPayment.status === "confirmed"){
-await setBookingConfirmedIfNeeded(client, updatedPayment.booking_id);
+const bookingConfirmedResult = await setBookingConfirmedIfNeeded(client, updatedPayment.booking_id);
+
+if(bookingConfirmedResult?.changed){
+bookingConfirmedContext = await loadBookingConfirmedNotificationContext(client, updatedPayment.booking_id);
+}
 }
 }
 
@@ -467,6 +613,19 @@ xpay_status:xpayStatus,
 totem_status:updatedPayment.status,
 provider_response:providerStatus
 });
+
+if(bookingConfirmedContext){
+await emitBookingConfirmedNotification(pool, bookingConfirmedContext,{
+booking_id: updatedPayment.booking_id,
+salon_id: bookingConfirmedContext.salon_id,
+salon_slug: bookingConfirmedContext.salon_slug,
+master_id: bookingConfirmedContext.master_id,
+client_id: bookingConfirmedContext.client_id,
+source: "xpay_static",
+payment_id: updatedPayment.id,
+qr_transaction_id: transactionId
+});
+}
 
 return {
 ok:true,
