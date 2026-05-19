@@ -1,5 +1,6 @@
 import { pool } from "../db.js";
 import { createNotification } from "../services/notifications/notificationService.js";
+import { buildBookingLifecycleNotificationTemplate } from "../services/notifications/notificationTemplates.js";
 
 function getPublicLifecyclePaymentLabelRu(provider, status, hasPayment) {
   if (!hasPayment) {
@@ -167,6 +168,18 @@ export async function publicLifecycle(req, res) {
           lifecycle_action: action,
           next_status: "completed",
         };
+        const clientNotificationTemplate = buildBookingLifecycleNotificationTemplate(
+          "completed",
+          "client"
+        );
+        const masterNotificationTemplate = buildBookingLifecycleNotificationTemplate(
+          "completed",
+          "master"
+        );
+        const salonNotificationTemplate = buildBookingLifecycleNotificationTemplate(
+          "completed",
+          "salon"
+        );
 
         await createNotification(pool, {
           target_type: "client",
@@ -174,10 +187,7 @@ export async function publicLifecycle(req, res) {
           owner_type: "salon",
           owner_id: booking.salon_id,
           channel: "in_app",
-          priority: "normal",
-          title_ru: "Запись завершена",
-          body_ru: "Ваша запись завершена. Спасибо за визит.",
-          action_type: "booking",
+          ...clientNotificationTemplate,
           action_url: buildLifecycleActionUrl(booking, "client"),
           status: "sent",
           payload_json: notificationPayload,
@@ -189,10 +199,7 @@ export async function publicLifecycle(req, res) {
           owner_type: "salon",
           owner_id: booking.salon_id,
           channel: "in_app",
-          priority: "normal",
-          title_ru: "Запись завершена",
-          body_ru: "Запись отмечена как завершённая.",
-          action_type: "booking",
+          ...masterNotificationTemplate,
           action_url: buildLifecycleActionUrl(booking, "master"),
           status: "sent",
           payload_json: notificationPayload,
@@ -204,10 +211,7 @@ export async function publicLifecycle(req, res) {
           owner_type: "salon",
           owner_id: booking.salon_id,
           channel: "in_app",
-          priority: "normal",
-          title_ru: "Запись завершена",
-          body_ru: "Запись в салоне завершена.",
-          action_type: "booking",
+          ...salonNotificationTemplate,
           action_url: buildLifecycleActionUrl(booking, "salon"),
           status: "sent",
           payload_json: notificationPayload,
@@ -247,6 +251,18 @@ export async function publicLifecycle(req, res) {
           lifecycle_action: action,
           next_status: "cancelled",
         };
+        const clientNotificationTemplate = buildBookingLifecycleNotificationTemplate(
+          "cancel",
+          "client"
+        );
+        const masterNotificationTemplate = buildBookingLifecycleNotificationTemplate(
+          "cancel",
+          "master"
+        );
+        const salonNotificationTemplate = buildBookingLifecycleNotificationTemplate(
+          "cancel",
+          "salon"
+        );
 
         await createNotification(pool, {
           target_type: "client",
@@ -254,10 +270,7 @@ export async function publicLifecycle(req, res) {
           owner_type: "salon",
           owner_id: booking.salon_id,
           channel: "in_app",
-          priority: "normal",
-          title_ru: "Запись отменена",
-          body_ru: "Ваша запись была отменена.",
-          action_type: "booking",
+          ...clientNotificationTemplate,
           action_url: buildLifecycleActionUrl(booking, "client"),
           status: "sent",
           payload_json: notificationPayload,
@@ -269,10 +282,7 @@ export async function publicLifecycle(req, res) {
           owner_type: "salon",
           owner_id: booking.salon_id,
           channel: "in_app",
-          priority: "normal",
-          title_ru: "Запись отменена",
-          body_ru: "Запись к вам была отменена.",
-          action_type: "booking",
+          ...masterNotificationTemplate,
           action_url: buildLifecycleActionUrl(booking, "master"),
           status: "sent",
           payload_json: notificationPayload,
@@ -284,10 +294,7 @@ export async function publicLifecycle(req, res) {
           owner_type: "salon",
           owner_id: booking.salon_id,
           channel: "in_app",
-          priority: "normal",
-          title_ru: "Запись отменена",
-          body_ru: "Запись в салоне была отменена.",
-          action_type: "booking",
+          ...salonNotificationTemplate,
           action_url: buildLifecycleActionUrl(booking, "salon"),
           status: "sent",
           payload_json: notificationPayload,

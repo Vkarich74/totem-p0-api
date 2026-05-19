@@ -1,5 +1,6 @@
 import express from "express";
 import { createNotification } from "../../services/notifications/notificationService.js";
+import { buildBookingConfirmedNotificationTemplate } from "../../services/notifications/notificationTemplates.js";
 
 export default function buildXpayRouter({
 pool,
@@ -238,10 +239,7 @@ target_id: String(clientId),
 owner_type: "salon",
 owner_id: salonId,
 channel: "in_app",
-priority: "normal",
-title_ru: "Запись подтверждена",
-body_ru: "Ваша запись подтверждена.",
-action_type: "booking",
+...buildBookingConfirmedNotificationTemplate("client"),
 action_url: null,
 status: "sent",
 payload_json: payloadJson
@@ -252,10 +250,7 @@ target_id: String(masterId),
 owner_type: "salon",
 owner_id: salonId,
 channel: "in_app",
-priority: "normal",
-title_ru: "Запись подтверждена",
-body_ru: "Запись подтверждена.",
-action_type: "booking",
+...buildBookingConfirmedNotificationTemplate("master"),
 action_url: buildBookingConfirmedActionUrl(context, "master"),
 status: "sent",
 payload_json: payloadJson
@@ -266,10 +261,7 @@ target_id: String(salonId),
 owner_type: "salon",
 owner_id: salonId,
 channel: "in_app",
-priority: "normal",
-title_ru: "Запись подтверждена",
-body_ru: "Запись подтверждена.",
-action_type: "booking",
+...buildBookingConfirmedNotificationTemplate("salon"),
 action_url: buildBookingConfirmedActionUrl(context, "salon"),
 status: "sent",
 payload_json: payloadJson

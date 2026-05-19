@@ -3,6 +3,7 @@
 import { randomUUID } from 'crypto';
 import { assertMoneyCoreWriteAllowed } from './config.js';
 import { createNotification } from '../services/notifications/notificationService.js';
+import { buildWithdrawRequestLockedNotificationTemplate } from '../services/notifications/notificationTemplates.js';
 
 const ALLOWED_OWNER_TYPES = new Set(['salon', 'master', 'platform', 'system']);
 const ALLOWED_CREATION_MODES = new Set(['manual', 'scheduled', 'admin', 'system']);
@@ -657,14 +658,18 @@ async function createWithdrawRequest(pool, ownerType, ownerId, input = {}, actor
       },
     });
 
+    const withdrawRequestLockedTemplate = buildWithdrawRequestLockedNotificationTemplate({
+      amount,
+      currency,
+    });
+
     await createMoneyOwnerNotification(client, {
       event_type: 'withdraw_request_locked',
       source_type: 'withdraw_request',
       source_id: (updatedRequestResult.rows[0] || request).id,
       owner_type: owner.owner_type,
       owner_id: owner.owner_id,
-      title_ru: 'Заявка на вывод создана',
-      body_ru: `Заявка на вывод ${amount} ${currency} создана и заблокирована в балансе.`,
+      ...withdrawRequestLockedTemplate,
       payload_json: {
         event_type: 'withdraw_request_locked',
         source_type: 'withdraw_request',

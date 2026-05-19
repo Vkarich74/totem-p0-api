@@ -3,6 +3,7 @@ import { pool } from "../db.js";
 import { getLeadDbIdById } from "./admin.leads.js";
 import { getCaseDbIdById } from "./admin.moderation.js";
 import { createNotification } from "../services/notifications/notificationService.js";
+import { buildAdminMessageNotificationTemplate } from "../services/notifications/notificationTemplates.js";
 
 const router = express.Router();
 const messages = new Map();
@@ -704,23 +705,23 @@ router.post("/send", async (req, res) => {
         notificationBridgeResult.reason = "BRIDGE_RESULT_VERIFY_NULL";
       }
 
+      const adminMessageTemplate = buildAdminMessageNotificationTemplate(recipient_type);
       const notificationTitle =
         normalizeText(req.body?.title_ru || req.body?.subject || req.body?.title) ||
-        "Сообщение от администратора";
+        adminMessageTemplate.title_ru;
       const notificationBody =
         normalizeText(req.body?.body_ru || req.body?.body || req.body?.text || req.body?.body_preview) ||
         body_preview ||
-        "Новое внутреннее сообщение";
+        adminMessageTemplate.body_ru;
       deferredNotificationBridgePayload = {
         target_type: recipient_type,
         target_id: String(canonicalRecipientId || recipient_id),
         owner_type: recipient_type === "client" ? null : recipient_type,
         owner_id: recipient_type === "client" ? null : String(canonicalRecipientId || recipient_id),
         channel: "in_app",
-        priority: "normal",
+        ...adminMessageTemplate,
         title_ru: notificationTitle,
         body_ru: notificationBody,
-        action_type: "message",
         action_url:
           recipient_type === "master"
             ? `/master/${canonicalRecipientId || recipient_id}/dashboard`

@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { createNotification } from "../../services/notifications/notificationService.js";
+import { buildCashConfirmNotificationTemplate } from "../../services/notifications/notificationTemplates.js";
 
 function parsePositiveAmount(value) {
   const amount = Number(value);
@@ -388,33 +389,33 @@ VALUES
       confirmed_by: confirmedBy || null
     };
 
-    const makeBody = (titleRu, actionType, actionUrl, targetId) => ({
+    const makeBody = (template, actionUrl, targetId) => ({
       target_type: null,
       target_id: targetId,
       owner_type: "salon",
       owner_id: salonId,
       channel: "in_app",
-      priority: "normal",
-      title_ru: titleRu,
-      body_ru: "Оплата наличными подтверждена.",
-      action_type: actionType,
+      ...template,
       action_url: actionUrl,
       status: "sent",
       payload_json: payloadJson
     });
+    const clientCashConfirmTemplate = buildCashConfirmNotificationTemplate("client");
+    const salonCashConfirmTemplate = buildCashConfirmNotificationTemplate("salon");
+    const masterCashConfirmTemplate = buildCashConfirmNotificationTemplate("master");
 
     const notificationItems = [
       {
-        ...makeBody("Оплата наличными подтверждена", "payment", null, String(clientId)),
+        ...makeBody(clientCashConfirmTemplate, null, String(clientId)),
         target_type: "client",
         owner_id: salonId
       },
       {
-        ...makeBody("Оплата наличными подтверждена", "payment", salonSlug ? `#/salon/${salonSlug}/dashboard` : null, String(salonId)),
+        ...makeBody(salonCashConfirmTemplate, salonSlug ? `#/salon/${salonSlug}/dashboard` : null, String(salonId)),
         target_type: "salon"
       },
       {
-        ...makeBody("Оплата наличными подтверждена", "payment", masterSlug ? `#/master/${masterSlug}/dashboard` : null, String(masterId)),
+        ...makeBody(masterCashConfirmTemplate, masterSlug ? `#/master/${masterSlug}/dashboard` : null, String(masterId)),
         target_type: "master"
       }
     ];

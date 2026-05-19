@@ -1,6 +1,7 @@
 import { pool } from "../db.js";
 import crypto from "crypto";
 import { createNotification } from "../services/notifications/notificationService.js";
+import { buildBookingCreatedNotificationTemplate } from "../services/notifications/notificationTemplates.js";
 
 function normalizeKgMobilePhone(value) {
   const raw = String(value || "").trim();
@@ -404,16 +405,17 @@ export async function publicCreateBooking(req, res) {
     await client.query("SAVEPOINT booking_created_notifications");
 
     try {
+      const clientNotificationTemplate = buildBookingCreatedNotificationTemplate("client");
+      const masterNotificationTemplate = buildBookingCreatedNotificationTemplate("master");
+      const salonNotificationTemplate = buildBookingCreatedNotificationTemplate("salon");
+
       await createNotification(client, {
         target_type: "client",
         target_id: String(finalClientId),
         owner_type: "salon",
         owner_id: salonId,
         channel: "in_app",
-        priority: "normal",
-        title_ru: "Запись создана",
-        body_ru: "Ваша запись создана и ожидает подтверждения.",
-        action_type: "booking",
+        ...clientNotificationTemplate,
         action_url: clientCabinetUrl,
         status: "sent",
         payload_json: bookingNotificationPayload
@@ -425,10 +427,7 @@ export async function publicCreateBooking(req, res) {
         owner_type: "salon",
         owner_id: salonId,
         channel: "in_app",
-        priority: "normal",
-        title_ru: "Новая запись",
-        body_ru: "К вам создана новая запись.",
-        action_type: "booking",
+        ...masterNotificationTemplate,
         action_url: `/master/${master_id}/dashboard`,
         status: "sent",
         payload_json: bookingNotificationPayload
@@ -440,10 +439,7 @@ export async function publicCreateBooking(req, res) {
         owner_type: "salon",
         owner_id: salonId,
         channel: "in_app",
-        priority: "normal",
-        title_ru: "Новая запись в салон",
-        body_ru: "В салоне создана новая запись.",
-        action_type: "booking",
+        ...salonNotificationTemplate,
         action_url: `/salon/${salonSlug}/dashboard`,
         status: "sent",
         payload_json: bookingNotificationPayload

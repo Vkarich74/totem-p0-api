@@ -3,6 +3,7 @@
 import { randomUUID } from 'crypto';
 import { assertMoneyCoreWriteAllowed } from './config.js';
 import { createNotification } from '../services/notifications/notificationService.js';
+import { buildPayoutExecutionNotificationTemplate } from '../services/notifications/notificationTemplates.js';
 
 const ALLOWED_PAYOUT_STATUSES = new Set([
   'draft',
@@ -646,14 +647,17 @@ async function createPayoutExecution(pool, input = {}, actor = {}) {
       },
     });
 
+    const payoutCreatedTemplate = buildPayoutExecutionNotificationTemplate('payout_execution_created', {
+      amount,
+    });
+
     await createMoneyOwnerNotification(client, {
       event_type: 'payout_execution_created',
       source_type: 'payout_execution',
       source_id: createResult.rows[0].id,
       owner_type: withdrawRequest.owner_type,
       owner_id: withdrawRequest.owner_id,
-      title_ru: 'Выплата создана',
-      body_ru: `Выплата ${amount} KGS создана.`,
+      ...payoutCreatedTemplate,
       payload_json: {
         event_type: 'payout_execution_created',
         source_type: 'payout_execution',
@@ -748,14 +752,17 @@ async function submitManualPayoutExecution(pool, id, input = {}, actor = {}) {
       },
     });
 
+    const payoutSubmittedTemplate = buildPayoutExecutionNotificationTemplate('payout_execution_submitted', {
+      amount,
+    });
+
     await createMoneyOwnerNotification(client, {
       event_type: 'payout_execution_submitted',
       source_type: 'payout_execution',
       source_id: updatedResult.rows[0].id,
       owner_type: payout.owner_type,
       owner_id: payout.owner_id,
-      title_ru: 'Выплата отправлена в обработку',
-      body_ru: `Выплата ${amount} KGS отправлена в обработку.`,
+      ...payoutSubmittedTemplate,
       payload_json: {
         event_type: 'payout_execution_submitted',
         source_type: 'payout_execution',
@@ -891,14 +898,17 @@ async function completePayoutExecution(pool, id, input = {}, actor = {}) {
       },
     });
 
+    const payoutCompletedTemplate = buildPayoutExecutionNotificationTemplate('payout_execution_completed', {
+      amount,
+    });
+
     await createMoneyOwnerNotification(client, {
       event_type: 'payout_execution_completed',
       source_type: 'payout_execution',
       source_id: updatedPayoutResult.rows[0].id,
       owner_type: payout.owner_type,
       owner_id: payout.owner_id,
-      title_ru: 'Выплата завершена',
-      body_ru: `Выплата ${amount} KGS завершена.`,
+      ...payoutCompletedTemplate,
       payload_json: {
         event_type: 'payout_execution_completed',
         source_type: 'payout_execution',
@@ -1024,14 +1034,17 @@ async function failPayoutExecution(pool, id, input = {}, actor = {}) {
       },
     });
 
+    const payoutFailedTemplate = buildPayoutExecutionNotificationTemplate('payout_execution_failed', {
+      amount,
+    });
+
     await createMoneyOwnerNotification(client, {
       event_type: 'payout_execution_failed',
       source_type: 'payout_execution',
       source_id: updatedPayoutResult.rows[0].id,
       owner_type: payout.owner_type,
       owner_id: payout.owner_id,
-      title_ru: 'Выплата не прошла',
-      body_ru: `Выплата ${amount} KGS не прошла. Проверьте причину в финансовом разделе.`,
+      ...payoutFailedTemplate,
       payload_json: {
         event_type: 'payout_execution_failed',
         source_type: 'payout_execution',
