@@ -1134,6 +1134,7 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
           created_at,
           last_seen_at,
           revoked_at,
+          updated_at,
           CASE WHEN p256dh IS NOT NULL AND p256dh <> '' THEN true ELSE false END AS has_p256dh,
           CASE WHEN auth IS NOT NULL AND auth <> '' THEN true ELSE false END AS has_auth
         FROM public.push_subscriptions
@@ -1159,6 +1160,76 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
       return res.status(500).json({
         ok: false,
         error: "ADMIN_PUSH_SUBSCRIPTIONS_FETCH_FAILED",
+      });
+    }
+  });
+
+  r.get("/notifications/reads", readLimiter, async (req, res) => {
+    const limit = Math.min(parsePositiveInt(req.query.limit, 50), 200);
+    const offset = parsePositiveInt(req.query.offset, 0);
+    const targetType = normalizeOptionalText(req.query.target_type, 80).toLowerCase();
+    const targetId = normalizeOptionalText(req.query.target_id, 120);
+    const readerType = normalizeOptionalText(req.query.reader_type, 80).toLowerCase();
+    const readerId = normalizeOptionalText(req.query.reader_id, 120);
+
+    try {
+      const { whereSql, values } = buildWhereClause([
+        { enabled: Boolean(targetType), sql: "n.target_type = ?", value: targetType },
+        { enabled: Boolean(targetId), sql: "n.target_id = ?", value: targetId },
+        { enabled: Boolean(readerType), sql: "r.reader_type = ?", value: readerType },
+        { enabled: Boolean(readerId), sql: "r.reader_id = ?", value: readerId },
+      ]);
+
+      const totalResult = await pool.query(
+        `
+        SELECT COUNT(*)::int AS total_count
+        FROM public.app_notification_reads r
+        JOIN public.app_notifications n
+          ON n.id = r.notification_id
+        ${whereSql}
+        `,
+        values,
+      );
+
+      const data = await pool.query(
+        `
+        SELECT
+          r.notification_id,
+          n.notification_uid,
+          r.reader_type,
+          r.reader_id,
+          r.read_at,
+          r.created_at,
+          n.target_type,
+          n.target_id,
+          n.title_ru,
+          n.action_type,
+          n.created_at AS notification_created_at
+        FROM public.app_notification_reads r
+        JOIN public.app_notifications n
+          ON n.id = r.notification_id
+        ${whereSql}
+        ORDER BY r.read_at DESC NULLS LAST, r.created_at DESC, r.notification_id DESC
+        LIMIT $${values.length + 1}
+        OFFSET $${values.length + 2}
+        `,
+        [...values, limit, offset],
+      );
+
+      return res.json({
+        ok: true,
+        data: {
+          items: data.rows,
+          total_count: totalResult.rows?.[0]?.total_count || 0,
+          limit,
+          offset,
+        },
+      });
+    } catch (error) {
+      console.error("ADMIN_NOTIFICATION_READS_FETCH_ERROR", error);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_NOTIFICATION_READS_FETCH_FAILED",
       });
     }
   });
