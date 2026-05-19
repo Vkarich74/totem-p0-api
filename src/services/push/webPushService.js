@@ -235,6 +235,91 @@ function normalizeOwnerPushRevokeInput(input = {}) {
   };
 }
 
+function normalizeClientPushSaveInput(input = {}) {
+  const clientIdRaw = Number.parseInt(String(input.client_id ?? input.clientId ?? ""), 10);
+  if (!Number.isInteger(clientIdRaw) || clientIdRaw <= 0) {
+    return buildValidationError(400, "PUSH_SUBSCRIPTION_CLIENT_ID_REQUIRED");
+  }
+
+  const deviceId = normalizePushIdentity(input.device_id ?? input.deviceId);
+  if (!deviceId) {
+    return buildValidationError(400, "PUSH_SUBSCRIPTION_DEVICE_ID_REQUIRED");
+  }
+
+  const rawPlatform = String(input.platform ?? "").trim().toLowerCase();
+  const platform = normalizePushPlatform(rawPlatform);
+
+  if (!platform) {
+    return buildValidationError(400, "PUSH_SUBSCRIPTION_PLATFORM_INVALID");
+  }
+
+  const subscriptionResult = normalizePushKeys(input.subscription);
+  if (subscriptionResult.error) {
+    return buildValidationError(400, subscriptionResult.error);
+  }
+
+  const userAgent = normalizePushUserAgent(input.user_agent ?? input.userAgent);
+
+  return {
+    ok: true,
+    clientId: clientIdRaw,
+    deviceId,
+    platform,
+    endpoint: subscriptionResult.endpoint,
+    p256dh: subscriptionResult.p256dh,
+    auth: subscriptionResult.auth,
+    userAgent,
+  };
+}
+
+function normalizeClientPushRevokeInput(input = {}) {
+  const clientIdRaw = Number.parseInt(String(input.client_id ?? input.clientId ?? ""), 10);
+  if (!Number.isInteger(clientIdRaw) || clientIdRaw <= 0) {
+    return buildValidationError(400, "PUSH_SUBSCRIPTION_CLIENT_ID_REQUIRED");
+  }
+
+  const deviceId = normalizePushIdentity(input.device_id ?? input.deviceId);
+  if (!deviceId) {
+    return buildValidationError(400, "PUSH_SUBSCRIPTION_DEVICE_ID_REQUIRED");
+  }
+
+  return {
+    ok: true,
+    clientId: clientIdRaw,
+    deviceId,
+  };
+}
+
+function normalizeClientPushStatusInput(input = {}) {
+  const clientIdRaw = Number.parseInt(String(input.client_id ?? input.clientId ?? ""), 10);
+  if (!Number.isInteger(clientIdRaw) || clientIdRaw <= 0) {
+    return buildValidationError(400, "PUSH_SUBSCRIPTION_CLIENT_ID_REQUIRED");
+  }
+
+  const hasDeviceId = Object.prototype.hasOwnProperty.call(input, "device_id") ||
+    Object.prototype.hasOwnProperty.call(input, "deviceId");
+
+  if (!hasDeviceId) {
+    return {
+      ok: true,
+      clientId: clientIdRaw,
+      deviceId: null,
+    };
+  }
+
+  const deviceIdRaw = input.device_id ?? input.deviceId;
+  const deviceId = normalizePushIdentity(deviceIdRaw);
+  if (!deviceId) {
+    return buildValidationError(400, "PUSH_SUBSCRIPTION_DEVICE_ID_REQUIRED");
+  }
+
+  return {
+    ok: true,
+    clientId: clientIdRaw,
+    deviceId,
+  };
+}
+
 export function getWebPushPublicConfig() {
   const vapidPublicKey = String(process.env.VAPID_PUBLIC_KEY || "").trim();
   const vapidPrivateKey = String(process.env.VAPID_PRIVATE_KEY || "").trim();
@@ -476,10 +561,187 @@ export async function revokeOwnerPushSubscription(pool, input = {}) {
   };
 }
 
+export async function saveClientPushSubscription(pool, input = {}) {
+  if (!pool || typeof pool.query !== "function") {
+    throw new Error("POOL_REQUIRED");
+  }
+
+  const normalized = normalizeClientPushSaveInput(input);
+  if (!normalized.ok) {
+    return normalized;
+  }
+
+  const subscriptionUid =
+    normalizeText(input.subscription_uid, 255) ||
+    `push_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+
+  const result = await pool.query(
+    `
+    INSERT INTO public.push_subscriptions (
+      subscription_uid,
+      user_type,
+      user_id,
+      device_id,
+      platform,
+      endpoint,
+      p256dh,
+      auth,
+      user_agent,
+      enabled,
+      created_at,
+      last_seen_at,
+      revoked_at
+    )
+    VALUES (
+      $1,
+      'client',
+      $2,
+      $3,
+      $4,
+      $5,
+      $6,
+      $7,
+      $8,
+      true,
+      NOW(),
+      NOW(),
+      NULL
+    )
+    ON CONFLICT (user_type, user_id, device_id)
+    DO UPDATE SET
+      endpoint = EXCLUDED.endpoint,
+      p256dh = EXCLUDED.p256dh,
+      auth = EXCLUDED.auth,
+      platform = EXCLUDED.platform,
+      user_agent = EXCLUDED.user_agent,
+      enabled = true,
+      revoked_at = NULL,
+      last_seen_at = NOW()
+    RETURNING subscription_uid, enabled
+    `,
+    [
+      subscriptionUid,
+      String(normalized.clientId),
+      normalized.deviceId,
+      normalized.platform,
+      normalized.endpoint,
+      normalized.p256dh,
+      normalized.auth,
+      normalized.userAgent,
+    ]
+  );
+
+  const row = result.rows[0] || null;
+
+  return {
+    ok: true,
+    user_type: "client",
+    user_id: String(normalized.clientId),
+    device_id: normalized.deviceId,
+    subscription_uid: row?.subscription_uid || subscriptionUid,
+    enabled: Boolean(row?.enabled ?? true),
+  };
+}
+
+export async function revokeClientPushSubscription(pool, input = {}) {
+  if (!pool || typeof pool.query !== "function") {
+    throw new Error("POOL_REQUIRED");
+  }
+
+  const normalized = normalizeClientPushRevokeInput(input);
+  if (!normalized.ok) {
+    return normalized;
+  }
+
+  const result = await pool.query(
+    `
+    UPDATE public.push_subscriptions
+    SET
+      enabled = false,
+      revoked_at = NOW(),
+      last_seen_at = NOW()
+    WHERE user_type = 'client'
+      AND user_id = $1
+      AND device_id = $2
+    RETURNING subscription_uid
+    `,
+    [String(normalized.clientId), normalized.deviceId]
+  );
+
+  return {
+    ok: true,
+    user_type: "client",
+    user_id: String(normalized.clientId),
+    device_id: normalized.deviceId,
+    revoked: result.rows.length > 0,
+  };
+}
+
+export async function getClientPushSubscriptionStatus(pool, input = {}) {
+  if (!pool || typeof pool.query !== "function") {
+    throw new Error("POOL_REQUIRED");
+  }
+
+  const normalized = normalizeClientPushStatusInput(input);
+  if (!normalized.ok) {
+    return normalized;
+  }
+
+  const values = [String(normalized.clientId)];
+  let filterSql = "user_type = 'client' AND user_id = $1";
+
+  if (normalized.deviceId) {
+    values.push(normalized.deviceId);
+    filterSql += ` AND device_id = $2`;
+  }
+
+  const result = await pool.query(
+    `
+    SELECT
+      subscription_uid,
+      user_type,
+      user_id,
+      device_id,
+      platform,
+      endpoint,
+      enabled,
+      created_at,
+      last_seen_at,
+      revoked_at
+    FROM public.push_subscriptions
+    WHERE ${filterSql}
+    ORDER BY last_seen_at DESC NULLS LAST, created_at DESC NULLS LAST, device_id ASC
+    `,
+    values
+  );
+
+  return {
+    ok: true,
+    client_id: String(normalized.clientId),
+    device_id: normalized.deviceId,
+    subscriptions: result.rows.map((row) => ({
+      subscription_uid: row.subscription_uid,
+      user_type: row.user_type,
+      user_id: row.user_id,
+      device_id: row.device_id,
+      platform: row.platform,
+      endpoint: row.endpoint,
+      enabled: Boolean(row.enabled),
+      created_at: row.created_at,
+      last_seen_at: row.last_seen_at,
+      revoked_at: row.revoked_at,
+      active: Boolean(row.enabled && !row.revoked_at),
+    })),
+  };
+}
+
 export default {
   getWebPushPublicConfig,
   saveAnonymousMobilePushSubscription,
   revokeAnonymousMobilePushSubscription,
   saveOwnerPushSubscription,
   revokeOwnerPushSubscription,
+  saveClientPushSubscription,
+  revokeClientPushSubscription,
+  getClientPushSubscriptionStatus,
 };

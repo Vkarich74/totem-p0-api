@@ -19,7 +19,12 @@ import {
   listNotificationsForTarget,
   markNotificationRead
 } from "../services/notifications/notificationService.js";
-import { getWebPushPublicConfig } from "../services/push/webPushService.js";
+import {
+  getWebPushPublicConfig,
+  getClientPushSubscriptionStatus,
+  revokeClientPushSubscription,
+  saveClientPushSubscription,
+} from "../services/push/webPushService.js";
 
 function hashClientCabinetToken(token) {
   return crypto.createHash("sha256").update(String(token || "")).digest("hex");
@@ -826,6 +831,144 @@ export function createPublicRouter(deps) {
       } catch (err) {
         console.error("PUBLIC_CLIENT_NOTIFICATION_READ_ERROR", err);
         return res.status(500).json({ ok: false, error: "CLIENT_NOTIFICATION_READ_FAILED" });
+      } finally {
+        db.release();
+      }
+    }
+  );
+
+  /**
+   * CLIENT PUSH SUBSCRIPTIONS
+   */
+  r.post(
+    "/clients/:clientId/:token/push-subscriptions",
+    async (req, res) => {
+      const db = await pool.connect();
+
+      try {
+        const clientId = Number.parseInt(String(req.params.clientId || ""), 10);
+        const token = String(req.params.token || "").trim();
+        const access = await verifyClientCabinetAccess(db, clientId, token);
+
+        if (!access.ok) {
+          return res.status(access.status || 400).json({ ok: false, error: access.error });
+        }
+
+        const deviceId = String(req.body?.device_id ?? req.body?.deviceId ?? "").trim();
+        if (!deviceId) {
+          return res.status(400).json({ ok: false, error: "PUSH_SUBSCRIPTION_DEVICE_ID_REQUIRED" });
+        }
+
+        if (deviceId.length > 120) {
+          return res.status(400).json({ ok: false, error: "PUSH_SUBSCRIPTION_DEVICE_ID_INVALID" });
+        }
+
+        const subscription = req.body?.subscription;
+        const platform = req.body?.platform;
+        const userAgent = String(req.headers["user-agent"] || "").trim();
+
+        const saved = await saveClientPushSubscription(db, {
+          clientId,
+          deviceId,
+          subscription,
+          platform,
+          userAgent,
+        });
+
+        if (!saved.ok) {
+          return res.status(saved.status || 400).json({ ok: false, error: saved.error });
+        }
+
+        return res.json({
+          ok: true,
+          subscription: saved,
+        });
+      } catch (err) {
+        console.error("PUBLIC_CLIENT_PUSH_SUBSCRIPTION_SAVE_ERROR", err);
+        return res.status(500).json({ ok: false, error: "CLIENT_PUSH_SUBSCRIPTION_SAVE_FAILED" });
+      } finally {
+        db.release();
+      }
+    }
+  );
+
+  r.delete(
+    "/clients/:clientId/:token/push-subscriptions/:deviceId",
+    async (req, res) => {
+      const db = await pool.connect();
+
+      try {
+        const clientId = Number.parseInt(String(req.params.clientId || ""), 10);
+        const token = String(req.params.token || "").trim();
+        const access = await verifyClientCabinetAccess(db, clientId, token);
+
+        if (!access.ok) {
+          return res.status(access.status || 400).json({ ok: false, error: access.error });
+        }
+
+        const deviceId = String(req.params.deviceId || "").trim();
+        if (!deviceId) {
+          return res.status(400).json({ ok: false, error: "PUSH_SUBSCRIPTION_DEVICE_ID_REQUIRED" });
+        }
+
+        if (deviceId.length > 120) {
+          return res.status(400).json({ ok: false, error: "PUSH_SUBSCRIPTION_DEVICE_ID_INVALID" });
+        }
+
+        const revoked = await revokeClientPushSubscription(db, {
+          clientId,
+          deviceId,
+        });
+
+        if (!revoked.ok) {
+          return res.status(revoked.status || 400).json({ ok: false, error: revoked.error });
+        }
+
+        return res.json({
+          ok: true,
+          revoked,
+        });
+      } catch (err) {
+        console.error("PUBLIC_CLIENT_PUSH_SUBSCRIPTION_REVOKE_ERROR", err);
+        return res.status(500).json({ ok: false, error: "CLIENT_PUSH_SUBSCRIPTION_REVOKE_FAILED" });
+      } finally {
+        db.release();
+      }
+    }
+  );
+
+  r.get(
+    "/clients/:clientId/:token/push-subscriptions/status",
+    async (req, res) => {
+      const db = await pool.connect();
+
+      try {
+        const clientId = Number.parseInt(String(req.params.clientId || ""), 10);
+        const token = String(req.params.token || "").trim();
+        const access = await verifyClientCabinetAccess(db, clientId, token);
+
+        if (!access.ok) {
+          return res.status(access.status || 400).json({ ok: false, error: access.error });
+        }
+
+        const deviceId = String(req.query.device_id ?? req.query.deviceId ?? "").trim();
+
+        const status = await getClientPushSubscriptionStatus(db, {
+          clientId,
+          deviceId: deviceId || null,
+        });
+
+        if (!status.ok) {
+          return res.status(status.status || 400).json({ ok: false, error: status.error });
+        }
+
+        return res.json({
+          ok: true,
+          status,
+        });
+      } catch (err) {
+        console.error("PUBLIC_CLIENT_PUSH_SUBSCRIPTION_STATUS_ERROR", err);
+        return res.status(500).json({ ok: false, error: "CLIENT_PUSH_SUBSCRIPTION_STATUS_FAILED" });
       } finally {
         db.release();
       }
