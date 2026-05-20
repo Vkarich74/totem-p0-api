@@ -799,9 +799,28 @@ return res.status(403).json({ok:false,error:"FORBIDDEN"});
 
 const billing_access = await getMasterBillingAccess(pool, master.rows[0].id);
 
+const masterSalon = await pool.query(`
+SELECT
+ms.salon_id,
+s.slug AS salon_slug
+FROM master_salon ms
+JOIN salons s ON s.id=ms.salon_id
+WHERE ms.master_id=$1
+AND ms.status='active'
+ORDER BY ms.activated_at DESC NULLS LAST, ms.id DESC
+LIMIT 1
+`,[master.rows[0].id]);
+
+const salonRelation = masterSalon.rows[0] || null;
+
 res.json({
 ok:true,
-master:master.rows[0],
+master:{
+...master.rows[0],
+salon_id:salonRelation?.salon_id || null,
+salon_slug:salonRelation?.salon_slug || null,
+salonSlug:salonRelation?.salon_slug || null
+},
 billing_access
 });
 
