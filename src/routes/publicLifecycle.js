@@ -66,7 +66,7 @@ export async function publicLifecycle(req, res) {
       return res.status(400).json({ ok: false, error: "BOOKING_ID_INVALID" });
     }
 
-    if (!["complete", "cancel"].includes(action)) {
+    if (!["confirm", "complete", "cancel"].includes(action)) {
       return res.status(400).json({ ok: false, error: "INVALID_ACTION" });
     }
 
@@ -86,7 +86,12 @@ export async function publicLifecycle(req, res) {
         b.price_snapshot
       FROM bookings b
       LEFT JOIN masters m ON m.id = b.master_id
-      WHERE b.id = $1 AND b.salon_id = $2
+      LEFT JOIN master_salon ms
+        ON ms.master_id = b.master_id
+       AND ms.salon_id = $2
+       AND ms.status = 'active'
+      WHERE b.id = $1
+        AND (b.salon_id = $2 OR ms.id IS NOT NULL)
       `,
       [bookingId, salon_id]
     );
@@ -96,6 +101,30 @@ export async function publicLifecycle(req, res) {
     }
 
     const currentStatus = rows[0].status;
+
+    if (action === "confirm") {
+      if (currentStatus === "confirmed") {
+        return res.json({ ok: true, status: "already_confirmed" });
+      }
+
+      if (["completed", "cancelled", "canceled"].includes(String(currentStatus || "").toLowerCase())) {
+        return res.status(409).json({
+          ok: false,
+          error: "INVALID_STATUS",
+          status: currentStatus,
+        });
+      }
+
+      await pool.query(
+        `UPDATE bookings
+            SET status = 'confirmed',
+                confirmed_at = NOW()
+          WHERE id = $1`,
+        [bookingId]
+      );
+
+      return res.json({ ok: true, status: "confirmed" });
+    }
 
     if (action === "complete") {
       const paymentRes = await pool.query(
