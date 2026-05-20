@@ -38,56 +38,11 @@ export default function buildTemplatesRouter(pool, internalReadRateLimit){
   const writeRoles = ["system", "owner", "salon_admin", "master_admin", "master"];
 
   r.get("/templates-public/:owner_type/:owner_slug/published", internalReadRateLimit, async (req, res) => {
-    const traceId = `template-public-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const startedAt = Date.now();
-    let db = null;
-    console.log("[templates-public]", "route:start", {
-      traceId,
-      ownerType: req.params.owner_type,
-      ownerSlug: req.params.owner_slug,
-      templateVersion: readVersion(req),
-    });
-    res.once("finish", () => {
-      console.log("[templates-public]", "response:finish", {
-        traceId,
-        statusCode: res.statusCode,
-        totalElapsedMs: Date.now() - startedAt,
-      });
-    });
+    const db = await pool.connect();
     try {
-      console.log("[templates-public]", "before:pool.connect", { traceId });
-      const connectStartedAt = Date.now();
-      db = await pool.connect();
-      console.log("[templates-public]", "after:pool.connect", {
-        traceId,
-        elapsedMs: Date.now() - connectStartedAt,
-      });
       const { ownerType, ownerSlug } = normalizeOwnerParams(req);
       const templateVersion = readVersion(req);
-      console.log("[templates-public]", "before:getPublishedSource", {
-        traceId,
-        ownerType,
-        ownerSlug,
-        templateVersion,
-      });
-      const publishedStartedAt = Date.now();
       const published = await getPublishedSource(db, ownerType, ownerSlug, templateVersion);
-      const payloadKeys = published?.payload && typeof published.payload === "object"
-        ? Object.keys(published.payload)
-        : [];
-      console.log("[templates-public]", "after:getPublishedSource", {
-        traceId,
-        elapsedMs: Date.now() - publishedStartedAt,
-        published_exists: !!published.document?.status?.published_exists,
-        has_payload: !!published?.payload,
-        payload_keys_count: payloadKeys.length,
-      });
-      console.log("[templates-public]", "before:res.json", {
-        traceId,
-        ownerType,
-        ownerSlug,
-        templateVersion,
-      });
       return res.json({
         ok: true,
         owner_type: ownerType,
@@ -98,25 +53,9 @@ export default function buildTemplatesRouter(pool, internalReadRateLimit){
         meta: published.document?.meta || {},
       });
     } catch (err) {
-      console.log("[templates-public]", "catch:error", {
-        traceId,
-        elapsedMs: Date.now() - startedAt,
-        code: err?.code || null,
-        message: err?.message || null,
-      });
       return sendError(res, err);
     } finally {
-      if (db) {
-        console.log("[templates-public]", "before:db.release", {
-          traceId,
-          totalElapsedMs: Date.now() - startedAt,
-        });
-        db.release();
-        console.log("[templates-public]", "after:db.release", {
-          traceId,
-          totalElapsedMs: Date.now() - startedAt,
-        });
-      }
+      db.release();
     }
   });
 
