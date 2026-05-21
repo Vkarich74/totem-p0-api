@@ -77,6 +77,136 @@ const identitySalonIds = getIdentitySalonIds(req?.identity);
 return identitySalonIds.has(targetSalonId);
 }
 
+function parseTime(value){
+const raw = String(value || "").trim();
+if(!/^\d{2}:\d{2}$/.test(raw)){
+return null;
+}
+
+const [hoursText, minutesText] = raw.split(":");
+const hours = Number(hoursText);
+const minutes = Number(minutesText);
+
+if(!Number.isInteger(hours) || !Number.isInteger(minutes)){
+return null;
+}
+
+if(hours < 0 || hours > 23 || minutes < 0 || minutes > 59){
+return null;
+}
+
+return raw;
+}
+
+function timeToMinutes(value){
+const parsed = parseTime(value);
+if(!parsed){
+return null;
+}
+
+const [hoursText, minutesText] = parsed.split(":");
+return Number(hoursText) * 60 + Number(minutesText);
+}
+
+function normalizeWorkingHoursRows(hours){
+if(!Array.isArray(hours)){
+const err = new Error("INVALID_HOURS");
+err.code = "INVALID_HOURS";
+throw err;
+}
+
+if(hours.length === 0 || hours.length > 7){
+const err = new Error("INVALID_HOURS");
+err.code = "INVALID_HOURS";
+throw err;
+}
+
+const seen = new Set();
+const normalized = [];
+
+for(const entry of hours){
+const weekday = Number(entry?.weekday);
+if(!Number.isInteger(weekday) || weekday < 0 || weekday > 6){
+const err = new Error("INVALID_WEEKDAY");
+err.code = "INVALID_WEEKDAY";
+throw err;
+}
+
+if(seen.has(weekday)){
+const err = new Error("DUPLICATE_WEEKDAY");
+err.code = "DUPLICATE_WEEKDAY";
+throw err;
+}
+
+const startTime = parseTime(entry?.start_time);
+const endTime = parseTime(entry?.end_time);
+
+if(!startTime || !endTime){
+const err = new Error("INVALID_TIME");
+err.code = "INVALID_TIME";
+throw err;
+}
+
+const startMinutes = timeToMinutes(startTime);
+const endMinutes = timeToMinutes(endTime);
+
+if(startMinutes === null || endMinutes === null || startMinutes >= endMinutes){
+const err = new Error("INVALID_TIME");
+err.code = "INVALID_TIME";
+throw err;
+}
+
+const hasBreakStart = entry?.break_start !== undefined && entry?.break_start !== null && String(entry.break_start).trim() !== "";
+const hasBreakEnd = entry?.break_end !== undefined && entry?.break_end !== null && String(entry.break_end).trim() !== "";
+
+if(hasBreakStart !== hasBreakEnd){
+const err = new Error("INVALID_BREAK");
+err.code = "INVALID_BREAK";
+throw err;
+}
+
+let breakStart = null;
+let breakEnd = null;
+
+if(hasBreakStart && hasBreakEnd){
+breakStart = parseTime(entry.break_start);
+breakEnd = parseTime(entry.break_end);
+
+if(!breakStart || !breakEnd){
+const err = new Error("INVALID_BREAK");
+err.code = "INVALID_BREAK";
+throw err;
+}
+
+const breakStartMinutes = timeToMinutes(breakStart);
+const breakEndMinutes = timeToMinutes(breakEnd);
+
+if(breakStartMinutes === null || breakEndMinutes === null || breakStartMinutes >= breakEndMinutes){
+const err = new Error("INVALID_BREAK");
+err.code = "INVALID_BREAK";
+throw err;
+}
+
+if(breakStartMinutes < startMinutes || breakEndMinutes > endMinutes){
+const err = new Error("INVALID_BREAK");
+err.code = "INVALID_BREAK";
+throw err;
+}
+}
+
+seen.add(weekday);
+normalized.push({
+weekday,
+start_time: startTime,
+end_time: endTime,
+break_start: breakStart,
+break_end: breakEnd
+});
+}
+
+return normalized;
+}
+
 async function getSalonBillingAccess(db, salonId){
 const billing = await getSalonBillingRow(db, salonId, false);
 return buildBillingAccessPayload(billing);
@@ -1415,6 +1545,177 @@ console.error("SALON_SERVICE_TAKE_ERROR",err);
 return res.status(500).json({
 ok:false,
 error:"SALON_SERVICE_TAKE_FAILED"
+});
+
+}finally{
+
+db.release();
+
+}
+
+});
+
+/* SALON MASTER WORKING HOURS */
+r.put("/salons/:slug/masters/:masterId/working-hours", async (req,res)=>{
+
+const { slug, masterId } = req.params;
+const { hours } = req.body || {};
+
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+const salon = await db.query(
+`SELECT id,name,slug
+FROM salons
+WHERE slug=$1
+LIMIT 1`,
+[slug]
+);
+
+if(!salon.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+if(!hasSalonOwnership(req, salonId)){
+await db.query("ROLLBACK");
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
+const access = await ensureSalonWriteAllowed(db, salonId);
+
+const master = await db.query(
+`SELECT id,name,slug
+FROM masters
+WHERE id=$1
+LIMIT 1`,
+[masterId]
+);
+
+if(!master.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const masterIdValue = master.rows[0].id;
+
+const relation = await db.query(`
+SELECT
+id,
+status,
+activated_at
+FROM master_salon
+WHERE salon_id=$1
+AND master_id=$2
+AND status='active'
+FOR UPDATE
+LIMIT 1
+`,[
+salonId,
+masterIdValue
+]);
+
+if(!relation.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ok:false,error:"MASTER_SALON_RELATION_NOT_FOUND"});
+}
+
+const normalizedHours = normalizeWorkingHoursRows(hours);
+
+await db.query(`
+DELETE FROM master_working_hours
+WHERE salon_id=$1
+AND master_id=$2
+`,[
+salonId,
+masterIdValue
+]);
+
+const insertedRows = [];
+
+for(const row of normalizedHours){
+const inserted = await db.query(`
+INSERT INTO master_working_hours(
+master_id,
+salon_id,
+weekday,
+start_time,
+end_time,
+break_start,
+break_end
+)
+VALUES($1,$2,$3,$4,$5,$6,$7)
+RETURNING
+id,
+master_id,
+salon_id,
+weekday,
+start_time,
+end_time,
+break_start,
+break_end
+`,[
+masterIdValue,
+salonId,
+row.weekday,
+row.start_time,
+row.end_time,
+row.break_start,
+row.break_end
+]);
+
+insertedRows.push(inserted.rows[0]);
+}
+
+await db.query("COMMIT");
+
+return res.json({
+ok:true,
+salon_id:salonId,
+master_id:masterIdValue,
+rows:insertedRows,
+count:insertedRows.length
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+if(err.code === "BILLING_BLOCKED"){
+return res.status(403).json({
+ok:false,
+error:"BILLING_BLOCKED",
+billing_access:{
+exists:err.access.exists,
+subscription_status:err.access.subscription_status,
+access_state:err.access.access_state,
+can_write:err.access.can_write,
+can_withdraw:err.access.can_withdraw,
+billing:err.access.billing
+}
+});
+}
+
+if([
+"INVALID_HOURS",
+"INVALID_WEEKDAY",
+"DUPLICATE_WEEKDAY",
+"INVALID_TIME",
+"INVALID_BREAK"
+].includes(err.code)){
+return res.status(400).json({ok:false,error:err.code});
+}
+
+console.error("SALON_MASTER_WORKING_HOURS_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"INTERNAL_ERROR"
 });
 
 }finally{
