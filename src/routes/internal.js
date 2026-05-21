@@ -19,6 +19,7 @@ import buildFinanceEngineRouter from "./internal/finance-engine.js";
 import buildWithdrawsProcessorRouter from "./internal/withdraws-processor.js";
 import buildMastersRouter from "./internal/masters.js";
 import buildSalonsRouter from "./internal/salons.js";
+import buildOdooBridgeRouter from "./internal/bridge.js";
 import leadsRouter from "./admin.leads.js";
 import moderationRouter from "./admin.moderation.js";
 import messagesRouter from "./admin.messages.js";
@@ -1335,6 +1336,9 @@ r.use("/admin", adminContainer);
 
 const provisionRouter = buildProvisionRouter(pool);
 r.use(provisionRouter);
+
+const odooBridgeRouter = buildOdooBridgeRouter(pool);
+r.use(odooBridgeRouter);
 
 const entryRouter = buildEntryRouter(pool);
 r.use(entryRouter);
