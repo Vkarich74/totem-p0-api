@@ -1561,6 +1561,13 @@ r.put("/salons/:slug/masters/:masterId/working-hours", async (req,res)=>{
 const { slug, masterId } = req.params;
 const { hours } = req.body || {};
 
+if(!req.auth){
+return res.status(401).json({
+ok:false,
+error:"AUTH_REQUIRED"
+});
+}
+
 const db = await pool.connect();
 
 try{
