@@ -13,6 +13,14 @@ function parseBearer(req) {
   return match ? String(match[1] || "").trim() : "";
 }
 
+function parseOptionalScalar(value) {
+  if (Array.isArray(value)) {
+    return String(value[0] || "").trim();
+  }
+
+  return String(value || "").trim();
+}
+
 function getJwtSecret() {
   const secret = String(process.env.JWT_SECRET || "").trim();
   if (!secret) {
@@ -41,7 +49,10 @@ export default async function AdminRuntimeGuard(req, res, next) {
     }
 
     const providedBridgeToken = String(
-      req.headers["x-odoo-bridge-token"] || req.headers["X-Odoo-Bridge-Token"] || ""
+      parseOptionalScalar(req.headers["x-odoo-bridge-token"]) ||
+      parseOptionalScalar(req.query?.token) ||
+      parseOptionalScalar(req.headers["X-Odoo-Bridge-Token"]) ||
+      ""
     ).trim();
 
     if (!providedBridgeToken || providedBridgeToken !== configuredBridgeToken) {

@@ -490,6 +490,231 @@ function normalizeOdooCoreFormIntakePayload(body = {}){
   };
 }
 
+function normalizeOdooRelationId(value){
+  if(Array.isArray(value)){
+    for(const item of value){
+      const nested = normalizeOdooRelationId(item);
+      if(Number.isInteger(nested) && nested > 0){
+        return nested;
+      }
+    }
+
+    return null;
+  }
+
+  const text = normalizeText(value);
+  if(!text){
+    return null;
+  }
+
+  const numeric = Number(text);
+  return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
+}
+
+function normalizeOdooRelationIds(value){
+  const ids = new Set();
+
+  const visit = (input) => {
+    if(Array.isArray(input)){
+      if(input.length === 3 && Number(input[0]) === 6 && Number(input[1]) === 0 && Array.isArray(input[2])){
+        visit(input[2]);
+        return;
+      }
+
+      if(input.length === 2 && (Number(input[0]) === 3 || Number(input[0]) === 4)){
+        const commandId = normalizeOdooRelationId(input[1]);
+        if(Number.isInteger(commandId) && commandId > 0){
+          ids.add(commandId);
+        }
+        return;
+      }
+
+      if(input.length === 2 && !Array.isArray(input[0]) && !Array.isArray(input[1])){
+        const firstId = normalizeOdooRelationId(input[0]);
+        const secondId = normalizeOdooRelationId(input[1]);
+
+        if(Number.isInteger(firstId) && firstId > 0 && typeof input[1] === "string"){
+          ids.add(firstId);
+          return;
+        }
+
+        if(Number.isInteger(firstId) && firstId > 0 && Number.isInteger(secondId) && secondId > 0){
+          ids.add(firstId);
+          ids.add(secondId);
+          return;
+        }
+
+        if(Number.isInteger(firstId) && firstId > 0){
+          ids.add(firstId);
+          return;
+        }
+      }
+
+      for(const item of input){
+        visit(item);
+      }
+      return;
+    }
+
+    const id = normalizeOdooRelationId(input);
+    if(Number.isInteger(id) && id > 0){
+      ids.add(id);
+    }
+  };
+
+  visit(value);
+  return Array.from(ids);
+}
+
+function buildOdooCoreRequestStandardPayload(body = {}){
+  const model = normalizeText(body._model);
+  const leadId = normalizeOdooRelationId(body._id);
+  const ownerType = normalizeOwnerType(body.owner_type) || "master";
+  const teamId = normalizeOdooRelationId(body.team_id);
+  const sourceId = normalizeOdooRelationId(body.source_id);
+  const stageId = normalizeOdooRelationId(body.stage_id);
+  const tagIds = normalizeOdooRelationIds(body.tag_ids);
+  const hasTagIdsField = Object.prototype.hasOwnProperty.call(body, "tag_ids");
+  const hasRequiredTags = !hasTagIdsField || (
+    tagIds.length > 0 &&
+    [2, 3].every((tagId) => tagIds.includes(tagId))
+  );
+
+  if(model !== "crm.lead"){
+    return {
+      error: {
+        status: 400,
+        code: "ODOO_MODEL_UNSUPPORTED",
+      },
+    };
+  }
+
+  if(!leadId){
+    return {
+      error: {
+        status: 400,
+        code: "ODOO_MODEL_UNSUPPORTED",
+      },
+    };
+  }
+
+  if(teamId !== 5 || sourceId !== 17 || stageId !== 54 || !hasRequiredTags){
+    return {
+      error: {
+        status: 400,
+        code: "ODOO_CORE_REQUEST_GUARD_FAILED",
+      },
+    };
+  }
+
+  const email = normalizeEmail(body.email_from);
+  if(!email){
+    return {
+      error: {
+        status: 400,
+        code: "ODOO_EMAIL_REQUIRED",
+      },
+    };
+  }
+
+  const name = normalizeText(body.contact_name || body.name);
+  const odooRequestId = `odoo-crm-lead-${leadId}`;
+  const slug = `odoo-core-${leadId}`;
+  const phone = normalizeText(body.phone);
+  const city = normalizeText(body.city) || "Bishkek";
+  const description = normalizeText(body.description) || "Odoo Core Request approved lead";
+  const specialization = "Odoo Core Request";
+  const workMode = "independent";
+  const comment = "Created from Odoo approved Core Request lead";
+  const salonName = normalizeText(body.salon_name);
+
+  return {
+    source: "odoo_core_form",
+    odoo_request_id: odooRequestId,
+    odoo_lead_id: String(leadId),
+    owner_type: ownerType,
+    name,
+    slug,
+    email,
+    phone,
+    city,
+    address: "",
+    description,
+    specialization,
+    work_mode: workMode,
+    salon_slug: null,
+    admin_notes: [
+      "Источник: Odoo Core form.",
+      `Odoo request: ${odooRequestId}.`,
+      comment,
+    ].join(" "),
+    odoo_payload: {
+      _id: leadId,
+      _model: model,
+      name: normalizeText(body.name),
+      contact_name: normalizeText(body.contact_name),
+      email_from: email,
+      phone,
+      city: normalizeText(body.city) || null,
+      description: normalizeText(body.description) || null,
+      team_id: teamId,
+      source_id: sourceId,
+      stage_id: stageId,
+      tag_ids: tagIds,
+      owner_type: ownerType,
+      salon_name: salonName || null,
+      specialization,
+      work_mode: workMode,
+      comment,
+    },
+  };
+}
+
+function buildOdooCoreRequestIntake(body = {}){
+  const hasStandardShape =
+    Object.prototype.hasOwnProperty.call(body, "_id") ||
+    Object.prototype.hasOwnProperty.call(body, "_model");
+
+  if(hasStandardShape){
+    return buildOdooCoreRequestStandardPayload(body);
+  }
+
+  const odooRequestId = normalizeText(body.odoo_request_id);
+
+  if(!odooRequestId){
+    return {
+      error: {
+        status: 400,
+        code: "ODOO_REQUEST_ID_REQUIRED",
+      },
+    };
+  }
+
+  const normalized = normalizeOdooCoreFormIntakePayload(body);
+  return {
+    ...normalized,
+    source: "odoo_core_form",
+    odoo_request_id: odooRequestId,
+    odoo_lead_id: normalized.odoo_lead_id || null,
+    odoo_payload: {
+      odoo_request_id: odooRequestId,
+      odoo_lead_id: normalized.odoo_lead_id || null,
+      owner_type: normalized.owner_type || null,
+      name: normalized.name,
+      email: normalized.email,
+      phone: normalized.phone || null,
+      city: normalized.city || null,
+      slug: normalized.slug,
+      salon_name: normalizeText(body.salon_name) || null,
+      description: normalized.description || null,
+      specialization: normalized.specialization || null,
+      work_mode: normalized.work_mode || null,
+      salon_slug: normalized.salon_slug || null,
+      comment: normalizeText(body.comment) || null,
+    },
+  };
+}
+
 function normalizeRequestId(value){
   const id = Number(value);
   return Number.isInteger(id) && id > 0 ? id : null;
@@ -1251,14 +1476,17 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
     }
 
     const incoming = req.body || {};
-    const odooRequestId = normalizeText(incoming.odoo_request_id);
+    const intake = buildOdooCoreRequestIntake(incoming);
 
-    if(!odooRequestId){
+    if(intake?.error){
       return res.status(400).json({
         ok: false,
-        error: "ODOO_REQUEST_ID_REQUIRED",
+        error: intake.error.code,
       });
     }
+
+    const odooRequestId = normalizeText(intake.odoo_request_id);
+    const odooLeadId = normalizeText(intake.odoo_lead_id);
 
     const duplicateResult = await pool.query(
       `
@@ -1282,7 +1510,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       });
     }
 
-    const normalized = normalizeOdooCoreFormIntakePayload(incoming);
+    const normalized = intake;
     const precheck = await buildOpenOwnerPrecheck(pool, normalized, {
       allowMissingPhone: true,
       allowMissingCity: true,
@@ -1300,7 +1528,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       ...precheck,
       source: "odoo_core_form",
       odoo_request_id: odooRequestId,
-      odoo_lead_id: normalized.odoo_lead_id || null,
+      odoo_lead_id: odooLeadId || null,
       odoo_payload: normalized.odoo_payload,
     };
 
@@ -1405,14 +1633,14 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         request,
         eventType: "owner_opening.request_created",
         admin,
-        data: {
-          moderation_case_id: moderationCase?.id ? Number(moderationCase.id) : null,
-          precheck_valid: true,
-          source: "odoo_core_form",
-          odoo_request_id: odooRequestId,
-          odoo_lead_id: normalized.odoo_lead_id || null,
-        },
-      });
+          data: {
+            moderation_case_id: moderationCase?.id ? Number(moderationCase.id) : null,
+            precheck_valid: true,
+            source: "odoo_core_form",
+            odoo_request_id: odooRequestId,
+            odoo_lead_id: odooLeadId || null,
+          },
+        });
 
       await db.query("COMMIT");
 
