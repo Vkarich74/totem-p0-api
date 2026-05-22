@@ -30,6 +30,30 @@ function verifyAdminJwt(token) {
 }
 
 export default async function AdminRuntimeGuard(req, res, next) {
+  const requestPath = String(req.originalUrl || req.url || "").split("?")[0];
+  if (requestPath.endsWith("/internal/admin/open-owner/odoo-intake")) {
+    const configuredBridgeToken = String(process.env.ODOO_BRIDGE_TOKEN || "").trim();
+    if (!configuredBridgeToken) {
+      return res.status(503).json({
+        ok: false,
+        error: "ODOO_BRIDGE_TOKEN_NOT_CONFIGURED",
+      });
+    }
+
+    const providedBridgeToken = String(
+      req.headers["x-odoo-bridge-token"] || req.headers["X-Odoo-Bridge-Token"] || ""
+    ).trim();
+
+    if (!providedBridgeToken || providedBridgeToken !== configuredBridgeToken) {
+      return res.status(401).json({
+        ok: false,
+        error: "UNAUTHORIZED",
+      });
+    }
+
+    return next();
+  }
+
   const token = parseBearer(req);
   if (!token) {
     return res.status(401).json({

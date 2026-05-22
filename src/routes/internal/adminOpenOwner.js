@@ -272,9 +272,11 @@ async function checkSalonSlug(pool, salonSlug){
   };
 }
 
-async function buildOpenOwnerPrecheck(pool, body = {}){
+async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
   const checks = [];
   const errors = [];
+  const allowMissingPhone = Boolean(options?.allowMissingPhone);
+  const allowMissingCity = Boolean(options?.allowMissingCity);
 
   const ownerType = normalizeOwnerType(body.owner_type);
   const name = normalizeText(body.name);
@@ -359,18 +361,18 @@ async function buildOpenOwnerPrecheck(pool, body = {}){
     }
   }
 
-  addCheck(checks, "phone_valid", Boolean(phoneNormalized), {
+  addCheck(checks, "phone_valid", allowMissingPhone ? (phoneRaw ? Boolean(phoneNormalized) : true) : Boolean(phoneNormalized), {
     phone_raw: phoneRaw || null,
     phone_normalized: phoneNormalized || null,
   });
-  if(!phoneNormalized){
+  if(!allowMissingPhone && !phoneNormalized){
     errors.push("INVALID_KG_MOBILE_PHONE");
   }
 
-  addCheck(checks, "city_present", Boolean(city), {
+  addCheck(checks, "city_present", allowMissingCity ? true : Boolean(city), {
     city,
   });
-  if(!city){
+  if(!allowMissingCity && !city){
     errors.push("CITY_REQUIRED");
   }
 
@@ -418,9 +420,9 @@ async function buildOpenOwnerPrecheck(pool, body = {}){
       slug_requested: slugSource,
       slug_final: slugFinal || null,
       email,
-      phone_raw: phoneRaw,
+      phone_raw: phoneRaw || null,
       phone_normalized: phoneNormalized || null,
-      city,
+      city: city || null,
       address: normalizeText(body.address),
       description: normalizeText(body.description),
       specialization: normalizeText(body.specialization),
@@ -429,6 +431,62 @@ async function buildOpenOwnerPrecheck(pool, body = {}){
       admin_notes: normalizeText(body.admin_notes),
     },
     checks,
+  };
+}
+
+function normalizeOdooCoreFormIntakePayload(body = {}){
+  const ownerType = normalizeOwnerType(body.owner_type);
+  const odooRequestId = normalizeText(body.odoo_request_id);
+  const odooLeadId = normalizeText(body.odoo_lead_id);
+  const salonName = normalizeText(body.salon_name);
+  const baseName = normalizeText(body.name);
+  const name = ownerType === "salon" ? (salonName || baseName) : baseName;
+  const slugSource = normalizeText(body.slug || body.slug_requested || name);
+  const phone = normalizeText(body.phone);
+  const city = normalizeText(body.city);
+  const workMode = normalizeText(body.work_mode || (ownerType === "master" ? "independent" : ""));
+  const salonSlug = normalizeText(body.salon_slug);
+  const comment = normalizeText(body.comment);
+  const description = normalizeText(body.description);
+  const specialization = normalizeText(body.specialization);
+  const adminNotes = [
+    "Источник: Odoo Core form.",
+    `Odoo request: ${odooRequestId}.`,
+    comment || null,
+  ].filter(Boolean).join(" ");
+
+  return {
+    owner_type: ownerType || null,
+    name,
+    slug: slugSource,
+    email: normalizeEmail(body.email),
+    phone,
+    city,
+    address: "",
+    description,
+    specialization,
+    work_mode: ownerType === "master" ? workMode : null,
+    salon_slug: ownerType === "master" && workMode === "attached_to_salon" ? normalizeSlug(salonSlug) : null,
+    admin_notes: adminNotes,
+    source: "odoo_core_form",
+    odoo_request_id: odooRequestId,
+    odoo_lead_id: odooLeadId || null,
+    odoo_payload: {
+      odoo_request_id: odooRequestId,
+      odoo_lead_id: odooLeadId || null,
+      owner_type: ownerType || null,
+      name,
+      email: normalizeEmail(body.email),
+      phone: phone || null,
+      city: city || null,
+      slug: slugSource || null,
+      salon_name: salonName || null,
+      description,
+      specialization,
+      work_mode: ownerType === "master" ? workMode : null,
+      salon_slug: ownerType === "master" && workMode === "attached_to_salon" ? normalizeSlug(salonSlug) : null,
+      comment: comment || null,
+    },
   };
 }
 
@@ -1179,6 +1237,200 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         ok: false,
         error: "ADMIN_OPEN_OWNER_PRECHECK_FAILED",
       });
+    }
+  });
+
+  r.post("/odoo-intake", async (req,res)=>{
+    const bridgeTokenConfigured = String(process.env.ODOO_BRIDGE_TOKEN || "").trim();
+
+    if(!bridgeTokenConfigured){
+      return res.status(503).json({
+        ok: false,
+        error: "ODOO_BRIDGE_TOKEN_NOT_CONFIGURED",
+      });
+    }
+
+    const incoming = req.body || {};
+    const odooRequestId = normalizeText(incoming.odoo_request_id);
+
+    if(!odooRequestId){
+      return res.status(400).json({
+        ok: false,
+        error: "ODOO_REQUEST_ID_REQUIRED",
+      });
+    }
+
+    const duplicateResult = await pool.query(
+      `
+        SELECT id, status
+        FROM public.owner_opening_requests
+        WHERE precheck_result_json->>'source' = 'odoo_core_form'
+          AND precheck_result_json->>'odoo_request_id' = $1
+        LIMIT 1
+      `,
+      [odooRequestId]
+    );
+
+    const duplicate = duplicateResult.rows[0] || null;
+
+    if(duplicate){
+      return res.status(200).json({
+        ok: true,
+        duplicate: true,
+        request_id: Number(duplicate.id),
+        status: duplicate.status || null,
+      });
+    }
+
+    const normalized = normalizeOdooCoreFormIntakePayload(incoming);
+    const precheck = await buildOpenOwnerPrecheck(pool, normalized, {
+      allowMissingPhone: true,
+      allowMissingCity: true,
+    });
+
+    if(!precheck.valid){
+      return res.status(400).json({
+        ok: false,
+        error: "PRECHECK_FAILED",
+        precheck,
+      });
+    }
+
+    const precheckForStorage = {
+      ...precheck,
+      source: "odoo_core_form",
+      odoo_request_id: odooRequestId,
+      odoo_lead_id: normalized.odoo_lead_id || null,
+      odoo_payload: normalized.odoo_payload,
+    };
+
+    const db = await pool.connect();
+
+    try{
+      const admin = getAdminActor(req);
+
+      await db.query("BEGIN");
+
+      const createdRequest = await db.query(
+        `
+          INSERT INTO public.owner_opening_requests(
+            owner_type,
+            status,
+            name,
+            slug_requested,
+            slug_final,
+            email,
+            phone_raw,
+            phone_normalized,
+            city,
+            address,
+            description,
+            specialization,
+            work_mode,
+            salon_slug,
+            admin_notes,
+            precheck_result_json,
+            created_by_admin_id,
+            created_by_admin_email,
+            validated_at,
+            created_at,
+            updated_at
+          )
+          VALUES(
+            $1,
+            'validated',
+            $2,
+            $3,
+            $4,
+            $5,
+            $6,
+            $7,
+            $8,
+            $9,
+            $10,
+            $11,
+            $12,
+            $13,
+            $14,
+            $15,
+            $16,
+            $17,
+            NOW(),
+            NOW(),
+            NOW()
+          )
+          RETURNING *
+        `,
+        [
+          precheck.normalized.owner_type,
+          precheck.normalized.name,
+          precheck.normalized.slug_requested,
+          precheck.normalized.slug_final,
+          precheck.normalized.email,
+          precheck.normalized.phone_raw,
+          precheck.normalized.phone_normalized,
+          precheck.normalized.city,
+          precheck.normalized.address,
+          precheck.normalized.description,
+          precheck.normalized.specialization,
+          precheck.normalized.work_mode,
+          precheck.normalized.salon_slug,
+          precheck.normalized.admin_notes,
+          JSON.stringify(precheckForStorage),
+          admin.id,
+          admin.email || null,
+        ]
+      );
+
+      let request = createdRequest.rows[0];
+
+      const moderationCase = await createOwnerOpeningModerationCase(db, request);
+
+      if(moderationCase?.id){
+        const updatedRequest = await db.query(
+          `
+            UPDATE public.owner_opening_requests
+            SET moderation_case_id=$2,
+                updated_at=NOW()
+            WHERE id=$1
+            RETURNING *
+          `,
+          [Number(request.id), Number(moderationCase.id)]
+        );
+
+        request = updatedRequest.rows[0] || request;
+      }
+
+      await writeOwnerOpeningAuditEvent(db, {
+        request,
+        eventType: "owner_opening.request_created",
+        admin,
+        data: {
+          moderation_case_id: moderationCase?.id ? Number(moderationCase.id) : null,
+          precheck_valid: true,
+          source: "odoo_core_form",
+          odoo_request_id: odooRequestId,
+          odoo_lead_id: normalized.odoo_lead_id || null,
+        },
+      });
+
+      await db.query("COMMIT");
+
+      return res.status(201).json({
+        ok: true,
+        duplicate: false,
+        request_id: Number(request.id),
+        status: "validated",
+      });
+    }catch(err){
+      try{ await db.query("ROLLBACK"); }catch(e){}
+      console.error("ADMIN_OPEN_OWNER_ODOO_INTAKE_ERROR", err);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_OPEN_OWNER_ODOO_INTAKE_FAILED",
+      });
+    }finally{
+      db.release();
     }
   });
 
