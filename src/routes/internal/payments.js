@@ -1,7 +1,11 @@
 import { Router } from "express";
 import { createNotification } from "../../services/notifications/notificationService.js";
 import { buildCashConfirmNotificationTemplate } from "../../services/notifications/notificationTemplates.js";
-import { createPendingOwnerQrPayment } from "../../money-core/ownerQrPayments.service.js";
+import {
+  createPendingOwnerQrPayment,
+  confirmOwnerQrPayment,
+  rejectOwnerQrPayment
+} from "../../money-core/ownerQrPayments.service.js";
 
 function parsePositiveAmount(value) {
   const amount = Number(value);
@@ -140,6 +144,40 @@ export default function buildPaymentsRouter({
   setBookingConfirmedIfNeeded
 }) {
   const r = Router();
+
+  function resolveOwnerQrActor(req) {
+    return {
+      actorUserId: Number(req.auth?.user_id ?? req.user?.id ?? req.user?.user_id ?? null),
+      actorContext: {
+        auth: req.auth || null,
+        identity: req.identity || null
+      }
+    };
+  }
+
+  function mapOwnerQrErrorStatus(code) {
+    switch (code) {
+      case "OWNER_QR_PAYMENT_NOT_FOUND":
+      case "OWNER_QR_DESTINATION_NOT_FOUND":
+        return 404;
+      case "OWNER_QR_FORBIDDEN":
+      case "OWNER_QR_PAYMENT_ALREADY_CONFIRMED":
+      case "OWNER_QR_PAYMENT_ALREADY_REJECTED":
+      case "OWNER_QR_PAYMENT_INVALID_STATUS":
+      case "OWNER_QR_DESTINATION_INACTIVE":
+      case "OWNER_QR_DESTINATION_BOOKING_MISMATCH":
+      case "OWNER_QR_ACTIVE_CONTRACT_REQUIRED":
+      case "OWNER_QR_INVALID_CONTRACT_TERMS":
+      case "OWNER_QR_PAYMENT_NOT_OWNER_QR":
+      case "OWNER_QR_CONFIRM_WRITE_DISABLED":
+        return 409;
+      case "OWNER_QR_REJECTION_REASON_REQUIRED":
+      case "OWNER_QR_PAYMENT_INVALID_PAYLOAD":
+        return 400;
+      default:
+        return 409;
+    }
+  }
 
   async function confirmDirectPendingCashPayment(db, input = {}) {
     const bookingId = Number(input.booking_id ?? input.bookingId ?? null);
@@ -579,6 +617,72 @@ RETURNING id,booking_id,amount,status,provider,created_at
         code === "OWNER_QR_BOOKING_NOT_FOUND" ||
         code === "OWNER_QR_DESTINATION_NOT_FOUND" ? 404 : 409
       );
+
+      return res.status(statusCode).json({
+        ok: false,
+        error: code
+      });
+    }
+  });
+
+  r.post("/payments/owner-qr/:id/confirm", async (req, res) => {
+    const paymentId = Number(req.params.id ?? req.params.payment_id ?? null);
+    const { actorUserId, actorContext } = resolveOwnerQrActor(req);
+
+    if (!Number.isInteger(paymentId) || paymentId <= 0) {
+      return res.status(404).json({ ok: false, error: "OWNER_QR_PAYMENT_NOT_FOUND" });
+    }
+
+    try {
+      const result = await confirmOwnerQrPayment({
+        pool,
+        paymentId,
+        actorUserId: Number.isInteger(actorUserId) && actorUserId > 0 ? actorUserId : null,
+        actorContext
+      });
+
+      return res.json({
+        ok: true,
+        payment: result.payment,
+        obligations: result.obligations || []
+      });
+    } catch (error) {
+      const code = error?.code || "OWNER_QR_PAYMENT_INVALID_STATUS";
+      const statusCode = mapOwnerQrErrorStatus(code);
+
+      return res.status(statusCode).json({
+        ok: false,
+        error: code
+      });
+    }
+  });
+
+  r.post("/payments/owner-qr/:id/reject", async (req, res) => {
+    const paymentId = Number(req.params.id ?? req.params.payment_id ?? null);
+    const { actorUserId, actorContext } = resolveOwnerQrActor(req);
+    const rejectionReason = req.body?.rejection_reason ?? req.body?.rejectionReason ?? null;
+
+    if (!Number.isInteger(paymentId) || paymentId <= 0) {
+      return res.status(404).json({ ok: false, error: "OWNER_QR_PAYMENT_NOT_FOUND" });
+    }
+
+    try {
+      const result = await rejectOwnerQrPayment({
+        pool,
+        paymentId,
+        actorUserId: Number.isInteger(actorUserId) && actorUserId > 0 ? actorUserId : null,
+        actorContext,
+        rejectionReason
+      });
+
+      return res.json({
+        ok: true,
+        payment: result.payment,
+        obligations: result.obligations || []
+      });
+    } catch (error) {
+      const code = error?.code || "OWNER_QR_PAYMENT_INVALID_STATUS";
+      const statusCode = mapOwnerQrErrorStatus(code);
 
       return res.status(statusCode).json({
         ok: false,
