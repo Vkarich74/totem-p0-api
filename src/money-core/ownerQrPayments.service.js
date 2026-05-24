@@ -344,6 +344,34 @@ function actorHasOwnership(actorContext, ownerType, ownerId) {
   });
 }
 
+function actorCanManageOwnerQrPayment(actorContext, payment, booking) {
+  if (actorHasOwnership(actorContext, payment.collector_owner_type, payment.collector_owner_id)) {
+    return true;
+  }
+
+  const resolvedOwnerType = normalizeText(payment.collector_owner_type);
+  const actorOwnerType = normalizeText(actorContext?.auth?.owner_type);
+  const actorOwnerSlug = normalizeText(
+    actorContext?.auth?.owner_slug
+      || actorContext?.auth?.salon_slug
+      || actorContext?.auth?.master_slug
+  );
+
+  if (!resolvedOwnerType || !actorOwnerType || !actorOwnerSlug) {
+    return false;
+  }
+
+  if (resolvedOwnerType === 'salon') {
+    return actorOwnerType === 'salon' && actorOwnerSlug === normalizeText(booking?.salon_slug);
+  }
+
+  if (resolvedOwnerType === 'master') {
+    return actorOwnerType === 'master' && actorOwnerSlug === normalizeText(booking?.master_slug);
+  }
+
+  return false;
+}
+
 function assertConfirmWriteAllowed() {
   try {
     assertMoneyCoreWriteAllowed();
@@ -397,8 +425,12 @@ SELECT
   b.salon_id,
   b.master_id,
   b.price_snapshot,
-  b.status
+  b.status,
+  sal.slug AS salon_slug,
+  m.slug AS master_slug
 FROM public.bookings b
+LEFT JOIN public.salons sal ON sal.id = b.salon_id
+LEFT JOIN public.masters m ON m.id = b.master_id
 WHERE b.id = $1
 FOR UPDATE
 LIMIT 1
@@ -898,14 +930,6 @@ async function confirmOwnerQrPayment({
     const normalizedStatus = normalizeText(payment.status)?.toLowerCase();
     const expectedSourceUid = `owner_qr:payment:${payment.id}`;
 
-    if (normalizedProvider !== OWNER_QR_DESTINATION_TYPE && normalizedMethod !== OWNER_QR_DESTINATION_TYPE) {
-      throw createError('OWNER_QR_PAYMENT_NOT_OWNER_QR', 'Payment is not owner_qr', 409);
-    }
-
-    if (!actorHasOwnership(actor, payment.collector_owner_type, payment.collector_owner_id)) {
-      throw createError('OWNER_QR_FORBIDDEN', 'Forbidden', 403);
-    }
-
     if (normalizedStatus === 'confirmed') {
       if (normalizeText(payment.money_core_source_uid) === expectedSourceUid) {
         const obligations = await loadObligationsByPayment(client, payment.id);
@@ -940,6 +964,14 @@ async function confirmOwnerQrPayment({
     const booking = await loadBookingForUpdate(client, payment.booking_id);
     if (!booking) {
       throw createError('OWNER_QR_PAYMENT_NOT_FOUND', 'Booking not found', 404);
+    }
+
+    if (normalizedProvider !== OWNER_QR_DESTINATION_TYPE && normalizedMethod !== OWNER_QR_DESTINATION_TYPE) {
+      throw createError('OWNER_QR_PAYMENT_NOT_OWNER_QR', 'Payment is not owner_qr', 409);
+    }
+
+    if (!actorCanManageOwnerQrPayment(actor, payment, booking)) {
+      throw createError('OWNER_QR_FORBIDDEN', 'Forbidden', 403);
     }
 
     const destination = await loadDestinationForUpdate(client, payment.qr_destination_id);
