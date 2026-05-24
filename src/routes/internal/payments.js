@@ -156,6 +156,93 @@ export default function buildPaymentsRouter({
     };
   }
 
+  async function resolveOwnerQrActorWithFallback(req) {
+    const resolved = resolveOwnerQrActor(req);
+    const actorUserId = resolved.actorUserId;
+    const identity = resolved.actorContext.identity || {};
+    const auth = resolved.actorContext.auth || {};
+
+    const hasOwnership = Array.isArray(identity.ownership) && identity.ownership.length > 0;
+    if (hasOwnership) {
+      return resolved;
+    }
+
+    if (!Number.isInteger(actorUserId) || actorUserId <= 0) {
+      return resolved;
+    }
+
+    const authUserResult = await pool.query(
+      `
+SELECT id, role, salon_slug, master_slug
+FROM public.auth_users
+WHERE id = $1
+LIMIT 1
+`,
+      [actorUserId]
+    );
+
+    const authUser = authUserResult.rows[0] || null;
+    if (!authUser) {
+      return resolved;
+    }
+
+    const fallbackIdentity = {
+      user_id: actorUserId,
+      role: String(authUser.role || auth.role || '').trim() || null,
+      salons: [],
+      masters: [],
+      ownership: [],
+    };
+
+    if (String(authUser.role || '').trim() === 'salon_admin' && String(authUser.salon_slug || '').trim()) {
+      const salonResult = await pool.query(
+        `
+SELECT id, slug
+FROM public.salons
+WHERE slug = $1
+LIMIT 1
+`,
+        [String(authUser.salon_slug).trim()]
+      );
+      const salon = salonResult.rows[0] || null;
+      if (salon) {
+        fallbackIdentity.salons.push(Number(salon.id));
+        fallbackIdentity.ownership.push({
+          owner_type: 'salon',
+          owner_id: Number(salon.id)
+        });
+      }
+    }
+
+    if (String(authUser.role || '').trim() === 'master' && String(authUser.master_slug || '').trim()) {
+      const masterResult = await pool.query(
+        `
+SELECT id, slug
+FROM public.masters
+WHERE slug = $1
+LIMIT 1
+`,
+        [String(authUser.master_slug).trim()]
+      );
+      const master = masterResult.rows[0] || null;
+      if (master) {
+        fallbackIdentity.masters.push(Number(master.id));
+        fallbackIdentity.ownership.push({
+          owner_type: 'master',
+          owner_id: Number(master.id)
+        });
+      }
+    }
+
+    return {
+      actorUserId,
+      actorContext: {
+        auth,
+        identity: fallbackIdentity
+      }
+    };
+  }
+
   function mapOwnerQrErrorStatus(code) {
     switch (code) {
       case "OWNER_QR_PAYMENT_NOT_FOUND":
@@ -658,7 +745,7 @@ RETURNING id,booking_id,amount,status,provider,created_at
 
   r.post("/payments/owner-qr/:id/confirm", async (req, res) => {
     const paymentId = Number(req.params.id ?? req.params.payment_id ?? null);
-    const { actorUserId, actorContext } = resolveOwnerQrActor(req);
+    const { actorUserId, actorContext } = await resolveOwnerQrActorWithFallback(req);
 
     if (!Number.isInteger(paymentId) || paymentId <= 0) {
       return res.status(404).json({ ok: false, error: "OWNER_QR_PAYMENT_NOT_FOUND" });
@@ -690,7 +777,7 @@ RETURNING id,booking_id,amount,status,provider,created_at
 
   r.post("/payments/owner-qr/:id/reject", async (req, res) => {
     const paymentId = Number(req.params.id ?? req.params.payment_id ?? null);
-    const { actorUserId, actorContext } = resolveOwnerQrActor(req);
+    const { actorUserId, actorContext } = await resolveOwnerQrActorWithFallback(req);
     const rejectionReason = req.body?.rejection_reason ?? req.body?.rejectionReason ?? null;
 
     if (!Number.isInteger(paymentId) || paymentId <= 0) {
