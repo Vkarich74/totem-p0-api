@@ -47,6 +47,13 @@ import {
   upsertWithdrawSettings,
 } from '../../money-core/withdrawDestinations.service.js';
 import {
+  listOwnerQrDestinations,
+  getActiveOwnerQrDestination,
+  createOwnerQrDestination,
+  updateOwnerQrDestination,
+  deactivateOwnerQrDestination,
+} from '../../money-core/ownerQrDestinations.service.js';
+import {
   listWithdrawRequests,
   getWithdrawRequestById,
   createWithdrawRequest,
@@ -162,6 +169,173 @@ async function resolveMoneyCoreOwnerBySlug(pool, ownerType, slug) {
 
 function buildMoneyCoreRouter(pool) {
   const r = express.Router();
+
+  function sendOwnerQrError(res, err, fallbackError = 'OWNER_QR_DESTINATION_INVALID_PAYLOAD', fallbackStatusCode = 400) {
+    if (err && (String(err.code || '').startsWith('OWNER_QR_') || String(err.code || '').startsWith('MONEY_CORE_'))) {
+      return safeJson(res, err.statusCode || fallbackStatusCode, {
+        ok: false,
+        error: err.code,
+        message: err.message,
+      });
+    }
+
+    if (err && err.statusCode) {
+      return safeJson(res, err.statusCode, {
+        ok: false,
+        error: err.code || fallbackError,
+        message: err.message,
+      });
+    }
+
+    return null;
+  }
+
+  function registerOwnerQrDestinationRoutes(ownerType, basePath) {
+    r.get(`${basePath}/money-core/owner-qr-destinations`, async (req, res, next) => {
+      try {
+        const owner = await resolveMoneyCoreOwnerBySlug(pool, ownerType, req.params.slug);
+
+        if (!owner.ok) {
+          return safeJson(res, owner.statusCode || 400, {
+            ok: false,
+            error: owner.error,
+          });
+        }
+
+        const destinations = await listOwnerQrDestinations(pool, {
+          ownerType: owner.owner_type,
+          ownerId: owner.owner_id,
+        });
+
+        return safeJson(res, 200, {
+          ok: true,
+          destinations,
+        });
+      } catch (err) {
+        return next(err);
+      }
+    });
+
+    r.get(`${basePath}/money-core/owner-qr-destinations/active`, async (req, res, next) => {
+      try {
+        const owner = await resolveMoneyCoreOwnerBySlug(pool, ownerType, req.params.slug);
+
+        if (!owner.ok) {
+          return safeJson(res, owner.statusCode || 400, {
+            ok: false,
+            error: owner.error,
+          });
+        }
+
+        const destination = await getActiveOwnerQrDestination(pool, {
+          ownerType: owner.owner_type,
+          ownerId: owner.owner_id,
+        });
+
+        return safeJson(res, 200, {
+          ok: true,
+          destination,
+        });
+      } catch (err) {
+        return next(err);
+      }
+    });
+
+    r.post(`${basePath}/money-core/owner-qr-destinations`, async (req, res, next) => {
+      try {
+        const owner = await resolveMoneyCoreOwnerBySlug(pool, ownerType, req.params.slug);
+
+        if (!owner.ok) {
+          return safeJson(res, owner.statusCode || 400, {
+            ok: false,
+            error: owner.error,
+          });
+        }
+
+        const destination = await createOwnerQrDestination({
+          pool,
+          ownerType: owner.owner_type,
+          ownerId: owner.owner_id,
+          payload: req.body || {},
+          createdByUserId: req.user?.id ?? req.user?.user_id ?? null,
+        });
+
+        return safeJson(res, 200, {
+          ok: true,
+          destination,
+        });
+      } catch (err) {
+        const handled = sendOwnerQrError(res, err);
+        if (handled) {
+          return handled;
+        }
+        return next(err);
+      }
+    });
+
+    r.patch(`${basePath}/money-core/owner-qr-destinations/:id`, async (req, res, next) => {
+      try {
+        const owner = await resolveMoneyCoreOwnerBySlug(pool, ownerType, req.params.slug);
+
+        if (!owner.ok) {
+          return safeJson(res, owner.statusCode || 400, {
+            ok: false,
+            error: owner.error,
+          });
+        }
+
+        const destination = await updateOwnerQrDestination({
+          pool,
+          ownerType: owner.owner_type,
+          ownerId: owner.owner_id,
+          destinationId: req.params.id,
+          payload: req.body || {},
+        });
+
+        return safeJson(res, 200, {
+          ok: true,
+          destination,
+        });
+      } catch (err) {
+        const handled = sendOwnerQrError(res, err, 'OWNER_QR_DESTINATION_INVALID_OWNER', 403);
+        if (handled) {
+          return handled;
+        }
+        return next(err);
+      }
+    });
+
+    r.patch(`${basePath}/money-core/owner-qr-destinations/:id/deactivate`, async (req, res, next) => {
+      try {
+        const owner = await resolveMoneyCoreOwnerBySlug(pool, ownerType, req.params.slug);
+
+        if (!owner.ok) {
+          return safeJson(res, owner.statusCode || 400, {
+            ok: false,
+            error: owner.error,
+          });
+        }
+
+        const destination = await deactivateOwnerQrDestination({
+          pool,
+          ownerType: owner.owner_type,
+          ownerId: owner.owner_id,
+          destinationId: req.params.id,
+        });
+
+        return safeJson(res, 200, {
+          ok: true,
+          destination,
+        });
+      } catch (err) {
+        const handled = sendOwnerQrError(res, err, 'OWNER_QR_DESTINATION_INVALID_OWNER', 403);
+        if (handled) {
+          return handled;
+        }
+        return next(err);
+      }
+    });
+  }
 
   r.get('/money-core/health', async (req, res, next) => {
     try {
@@ -1500,6 +1674,8 @@ function buildMoneyCoreRouter(pool) {
     }
   });
 
+  registerOwnerQrDestinationRoutes('salon', '/salons/:slug');
+
   r.get('/salons/:slug/money-core/withdraw-settings', async (req, res, next) => {
     try {
       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'salon', req.params.slug);
@@ -1692,6 +1868,8 @@ function buildMoneyCoreRouter(pool) {
       return next(err);
     }
   });
+
+  registerOwnerQrDestinationRoutes('master', '/masters/:slug');
 
   r.get('/masters/:slug/money-core/withdraw-settings', async (req, res, next) => {
     try {
