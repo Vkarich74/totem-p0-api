@@ -100,6 +100,157 @@ function normalizeDestinationRow(row) {
   };
 }
 
+function normalizeOwnerQrOptionsDestinationRow(row) {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    owner_type: row.owner_type,
+    owner_id: row.owner_id,
+    destination_type: row.destination_type,
+    label: row.label,
+    qr_image_url: row.qr_image_url,
+    bank_name: row.bank_name,
+    account_name: row.account_name,
+    phone_or_account: row.phone_or_account,
+  };
+}
+
+function normalizeOwnerQrPaymentReadRow(row) {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    booking_id: row.booking_id ?? null,
+    amount: row.amount,
+    provider: row.provider,
+    method: row.method,
+    confirmation_mode: row.confirmation_mode,
+    status: row.status,
+    collector_owner_type: row.collector_owner_type,
+    collector_owner_id: row.collector_owner_id,
+    qr_destination_id: row.qr_destination_id,
+    confirmed_at: row.confirmed_at ?? null,
+    rejected_at: row.rejected_at ?? null,
+    rejection_reason: row.rejection_reason ?? null,
+    created_at: row.created_at,
+    updated_at: row.updated_at ?? null,
+    client_name: row.client_name ?? null,
+    client_phone: row.client_phone ?? null,
+    salon_id: row.salon_id ?? null,
+    master_id: row.master_id ?? null,
+    service_id: row.service_id ?? null,
+    booking_status: row.booking_status ?? null,
+    booking_start_at: row.booking_start_at ?? null,
+    booking_end_at: row.booking_end_at ?? null,
+    salon_name: row.salon_name ?? null,
+    master_name: row.master_name ?? null,
+    service_name: row.service_name ?? null,
+  };
+}
+
+async function getOwnerQrPaymentOptions({ pool, bookingId }) {
+  if (!pool || typeof pool.query !== 'function') {
+    throw createError('OWNER_QR_PAYMENT_INVALID_PAYLOAD', 'Pool is required', 500);
+  }
+
+  const normalizedBookingId = normalizePositiveInt(bookingId);
+  if (!normalizedBookingId) {
+    throw createError('OWNER_QR_PAYMENT_INVALID_PAYLOAD', 'Booking id is required', 400);
+  }
+
+  const bookingResult = await pool.query(
+    `
+    SELECT
+      b.id,
+      b.salon_id,
+      b.master_id
+    FROM public.bookings b
+    WHERE b.id = $1
+    LIMIT 1
+    `,
+    [normalizedBookingId]
+  );
+
+  const booking = bookingResult.rows[0] || null;
+  if (!booking) {
+    throw createError('OWNER_QR_BOOKING_NOT_FOUND', 'Booking not found', 404);
+  }
+
+  const destinationsResult = await pool.query(
+    `
+    SELECT *
+    FROM public.owner_payment_destinations
+    WHERE destination_type = $1
+      AND is_active = true
+      AND (
+        (owner_type = 'salon' AND owner_id = $2)
+        OR (owner_type = 'master' AND owner_id = $3)
+      )
+    ORDER BY owner_type ASC, created_at DESC, id DESC
+    `,
+    [OWNER_QR_DESTINATION_TYPE, booking.salon_id, booking.master_id]
+  );
+
+  return {
+    booking_id: booking.id,
+    destinations: destinationsResult.rows.map(normalizeOwnerQrOptionsDestinationRow),
+  };
+}
+
+async function listOwnerQrPaymentsForOwner({ pool, ownerType, ownerId }) {
+  const owner = normalizeOwner(ownerType, ownerId);
+
+  const result = await pool.query(
+    `
+    SELECT
+      p.id,
+      p.booking_id,
+      p.amount,
+      p.provider,
+      p.method,
+      p.confirmation_mode,
+      p.status,
+      p.collector_owner_type,
+      p.collector_owner_id,
+      p.qr_destination_id,
+      p.confirmed_at,
+      p.rejected_at,
+      p.rejection_reason,
+      p.created_at,
+      p.updated_at,
+      b.status AS booking_status,
+      b.salon_id,
+      b.master_id,
+      b.service_id,
+      b.start_at AS booking_start_at,
+      b.end_at AS booking_end_at,
+      c.name AS client_name,
+      c.phone AS client_phone,
+      s.name AS service_name,
+      sal.name AS salon_name,
+      m.name AS master_name
+    FROM public.payments p
+    LEFT JOIN public.bookings b ON b.id = p.booking_id
+    LEFT JOIN public.clients c ON c.id = b.client_id
+    LEFT JOIN public.services s ON s.id = b.service_id
+    LEFT JOIN public.salons sal ON sal.id = b.salon_id
+    LEFT JOIN public.masters m ON m.id = b.master_id
+    WHERE p.collector_owner_type = $1
+      AND p.collector_owner_id = $2
+    ORDER BY p.created_at DESC, p.id DESC
+    LIMIT 200
+    `,
+    [owner.owner_type, owner.owner_id]
+  );
+
+  return result.rows.map(normalizeOwnerQrPaymentReadRow);
+}
+
 function normalizeObligationRow(row) {
   if (!row) {
     return null;
@@ -1050,4 +1201,6 @@ export {
   createPendingOwnerQrPayment,
   confirmOwnerQrPayment,
   rejectOwnerQrPayment,
+  getOwnerQrPaymentOptions,
+  listOwnerQrPaymentsForOwner,
 };

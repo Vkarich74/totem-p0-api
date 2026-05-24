@@ -4,7 +4,8 @@ import { buildCashConfirmNotificationTemplate } from "../../services/notificatio
 import {
   createPendingOwnerQrPayment,
   confirmOwnerQrPayment,
-  rejectOwnerQrPayment
+  rejectOwnerQrPayment,
+  getOwnerQrPaymentOptions
 } from "../../money-core/ownerQrPayments.service.js";
 
 function parsePositiveAmount(value) {
@@ -159,6 +160,7 @@ export default function buildPaymentsRouter({
     switch (code) {
       case "OWNER_QR_PAYMENT_NOT_FOUND":
       case "OWNER_QR_DESTINATION_NOT_FOUND":
+      case "OWNER_QR_BOOKING_NOT_FOUND":
         return 404;
       case "OWNER_QR_FORBIDDEN":
       case "OWNER_QR_PAYMENT_ALREADY_CONFIRMED":
@@ -178,6 +180,35 @@ export default function buildPaymentsRouter({
         return 409;
     }
   }
+
+  r.get("/payments/owner-qr/options", async (req, res) => {
+    const bookingId = Number(req.query?.booking_id ?? req.query?.bookingId ?? null);
+
+    if (!Number.isInteger(bookingId) || bookingId <= 0) {
+      return res.status(400).json({ ok: false, error: "OWNER_QR_PAYMENT_INVALID_PAYLOAD" });
+    }
+
+    try {
+      const result = await getOwnerQrPaymentOptions({
+        pool,
+        bookingId
+      });
+
+      return res.json({
+        ok: true,
+        booking_id: result.booking_id,
+        destinations: result.destinations || []
+      });
+    } catch (error) {
+      const code = error?.code || "OWNER_QR_PAYMENT_INVALID_PAYLOAD";
+      const statusCode = mapOwnerQrErrorStatus(code);
+
+      return res.status(statusCode).json({
+        ok: false,
+        error: code
+      });
+    }
+  });
 
   async function confirmDirectPendingCashPayment(db, input = {}) {
     const bookingId = Number(input.booking_id ?? input.bookingId ?? null);

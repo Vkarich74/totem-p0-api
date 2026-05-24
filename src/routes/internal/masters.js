@@ -9,6 +9,9 @@ import {
 revokeOwnerPushSubscription,
 saveOwnerPushSubscription
 } from "../../services/push/webPushService.js";
+import {
+listOwnerQrPaymentsForOwner
+} from "../../money-core/ownerQrPayments.service.js";
 
 export default function buildMastersRouter(pool, internalReadRateLimit){
 
@@ -1835,6 +1838,51 @@ error:"MASTER_PENDING_CASH_BOOKINGS_FAILED"
 });
 
 }
+});
+
+/* MASTER OWNER QR PAYMENTS */
+r.get("/masters/:slug/owner-qr-payments", internalReadRateLimit, async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const master = await pool.query(
+`SELECT id FROM masters WHERE slug=$1`,
+[slug]
+);
+
+if(!master.rows.length){
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const masterId = master.rows[0].id;
+
+if(!hasMasterOwnership(req, masterId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
+const payments = await listOwnerQrPaymentsForOwner(pool, {
+ownerType: "master",
+ownerId: masterId
+});
+
+res.json({
+ok:true,
+payments
+});
+
+}catch(err){
+
+console.error("MASTER_OWNER_QR_PAYMENTS_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"MASTER_OWNER_QR_PAYMENTS_FETCH_FAILED"
+});
+
+}
+
 });
 
 /*

@@ -74,6 +74,9 @@ import {
   resolveReconciliationMismatch,
 } from '../../money-core/reconciliation.service.js';
 import {
+  listOwnerObligations,
+} from '../../money-core/ownerQrObligations.service.js';
+import {
   buildAdminMoneyCoreOverview,
   listAdminOwnerBalances,
   listAdminWithdrawRequests,
@@ -165,6 +168,128 @@ async function resolveMoneyCoreOwnerBySlug(pool, ownerType, slug) {
     owner_id: ownerRow.id,
     owner: ownerRow,
   };
+}
+
+async function resolveMoneyCoreOwnerById(pool, ownerType, ownerId) {
+  const normalizedOwnerType = String(ownerType || '').trim().toLowerCase();
+  const normalizedOwnerId = Number.parseInt(String(ownerId || '').trim(), 10);
+
+  if (!normalizedOwnerType || !['salon', 'master', 'system'].includes(normalizedOwnerType)) {
+    return {
+      ok: false,
+      statusCode: 400,
+      error: 'OWNER_TYPE_INVALID',
+    };
+  }
+
+  if (!Number.isInteger(normalizedOwnerId) || normalizedOwnerId <= 0) {
+    return {
+      ok: false,
+      statusCode: 400,
+      error: 'OWNER_ID_REQUIRED',
+    };
+  }
+
+  if (normalizedOwnerType === 'system') {
+    if (normalizedOwnerId !== 900001) {
+      return {
+        ok: false,
+        statusCode: 404,
+        error: 'OWNER_NOT_FOUND',
+      };
+    }
+
+    return {
+      ok: true,
+      owner_type: 'system',
+      owner_id: 900001,
+      owner: { id: 900001, owner_type: 'system' },
+    };
+  }
+
+  const ownerQuery =
+    normalizedOwnerType === 'salon'
+      ? await pool.query(
+          'SELECT id, slug, name, enabled, status FROM public.salons WHERE id = $1 LIMIT 1',
+          [normalizedOwnerId]
+        )
+      : await pool.query(
+          'SELECT id, slug, name, active FROM public.masters WHERE id = $1 LIMIT 1',
+          [normalizedOwnerId]
+        );
+
+  const ownerRow = ownerQuery.rows[0] || null;
+
+  if (!ownerRow) {
+    return {
+      ok: false,
+      statusCode: 404,
+      error: 'OWNER_NOT_FOUND',
+    };
+  }
+
+  return {
+    ok: true,
+    owner_type: normalizedOwnerType,
+    owner_id: ownerRow.id,
+    owner: ownerRow,
+  };
+}
+
+function getIdentityOwnerIds(identity, ownerType) {
+  const ids = new Set();
+
+  if (!identity || !ownerType) {
+    return ids;
+  }
+
+  const normalizedOwnerType = String(ownerType || '').trim().toLowerCase();
+
+  const sources = [];
+  if (Array.isArray(identity?.ownership)) {
+    sources.push(...identity.ownership);
+  }
+
+  for (const item of sources) {
+    if (!item || typeof item !== 'object') {
+      continue;
+    }
+
+    const itemOwnerType = String(item.owner_type || item.type || '').trim().toLowerCase();
+    if (itemOwnerType !== normalizedOwnerType) {
+      continue;
+    }
+
+    const rawId = item.owner_id ?? item.salon_id ?? item.master_id ?? item.id;
+    const parsedId = Number.parseInt(String(rawId || '').trim(), 10);
+    if (Number.isInteger(parsedId) && parsedId > 0) {
+      ids.add(parsedId);
+    }
+  }
+
+  return ids;
+}
+
+function hasMoneyCoreOwnerAccess(req, ownerType, ownerId) {
+  if (req?.auth?.role === 'system') {
+    return true;
+  }
+
+  const normalizedOwnerType = String(ownerType || '').trim().toLowerCase();
+  const normalizedOwnerId = Number.parseInt(String(ownerId || '').trim(), 10);
+
+  if (!normalizedOwnerType || !Number.isInteger(normalizedOwnerId) || normalizedOwnerId <= 0) {
+    return false;
+  }
+
+  if (normalizedOwnerType === 'system') {
+    return false;
+  }
+
+  const identityOwnerIds = getIdentityOwnerIds(req?.identity, normalizedOwnerType);
+  const authOwnerIds = getIdentityOwnerIds(req?.auth, normalizedOwnerType);
+
+  return identityOwnerIds.has(normalizedOwnerId) || authOwnerIds.has(normalizedOwnerId);
 }
 
 function buildMoneyCoreRouter(pool) {
@@ -804,6 +929,42 @@ function buildMoneyCoreRouter(pool) {
       return safeJson(res, 200, {
         ok: true,
         entries,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/owners/:ownerType/:ownerId/owner-obligations', async (req, res, next) => {
+    try {
+      const owner = await resolveMoneyCoreOwnerById(pool, req.params.ownerType, req.params.ownerId);
+
+      if (!owner.ok) {
+        return safeJson(res, owner.statusCode || 400, {
+          ok: false,
+          error: owner.error,
+        });
+      }
+
+      if (!hasMoneyCoreOwnerAccess(req, owner.owner_type, owner.owner_id)) {
+        return safeJson(res, 403, {
+          ok: false,
+          error: 'OWNER_QR_FORBIDDEN',
+        });
+      }
+
+      const data = await listOwnerObligations(pool, {
+        ownerType: owner.owner_type,
+        ownerId: owner.owner_id,
+      });
+
+      return safeJson(res, 200, {
+        ok: true,
+        owner_type: data.owner_type,
+        owner_id: data.owner_id,
+        outgoing_open_total: data.outgoing_open_total,
+        incoming_open_total: data.incoming_open_total,
+        rows: data.rows,
       });
     } catch (err) {
       return next(err);

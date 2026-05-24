@@ -8,6 +8,9 @@ import {
 revokeOwnerPushSubscription,
 saveOwnerPushSubscription
 } from "../../services/push/webPushService.js";
+import {
+listOwnerQrPaymentsForOwner
+} from "../../money-core/ownerQrPayments.service.js";
 
 export default function buildSalonsRouter(pool, internalReadRateLimit){
 
@@ -2265,6 +2268,51 @@ console.error("SALON_PAYMENTS_ERROR",err);
 res.status(500).json({
 ok:false,
 error:"SALON_PAYMENTS_FETCH_FAILED"
+});
+
+}
+
+});
+
+/* SALON OWNER QR PAYMENTS */
+r.get("/salons/:slug/owner-qr-payments", internalReadRateLimit, async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id FROM salons WHERE slug=$1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonId = salon.rows[0].id;
+
+if(!hasSalonOwnership(req, salonId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
+const payments = await listOwnerQrPaymentsForOwner(pool, {
+ownerType: "salon",
+ownerId: salonId
+});
+
+res.json({
+ok:true,
+payments
+});
+
+}catch(err){
+
+console.error("SALON_OWNER_QR_PAYMENTS_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"SALON_OWNER_QR_PAYMENTS_FETCH_FAILED"
 });
 
 }
