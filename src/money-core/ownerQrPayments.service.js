@@ -425,12 +425,8 @@ SELECT
   b.salon_id,
   b.master_id,
   b.price_snapshot,
-  b.status,
-  sal.slug AS salon_slug,
-  m.slug AS master_slug
+  b.status
 FROM public.bookings b
-LEFT JOIN public.salons sal ON sal.id = b.salon_id
-LEFT JOIN public.masters m ON m.id = b.master_id
 WHERE b.id = $1
 FOR UPDATE
 LIMIT 1
@@ -439,6 +435,34 @@ LIMIT 1
   );
 
   return result.rows[0] || null;
+}
+
+async function loadBookingOwnerSlugs(client, booking) {
+  const [salonResult, masterResult] = await Promise.all([
+    client.query(
+      `
+SELECT slug
+FROM public.salons
+WHERE id = $1
+LIMIT 1
+`,
+      [normalizePositiveInt(booking?.salon_id)]
+    ),
+    client.query(
+      `
+SELECT slug
+FROM public.masters
+WHERE id = $1
+LIMIT 1
+`,
+      [normalizePositiveInt(booking?.master_id)]
+    ),
+  ]);
+
+  return {
+    salon_slug: salonResult.rows[0]?.slug || null,
+    master_slug: masterResult.rows[0]?.slug || null,
+  };
 }
 
 async function loadDestinationForUpdate(client, destinationId) {
@@ -975,11 +999,17 @@ async function confirmOwnerQrPayment({
       throw createError('OWNER_QR_PAYMENT_NOT_FOUND', 'Booking not found', 404);
     }
 
+    const bookingOwnerSlugs = await loadBookingOwnerSlugs(client, booking);
+    const bookingWithOwnerSlugs = {
+      ...booking,
+      ...bookingOwnerSlugs,
+    };
+
     if (normalizedProvider !== OWNER_QR_DESTINATION_TYPE && normalizedMethod !== OWNER_QR_DESTINATION_TYPE) {
       throw createError('OWNER_QR_PAYMENT_NOT_OWNER_QR', 'Payment is not owner_qr', 409);
     }
 
-    if (!actorCanManageOwnerQrPayment(actor, payment, booking)) {
+    if (!actorCanManageOwnerQrPayment(actor, payment, bookingWithOwnerSlugs)) {
       throw createError('OWNER_QR_FORBIDDEN', 'Forbidden', 403);
     }
 
@@ -1150,7 +1180,18 @@ async function rejectOwnerQrPayment({
       throw createError('OWNER_QR_PAYMENT_NOT_OWNER_QR', 'Payment is not owner_qr', 409);
     }
 
-    if (!actorCanManageOwnerQrPayment(actor, payment, booking)) {
+    const booking = await loadBookingForUpdate(client, payment.booking_id);
+    if (!booking) {
+      throw createError('OWNER_QR_PAYMENT_NOT_FOUND', 'Booking not found', 404);
+    }
+
+    const bookingOwnerSlugs = await loadBookingOwnerSlugs(client, booking);
+    const bookingWithOwnerSlugs = {
+      ...booking,
+      ...bookingOwnerSlugs,
+    };
+
+    if (!actorCanManageOwnerQrPayment(actor, payment, bookingWithOwnerSlugs)) {
       throw createError('OWNER_QR_FORBIDDEN', 'Forbidden', 403);
     }
 
