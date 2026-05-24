@@ -260,7 +260,7 @@ async function listOwnerQrPaymentsForOwner({ pool, ownerType, ownerId }) {
     ORDER BY p.created_at DESC, p.id DESC
     LIMIT 200
     `,
-    [owner.owner_type, owner.owner_id]
+    [owner.ownerType, owner.ownerId]
   );
 
   return result.rows.map(normalizeOwnerQrPaymentReadRow);
