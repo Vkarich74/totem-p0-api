@@ -46,6 +46,21 @@ function createError(code, message, statusCode = 400) {
   return error;
 }
 
+function normalizeOwner(ownerType, ownerId) {
+  const normalizedType = String(ownerType || '').trim();
+  const normalizedId = Number(ownerId);
+
+  if (!['salon', 'master'].includes(normalizedType)) {
+    throw createError('OWNER_QR_INVALID_OWNER_TYPE', 'Invalid owner type', 400);
+  }
+
+  if (!Number.isInteger(normalizedId) || normalizedId <= 0) {
+    throw createError('OWNER_QR_INVALID_OWNER_ID', 'Invalid owner id', 400);
+  }
+
+  return { ownerType: normalizedType, ownerId: normalizedId };
+}
+
 function normalizePaymentRow(row) {
   if (!row) {
     return null;

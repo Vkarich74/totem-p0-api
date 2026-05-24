@@ -2296,7 +2296,8 @@ if(!hasSalonOwnership(req, salonId)){
 return res.status(403).json({ok:false,error:"FORBIDDEN"});
 }
 
-const payments = await listOwnerQrPaymentsForOwner(pool, {
+const payments = await listOwnerQrPaymentsForOwner({
+pool,
 ownerType: "salon",
 ownerId: salonId
 });
