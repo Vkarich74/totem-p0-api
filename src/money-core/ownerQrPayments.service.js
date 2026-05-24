@@ -662,7 +662,16 @@ INSERT INTO public.money_owner_obligations (
 ) VALUES (
   $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb
 )
-ON CONFLICT DO NOTHING
+ON CONFLICT (
+  source_type,
+  source_id,
+  from_owner_type,
+  from_owner_id,
+  to_owner_type,
+  to_owner_id,
+  obligation_type,
+  COALESCE(split_role, ''::text)
+) DO NOTHING
 `,
       [
         obligation.source_type,
