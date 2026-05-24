@@ -1008,7 +1008,7 @@ async function confirmOwnerQrPayment({
       throw createError('OWNER_QR_DESTINATION_BOOKING_MISMATCH', 'Destination owner mismatch', 409);
     }
 
-    if (!actorHasOwnership(actor, payment.collector_owner_type, payment.collector_owner_id)) {
+    if (!actorCanManageOwnerQrPayment(actor, payment, booking)) {
       throw createError('OWNER_QR_FORBIDDEN', 'Forbidden', 403);
     }
 
@@ -1141,7 +1141,7 @@ async function rejectOwnerQrPayment({
       throw createError('OWNER_QR_PAYMENT_NOT_OWNER_QR', 'Payment is not owner_qr', 409);
     }
 
-    if (!actorHasOwnership(actor, payment.collector_owner_type, payment.collector_owner_id)) {
+    if (!actorCanManageOwnerQrPayment(actor, payment, booking)) {
       throw createError('OWNER_QR_FORBIDDEN', 'Forbidden', 403);
     }
 
