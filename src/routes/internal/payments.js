@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { createNotification } from "../../services/notifications/notificationService.js";
 import { buildCashConfirmNotificationTemplate } from "../../services/notifications/notificationTemplates.js";
+import { createPendingOwnerQrPayment } from "../../money-core/ownerQrPayments.service.js";
 
 function parsePositiveAmount(value) {
   const amount = Number(value);
@@ -546,6 +547,43 @@ RETURNING id,booking_id,amount,status,provider,created_at
       });
     } finally {
       db.release();
+    }
+  });
+
+  r.post("/payments/owner-qr/pending", async (req, res) => {
+    const body = req.body || {};
+    const bookingId = Number(body.booking_id ?? body.bookingId ?? null);
+    const qrDestinationId = Number(body.qr_destination_id ?? body.qrDestinationId ?? null);
+    const createdByUserId = Number(req.user?.id ?? req.user?.user_id ?? null);
+
+    if (!Number.isInteger(bookingId) || bookingId <= 0 || !Number.isInteger(qrDestinationId) || qrDestinationId <= 0) {
+      return res.status(400).json({ ok: false, error: "OWNER_QR_PAYMENT_INVALID_PAYLOAD" });
+    }
+
+    try {
+      const result = await createPendingOwnerQrPayment({
+        pool,
+        bookingId,
+        qrDestinationId,
+        createdByUserId: Number.isInteger(createdByUserId) && createdByUserId > 0 ? createdByUserId : null
+      });
+
+      return res.json({
+        ok: true,
+        payment: result.payment,
+        qr_destination: result.qr_destination
+      });
+    } catch (error) {
+      const code = error?.code || "OWNER_QR_PAYMENT_INVALID_PAYLOAD";
+      const statusCode = error?.statusCode || (
+        code === "OWNER_QR_BOOKING_NOT_FOUND" ||
+        code === "OWNER_QR_DESTINATION_NOT_FOUND" ? 404 : 409
+      );
+
+      return res.status(statusCode).json({
+        ok: false,
+        error: code
+      });
     }
   });
 
