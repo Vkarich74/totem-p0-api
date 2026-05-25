@@ -578,7 +578,7 @@ function buildMoneyCoreRouter(pool) {
           return sendOwnerQrAuthError(res);
         }
 
-        const destination = await deleteOwnerQrDestinationImage({
+        const deletionResult = await deleteOwnerQrDestinationImage({
           pool,
           ownerType: owner.owner_type,
           ownerId: owner.owner_id,
@@ -588,7 +588,8 @@ function buildMoneyCoreRouter(pool) {
 
         return safeJson(res, 200, {
           ok: true,
-          destination,
+          no_image: !!(deletionResult && deletionResult.no_image),
+          destination: deletionResult && deletionResult.destination ? deletionResult.destination : deletionResult,
         });
       } catch (err) {
         const handled = sendOwnerQrError(res, err, 'OWNER_QR_IMAGE_INVALID_FILE', 400);

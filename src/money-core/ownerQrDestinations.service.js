@@ -489,6 +489,15 @@ async function deleteOwnerQrDestinationImage({ pool, ownerType, ownerId, ownerSl
     });
 
     const publicId = getOwnerQrCloudinaryPublicId(current.metadata_json || {});
+    const hasImage = Boolean(normalizeText(current.qr_image_url) || publicId);
+    if (!hasImage) {
+      await client.query('COMMIT');
+      return {
+        destination: current,
+        no_image: true,
+      };
+    }
+
     if (publicId) {
       await deleteOwnerQrImage(publicId);
     }
@@ -512,7 +521,10 @@ async function deleteOwnerQrDestinationImage({ pool, ownerType, ownerId, ownerSl
     );
 
     await client.query('COMMIT');
-    return normalizeDestinationRow(updateResult.rows[0] || null);
+    return {
+      destination: normalizeDestinationRow(updateResult.rows[0] || null),
+      no_image: false,
+    };
   } catch (error) {
     try {
       await client.query('ROLLBACK');
