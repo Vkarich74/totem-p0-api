@@ -52,7 +52,12 @@ import {
   createOwnerQrDestination,
   updateOwnerQrDestination,
   deactivateOwnerQrDestination,
+  uploadOwnerQrDestinationImage,
+  deleteOwnerQrDestinationImage,
 } from '../../money-core/ownerQrDestinations.service.js';
+import {
+  createOwnerQrImageUploadMiddleware,
+} from '../../services/cloudinaryOwnerQrUpload.js';
 import {
   listWithdrawRequests,
   getWithdrawRequestById,
@@ -294,9 +299,10 @@ function hasMoneyCoreOwnerAccess(req, ownerType, ownerId) {
 
 function buildMoneyCoreRouter(pool) {
   const r = express.Router();
+  const ownerQrImageUpload = createOwnerQrImageUploadMiddleware();
 
   function sendOwnerQrError(res, err, fallbackError = 'OWNER_QR_DESTINATION_INVALID_PAYLOAD', fallbackStatusCode = 400) {
-    if (err && (String(err.code || '').startsWith('OWNER_QR_') || String(err.code || '').startsWith('MONEY_CORE_'))) {
+    if (err && (String(err.code || '').startsWith('OWNER_QR_') || String(err.code || '').startsWith('MONEY_CORE_') || String(err.code || '').startsWith('CLOUDINARY_'))) {
       return safeJson(res, err.statusCode || fallbackStatusCode, {
         ok: false,
         error: err.code,
@@ -313,6 +319,56 @@ function buildMoneyCoreRouter(pool) {
     }
 
     return null;
+  }
+
+  function sendOwnerQrUploadError(res, err) {
+    if (!err) {
+      return null;
+    }
+
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return safeJson(res, 413, {
+        ok: false,
+        error: 'OWNER_QR_IMAGE_TOO_LARGE',
+      });
+    }
+
+    if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+      return safeJson(res, 400, {
+        ok: false,
+        error: 'OWNER_QR_IMAGE_INVALID_FILE',
+      });
+    }
+
+    if (String(err.code || '').startsWith('OWNER_QR_IMAGE_')) {
+      return safeJson(res, err.statusCode || 400, {
+        ok: false,
+        error: err.code,
+        message: err.message,
+      });
+    }
+
+    if (String(err.code || '').startsWith('CLOUDINARY_')) {
+      return safeJson(res, err.statusCode || 500, {
+        ok: false,
+        error: err.code,
+        message: err.message,
+      });
+    }
+
+    return null;
+  }
+
+  function runMiddleware(req, res, middleware) {
+    return new Promise((resolve, reject) => {
+      middleware(req, res, (err) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve();
+      });
+    });
   }
 
   function registerOwnerQrDestinationRoutes(ownerType, basePath) {
@@ -454,6 +510,80 @@ function buildMoneyCoreRouter(pool) {
         });
       } catch (err) {
         const handled = sendOwnerQrError(res, err, 'OWNER_QR_DESTINATION_INVALID_OWNER', 403);
+        if (handled) {
+          return handled;
+        }
+        return next(err);
+      }
+    });
+
+    r.post(`${basePath}/money-core/owner-qr-destinations/:id/upload-image`, async (req, res, next) => {
+      try {
+        const owner = await resolveMoneyCoreOwnerBySlug(pool, ownerType, req.params.slug);
+
+        if (!owner.ok) {
+          return safeJson(res, owner.statusCode || 400, {
+            ok: false,
+            error: owner.error,
+          });
+        }
+
+        await runMiddleware(req, res, ownerQrImageUpload);
+
+        if (!req.file) {
+          return safeJson(res, 400, {
+            ok: false,
+            error: 'OWNER_QR_IMAGE_INVALID_FILE',
+          });
+        }
+
+        const destination = await uploadOwnerQrDestinationImage({
+          pool,
+          ownerType: owner.owner_type,
+          ownerId: owner.owner_id,
+          ownerSlug: owner.owner?.slug || req.params.slug,
+          destinationId: req.params.id,
+          file: req.file,
+        });
+
+        return safeJson(res, 200, {
+          ok: true,
+          destination,
+        });
+      } catch (err) {
+        const handled = sendOwnerQrUploadError(res, err) || sendOwnerQrError(res, err, 'OWNER_QR_IMAGE_INVALID_FILE', 400);
+        if (handled) {
+          return handled;
+        }
+        return next(err);
+      }
+    });
+
+    r.delete(`${basePath}/money-core/owner-qr-destinations/:id/image`, async (req, res, next) => {
+      try {
+        const owner = await resolveMoneyCoreOwnerBySlug(pool, ownerType, req.params.slug);
+
+        if (!owner.ok) {
+          return safeJson(res, owner.statusCode || 400, {
+            ok: false,
+            error: owner.error,
+          });
+        }
+
+        const destination = await deleteOwnerQrDestinationImage({
+          pool,
+          ownerType: owner.owner_type,
+          ownerId: owner.owner_id,
+          ownerSlug: owner.owner?.slug || req.params.slug,
+          destinationId: req.params.id,
+        });
+
+        return safeJson(res, 200, {
+          ok: true,
+          destination,
+        });
+      } catch (err) {
+        const handled = sendOwnerQrError(res, err, 'OWNER_QR_IMAGE_DELETE_FAILED', 500);
         if (handled) {
           return handled;
         }
