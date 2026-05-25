@@ -74,7 +74,7 @@ function buildOwnerQrImageStoragePaths({ ownerType, ownerSlug, destinationId }) 
   }
 
   const folder = `totem/businesses/${normalizedOwnerType}s/${normalizedOwnerSlug}/owner-qr`;
-  const public_id = `${folder}/qr-image-destination-${normalizedDestinationId}`;
+  const public_id = `qr-image-destination-${normalizedDestinationId}`;
 
   return {
     folder,
