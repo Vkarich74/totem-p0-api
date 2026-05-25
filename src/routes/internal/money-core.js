@@ -371,13 +371,6 @@ function buildMoneyCoreRouter(pool) {
     });
   }
 
-  function sendOwnerQrAuthError(res) {
-    return safeJson(res, 403, {
-      ok: false,
-      error: 'OWNER_QR_FORBIDDEN',
-    });
-  }
-
   function registerOwnerQrDestinationRoutes(ownerType, basePath) {
     r.get(`${basePath}/money-core/owner-qr-destinations`, async (req, res, next) => {
       try {
@@ -535,10 +528,6 @@ function buildMoneyCoreRouter(pool) {
           });
         }
 
-        if (!hasMoneyCoreOwnerAccess(req, owner.owner_type, owner.owner_id)) {
-          return sendOwnerQrAuthError(res);
-        }
-
         await runMiddleware(req, res, ownerQrImageUpload);
 
         if (!req.file) {
@@ -579,10 +568,6 @@ function buildMoneyCoreRouter(pool) {
             ok: false,
             error: owner.error,
           });
-        }
-
-        if (!hasMoneyCoreOwnerAccess(req, owner.owner_type, owner.owner_id)) {
-          return sendOwnerQrAuthError(res);
         }
 
         const destination = await deleteOwnerQrDestinationImage({
