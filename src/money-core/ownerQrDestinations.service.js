@@ -1,20 +1,7 @@
 'use strict';
 
-import {
-  deleteOwnerQrImage,
-  uploadOwnerQrImage,
-} from '../services/cloudinaryOwnerQrUpload.js';
-
 const ALLOWED_OWNER_TYPES = new Set(['salon', 'master']);
 const DESTINATION_TYPE = 'owner_qr';
-const OWNER_QR_CLOUDINARY_KEYS = [
-  'cloudinary_public_id',
-  'cloudinary_folder',
-  'cloudinary_uploaded_at',
-  'cloudinary_resource_type',
-  'cloudinary_format',
-  'cloudinary_bytes',
-];
 
 function normalizeText(value) {
   const text = String(value ?? '').trim();
@@ -123,47 +110,6 @@ function normalizeDestinationRow(row) {
     updated_at: row.updated_at,
     metadata_json: row.metadata_json || {},
   };
-}
-
-function normalizeMetadataJson(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return {};
-  }
-
-  return { ...value };
-}
-
-function mergeOwnerQrCloudinaryMetadata(baseMetadata, cloudinaryAsset) {
-  const metadata = normalizeMetadataJson(baseMetadata);
-
-  if (!cloudinaryAsset) {
-    return metadata;
-  }
-
-  metadata.cloudinary_public_id = cloudinaryAsset.public_id || null;
-  metadata.cloudinary_folder = cloudinaryAsset.folder || null;
-  metadata.cloudinary_uploaded_at = cloudinaryAsset.uploaded_at || null;
-  metadata.cloudinary_resource_type = cloudinaryAsset.resource_type || null;
-  metadata.cloudinary_format = cloudinaryAsset.format || null;
-  metadata.cloudinary_bytes = Number.isFinite(Number(cloudinaryAsset.bytes)) ? Number(cloudinaryAsset.bytes) : null;
-
-  return metadata;
-}
-
-function removeOwnerQrCloudinaryMetadata(baseMetadata) {
-  const metadata = normalizeMetadataJson(baseMetadata);
-
-  for (const key of OWNER_QR_CLOUDINARY_KEYS) {
-    metadata[key] = null;
-  }
-
-  return metadata;
-}
-
-function getOwnerQrCloudinaryPublicId(metadataJson) {
-  const metadata = normalizeMetadataJson(metadataJson);
-  const publicId = normalizeText(metadata.cloudinary_public_id);
-  return publicId || null;
 }
 
 async function listOwnerQrDestinations(pool, { ownerType, ownerId }) {
@@ -416,115 +362,11 @@ async function deactivateOwnerQrDestination({ pool, ownerType, ownerId, destinat
   }
 }
 
-async function uploadOwnerQrDestinationImage({ pool, ownerType, ownerId, ownerSlug, destinationId, file }) {
-  const owner = normalizeOwner(ownerType, ownerId);
-  const client = await pool.connect();
-
-  try {
-    await client.query('BEGIN');
-    const current = await validateOwnerQrDestinationOwnership({
-      pool: client,
-      ownerType: owner.owner_type,
-      ownerId: owner.owner_id,
-      destinationId,
-    });
-
-    const cloudinaryAsset = await uploadOwnerQrImage({
-      ownerType: owner.owner_type,
-      ownerSlug: ownerSlug || current.owner_slug || '',
-      destinationId: current.id,
-      file,
-    });
-
-    const mergedMetadata = mergeOwnerQrCloudinaryMetadata(current.metadata_json, cloudinaryAsset);
-
-    const updateResult = await client.query(
-      `
-      UPDATE public.owner_payment_destinations
-      SET qr_image_url = $2,
-          metadata_json = $3::jsonb,
-          updated_at = now()
-      WHERE id = $1
-      RETURNING *
-      `,
-      [
-        current.id,
-        cloudinaryAsset.secure_url || null,
-        JSON.stringify(mergedMetadata),
-      ]
-    );
-
-    await client.query('COMMIT');
-    return normalizeDestinationRow(updateResult.rows[0] || null);
-  } catch (error) {
-    try {
-      await client.query('ROLLBACK');
-    } catch (_) {
-      // ignore rollback failure
-    }
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-async function deleteOwnerQrDestinationImage({ pool, ownerType, ownerId, ownerSlug, destinationId }) {
-  const owner = normalizeOwner(ownerType, ownerId);
-  const client = await pool.connect();
-
-  try {
-    await client.query('BEGIN');
-    const current = await validateOwnerQrDestinationOwnership({
-      pool: client,
-      ownerType: owner.owner_type,
-      ownerId: owner.owner_id,
-      destinationId,
-    });
-
-    const existingPublicId = getOwnerQrCloudinaryPublicId(current.metadata_json);
-
-    if (existingPublicId) {
-      await deleteOwnerQrImage(existingPublicId);
-    }
-
-    const metadata = removeOwnerQrCloudinaryMetadata(current.metadata_json);
-
-    const updateResult = await client.query(
-      `
-      UPDATE public.owner_payment_destinations
-      SET qr_image_url = NULL,
-          metadata_json = $2::jsonb,
-          updated_at = now()
-      WHERE id = $1
-      RETURNING *
-      `,
-      [
-        current.id,
-        JSON.stringify(metadata),
-      ]
-    );
-
-    await client.query('COMMIT');
-    return normalizeDestinationRow(updateResult.rows[0] || null);
-  } catch (error) {
-    try {
-      await client.query('ROLLBACK');
-    } catch (_) {
-      // ignore rollback failure
-    }
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
 export {
   listOwnerQrDestinations,
   getActiveOwnerQrDestination,
   createOwnerQrDestination,
   updateOwnerQrDestination,
   deactivateOwnerQrDestination,
-  uploadOwnerQrDestinationImage,
-  deleteOwnerQrDestinationImage,
   validateOwnerQrDestinationOwnership,
 };
