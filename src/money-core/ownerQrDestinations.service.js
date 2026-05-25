@@ -1,7 +1,19 @@
-'use strict';
+import {
+  deleteOwnerQrImage,
+  uploadOwnerQrImage,
+} from '../services/ownerQrImageStorage.js';
 
 const ALLOWED_OWNER_TYPES = new Set(['salon', 'master']);
 const DESTINATION_TYPE = 'owner_qr';
+const OWNER_QR_IMAGE_METADATA_KEYS = Object.freeze([
+  'image_storage',
+  'cloudinary_public_id',
+  'cloudinary_folder',
+  'cloudinary_uploaded_at',
+  'cloudinary_resource_type',
+  'cloudinary_format',
+  'cloudinary_bytes',
+]);
 
 function normalizeText(value) {
   const text = String(value ?? '').trim();
@@ -110,6 +122,42 @@ function normalizeDestinationRow(row) {
     updated_at: row.updated_at,
     metadata_json: row.metadata_json || {},
   };
+}
+
+function mergeOwnerQrImageMetadata(currentMetadata = {}, uploadResult = {}) {
+  const metadata = isPlainObject(currentMetadata) ? { ...currentMetadata } : {};
+
+  metadata.image_storage = 'cloudinary';
+  metadata.cloudinary_public_id = uploadResult.public_id || null;
+  metadata.cloudinary_folder = uploadResult.folder || null;
+  metadata.cloudinary_uploaded_at = uploadResult.uploaded_at || null;
+  metadata.cloudinary_resource_type = uploadResult.resource_type || null;
+  metadata.cloudinary_format = uploadResult.format || null;
+  metadata.cloudinary_bytes = uploadResult.bytes ?? null;
+
+  return metadata;
+}
+
+function clearOwnerQrImageMetadata(currentMetadata = {}) {
+  const metadata = isPlainObject(currentMetadata) ? { ...currentMetadata } : {};
+
+  metadata.image_storage = null;
+  metadata.cloudinary_public_id = null;
+  metadata.cloudinary_folder = null;
+  metadata.cloudinary_uploaded_at = null;
+  metadata.cloudinary_resource_type = null;
+  metadata.cloudinary_format = null;
+  metadata.cloudinary_bytes = null;
+
+  return metadata;
+}
+
+function getOwnerQrCloudinaryPublicId(metadataJson = {}) {
+  if (!isPlainObject(metadataJson)) {
+    return null;
+  }
+
+  return normalizeText(metadataJson.cloudinary_public_id);
 }
 
 async function listOwnerQrDestinations(pool, { ownerType, ownerId }) {
@@ -362,11 +410,129 @@ async function deactivateOwnerQrDestination({ pool, ownerType, ownerId, destinat
   }
 }
 
+async function attachOwnerQrDestinationImage({ pool, ownerType, ownerId, ownerSlug, destinationId, file }) {
+  const owner = normalizeOwner(ownerType, ownerId);
+  const destinationIdNormalized = normalizeInt(destinationId);
+
+  if (!file || !Buffer.isBuffer(file.buffer) || file.buffer.length === 0) {
+    const error = new Error('Invalid file');
+    error.code = 'OWNER_QR_IMAGE_INVALID_FILE';
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const current = await validateOwnerQrDestinationOwnership({
+      pool: client,
+      ownerType: owner.owner_type,
+      ownerId: owner.owner_id,
+      destinationId: destinationIdNormalized,
+    });
+
+    const uploadResult = await uploadOwnerQrImage({
+      ownerType: owner.owner_type,
+      ownerSlug,
+      destinationId: current.id,
+      file,
+    });
+
+    const metadataJson = mergeOwnerQrImageMetadata(current.metadata_json || {}, uploadResult);
+
+    const updateResult = await client.query(
+      `
+      UPDATE public.owner_payment_destinations
+      SET
+        qr_image_url = $2,
+        metadata_json = $3::jsonb,
+        updated_at = now()
+      WHERE id = $1
+      RETURNING *
+      `,
+      [
+        current.id,
+        uploadResult.secure_url,
+        JSON.stringify(metadataJson),
+      ]
+    );
+
+    await client.query('COMMIT');
+    return normalizeDestinationRow(updateResult.rows[0] || null);
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (_) {
+      // ignore rollback failure
+    }
+
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function deleteOwnerQrDestinationImage({ pool, ownerType, ownerId, ownerSlug, destinationId }) {
+  const owner = normalizeOwner(ownerType, ownerId);
+  const destinationIdNormalized = normalizeInt(destinationId);
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const current = await validateOwnerQrDestinationOwnership({
+      pool: client,
+      ownerType: owner.owner_type,
+      ownerId: owner.owner_id,
+      destinationId: destinationIdNormalized,
+    });
+
+    const publicId = getOwnerQrCloudinaryPublicId(current.metadata_json || {});
+    if (publicId) {
+      await deleteOwnerQrImage(publicId);
+    }
+
+    const metadataJson = clearOwnerQrImageMetadata(current.metadata_json || {});
+
+    const updateResult = await client.query(
+      `
+      UPDATE public.owner_payment_destinations
+      SET
+        qr_image_url = null,
+        metadata_json = $2::jsonb,
+        updated_at = now()
+      WHERE id = $1
+      RETURNING *
+      `,
+      [
+        current.id,
+        JSON.stringify(metadataJson),
+      ]
+    );
+
+    await client.query('COMMIT');
+    return normalizeDestinationRow(updateResult.rows[0] || null);
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (_) {
+      // ignore rollback failure
+    }
+
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export {
   listOwnerQrDestinations,
   getActiveOwnerQrDestination,
   createOwnerQrDestination,
   updateOwnerQrDestination,
   deactivateOwnerQrDestination,
+  attachOwnerQrDestinationImage,
+  deleteOwnerQrDestinationImage,
   validateOwnerQrDestinationOwnership,
 };
