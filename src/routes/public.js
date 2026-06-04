@@ -232,9 +232,7 @@ export function createPublicRouter(deps) {
   /**
    * SALON PROFILE
    */
-  r.get(
-    "/salons/:slug",
-    async (req, res) => {
+  async function handleSalonProfile(req, res) {
       try {
         const slug = String(req.params.slug || "").trim();
 
@@ -269,8 +267,10 @@ export function createPublicRouter(deps) {
           .status(500)
           .json({ ok: false, error: "INTERNAL_ERROR" });
       }
-    }
-  );
+  }
+
+  r.get("/salon/:slug", handleSalonProfile);
+  r.get("/salons/:slug", handleSalonProfile);
 
   /**
    * SALON METRICS
