@@ -916,7 +916,7 @@ function buildOwnerOpeningLinks({ request, provisionResult, bindResult = null })
   return {
     owner_type: ownerType || request.owner_type,
     slug,
-    public_url: provisionResult?.result?.urls?.public || provisionResult?.public_url || (ownerType && slug ? `/${ownerType}/${slug}` : null),
+    public_url: provisionResult?.result?.urls?.public || provisionResult?.public_url || (ownerType && slug ? (ownerType === "salon" ? `/salon?slug=${encodeURIComponent(slug)}` : `/${ownerType}/${encodeURIComponent(slug)}`) : null),
     cabinet_url: provisionResult?.cabinet_url || (ownerType && slug ? `#/${ownerType}/${slug}` : null),
     internal_url: ownerType && slug ? `/internal/${ownerType === "salon" ? "salons" : "masters"}/${slug}` : null,
     provision_urls: provisionResult?.result?.urls || null,
@@ -945,13 +945,11 @@ function buildOwnerOpeningEmailPreview(request){
   const links = request.links_json || {};
   const ownerType = normalizeOwnerType(request.owner_type);
   const ownerLabel = ownerType === "master" ? "мастера" : "салона";
-  const publicUrl = links.public_url || (ownerType && request.slug_final ? `/${ownerType}/${encodeURIComponent(request.slug_final)}` : null);
+  const publicUrl = links.public_url || (ownerType && request.slug_final ? (ownerType === "salon" ? `/salon?slug=${encodeURIComponent(request.slug_final)}` : `/${ownerType}/${encodeURIComponent(request.slug_final)}`) : null);
   const cabinetUrl = links.cabinet_url || (ownerType && request.slug_final ? `#/${ownerType}/${request.slug_final}` : null);
   const appBaseUrl = "https://app.totemv.com";
   const publicBaseUrl = "https://www.totemv.com";
-  const salonPublicBaseUrl = "https://app.totemv.com";
-  const publicLinkBase = ownerType === "salon" ? salonPublicBaseUrl : publicBaseUrl;
-  const publicLink = publicUrl && publicUrl.startsWith("http") ? publicUrl : publicUrl ? `${publicLinkBase}${publicUrl.startsWith("/") ? "" : "/"}${publicUrl}` : null;
+  const publicLink = publicUrl && publicUrl.startsWith("http") ? publicUrl : publicUrl ? `${publicBaseUrl}${publicUrl.startsWith("/") ? "" : "/"}${publicUrl}` : null;
   const cabinetLink = cabinetUrl && cabinetUrl.startsWith("http") ? cabinetUrl : cabinetUrl ? `${appBaseUrl}/${cabinetUrl}` : null;
 
   const subject = `TOTEM: доступ ${ownerLabel} создан`;

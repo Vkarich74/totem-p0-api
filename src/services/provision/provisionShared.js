@@ -378,7 +378,7 @@ export function buildCanonicalUrls(ownerType, canonicalSlug){
   }
 
   return {
-    public_url: `/${safeType}/${safeSlug}`,
+    public_url: safeType === "salon" ? `/salon?slug=${encodeURIComponent(safeSlug)}` : `/${safeType}/${encodeURIComponent(safeSlug)}`,
     cabinet_url: `#/${safeType}/${safeSlug}`
   };
 }
