@@ -89,7 +89,7 @@ export function validateCanonicalSlug(slug){
 export function resolveCanonicalPublicBaseUrl(baseUrl = null){
   const explicitBaseUrl = normalizeBaseUrl(baseUrl);
   const envBaseUrl = normalizeBaseUrl(process.env.PUBLIC_WEB_BASE_URL || process.env.APP_BASE_URL || process.env.PUBLIC_APP_BASE_URL || "");
-  const resolvedBaseUrl = explicitBaseUrl || envBaseUrl || "https://www.totemv.com";
+  const resolvedBaseUrl = explicitBaseUrl || envBaseUrl || "https://totemv.com";
 
   return normalizeBaseUrl(resolvedBaseUrl);
 }

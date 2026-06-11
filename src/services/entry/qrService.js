@@ -2,7 +2,7 @@
 
 import { resolveCanonicalBookingAppBaseUrl } from './entryContract.js';
 
-const WEB_BASE = (process.env.WEB_BASE || 'https://www.totemv.com').replace(/\/+$/, '');
+const WEB_BASE = (process.env.WEB_BASE || 'https://totemv.com').replace(/\/+$/, '');
 
 function normalizeOwnerType(value) {
   const ownerType = String(value || '').trim().toLowerCase();
