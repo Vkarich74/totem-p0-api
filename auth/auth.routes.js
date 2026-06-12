@@ -293,11 +293,26 @@ router.post("/verify", async (req, res) => {
     });
 
     return res.json({
-      ok: true,
-      role: user.role,
-      salon_slug: user.salon_slug,
-      master_slug: user.master_slug
-    });
+ ok: true,
+ access_token: sessionId,
+ token: sessionId,
+ token_type: "Bearer",
+ role: user.role,
+ salon_slug: user.salon_slug,
+ master_slug: user.master_slug,
+ auth: {
+ role: user.role,
+ slug: user.master_slug || user.salon_slug || null,
+ salon_slug: user.salon_slug,
+ master_slug: user.master_slug
+ },
+ auth_context: {
+ role: user.role,
+ slug: user.master_slug || user.salon_slug || null,
+ salon_slug: user.salon_slug,
+ master_slug: user.master_slug
+ }
+ });
   } catch (e) {
     console.error("[AUTH_VERIFY_ERROR]", e);
     return res.status(500).json({ ok:false, error:"AUTH_VERIFY_FAILED" });
@@ -343,11 +358,26 @@ router.post("/login", async (req, res) => {
     });
 
     return res.json({
-      ok: true,
-      role: user.role,
-      salon_slug: user.salon_slug,
-      master_slug: user.master_slug
-    });
+ ok: true,
+ access_token: sessionId,
+ token: sessionId,
+ token_type: "Bearer",
+ role: user.role,
+ salon_slug: user.salon_slug,
+ master_slug: user.master_slug,
+ auth: {
+ role: user.role,
+ slug: user.master_slug || user.salon_slug || null,
+ salon_slug: user.salon_slug,
+ master_slug: user.master_slug
+ },
+ auth_context: {
+ role: user.role,
+ slug: user.master_slug || user.salon_slug || null,
+ salon_slug: user.salon_slug,
+ master_slug: user.master_slug
+ }
+ });
 
   } catch (e) {
     console.error("[AUTH_LOGIN_ERROR]", e);
