@@ -1,5 +1,6 @@
 import express from "express";
-import crypto from "crypto";
+import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
 import nodemailer from "nodemailer";
 import { pool as db } from "../db.js";
 
@@ -291,6 +292,7 @@ router.post("/verify", async (req, res) => {
     }
 
     const sessionId = await createSession(user.id);
+    const accessToken = jwt.sign({ user_id: user.id, role: user.role, session_id: sessionId }, process.env.JWT_SECRET, { expiresIn: '24h' });
 
     res.cookie("totem_session", sessionId, {
       httpOnly: true,
@@ -300,8 +302,8 @@ router.post("/verify", async (req, res) => {
 
     return res.json({
  ok: true,
- access_token: sessionId,
- token: sessionId,
+ access_token: accessToken,
+ token: accessToken,
  token_type: "Bearer",
  role: user.role,
  salon_slug: user.salon_slug,
@@ -358,6 +360,7 @@ router.post("/login", async (req, res) => {
     }
 
     const sessionId = await createSession(user.id);
+    const accessToken = jwt.sign({ user_id: user.id, role: user.role, session_id: sessionId }, process.env.JWT_SECRET, { expiresIn: '24h' });
 
     res.cookie("totem_session", sessionId, {
       httpOnly: true,
@@ -367,8 +370,8 @@ router.post("/login", async (req, res) => {
 
     return res.json({
  ok: true,
- access_token: sessionId,
- token: sessionId,
+ access_token: accessToken,
+ token: accessToken,
  token_type: "Bearer",
  role: user.role,
  salon_slug: user.salon_slug,
