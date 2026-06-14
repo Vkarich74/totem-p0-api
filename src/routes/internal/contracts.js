@@ -134,6 +134,124 @@ function normalizeDate(date){
   }
 }
 
+function safeInt(value){
+const n = Number(value);
+if(!Number.isInteger(n) || n <= 0){
+return null;
+}
+return n;
+}
+
+function getIdentitySalonIds(identity){
+const ids = new Set();
+
+if(Array.isArray(identity?.salons)){
+for(const item of identity.salons){
+if(item && typeof item === "object"){
+const id = safeInt(item.id ?? item.salon_id ?? item.owner_id);
+if(id){
+ids.add(id);
+}
+continue;
+}
+
+const id = safeInt(item);
+if(id){
+ids.add(id);
+}
+}
+}
+
+if(Array.isArray(identity?.ownership)){
+for(const item of identity.ownership){
+if(!item || typeof item !== "object"){
+continue;
+}
+
+const ownerType = String(item.owner_type || item.type || "").trim();
+if(ownerType !== "salon"){
+continue;
+}
+
+const id = safeInt(item.owner_id ?? item.salon_id ?? item.id);
+if(id){
+ids.add(id);
+}
+}
+}
+
+return ids;
+}
+
+function hasSalonOwnership(req, salonId){
+if(req?.auth?.role === "system"){
+return true;
+}
+
+const targetSalonId = safeInt(salonId);
+if(!targetSalonId){
+return false;
+}
+
+const identitySalonIds = getIdentitySalonIds(req?.identity);
+return identitySalonIds.has(targetSalonId);
+}
+
+function getIdentityMasterIds(identity){
+const ids = new Set();
+
+if(Array.isArray(identity?.masters)){
+for(const item of identity.masters){
+if(item && typeof item === "object"){
+const id = safeInt(item.id ?? item.master_id ?? item.owner_id);
+if(id){
+ids.add(id);
+}
+continue;
+}
+
+const id = safeInt(item);
+if(id){
+ids.add(id);
+}
+}
+}
+
+if(Array.isArray(identity?.ownership)){
+for(const item of identity.ownership){
+if(!item || typeof item !== "object"){
+continue;
+}
+
+const ownerType = String(item.owner_type || item.type || "").trim();
+if(ownerType !== "master"){
+continue;
+}
+
+const id = safeInt(item.owner_id ?? item.master_id ?? item.id);
+if(id){
+ids.add(id);
+}
+}
+}
+
+return ids;
+}
+
+function hasMasterOwnership(req, masterId){
+if(req?.auth?.role === "system"){
+return true;
+}
+
+const targetMasterId = safeInt(masterId);
+if(!targetMasterId){
+return false;
+}
+
+const identityMasterIds = getIdentityMasterIds(req?.identity);
+return identityMasterIds.has(targetMasterId);
+}
+
 function parseQueryDate(value, errorCode){
 const raw = String(value ?? '').trim();
 if(!raw){
@@ -590,6 +708,10 @@ if(!salon.rows.length){
 return res.status(404).json({ ok:false, error:"SALON_NOT_FOUND" });
 }
 
+if(!hasSalonOwnership(req, salon.rows[0].id)){
+return res.status(403).json({ ok:false, error:"FORBIDDEN" });
+}
+
 const obligations = await fetchRentObligationsByOwner({
 db: pool,
 ownerColumn: 'salon_id',
@@ -640,6 +762,10 @@ const master = await pool.query(
 
 if(!master.rows.length){
 return res.status(404).json({ ok:false, error:"MASTER_NOT_FOUND" });
+}
+
+if(!hasMasterOwnership(req, master.rows[0].id)){
+return res.status(403).json({ ok:false, error:"FORBIDDEN" });
 }
 
 const obligations = await fetchRentObligationsByOwner({
