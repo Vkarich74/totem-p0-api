@@ -372,6 +372,200 @@ const result = await db.query(query, values);
 return result.rows;
 }
 
+function resolveFixedRentPeriodStart(contract){
+const rawStart = contract?.effective_from || contract?.created_at || null;
+const startDate = rawStart ? new Date(rawStart) : new Date();
+
+if(Number.isNaN(startDate.getTime())){
+const err = new Error("FIXED_RENT_PERIOD_NOT_SUPPORTED");
+err.code = "FIXED_RENT_PERIOD_NOT_SUPPORTED";
+throw err;
+}
+
+return startDate.toISOString();
+}
+
+async function resolveFixedRentOwnership(db, contract){
+const salonTextId = String(contract?.salon_id ?? "").trim();
+const masterTextId = String(contract?.master_id ?? "").trim();
+const salonNumericId = safeInt(salonTextId);
+const masterNumericId = safeInt(masterTextId);
+
+if(!salonNumericId || !masterNumericId){
+const err = new Error("FIXED_RENT_PARTIES_RESOLVE_FAILED");
+err.code = "FIXED_RENT_PARTIES_RESOLVE_FAILED";
+throw err;
+}
+
+const salon = await db.query(
+`SELECT id
+ FROM salons
+ WHERE id=$1
+ LIMIT 1`,
+[salonNumericId]
+);
+
+const master = await db.query(
+`SELECT id
+ FROM masters
+ WHERE id=$1
+ LIMIT 1`,
+[masterNumericId]
+);
+
+if(!salon.rows.length || !master.rows.length){
+const err = new Error("FIXED_RENT_PARTIES_RESOLVE_FAILED");
+err.code = "FIXED_RENT_PARTIES_RESOLVE_FAILED";
+throw err;
+}
+
+return {
+contract_salon_id: salonTextId,
+contract_master_id: masterTextId,
+salon_id: salon.rows[0].id,
+master_id: master.rows[0].id
+};
+}
+
+async function upsertFixedRentObligation(db, contract, source, createdByFlow){
+if(String(contract?.terms_json?.model || "").trim().toLowerCase() !== "fixed_rent"){
+const err = new Error("FIXED_RENT_MODEL_REQUIRED");
+err.code = "FIXED_RENT_MODEL_REQUIRED";
+throw err;
+}
+
+const rentPeriod = normalizeContractText(contract?.terms_json?.rent_period, "monthly").toLowerCase();
+if(rentPeriod !== "monthly"){
+const err = new Error("FIXED_RENT_PERIOD_NOT_SUPPORTED");
+err.code = "FIXED_RENT_PERIOD_NOT_SUPPORTED";
+throw err;
+}
+
+const amount = normalizePositiveAmount(contract?.terms_json?.rent_amount, "FIXED_RENT_AMOUNT_INVALID");
+const currency = normalizeCurrency(contract?.terms_json || {});
+const ownership = await resolveFixedRentOwnership(db, contract);
+const periodStart = resolveFixedRentPeriodStart(contract);
+const metadata = JSON.stringify({
+source,
+rent_period: rentPeriod,
+created_by_flow: createdByFlow
+});
+
+const inserted = await db.query(
+`INSERT INTO public.contract_rent_obligations (
+contract_id,
+contract_salon_id,
+contract_master_id,
+salon_id,
+master_id,
+period_start,
+period_end,
+amount,
+currency,
+status,
+due_at,
+metadata
+)
+VALUES (
+$1,
+$2,
+$3,
+$4,
+$5,
+$6::timestamptz,
+$6::timestamptz + interval '1 month',
+$7,
+$8,
+'open',
+$6::timestamptz,
+$9::jsonb
+)
+ON CONFLICT (contract_id, period_start, period_end)
+DO NOTHING
+RETURNING *
+`,
+[
+contract.id,
+ownership.contract_salon_id,
+ownership.contract_master_id,
+ownership.salon_id,
+ownership.master_id,
+periodStart,
+amount,
+currency,
+metadata
+]
+);
+
+if(inserted.rows.length){
+return inserted.rows[0];
+}
+
+const existing = await db.query(
+`SELECT
+id,
+contract_id,
+contract_salon_id,
+contract_master_id,
+salon_id,
+master_id,
+period_start,
+period_end,
+amount,
+currency,
+status,
+due_at,
+paid_at,
+created_at,
+updated_at,
+cancelled_at,
+metadata
+FROM public.contract_rent_obligations
+WHERE contract_id=$1
+AND period_start=$2::timestamptz
+AND period_end=($2::timestamptz + interval '1 month')
+LIMIT 1`,
+[contract.id, periodStart]
+);
+
+return existing.rows[0] || null;
+}
+
+async function activateFixedRentContract(db, contract, source){
+await db.query(
+`UPDATE contracts
+ SET status='archived',
+ archived_at=NOW()
+ WHERE salon_id=$1
+ AND master_id=$2
+ AND status='active'
+ AND id<>$3`,
+[contract.salon_id, contract.master_id, contract.id]
+);
+
+const activated = await db.query(
+`UPDATE contracts
+ SET status='active',
+ archived_at=NULL
+ WHERE id=$1
+ RETURNING *`,
+[contract.id]
+);
+
+const activeContract = activated.rows[0] || contract;
+const obligation = await upsertFixedRentObligation(
+db,
+activeContract,
+source,
+source === "fixed_rent_accept" ? "contract_accept" : source
+);
+
+return {
+contract: activeContract,
+obligation
+};
+}
+
 export default function buildContractsRouter(pool, internalReadRateLimit){
 
 const r = express.Router();
@@ -603,6 +797,39 @@ const currentContract = contract.rows[0];
 const salonId = currentContract.salon_id;
 const masterId = currentContract.master_id;
 const acceptModel = String(currentContract.terms_json?.model || "percentage").toLowerCase();
+
+if(acceptModel === "fixed_rent"){
+try{
+const activated = await activateFixedRentContract(db, currentContract, "fixed_rent_accept");
+
+await db.query("COMMIT");
+
+return res.json({
+ok:true,
+contract:activated.contract,
+obligation:activated.obligation
+});
+}catch(err){
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+if(err.message === "FIXED_RENT_AMOUNT_INVALID"
+|| err.message === "FIXED_RENT_PARTIES_RESOLVE_FAILED"
+|| err.message === "FIXED_RENT_PERIOD_NOT_SUPPORTED"
+|| err.message === "FIXED_RENT_MODEL_REQUIRED"){
+return res.status(400).json({
+ok:false,
+error:err.message
+});
+}
+
+console.error("CONTRACT_ACCEPT_FIXED_RENT_ERROR", err);
+
+return res.status(500).json({
+ok:false,
+error:"CONTRACT_ACCEPT_FAILED"
+});
+}
+}
 
 if(acceptModel !== "percentage"){
 await db.query("ROLLBACK");

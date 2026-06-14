@@ -8,6 +8,175 @@ function normalizeText(value){
   return String(value || "").trim();
 }
 
+function safeInt(value){
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+function resolveFixedRentPeriodStart(contract){
+  const rawStart = contract?.effective_from || contract?.created_at || null;
+  const startDate = rawStart ? new Date(rawStart) : new Date();
+
+  if(Number.isNaN(startDate.getTime())){
+    const err = new Error("FIXED_RENT_PERIOD_NOT_SUPPORTED");
+    err.code = "FIXED_RENT_PERIOD_NOT_SUPPORTED";
+    throw err;
+  }
+
+  return startDate.toISOString();
+}
+
+async function resolveFixedRentOwnership(db, contract){
+  const salonTextId = String(contract?.salon_id ?? "").trim();
+  const masterTextId = String(contract?.master_id ?? "").trim();
+  const salonNumericId = safeInt(salonTextId);
+  const masterNumericId = safeInt(masterTextId);
+
+  if(!salonNumericId || !masterNumericId){
+    const err = new Error("FIXED_RENT_PARTIES_RESOLVE_FAILED");
+    err.code = "FIXED_RENT_PARTIES_RESOLVE_FAILED";
+    throw err;
+  }
+
+  const salon = await db.query(
+    `SELECT id
+     FROM salons
+     WHERE id=$1
+     LIMIT 1`,
+    [salonNumericId]
+  );
+
+  const master = await db.query(
+    `SELECT id
+     FROM masters
+     WHERE id=$1
+     LIMIT 1`,
+    [masterNumericId]
+  );
+
+  if(!salon.rows.length || !master.rows.length){
+    const err = new Error("FIXED_RENT_PARTIES_RESOLVE_FAILED");
+    err.code = "FIXED_RENT_PARTIES_RESOLVE_FAILED";
+    throw err;
+  }
+
+  return {
+    contract_salon_id: salonTextId,
+    contract_master_id: masterTextId,
+    salon_id: salon.rows[0].id,
+    master_id: master.rows[0].id
+  };
+}
+
+async function upsertFixedRentObligation(db, contract, source, createdByFlow){
+  if(String(contract?.terms_json?.model || "").trim().toLowerCase() !== "fixed_rent"){
+    const err = new Error("FIXED_RENT_MODEL_REQUIRED");
+    err.code = "FIXED_RENT_MODEL_REQUIRED";
+    throw err;
+  }
+
+  const rentPeriod = normalizeText(contract?.terms_json?.rent_period || "monthly").toLowerCase();
+  if(rentPeriod !== "monthly"){
+    const err = new Error("FIXED_RENT_PERIOD_NOT_SUPPORTED");
+    err.code = "FIXED_RENT_PERIOD_NOT_SUPPORTED";
+    throw err;
+  }
+
+  const rentAmount = Number(contract?.terms_json?.rent_amount);
+  if(!Number.isFinite(rentAmount) || rentAmount <= 0){
+    const err = new Error("FIXED_RENT_AMOUNT_INVALID");
+    err.code = "FIXED_RENT_AMOUNT_INVALID";
+    throw err;
+  }
+
+  const ownership = await resolveFixedRentOwnership(db, contract);
+  const periodStart = resolveFixedRentPeriodStart(contract);
+  const currency = normalizeText(contract?.terms_json?.currency || "KGS").toUpperCase();
+  const metadata = JSON.stringify({
+    source,
+    rent_period: rentPeriod,
+    created_by_flow: createdByFlow
+  });
+
+  const inserted = await db.query(
+    `INSERT INTO public.contract_rent_obligations (
+       contract_id,
+       contract_salon_id,
+       contract_master_id,
+       salon_id,
+       master_id,
+       period_start,
+       period_end,
+       amount,
+       currency,
+       status,
+       due_at,
+       metadata
+     )
+     VALUES (
+       $1,
+       $2,
+       $3,
+       $4,
+       $5,
+       $6::timestamptz,
+       $6::timestamptz + interval '1 month',
+       $7,
+       $8,
+       'open',
+       $6::timestamptz,
+       $9::jsonb
+     )
+     ON CONFLICT (contract_id, period_start, period_end)
+     DO NOTHING
+     RETURNING *`,
+    [
+      contract.id,
+      ownership.contract_salon_id,
+      ownership.contract_master_id,
+      ownership.salon_id,
+      ownership.master_id,
+      periodStart,
+      rentAmount,
+      currency,
+      metadata
+    ]
+  );
+
+  if(inserted.rows.length){
+    return inserted.rows[0];
+  }
+
+  const existing = await db.query(
+    `SELECT
+       id,
+       contract_id,
+       contract_salon_id,
+       contract_master_id,
+       salon_id,
+       master_id,
+       period_start,
+       period_end,
+       amount,
+       currency,
+       status,
+       due_at,
+       paid_at,
+       created_at,
+       updated_at,
+       cancelled_at,
+       metadata
+     FROM public.contract_rent_obligations
+     WHERE contract_id=$1
+       AND period_start=$2::timestamptz
+       AND period_end=($2::timestamptz + interval '1 month')
+     LIMIT 1`,
+    [contract.id, periodStart]
+  );
+
+  return existing.rows[0] || null;
+}
+
 function validateActivateInput(payload = {}){
   const salonSlug = normalizeText(payload.salon_slug);
   const masterSlug = normalizeText(payload.master_slug);
@@ -136,10 +305,16 @@ async function acceptPendingContractIfNeeded(db, salonId, masterId, acceptContra
   );
 
   if(existingActive.rows.length){
+    const activeContract = existingActive.rows[0];
+    const obligation = String(activeContract?.terms_json?.model || "").trim().toLowerCase() === "fixed_rent"
+      ? await upsertFixedRentObligation(db, activeContract, "fixed_rent_provisioning_accept", "activate_master_salon_canonical")
+      : null;
+
     return {
       updated: false,
       idempotent: true,
-      contract: existingActive.rows[0]
+      contract: activeContract,
+      obligation
     };
   }
 
@@ -205,10 +380,16 @@ async function acceptPendingContractIfNeeded(db, salonId, masterId, acceptContra
     [pending.rows[0].id]
   );
 
+  const activeContract = activated.rows[0] || pending.rows[0];
+  const obligation = String(activeContract?.terms_json?.model || "").trim().toLowerCase() === "fixed_rent"
+    ? await upsertFixedRentObligation(db, activeContract, "fixed_rent_provisioning_accept", "activate_master_salon_canonical")
+    : null;
+
   return {
     updated: true,
     idempotent: false,
-    contract: activated.rows[0] || pending.rows[0]
+    contract: activeContract,
+    obligation
   };
 }
 
@@ -257,6 +438,23 @@ function buildActivationResult({ salon, master, relation, contractState, meta })
         terms_json: contractState.contract.terms_json,
         effective_from: contractState.contract.effective_from || null,
         archived_at: contractState.contract.archived_at || null
+      } : null,
+      obligation: contractState.obligation ? {
+        id: contractState.obligation.id,
+        contract_id: contractState.obligation.contract_id,
+        salon_id: contractState.obligation.salon_id,
+        master_id: contractState.obligation.master_id,
+        period_start: contractState.obligation.period_start,
+        period_end: contractState.obligation.period_end,
+        amount: contractState.obligation.amount,
+        currency: contractState.obligation.currency,
+        status: contractState.obligation.status,
+        due_at: contractState.obligation.due_at,
+        paid_at: contractState.obligation.paid_at,
+        created_at: contractState.obligation.created_at,
+        updated_at: contractState.obligation.updated_at,
+        cancelled_at: contractState.obligation.cancelled_at,
+        metadata: contractState.obligation.metadata
       } : null,
       urls: {
         salon_internal: `/internal/salons/${salon.slug}`,
