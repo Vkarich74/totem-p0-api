@@ -42,6 +42,156 @@ function createClientCabinetToken() {
   };
 }
 
+function isIanaTimeZone(value) {
+  const zone = String(value || "").trim();
+  if (!zone) {
+    return false;
+  }
+
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: zone }).format(new Date());
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function getSalonBookingTimeZone({ salonSlug, salonId, salonTimeZone }) {
+  const explicitZone = String(salonTimeZone || "").trim();
+  if (isIanaTimeZone(explicitZone)) {
+    return explicitZone;
+  }
+
+  if (String(salonSlug || "").trim() === "master-prime" || Number(salonId) === 32) {
+    return "Asia/Bishkek";
+  }
+
+  return "UTC";
+}
+
+function formatZoneParts(date, timeZone) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+
+  const parts = formatter.formatToParts(date);
+  const lookup = Object.create(null);
+
+  for (const part of parts) {
+    if (part.type !== "literal") {
+      lookup[part.type] = part.value;
+    }
+  }
+
+  return {
+    year: Number(lookup.year || 0),
+    month: Number(lookup.month || 0),
+    day: Number(lookup.day || 0),
+    hour: Number(lookup.hour || 0),
+    minute: Number(lookup.minute || 0),
+    second: Number(lookup.second || 0)
+  };
+}
+
+function localDateTimeToUtcIso(dateValue, timeValue, timeZone) {
+  const dateParts = String(dateValue || "").trim().split("-");
+  const timeParts = String(timeValue || "").trim().split(":");
+
+  if (dateParts.length !== 3 || timeParts.length < 2) {
+    return null;
+  }
+
+  const year = Number(dateParts[0]);
+  const month = Number(dateParts[1]);
+  const day = Number(dateParts[2]);
+  const hour = Number(timeParts[0]);
+  const minute = Number(timeParts[1]);
+
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute)
+  ) {
+    return null;
+  }
+
+  const guess = new Date(Date.UTC(year, month - 1, day, hour, minute, 0, 0));
+  const zoneParts = formatZoneParts(guess, timeZone);
+  const desiredMs = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+  const zoneMs = Date.UTC(
+    zoneParts.year,
+    zoneParts.month - 1,
+    zoneParts.day,
+    zoneParts.hour,
+    zoneParts.minute,
+    zoneParts.second || 0,
+    0
+  );
+  const offsetMs = zoneMs - desiredMs;
+
+  return new Date(guess.getTime() - offsetMs).toISOString();
+}
+
+function hasExplicitTimeZone(startAt) {
+  return /(?:Z|[+-]\d{2}:\d{2})$/i.test(String(startAt || "").trim());
+}
+
+function extractLocalDateTimeFromStartAt(startAt) {
+  const match = String(startAt || "")
+    .trim()
+    .match(/^(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2})(?::\d{2}(?:\.\d{1,3})?)?$/);
+
+  if (!match) {
+    return null;
+  }
+
+  return {
+    date: match[1],
+    time: match[2]
+  };
+}
+
+function normalizePublicStartAt(input, { salonSlug, salonId, salonTimeZone }) {
+  const targetTimeZone = getSalonBookingTimeZone({
+    salonSlug,
+    salonId,
+    salonTimeZone
+  });
+
+  const providedDate = String(input?.date || input?.booking_date || "").trim();
+  const providedTime = String(input?.time || input?.booking_time || "").trim();
+  const providedStartAt = String(input?.start_at || "").trim();
+
+  if (providedDate && providedTime) {
+    return localDateTimeToUtcIso(providedDate, providedTime, targetTimeZone);
+  }
+
+  if (!providedStartAt) {
+    return null;
+  }
+
+  if (hasExplicitTimeZone(providedStartAt)) {
+    const parsed = new Date(providedStartAt);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  }
+
+  const localParts = extractLocalDateTimeFromStartAt(providedStartAt);
+  if (!localParts) {
+    return null;
+  }
+
+  return localDateTimeToUtcIso(localParts.date, localParts.time, targetTimeZone);
+}
+
 export async function publicCreateBooking(req, res) {
   const client = await pool.connect();
 
@@ -55,10 +205,20 @@ export async function publicCreateBooking(req, res) {
     const rawBody = JSON.stringify(req.body || {});
     const requestHash = crypto.createHash("sha256").update(rawBody).digest("hex");
 
-    const { master_id, service_id, start_at, client_id, client_payload, client_name, phone } = req.body;
+    const {
+      master_id,
+      service_id,
+      start_at,
+      date,
+      time,
+      client_id,
+      client_payload,
+      client_name,
+      phone
+    } = req.body;
     const { slug } = req.params;
 
-    if (!master_id || !service_id || !start_at) {
+    if (!master_id || !service_id || (!start_at && (!date || !time))) {
       return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
     }
 
@@ -121,6 +281,7 @@ export async function publicCreateBooking(req, res) {
 
     const salonId = salonRes.rows[0].id;
     const salonSlug = salonRes.rows[0].slug;
+    const salonTimeZone = salonRes.rows[0].timezone || salonRes.rows[0].time_zone || salonRes.rows[0].tz || null;
 
     const serviceLinkRes = await client.query(
       `SELECT
@@ -168,19 +329,33 @@ export async function publicCreateBooking(req, res) {
       return res.status(400).json({ ok: false, error: "MASTER_NOT_IN_SALON" });
     }
 
-    const startDate = new Date(start_at);
+    const normalizedStartAt = normalizePublicStartAt(
+      {
+        start_at,
+        date,
+        time
+      },
+      {
+        salonSlug,
+        salonId,
+        salonTimeZone
+      }
+    );
 
-    if (Number.isNaN(startDate.getTime())) {
+    if (!normalizedStartAt) {
       await client.query("ROLLBACK");
       return res.status(400).json({ ok: false, error: "INVALID_START_AT" });
     }
 
+    const startDate = new Date(normalizedStartAt);
+    const endAtIso = new Date(startDate.getTime() + durationMin * 60000).toISOString();
+
     const endAtRes = await client.query(
       `SELECT ($1::timestamptz + ($2 || ' minutes')::interval) AS end_at`,
-      [start_at, durationMin]
+      [normalizedStartAt, durationMin]
     );
 
-    const end_at = endAtRes.rows[0].end_at;
+    const end_at = endAtRes.rows[0].end_at || endAtIso;
 
     let finalClientId = client_id || null;
     let finalClientName = null;
@@ -247,7 +422,7 @@ export async function publicCreateBooking(req, res) {
          AND start_at = $2
          AND end_at = $3
        LIMIT 1`,
-      [master_id, start_at, end_at]
+      [master_id, normalizedStartAt, end_at]
     );
 
     let slot_id;
@@ -273,7 +448,7 @@ export async function publicCreateBooking(req, res) {
          (master_id, salon_id, start_at, end_at, status, request_id)
          VALUES ($1, $2, $3, $4, 'reserved', $5)
          RETURNING id`,
-        [master_id, salonId, start_at, end_at, idempotencyKey]
+        [master_id, salonId, normalizedStartAt, end_at, idempotencyKey]
       );
 
       slot_id = slotInsert.rows[0].id;
@@ -290,7 +465,7 @@ export async function publicCreateBooking(req, res) {
         salonId,
         salonSlug,
         master_id,
-        start_at,
+        normalizedStartAt,
         end_at,
         idempotencyKey,
         slot_id,
