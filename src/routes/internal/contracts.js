@@ -21,6 +21,14 @@ throw new Error(errorCode);
 return n;
 }
 
+function normalizePositiveInteger(value, errorCode){
+const n = Number(value);
+if(!Number.isInteger(n) || n <= 0){
+throw new Error(errorCode);
+}
+return n;
+}
+
 function normalizeNonNegativeNumber(value, errorCode, fallback = 0){
 const n = normalizeContractNumber(value ?? fallback, errorCode);
 if(n < 0){
@@ -372,6 +380,10 @@ const result = await db.query(query, values);
 return result.rows;
 }
 
+function isUuidLike(value){
+return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value ?? "").trim());
+}
+
 function resolveFixedRentPeriodStart(contract){
 const rawStart = contract?.effective_from || contract?.created_at || null;
 const startDate = rawStart ? new Date(rawStart) : new Date();
@@ -529,6 +541,199 @@ LIMIT 1`,
 );
 
 return existing.rows[0] || null;
+}
+
+async function confirmFixedRentPayment({
+client,
+salonSlug,
+contract,
+obligation,
+amount,
+currency,
+provider,
+paymentMethod,
+idempotencyKey
+}){
+const paymentConfirmedAt = new Date().toISOString();
+const paymentMetadata = {
+source: "fixed_rent_manual_confirm",
+created_by_flow: "salon_rent_payment_confirm",
+salon_slug: salonSlug
+};
+
+const existingByKey = await client.query(
+`SELECT
+id,
+contract_id,
+obligation_id,
+contract_salon_id,
+contract_master_id,
+salon_id,
+master_id,
+amount,
+currency,
+provider,
+payment_method,
+status,
+idempotency_key,
+confirmed_at,
+voided_at,
+cancelled_at,
+created_at,
+updated_at,
+metadata
+FROM public.contract_rent_payments
+WHERE provider=$1
+AND idempotency_key=$2
+LIMIT 1
+FOR UPDATE`,
+[provider, idempotencyKey]
+);
+
+if(existingByKey.rows.length){
+const existing = existingByKey.rows[0];
+
+if(String(existing.obligation_id || "") !== String(obligation.id)){
+const err = new Error("RENT_PAYMENT_IDEMPOTENCY_CONFLICT");
+err.code = "RENT_PAYMENT_IDEMPOTENCY_CONFLICT";
+throw err;
+}
+
+if(String(existing.status || "").toLowerCase() !== "confirmed"){
+await client.query(
+`UPDATE public.contract_rent_payments
+SET status='confirmed',
+    confirmed_at = COALESCE(confirmed_at, $1::timestamptz),
+    updated_at = now(),
+    payment_method = COALESCE(payment_method, $2),
+    metadata = COALESCE(metadata, '{}'::jsonb) || $3::jsonb
+WHERE id=$4`,
+[paymentConfirmedAt, paymentMethod, JSON.stringify(paymentMetadata), existing.id]
+);
+}
+
+const paymentRow = await client.query(
+`SELECT
+id,
+contract_id,
+obligation_id,
+contract_salon_id,
+contract_master_id,
+salon_id,
+master_id,
+amount,
+currency,
+provider,
+payment_method,
+status,
+idempotency_key,
+confirmed_at,
+voided_at,
+cancelled_at,
+created_at,
+updated_at,
+metadata
+FROM public.contract_rent_payments
+WHERE id=$1
+LIMIT 1`,
+[existing.id]
+);
+
+return {
+payment: paymentRow.rows[0],
+idempotent: true
+};
+}
+
+const inserted = await client.query(
+`INSERT INTO public.contract_rent_payments (
+contract_id,
+obligation_id,
+contract_salon_id,
+contract_master_id,
+salon_id,
+master_id,
+amount,
+currency,
+provider,
+payment_method,
+status,
+idempotency_key,
+confirmed_at,
+metadata
+)
+VALUES (
+$1,
+$2,
+$3,
+$4,
+$5,
+$6,
+$7,
+$8,
+$9,
+$10,
+'confirmed',
+$11,
+$12::timestamptz,
+$13::jsonb
+)
+ON CONFLICT (provider, idempotency_key)
+DO UPDATE SET
+status='confirmed',
+confirmed_at = COALESCE(public.contract_rent_payments.confirmed_at, EXCLUDED.confirmed_at),
+updated_at = now(),
+payment_method = COALESCE(public.contract_rent_payments.payment_method, EXCLUDED.payment_method),
+metadata = COALESCE(public.contract_rent_payments.metadata, '{}'::jsonb) || EXCLUDED.metadata
+RETURNING
+id,
+contract_id,
+obligation_id,
+contract_salon_id,
+contract_master_id,
+salon_id,
+master_id,
+amount,
+currency,
+provider,
+payment_method,
+status,
+idempotency_key,
+confirmed_at,
+voided_at,
+cancelled_at,
+created_at,
+updated_at,
+metadata`,
+[
+contract.id,
+obligation.id,
+obligation.contract_salon_id,
+obligation.contract_master_id,
+obligation.salon_id,
+obligation.master_id,
+amount,
+currency,
+provider,
+paymentMethod,
+idempotencyKey,
+paymentConfirmedAt,
+JSON.stringify(paymentMetadata)
+]
+);
+
+const payment = inserted.rows[0];
+
+if(!payment || String(payment.obligation_id || "") !== String(obligation.id)){
+const err = new Error("RENT_PAYMENT_IDEMPOTENCY_CONFLICT");
+err.code = "RENT_PAYMENT_IDEMPOTENCY_CONFLICT";
+throw err;
+}
+
+return {
+payment,
+idempotent: false
+};
 }
 
 async function activateFixedRentContract(db, contract, source){
@@ -1023,6 +1228,246 @@ return res.status(500).json({
 ok:false,
 error:"RENT_OBLIGATIONS_FETCH_FAILED"
 });
+
+}
+
+});
+
+r.post("/salons/:slug/rent-payments/confirm", async (req,res)=>{
+
+const { slug } = req.params;
+const body = req.body || {};
+const obligationId = String(body.obligation_id ?? body.obligationId ?? "").trim();
+const amount = normalizePositiveInteger(body.amount, "RENT_PAYMENT_AMOUNT_INVALID");
+const rawCurrency = normalizeContractText(body.currency, "");
+const currency = String(rawCurrency || "").trim().toUpperCase();
+const provider = normalizeContractText(body.provider, "manual");
+const paymentMethod = normalizeContractText(body.payment_method, "cash");
+const idempotencyKey = String(body.idempotency_key ?? body.idempotencyKey ?? "").trim();
+
+if(!obligationId || !isUuidLike(obligationId)){
+return res.status(400).json({ ok:false, error:"RENT_OBLIGATION_ID_REQUIRED" });
+}
+
+if(!currency){
+return res.status(400).json({ ok:false, error:"RENT_PAYMENT_CURRENCY_INVALID" });
+}
+
+if(!idempotencyKey){
+return res.status(400).json({ ok:false, error:"RENT_PAYMENT_IDEMPOTENCY_KEY_REQUIRED" });
+}
+
+let client = null;
+
+try{
+
+const salon = await pool.query(
+`SELECT id, slug
+ FROM salons
+ WHERE slug=$1
+ LIMIT 1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ ok:false, error:"SALON_NOT_FOUND" });
+}
+
+if(!hasSalonOwnership(req, salon.rows[0].id)){
+return res.status(403).json({ ok:false, error:"SALON_ACCESS_DENIED" });
+}
+
+client = await pool.connect();
+await client.query("BEGIN");
+
+const obligationResult = await client.query(
+`SELECT ro.*
+ FROM public.contract_rent_obligations ro
+ WHERE ro.id=$1
+ FOR UPDATE`,
+[obligationId]
+);
+
+if(!obligationResult.rows.length){
+await client.query("ROLLBACK");
+return res.status(404).json({ ok:false, error:"RENT_OBLIGATION_NOT_FOUND" });
+}
+
+const obligation = obligationResult.rows[0];
+
+if(Number(obligation.salon_id) !== Number(salon.rows[0].id)){
+await client.query("ROLLBACK");
+return res.status(403).json({ ok:false, error:"RENT_OBLIGATION_SALON_MISMATCH" });
+}
+
+if(!['open','paid'].includes(String(obligation.status || "").toLowerCase())){
+await client.query("ROLLBACK");
+return res.status(409).json({ ok:false, error:"RENT_OBLIGATION_STATUS_INVALID" });
+}
+
+if(Number(obligation.amount) !== amount){
+await client.query("ROLLBACK");
+return res.status(409).json({ ok:false, error:"RENT_PAYMENT_AMOUNT_MISMATCH" });
+}
+
+if(String(obligation.currency || "").trim().toUpperCase() !== currency){
+await client.query("ROLLBACK");
+return res.status(409).json({ ok:false, error:"RENT_PAYMENT_CURRENCY_MISMATCH" });
+}
+
+const contractResult = await client.query(
+`SELECT *
+ FROM public.contracts
+ WHERE id=$1
+ LIMIT 1`,
+[obligation.contract_id]
+);
+
+if(!contractResult.rows.length){
+await client.query("ROLLBACK");
+return res.status(404).json({ ok:false, error:"RENT_CONTRACT_NOT_FOUND" });
+}
+
+const contract = contractResult.rows[0];
+if(String(contract.status || "").toLowerCase() !== "active"){
+await client.query("ROLLBACK");
+return res.status(409).json({ ok:false, error:"RENT_CONTRACT_NOT_ACTIVE" });
+}
+
+if(String(contract.terms_json?.model || "").trim().toLowerCase() !== "fixed_rent"){
+await client.query("ROLLBACK");
+return res.status(409).json({ ok:false, error:"RENT_CONTRACT_MODEL_NOT_FIXED_RENT" });
+}
+
+const confirmedBeforeResult = await client.query(
+`SELECT
+id,
+contract_id,
+obligation_id,
+contract_salon_id,
+contract_master_id,
+salon_id,
+master_id,
+amount,
+currency,
+provider,
+payment_method,
+status,
+idempotency_key,
+confirmed_at,
+voided_at,
+cancelled_at,
+created_at,
+updated_at,
+metadata
+FROM public.contract_rent_payments
+WHERE obligation_id=$1
+AND status='confirmed'
+LIMIT 1`,
+[obligation.id]
+);
+
+let paymentResult = null;
+let idempotent = false;
+
+if(confirmedBeforeResult.rows.length){
+paymentResult = confirmedBeforeResult.rows[0];
+idempotent = true;
+} else {
+const rentPaymentResult = await confirmFixedRentPayment({
+client,
+salonSlug: slug,
+contract,
+obligation,
+amount,
+currency,
+provider,
+paymentMethod,
+idempotencyKey
+});
+
+paymentResult = rentPaymentResult.payment;
+idempotent = rentPaymentResult.idempotent;
+}
+
+if(String(paymentResult?.obligation_id || "") !== String(obligation.id)){
+await client.query("ROLLBACK");
+return res.status(409).json({ ok:false, error:"RENT_PAYMENT_IDEMPOTENCY_CONFLICT" });
+}
+
+const paidAtValue = paymentResult?.confirmed_at || new Date().toISOString();
+const paidObligationResult = await client.query(
+`UPDATE public.contract_rent_obligations
+SET status='paid',
+    paid_at = COALESCE(paid_at, $1::timestamptz),
+    updated_at = now(),
+    metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+      'paid_by_flow', 'salon_rent_payment_confirm',
+      'rent_payment_id', $2::text
+    )
+WHERE id=$3
+AND status IN ('open','paid')
+RETURNING
+id,
+contract_id,
+contract_salon_id,
+contract_master_id,
+salon_id,
+master_id,
+period_start,
+period_end,
+amount,
+currency,
+status,
+due_at,
+paid_at,
+created_at,
+updated_at,
+cancelled_at,
+metadata`,
+[paidAtValue, String(paymentResult.id), obligation.id]
+);
+
+if(!paidObligationResult.rows.length){
+await client.query("ROLLBACK");
+return res.status(409).json({ ok:false, error:"RENT_OBLIGATION_STATUS_INVALID" });
+}
+
+await client.query("COMMIT");
+
+return res.json({
+ok:true,
+payment: paymentResult,
+obligation: paidObligationResult.rows[0],
+idempotent
+});
+
+}catch(err){
+
+if(client){
+try{ await client.query("ROLLBACK"); }catch(e){}
+}
+
+if(err?.code === "RENT_PAYMENT_IDEMPOTENCY_CONFLICT" || err?.message === "RENT_PAYMENT_IDEMPOTENCY_CONFLICT"){
+return res.status(409).json({ ok:false, error:"RENT_PAYMENT_IDEMPOTENCY_CONFLICT" });
+}
+
+if(err?.message === "RENT_PAYMENT_AMOUNT_INVALID"){
+return res.status(400).json({ ok:false, error:"RENT_PAYMENT_AMOUNT_INVALID" });
+}
+
+console.error("RENT_PAYMENT_CONFIRM_ERROR", err);
+
+return res.status(500).json({
+ok:false,
+error:"RENT_PAYMENT_CONFIRM_FAILED"
+});
+
+}finally{
+
+if(client){
+client.release();
+}
 
 }
 
