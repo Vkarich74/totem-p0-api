@@ -459,7 +459,6 @@ export function createPublicRouter(deps) {
           JOIN services s ON s.id = sms.service_pk
           JOIN masters m ON m.id = sms.master_id
           WHERE sms.salon_id = $1
-            AND COALESCE(sms.active, true) = true
             AND COALESCE(m.active, true) = true
           ORDER BY sms.id DESC
           `,
