@@ -361,8 +361,20 @@ await db.query("ROLLBACK");
 return res.status(404).json({ok:false,error:"CONTRACT_NOT_FOUND"});
 }
 
-const salonId = contract.rows[0].salon_id;
-const masterId = contract.rows[0].master_id;
+const currentContract = contract.rows[0];
+const salonId = currentContract.salon_id;
+const masterId = currentContract.master_id;
+const acceptModel = String(currentContract.terms_json?.model || "percentage").toLowerCase();
+
+if(acceptModel !== "percentage"){
+await db.query("ROLLBACK");
+return res.status(409).json({
+ok:false,
+error:"CONTRACT_ACCEPT_MODEL_NOT_MONEY_READY",
+message:"Активация расчётов пока доступна только для процентной модели. Договор сохранён, но salary/fixed_rent/hybrid не переводятся в активный расчётный контур до расширения money-core.",
+model:acceptModel
+});
+}
 
 await db.query(`
 UPDATE contracts
