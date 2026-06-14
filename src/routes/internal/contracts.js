@@ -134,6 +134,126 @@ function normalizeDate(date){
   }
 }
 
+function parseQueryDate(value, errorCode){
+const raw = String(value ?? '').trim();
+if(!raw){
+return null;
+}
+
+const date = new Date(raw);
+if(Number.isNaN(date.getTime())){
+throw new Error(errorCode);
+}
+
+return date.toISOString();
+}
+
+function parseStatusFilter(value){
+const raw = String(value ?? '').trim();
+if(!raw){
+return [];
+}
+
+return raw
+.split(',')
+.map((item) => item.trim())
+.filter(Boolean);
+}
+
+function buildRentObligationsSummary(rows){
+const summary = {
+open_count: 0,
+paid_count: 0,
+cancelled_count: 0,
+voided_count: 0,
+open_amount: 0,
+paid_amount: 0
+};
+
+for(const row of rows){
+const amount = Number(row.amount || 0);
+const status = String(row.status || '').toLowerCase();
+
+if(status === 'open'){
+summary.open_count += 1;
+summary.open_amount += amount;
+continue;
+}
+
+if(status === 'paid'){
+summary.paid_count += 1;
+summary.paid_amount += amount;
+continue;
+}
+
+if(status === 'cancelled'){
+summary.cancelled_count += 1;
+continue;
+}
+
+if(status === 'voided'){
+summary.voided_count += 1;
+}
+}
+
+return summary;
+}
+
+async function fetchRentObligationsByOwner({
+db,
+ownerColumn,
+ownerId,
+filters = {}
+}){
+const values = [ownerId];
+const clauses = [`${ownerColumn} = $1`];
+
+const statusList = parseStatusFilter(filters.status);
+if(statusList.length){
+values.push(statusList);
+clauses.push(`status = ANY($${values.length}::text[])`);
+}
+
+const from = parseQueryDate(filters.from, 'INVALID_FROM_DATE');
+if(from){
+values.push(from);
+clauses.push(`period_start >= $${values.length}::timestamptz`);
+}
+
+const to = parseQueryDate(filters.to, 'INVALID_TO_DATE');
+if(to){
+values.push(to);
+clauses.push(`period_start <= $${values.length}::timestamptz`);
+}
+
+const query = `
+SELECT
+id,
+contract_id,
+contract_salon_id,
+contract_master_id,
+salon_id,
+master_id,
+period_start,
+period_end,
+amount,
+currency,
+status,
+due_at,
+paid_at,
+created_at,
+updated_at,
+cancelled_at,
+metadata
+FROM public.contract_rent_obligations
+WHERE ${clauses.join(' AND ')}
+ORDER BY due_at ASC NULLS LAST, period_start DESC
+`;
+
+const result = await db.query(query, values);
+return result.rows;
+}
+
 export default function buildContractsRouter(pool, internalReadRateLimit){
 
 const r = express.Router();
@@ -445,6 +565,110 @@ console.error("CONTRACT_ARCHIVE_ERROR",err);
 res.status(500).json({
 ok:false,
 error:"CONTRACT_ARCHIVE_FAILED"
+});
+
+}
+
+});
+
+/* RENT OBLIGATIONS FOR SALON */
+r.get("/salons/:slug/rent-obligations", internalReadRateLimit, async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id
+ FROM salons
+ WHERE slug=$1
+ LIMIT 1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ ok:false, error:"SALON_NOT_FOUND" });
+}
+
+const obligations = await fetchRentObligationsByOwner({
+db: pool,
+ownerColumn: 'salon_id',
+ownerId: salon.rows[0].id,
+filters: req.query || {}
+});
+
+return res.json({
+ok:true,
+obligations,
+summary: buildRentObligationsSummary(obligations)
+});
+
+}catch(err){
+
+if(err.message === 'INVALID_FROM_DATE' || err.message === 'INVALID_TO_DATE'){
+return res.status(400).json({
+ok:false,
+error:err.message
+});
+}
+
+console.error("SALON_RENT_OBLIGATIONS_FETCH_ERROR", err);
+
+return res.status(500).json({
+ok:false,
+error:"RENT_OBLIGATIONS_FETCH_FAILED"
+});
+
+}
+
+});
+
+/* RENT OBLIGATIONS FOR MASTER */
+r.get("/masters/:slug/rent-obligations", internalReadRateLimit, async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const master = await pool.query(
+`SELECT id
+ FROM masters
+ WHERE slug=$1
+ LIMIT 1`,
+[slug]
+);
+
+if(!master.rows.length){
+return res.status(404).json({ ok:false, error:"MASTER_NOT_FOUND" });
+}
+
+const obligations = await fetchRentObligationsByOwner({
+db: pool,
+ownerColumn: 'master_id',
+ownerId: master.rows[0].id,
+filters: req.query || {}
+});
+
+return res.json({
+ok:true,
+obligations,
+summary: buildRentObligationsSummary(obligations)
+});
+
+}catch(err){
+
+if(err.message === 'INVALID_FROM_DATE' || err.message === 'INVALID_TO_DATE'){
+return res.status(400).json({
+ok:false,
+error:err.message
+});
+}
+
+console.error("MASTER_RENT_OBLIGATIONS_FETCH_ERROR", err);
+
+return res.status(500).json({
+ok:false,
+error:"RENT_OBLIGATIONS_FETCH_FAILED"
 });
 
 }
