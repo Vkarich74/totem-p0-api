@@ -265,6 +265,22 @@ export async function publicLifecycle(req, res) {
         [bookingId]
       );
 
+      await pool.query(
+        `
+        UPDATE payments
+           SET status = 'rejected',
+               is_active = false,
+               rejected_at = NOW(),
+               rejection_reason = 'booking_cancelled',
+               updated_at = NOW()
+         WHERE booking_id = $1
+           AND provider = 'direct'
+           AND status = 'pending'
+           AND is_active = true
+        `,
+        [bookingId]
+      );
+
       try {
         const booking = rows[0];
         const notificationPayload = {

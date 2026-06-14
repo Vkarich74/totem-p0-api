@@ -1801,6 +1801,7 @@ ORDER BY p.updated_at DESC NULLS LAST, p.id DESC
 LIMIT 1
 ) pay ON true
 WHERE b.master_id=$1
+AND LOWER(COALESCE(b.status, '')) NOT IN ('cancelled', 'canceled', 'отмена')
 AND pay.provider='direct'
 AND pay.status='pending'
 AND pay.is_active=true
