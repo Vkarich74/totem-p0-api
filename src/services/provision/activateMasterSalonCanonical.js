@@ -177,6 +177,180 @@ async function upsertFixedRentObligation(db, contract, source, createdByFlow){
   return existing.rows[0] || null;
 }
 
+async function resolveSalaryOwnership(db, contract){
+  const salonTextId = String(contract?.salon_id ?? "").trim();
+  const masterTextId = String(contract?.master_id ?? "").trim();
+  const salonNumericId = safeInt(salonTextId);
+  const masterNumericId = safeInt(masterTextId);
+
+  if(!salonNumericId || !masterNumericId){
+    const err = new Error("SALARY_PARTIES_RESOLVE_FAILED");
+    err.code = "SALARY_PARTIES_RESOLVE_FAILED";
+    throw err;
+  }
+
+  const salon = await db.query(
+    `SELECT id
+     FROM salons
+     WHERE id=$1
+     LIMIT 1`,
+    [salonNumericId]
+  );
+
+  const master = await db.query(
+    `SELECT id
+     FROM masters
+     WHERE id=$1
+     LIMIT 1`,
+    [masterNumericId]
+  );
+
+  if(!salon.rows.length || !master.rows.length){
+    const err = new Error("SALARY_PARTIES_RESOLVE_FAILED");
+    err.code = "SALARY_PARTIES_RESOLVE_FAILED";
+    throw err;
+  }
+
+  return {
+    contract_salon_id: salonTextId,
+    contract_master_id: masterTextId,
+    salon_id: salon.rows[0].id,
+    master_id: master.rows[0].id
+  };
+}
+
+function resolveSalaryPeriodStart(contract){
+  const rawStart = contract?.effective_from || contract?.created_at || null;
+  const startDate = rawStart ? new Date(rawStart) : new Date();
+
+  if(Number.isNaN(startDate.getTime())){
+    const err = new Error("SALARY_PERIOD_NOT_SUPPORTED");
+    err.code = "SALARY_PERIOD_NOT_SUPPORTED";
+    throw err;
+  }
+
+  return startDate.toISOString();
+}
+
+async function upsertSalaryObligation(db, contract, source, createdByFlow){
+  if(String(contract?.terms_json?.model || "").trim().toLowerCase() !== "salary"){
+    const err = new Error("SALARY_MODEL_REQUIRED");
+    err.code = "SALARY_MODEL_REQUIRED";
+    throw err;
+  }
+
+  const salaryPeriod = String(contract?.terms_json?.salary_period || "monthly").trim().toLowerCase();
+  if(!["weekly", "monthly"].includes(salaryPeriod)){
+    const err = new Error("SALARY_PERIOD_NOT_SUPPORTED");
+    err.code = "SALARY_PERIOD_NOT_SUPPORTED";
+    throw err;
+  }
+
+  const salaryAmount = Number(contract?.terms_json?.salary_amount);
+  if(!Number.isInteger(salaryAmount) || salaryAmount <= 0){
+    const err = new Error("SALARY_AMOUNT_INVALID");
+    err.code = "SALARY_AMOUNT_INVALID";
+    throw err;
+  }
+
+  const ownership = await resolveSalaryOwnership(db, contract);
+  const periodStart = resolveSalaryPeriodStart(contract);
+  const periodStartDate = new Date(periodStart);
+  const periodEndDate = new Date(periodStartDate.getTime());
+  if(salaryPeriod === "weekly"){
+    periodEndDate.setUTCDate(periodEndDate.getUTCDate() + 7);
+  }else{
+    periodEndDate.setUTCMonth(periodEndDate.getUTCMonth() + 1);
+  }
+  const periodEnd = periodEndDate.toISOString();
+  const currency = normalizeText(contract?.terms_json?.currency || "KGS").toUpperCase();
+  const metadata = JSON.stringify({
+    source,
+    salary_period: salaryPeriod,
+    created_by_flow: createdByFlow,
+    direction: "salon_to_master"
+  });
+
+  const inserted = await db.query(
+    `INSERT INTO public.contract_salary_obligations (
+       contract_id,
+       contract_salon_id,
+       contract_master_id,
+       salon_id,
+       master_id,
+       period_start,
+       period_end,
+       amount,
+       currency,
+       status,
+       due_at,
+       metadata
+     )
+     VALUES (
+       $1,
+       $2,
+       $3,
+       $4,
+       $5,
+       $6::timestamptz,
+       $7::timestamptz,
+       $8,
+       $9,
+       'open',
+       $7::timestamptz,
+       $10::jsonb
+     )
+     ON CONFLICT (contract_id, period_start, period_end)
+     DO NOTHING
+     RETURNING *`,
+    [
+      contract.id,
+      ownership.contract_salon_id,
+      ownership.contract_master_id,
+      ownership.salon_id,
+      ownership.master_id,
+      periodStart,
+      periodEnd,
+      salaryAmount,
+      currency,
+      metadata
+    ]
+  );
+
+  if(inserted.rows.length){
+    return inserted.rows[0];
+  }
+
+  const existing = await db.query(
+    `SELECT
+       id,
+       contract_id,
+       contract_salon_id,
+       contract_master_id,
+       salon_id,
+       master_id,
+       period_start,
+       period_end,
+       amount,
+       currency,
+       status,
+       due_at,
+       paid_at,
+       created_at,
+       updated_at,
+       cancelled_at,
+       metadata
+     FROM public.contract_salary_obligations
+     WHERE contract_id=$1
+       AND period_start=$2::timestamptz
+       AND period_end=$3::timestamptz
+     LIMIT 1`,
+    [contract.id, periodStart, periodEnd]
+  );
+
+  return existing.rows[0] || null;
+}
+
 function validateActivateInput(payload = {}){
   const salonSlug = normalizeText(payload.salon_slug);
   const masterSlug = normalizeText(payload.master_slug);
@@ -306,9 +480,12 @@ async function acceptPendingContractIfNeeded(db, salonId, masterId, acceptContra
 
   if(existingActive.rows.length){
     const activeContract = existingActive.rows[0];
-    const obligation = String(activeContract?.terms_json?.model || "").trim().toLowerCase() === "fixed_rent"
+    const activeModel = String(activeContract?.terms_json?.model || "").trim().toLowerCase();
+    const obligation = activeModel === "fixed_rent"
       ? await upsertFixedRentObligation(db, activeContract, "fixed_rent_provisioning_accept", "activate_master_salon_canonical")
-      : null;
+      : activeModel === "salary"
+        ? await upsertSalaryObligation(db, activeContract, "salary_provisioning_accept", "activate_master_salon_canonical")
+        : null;
 
     return {
       updated: false,
@@ -381,9 +558,12 @@ async function acceptPendingContractIfNeeded(db, salonId, masterId, acceptContra
   );
 
   const activeContract = activated.rows[0] || pending.rows[0];
-  const obligation = String(activeContract?.terms_json?.model || "").trim().toLowerCase() === "fixed_rent"
+  const activeModel = String(activeContract?.terms_json?.model || "").trim().toLowerCase();
+  const obligation = activeModel === "fixed_rent"
     ? await upsertFixedRentObligation(db, activeContract, "fixed_rent_provisioning_accept", "activate_master_salon_canonical")
-    : null;
+    : activeModel === "salary"
+      ? await upsertSalaryObligation(db, activeContract, "salary_provisioning_accept", "activate_master_salon_canonical")
+      : null;
 
   return {
     updated: true,

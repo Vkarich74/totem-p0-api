@@ -771,6 +771,215 @@ obligation
 };
 }
 
+async function resolveSalaryOwnership(db, contract){
+const salonTextId = String(contract?.salon_id ?? "").trim();
+const masterTextId = String(contract?.master_id ?? "").trim();
+const salonNumericId = safeInt(salonTextId);
+const masterNumericId = safeInt(masterTextId);
+
+if(!salonNumericId || !masterNumericId){
+const err = new Error("SALARY_PARTIES_RESOLVE_FAILED");
+err.code = "SALARY_PARTIES_RESOLVE_FAILED";
+throw err;
+}
+
+const salon = await db.query(
+`SELECT id
+ FROM salons
+ WHERE id=$1
+ LIMIT 1`,
+[salonNumericId]
+);
+
+const master = await db.query(
+`SELECT id
+ FROM masters
+ WHERE id=$1
+ LIMIT 1`,
+[masterNumericId]
+);
+
+if(!salon.rows.length || !master.rows.length){
+const err = new Error("SALARY_PARTIES_RESOLVE_FAILED");
+err.code = "SALARY_PARTIES_RESOLVE_FAILED";
+throw err;
+}
+
+return {
+contract_salon_id: salonTextId,
+contract_master_id: masterTextId,
+salon_id: salon.rows[0].id,
+master_id: master.rows[0].id
+};
+}
+
+function resolveSalaryPeriodStart(contract){
+const rawStart = contract?.effective_from || contract?.created_at || null;
+const startDate = rawStart ? new Date(rawStart) : new Date();
+
+if(Number.isNaN(startDate.getTime())){
+const err = new Error("SALARY_PERIOD_NOT_SUPPORTED");
+err.code = "SALARY_PERIOD_NOT_SUPPORTED";
+throw err;
+}
+
+return startDate.toISOString();
+}
+
+async function upsertSalaryObligation(db, contract, source, createdByFlow){
+if(String(contract?.terms_json?.model || "").trim().toLowerCase() !== "salary"){
+const err = new Error("SALARY_MODEL_REQUIRED");
+err.code = "SALARY_MODEL_REQUIRED";
+throw err;
+}
+
+const salaryPeriod = String(contract?.terms_json?.salary_period || "monthly").trim().toLowerCase();
+if(!["weekly", "monthly"].includes(salaryPeriod)){
+const err = new Error("SALARY_PERIOD_NOT_SUPPORTED");
+err.code = "SALARY_PERIOD_NOT_SUPPORTED";
+throw err;
+}
+
+const salaryAmount = Number(contract?.terms_json?.salary_amount);
+if(!Number.isInteger(salaryAmount) || salaryAmount <= 0){
+const err = new Error("SALARY_AMOUNT_INVALID");
+err.code = "SALARY_AMOUNT_INVALID";
+throw err;
+}
+
+const ownership = await resolveSalaryOwnership(db, contract);
+const periodStart = resolveSalaryPeriodStart(contract);
+const periodStartDate = new Date(periodStart);
+const periodEndDate = new Date(periodStartDate.getTime());
+if(salaryPeriod === "weekly"){
+periodEndDate.setUTCDate(periodEndDate.getUTCDate() + 7);
+}else{
+periodEndDate.setUTCMonth(periodEndDate.getUTCMonth() + 1);
+}
+const periodEnd = periodEndDate.toISOString();
+const currency = String(contract?.terms_json?.currency || "KGS").trim().toUpperCase();
+const metadata = JSON.stringify({
+source,
+salary_period: salaryPeriod,
+created_by_flow: createdByFlow,
+direction: "salon_to_master"
+});
+
+const inserted = await db.query(
+`INSERT INTO public.contract_salary_obligations (
+contract_id,
+contract_salon_id,
+contract_master_id,
+salon_id,
+master_id,
+period_start,
+period_end,
+amount,
+currency,
+status,
+due_at,
+metadata
+)
+VALUES (
+$1,
+$2,
+$3,
+$4,
+$5,
+$6::timestamptz,
+$7::timestamptz,
+$8,
+$9,
+'open',
+$7::timestamptz,
+$10::jsonb
+)
+ON CONFLICT (contract_id, period_start, period_end)
+DO NOTHING
+RETURNING *`,
+[
+contract.id,
+ownership.contract_salon_id,
+ownership.contract_master_id,
+ownership.salon_id,
+ownership.master_id,
+periodStart,
+periodEnd,
+salaryAmount,
+currency,
+metadata
+]
+);
+
+if(inserted.rows.length){
+return inserted.rows[0];
+}
+
+const existing = await db.query(
+`SELECT
+ id,
+ contract_id,
+ contract_salon_id,
+ contract_master_id,
+ salon_id,
+ master_id,
+ period_start,
+ period_end,
+ amount,
+ currency,
+ status,
+ due_at,
+paid_at,
+created_at,
+updated_at,
+cancelled_at,
+metadata
+FROM public.contract_salary_obligations
+WHERE contract_id=$1
+AND period_start=$2::timestamptz
+AND period_end=$3::timestamptz
+LIMIT 1`,
+[contract.id, periodStart, periodEnd]
+);
+
+return existing.rows[0] || null;
+}
+
+async function activateSalaryContract(db, contract, source){
+await db.query(
+`UPDATE contracts
+ SET status='archived',
+ archived_at=NOW()
+ WHERE salon_id=$1
+ AND master_id=$2
+ AND status='active'
+ AND id<>$3`,
+[contract.salon_id, contract.master_id, contract.id]
+);
+
+const activated = await db.query(
+`UPDATE contracts
+ SET status='active',
+ archived_at=NULL
+ WHERE id=$1
+ RETURNING *`,
+[contract.id]
+);
+
+const activeContract = activated.rows[0] || contract;
+const obligation = await upsertSalaryObligation(
+db,
+activeContract,
+source,
+source === "salary_accept" ? "contract_accept" : source
+);
+
+return {
+contract: activeContract,
+obligation
+};
+}
+
 export default function buildContractsRouter(pool, internalReadRateLimit){
 
 const r = express.Router();
@@ -1002,6 +1211,39 @@ const currentContract = contract.rows[0];
 const salonId = currentContract.salon_id;
 const masterId = currentContract.master_id;
 const acceptModel = String(currentContract.terms_json?.model || "percentage").toLowerCase();
+
+if(acceptModel === "salary"){
+try{
+const activated = await activateSalaryContract(db, currentContract, "salary_accept");
+
+await db.query("COMMIT");
+
+return res.json({
+ok:true,
+contract:activated.contract,
+obligation:activated.obligation
+});
+}catch(err){
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+if(err.message === "SALARY_AMOUNT_INVALID"
+|| err.message === "SALARY_PARTIES_RESOLVE_FAILED"
+|| err.message === "SALARY_PERIOD_NOT_SUPPORTED"
+|| err.message === "SALARY_MODEL_REQUIRED"){
+return res.status(400).json({
+ok:false,
+error:err.message
+});
+}
+
+console.error("CONTRACT_ACCEPT_SALARY_ERROR", err);
+
+return res.status(500).json({
+ok:false,
+error:"CONTRACT_ACCEPT_FAILED"
+});
+}
+}
 
 if(acceptModel === "fixed_rent"){
 try{
