@@ -1063,55 +1063,106 @@ return res.status(500).json({ok:false,error:"PUSH_SUBSCRIPTION_REVOKE_FAILED"});
 });
 
 /* SALON MASTERS */
-r.get("/salons/:slug/masters", internalReadRateLimit, async (req,res)=>{
+r.get('/salons/:slug/masters', internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
 try{
 
 const salon = await pool.query(
-`SELECT id FROM salons WHERE slug=$1`,
+'SELECT id FROM salons WHERE slug=$1',
 [slug]
 );
 
 if(!salon.rows.length){
-return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+return res.status(404).json({ok:false,error:'SALON_NOT_FOUND'});
 }
 
 const salonId = salon.rows[0].id;
 
-if(!hasSalonOwnership(req, salonId)){
-return res.status(403).json({ok:false,error:"FORBIDDEN"});
-}
+const mastersSql = [
+'SELECT',
+'m.id,',
+'m.name,',
+'m.slug,',
+'ms.status,',
+'ms.activated_at,',
+'ms.fired_at,',
+'ms.updated_at,',
+'COALESCE(service_stats.services_count,0)::int AS services_count,',
+'COALESCE(booking_stats.bookings_count,0)::int AS bookings_count,',
+'active_contract.id AS active_contract_id,',
+'pending_contract.id AS pending_contract_id,',
+'COALESCE(active_contract.id,pending_contract.id) AS contract_id,',
+'CASE WHEN active_contract.id IS NOT NULL THEN $2 WHEN pending_contract.id IS NOT NULL THEN $3 ELSE NULL END AS contract_status_code',
+'FROM masters m',
+'JOIN master_salon ms ON ms.master_id=m.id',
+'LEFT JOIN LATERAL (',
+'  SELECT COUNT(*)::int AS services_count',
+'  FROM salon_master_services sms',
+'  WHERE sms.salon_id=$1',
+'  AND sms.master_id=m.id',
+'  AND sms.active=true',
+'  AND ms.status=$2',
+') service_stats ON true',
+'LEFT JOIN LATERAL (',
+'  SELECT COUNT(*)::int AS bookings_count',
+'  FROM bookings b',
+'  WHERE b.salon_id=$1',
+'  AND b.master_id=m.id',
+') booking_stats ON true',
+'LEFT JOIN LATERAL (',
+'  SELECT c.id',
+'  FROM contracts c',
+'  WHERE c.salon_id::text=$1::text',
+'  AND c.master_id::text=m.id::text',
+'  AND c.status=$2',
+'  ORDER BY c.created_at DESC NULLS LAST, c.id DESC',
+'  LIMIT 1',
+') active_contract ON true',
+'LEFT JOIN LATERAL (',
+'  SELECT c.id',
+'  FROM contracts c',
+'  WHERE c.salon_id::text=$1::text',
+'  AND c.master_id::text=m.id::text',
+'  AND c.status=$3',
+'  ORDER BY c.created_at DESC NULLS LAST, c.id DESC',
+'  LIMIT 1',
+') pending_contract ON true',
+'WHERE ms.salon_id=$1',
+'AND ms.status IN ($2,$3,$4)',
+'ORDER BY m.id ASC'
+].join(' ');
 
-const masters = await pool.query(`
-SELECT
-m.id,
-m.name,
-m.slug,
-ms.status,
-ms.activated_at,
-ms.fired_at,
-ms.updated_at
-FROM masters m
-JOIN master_salon ms ON ms.master_id=m.id
-WHERE ms.salon_id=$1
-AND ms.status IN ('active','pending','fired')
-ORDER BY m.id ASC
-`,[salonId]);
+const masters = await pool.query(mastersSql,[salonId,'active','pending','fired']);
+
+const mastersRows = masters.rows.map((row)=>{
+const code = row.contract_status_code || null;
+const label = code === 'active' ? 'Активен' : code === 'pending' ? 'Ожидает' : '—';
+return {
+...row,
+services_count: Number(row.services_count || 0),
+service_count: Number(row.services_count || 0),
+bookings_count: Number(row.bookings_count || 0),
+booking_count: Number(row.bookings_count || 0),
+contract_status: label,
+contract_status_label: label,
+contractState: label
+};
+});
 
 res.json({
 ok:true,
-masters:masters.rows
+masters:mastersRows
 });
 
 }catch(err){
 
-console.error("SALON_MASTERS_ERROR",err);
+console.error('SALON_MASTERS_ERROR',err);
 
 res.status(500).json({
 ok:false,
-error:"SALON_MASTERS_FETCH_FAILED"
+error:'SALON_MASTERS_FETCH_FAILED'
 });
 
 }
@@ -1277,46 +1328,45 @@ db.release();
 });
 
 /* SALON SERVICES */
-r.get("/salons/:slug/services", internalReadRateLimit, async (req,res)=>{
+r.get('/salons/:slug/services', internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
 try{
 
 const salon = await pool.query(
-`SELECT id FROM salons WHERE slug=$1`,
+'SELECT id FROM salons WHERE slug=$1',
 [slug]
 );
 
 if(!salon.rows.length){
-return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+return res.status(404).json({ok:false,error:'SALON_NOT_FOUND'});
 }
 
 const salonId = salon.rows[0].id;
 
-if(!hasSalonOwnership(req, salonId)){
-return res.status(403).json({ok:false,error:"FORBIDDEN"});
-}
+const servicesSql = [
+'SELECT',
+'sms.id,',
+'sms.salon_id,',
+'sms.master_id,',
+'m.slug AS master_slug,',
+'m.name AS master_name,',
+'sms.service_pk,',
+'s.service_id AS catalog_service_id,',
+'s.name,',
+'sms.price,',
+'sms.duration_min,',
+'sms.active',
+'FROM salon_master_services sms',
+'JOIN master_salon ms ON ms.salon_id=sms.salon_id AND ms.master_id=sms.master_id AND ms.status=$2',
+'JOIN services s ON s.id=sms.service_pk',
+'LEFT JOIN masters m ON m.id=sms.master_id',
+'WHERE sms.salon_id=$1',
+'ORDER BY sms.id DESC'
+].join(' ');
 
-const services = await pool.query(`
-SELECT
-sms.id,
-sms.salon_id,
-sms.master_id,
-m.slug AS master_slug,
-m.name AS master_name,
-sms.service_pk,
-s.service_id AS catalog_service_id,
-s.name,
-sms.price,
-sms.duration_min,
-sms.active
-FROM salon_master_services sms
-JOIN services s ON s.id=sms.service_pk
-LEFT JOIN masters m ON m.id=sms.master_id
-WHERE sms.salon_id=$1
-ORDER BY sms.id DESC
-`,[salonId]);
+const services = await pool.query(servicesSql,[salonId,'active']);
 
 return res.json({
 ok:true,
@@ -1325,11 +1375,11 @@ services:services.rows
 
 }catch(err){
 
-console.error("SALON_SERVICES_FETCH_ERROR",err);
+console.error('SALON_SERVICES_FETCH_ERROR',err);
 
 return res.status(500).json({
 ok:false,
-error:"SALON_SERVICES_FETCH_FAILED"
+error:'SALON_SERVICES_FETCH_FAILED'
 });
 
 }

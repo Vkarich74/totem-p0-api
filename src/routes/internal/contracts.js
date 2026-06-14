@@ -1,26 +1,129 @@
 import express from "express";
 
+function normalizeContractText(value, fallback){
+const text = String(value ?? '').trim();
+return text || fallback;
+}
+
+function normalizeContractNumber(value, errorCode){
+const n = Number(value);
+if(!Number.isFinite(n)){
+throw new Error(errorCode);
+}
+return n;
+}
+
+function normalizePositiveAmount(value, errorCode){
+const n = normalizeContractNumber(value, errorCode);
+if(n <= 0){
+throw new Error(errorCode);
+}
+return n;
+}
+
+function normalizeNonNegativeNumber(value, errorCode, fallback = 0){
+const n = normalizeContractNumber(value ?? fallback, errorCode);
+if(n < 0){
+throw new Error(errorCode);
+}
+return n;
+}
+
+function normalizeCurrency(terms){
+return normalizeContractText(terms?.currency, 'KGS').toUpperCase();
+}
+
+function normalizePayoutSchedule(terms){
+return normalizeContractText(terms?.payout_schedule, 'manual');
+}
+
+function validatePercentSplit(terms){
+const master = normalizeNonNegativeNumber(terms?.master_percent, 'INVALID_PERCENT_NUMBER');
+const salon = normalizeNonNegativeNumber(terms?.salon_percent, 'INVALID_PERCENT_NUMBER');
+const platform = normalizeNonNegativeNumber(terms?.platform_percent, 'INVALID_PERCENT_NUMBER');
+const total = master + salon + platform;
+if(Math.abs(total - 100) > 0.000001){
+throw new Error('INVALID_PERCENT_TOTAL');
+}
+return {
+master_percent: master,
+salon_percent: salon,
+platform_percent: platform
+};
+}
+
+function normalizeTermsObject(terms){
+if(typeof terms === 'string'){
+try{
+return JSON.parse(terms || '{}');
+}catch{
+throw new Error('INVALID_TERMS_JSON');
+}
+}
+if(!terms || typeof terms !== 'object' || Array.isArray(terms)){
+throw new Error('INVALID_TERMS_JSON');
+}
+return terms;
+}
+
 function validateTerms(terms){
-  const master = Number(terms?.master_percent ?? 0);
-  const salon = Number(terms?.salon_percent ?? 0);
-  const platform = Number(terms?.platform_percent ?? 0);
+terms = normalizeTermsObject(terms || {});
+const model = normalizeContractText(terms.model, 'percentage').toLowerCase();
 
-  if(master < 0 || salon < 0 || platform < 0){
-    throw new Error("INVALID_PERCENT_NEGATIVE");
-  }
+if(!['percentage','fixed_rent','salary','hybrid'].includes(model)){
+throw new Error('INVALID_CONTRACT_MODEL');
+}
 
-  const total = master + salon + platform;
+if(model === 'percentage'){
+const split = validatePercentSplit(terms);
+return {
+...terms,
+model: 'percentage',
+...split,
+payout_schedule: normalizePayoutSchedule(terms),
+...(terms.currency ? { currency: normalizeCurrency(terms) } : {})
+};
+}
 
-  if(total !== 100){
-    throw new Error("INVALID_PERCENT_TOTAL");
-  }
+if(model === 'fixed_rent'){
+return {
+...terms,
+model: 'fixed_rent',
+rent_amount: normalizePositiveAmount(terms.rent_amount, 'INVALID_RENT_AMOUNT'),
+rent_period: normalizeContractText(terms.rent_period, 'monthly'),
+currency: normalizeCurrency(terms),
+payout_schedule: normalizePayoutSchedule(terms),
+settlement_mode: normalizeContractText(terms.settlement_mode, 'accrued')
+};
+}
 
-  return {
-    master_percent: master,
-    salon_percent: salon,
-    platform_percent: platform,
-    payout_schedule: terms?.payout_schedule || "manual"
-  };
+if(model === 'salary'){
+return {
+...terms,
+model: 'salary',
+salary_amount: normalizePositiveAmount(terms.salary_amount, 'INVALID_SALARY_AMOUNT'),
+salary_period: normalizeContractText(terms.salary_period, 'monthly'),
+currency: normalizeCurrency(terms),
+payout_schedule: normalizePayoutSchedule(terms),
+bonus_percent: normalizeNonNegativeNumber(terms.bonus_percent, 'INVALID_BONUS_PERCENT', 0)
+};
+}
+
+const baseType = normalizeContractText(terms.base_type, 'salary').toLowerCase();
+if(!['salary','fixed_rent'].includes(baseType)){
+throw new Error('INVALID_HYBRID_BASE_TYPE');
+}
+
+return {
+...terms,
+model: 'hybrid',
+base_type: baseType,
+base_amount: normalizePositiveAmount(terms.base_amount, 'INVALID_HYBRID_BASE_AMOUNT'),
+base_period: normalizeContractText(terms.base_period, 'monthly'),
+currency: normalizeCurrency(terms),
+...validatePercentSplit(terms),
+payout_schedule: normalizePayoutSchedule(terms)
+};
 }
 
 function normalizeDate(date){
