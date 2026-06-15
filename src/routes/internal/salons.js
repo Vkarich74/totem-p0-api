@@ -11,6 +11,9 @@ saveOwnerPushSubscription
 import {
 listOwnerQrPaymentsForOwner
 } from "../../money-core/ownerQrPayments.service.js";
+import {
+getPaymentProjectionList
+} from "./paymentProjection.js";
 
 export default function buildSalonsRouter(pool, internalReadRateLimit){
 
@@ -2507,6 +2510,63 @@ console.error("SALON_PAYMENTS_ERROR",err);
 res.status(500).json({
 ok:false,
 error:"SALON_PAYMENTS_FETCH_FAILED"
+});
+
+}
+
+});
+
+/* SALON PAYMENT PROJECTIONS */
+r.get("/salons/:slug/payments/projection", internalReadRateLimit, async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id, name, slug FROM salons WHERE slug=$1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonRow = salon.rows[0];
+
+if(!hasSalonOwnership(req, salonRow.id)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
+const rawMasterId = req.query.master_id;
+let masterIdFilter = null;
+
+if(rawMasterId !== undefined && rawMasterId !== null && String(rawMasterId).trim() !== ""){
+masterIdFilter = safeInt(rawMasterId);
+if(!masterIdFilter){
+return res.status(400).json({ok:false,error:"INVALID_MASTER_ID"});
+}
+}
+
+const response = await getPaymentProjectionList(pool, {
+scopeType: "salon",
+scopeRow: salonRow,
+scopeId: salonRow.id,
+masterIdFilter,
+from: req.query.from ?? null,
+to: req.query.to ?? null,
+status: req.query.status ?? null
+});
+
+res.json(response);
+
+}catch(err){
+
+console.error("SALON_PAYMENT_PROJECTION_LIST_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"SALON_PAYMENT_PROJECTION_LIST_FAILED"
 });
 
 }

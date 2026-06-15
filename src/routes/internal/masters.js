@@ -12,6 +12,9 @@ saveOwnerPushSubscription
 import {
 listOwnerQrPaymentsForOwner
 } from "../../money-core/ownerQrPayments.service.js";
+import {
+getPaymentProjectionList
+} from "./paymentProjection.js";
 
 export default function buildMastersRouter(pool, internalReadRateLimit){
 
@@ -2155,6 +2158,52 @@ console.error("MASTER_PAYMENT_PROJECTION_ERROR",err);
 res.status(500).json({
 ok:false,
 error:"MASTER_PAYMENT_PROJECTION_FAILED"
+});
+
+}
+
+});
+
+/* MASTER PAYMENT PROJECTIONS */
+r.get("/masters/:slug/payments/projection", internalReadRateLimit, async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const master = await pool.query(
+`SELECT id, name, slug FROM masters WHERE slug=$1`,
+[slug]
+);
+
+if(!master.rows.length){
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+const masterRow = master.rows[0];
+
+if(!hasMasterOwnership(req, masterRow.id)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
+const response = await getPaymentProjectionList(pool, {
+scopeType: "master",
+scopeRow: masterRow,
+scopeId: masterRow.id,
+from: req.query.from ?? null,
+to: req.query.to ?? null,
+status: req.query.status ?? null
+});
+
+res.json(response);
+
+}catch(err){
+
+console.error("MASTER_PAYMENT_PROJECTION_LIST_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"MASTER_PAYMENT_PROJECTION_LIST_FAILED"
 });
 
 }
