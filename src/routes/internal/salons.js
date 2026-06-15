@@ -2561,7 +2561,7 @@ b.end_at AS booking_end_at,
 b.created_at AS booking_created_at,
 b.service_id,
 COALESCE(svc.name, b.service_id::text) AS service_name,
-COALESCE(cli.name, b.client_name) AS client_name,
+COALESCE(cli.name, b.client_id::text) AS client_name,
 COALESCE(sal.name, sal.slug, b.salon_id::text) AS salon_name,
 COALESCE(mas.name, mas.slug, b.master_id::text) AS master_name
 FROM public.payments p
