@@ -80,6 +80,195 @@ const identitySalonIds = getIdentitySalonIds(req?.identity);
 return identitySalonIds.has(targetSalonId);
 }
 
+function roundProjectionMoney(value){
+const numeric = Number(value);
+if(!Number.isFinite(numeric)){
+return 0;
+}
+
+return Math.round((numeric + Number.EPSILON) * 100) / 100;
+}
+
+function normalizeProjectionDate(value){
+if(!value){
+return null;
+}
+
+const date = value instanceof Date ? value : new Date(value);
+if(Number.isNaN(date.getTime())){
+return null;
+}
+
+return date.toISOString();
+}
+
+function normalizeProjectionPercent(value){
+const numeric = Number(value);
+return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function buildPaymentProjectionResponse({
+payment,
+contract,
+scopeSalons,
+scopeMasters
+}){
+const grossAmount = roundProjectionMoney(payment.gross_amount ?? payment.amount ?? 0);
+const contractTerms = contract?.terms_json && typeof contract.terms_json === "object"
+? { ...contract.terms_json }
+: {};
+const contractModel = String(contractTerms.model || "").trim().toLowerCase() || null;
+const currency = String(contractTerms.currency || "KGS").trim().toUpperCase() || "KGS";
+const bookingCreatedAt = normalizeProjectionDate(payment.booking_created_at);
+const paymentCreatedAt = normalizeProjectionDate(payment.payment_created_at);
+const contractBasis = bookingCreatedAt ? "booking_created_at" : (paymentCreatedAt ? "payment_created_at" : null);
+
+const collectorOwnerType = String(payment.collector_owner_type || "").trim() || null;
+const collectorOwnerId = payment.collector_owner_id == null ? null : Number(payment.collector_owner_id);
+
+let collectorLabel = null;
+if(collectorOwnerType === "salon"){
+collectorLabel = scopeSalons?.name || scopeSalons?.slug || null;
+}else if(collectorOwnerType === "master"){
+collectorLabel = scopeMasters?.name || scopeMasters?.slug || null;
+}
+
+let masterPercent = null;
+let salonPercent = null;
+let platformPercent = null;
+let masterShare = null;
+let salonShare = null;
+let platformShare = null;
+let shareResidual = null;
+let calculationStatus = "blocked_missing_contract";
+let settlementStatus = "blocked_missing_contract";
+let custodyHolderType = null;
+let custodyHolderId = null;
+let transferFromType = null;
+let transferFromId = null;
+let transferToType = null;
+let transferToId = null;
+let transferAmount = null;
+let includedInOpenBalance = false;
+let includedInHistory = true;
+let carryForward = false;
+let openTransferAmount = 0;
+let settledTransferAmount = 0;
+let remainingTransferAmount = 0;
+
+if(contract){
+masterPercent = normalizeProjectionPercent(contractTerms.master_percent);
+salonPercent = normalizeProjectionPercent(contractTerms.salon_percent);
+platformPercent = normalizeProjectionPercent(contractTerms.platform_percent);
+
+masterShare = roundProjectionMoney(grossAmount * masterPercent / 100);
+salonShare = roundProjectionMoney(grossAmount * salonPercent / 100);
+platformShare = roundProjectionMoney(grossAmount * platformPercent / 100);
+shareResidual = roundProjectionMoney(grossAmount - masterShare - salonShare - platformShare);
+
+if(collectorOwnerType === "salon"){
+custodyHolderType = "salon";
+custodyHolderId = Number(payment.salon_id) || null;
+transferFromType = "salon";
+transferFromId = Number(payment.salon_id) || null;
+transferToType = "master";
+transferToId = Number(payment.master_id) || null;
+transferAmount = masterShare;
+calculationStatus = "shares_calculated_transfer_ready";
+settlementStatus = transferAmount > 0 ? "transfer_required" : "no_transfer_required";
+includedInOpenBalance = transferAmount > 0;
+carryForward = transferAmount > 0;
+openTransferAmount = transferAmount > 0 ? transferAmount : 0;
+remainingTransferAmount = transferAmount > 0 ? transferAmount : 0;
+}else if(collectorOwnerType === "master"){
+custodyHolderType = "master";
+custodyHolderId = Number(payment.master_id) || null;
+transferFromType = "master";
+transferFromId = Number(payment.master_id) || null;
+transferToType = "salon";
+transferToId = Number(payment.salon_id) || null;
+transferAmount = salonShare;
+calculationStatus = "shares_calculated_transfer_ready";
+settlementStatus = transferAmount > 0 ? "transfer_required" : "no_transfer_required";
+includedInOpenBalance = transferAmount > 0;
+carryForward = transferAmount > 0;
+openTransferAmount = transferAmount > 0 ? transferAmount : 0;
+remainingTransferAmount = transferAmount > 0 ? transferAmount : 0;
+}else{
+calculationStatus = "shares_calculated_transfer_blocked_missing_collector";
+settlementStatus = "blocked_missing_collector";
+includedInOpenBalance = false;
+carryForward = false;
+}
+
+if(transferAmount === 0){
+calculationStatus = "no_transfer_required";
+settlementStatus = "no_transfer_required";
+includedInOpenBalance = false;
+carryForward = false;
+openTransferAmount = 0;
+remainingTransferAmount = 0;
+}
+}
+
+return {
+payment_id: Number(payment.payment_id),
+booking_id: Number(payment.booking_id),
+salon_id: Number(payment.salon_id),
+master_id: Number(payment.master_id),
+gross_amount: grossAmount,
+currency,
+payment_status: payment.payment_status ?? null,
+payment_provider: payment.payment_provider ?? null,
+method: payment.method ?? null,
+booking_status: payment.booking_status ?? null,
+booking_start_at: payment.booking_start_at ?? null,
+booking_end_at: payment.booking_end_at ?? null,
+booking_created_at: bookingCreatedAt || paymentCreatedAt,
+service_id: payment.service_id ?? null,
+service_name: payment.service_name ?? null,
+client_name: payment.client_name ?? null,
+collector_owner_type: collectorOwnerType,
+collector_owner_id: collectorOwnerId,
+collector_label: collectorLabel,
+confirmed_by_user_id: payment.confirmed_by_user_id ?? null,
+confirmed_at: normalizeProjectionDate(payment.confirmed_at),
+applied_contract_id: contract?.id ?? null,
+applied_contract_model: contractModel,
+contract_basis: contract ? contractBasis : null,
+contract_terms_snapshot: contractTerms,
+master_percent: masterPercent,
+salon_percent: salonPercent,
+platform_percent: platformPercent,
+master_share: masterShare,
+salon_share: salonShare,
+platform_share: platformShare,
+share_residual: shareResidual,
+custody_holder_type: custodyHolderType,
+custody_holder_id: custodyHolderId,
+transfer_from_type: transferFromType,
+transfer_from_id: transferFromId,
+transfer_to_type: transferToType,
+transfer_to_id: transferToId,
+transfer_amount: transferAmount,
+calculation_status: calculationStatus,
+settlement_status: settlementStatus,
+settlement_anchor_id: null,
+settlement_anchor_type: null,
+settlement_period_type: "none",
+settlement_period_from: null,
+settlement_period_to: null,
+period_timezone: "Asia/Bishkek",
+week_start: "Monday",
+open_transfer_amount: openTransferAmount,
+settled_transfer_amount: settledTransferAmount,
+remaining_transfer_amount: remainingTransferAmount,
+included_in_open_balance: includedInOpenBalance,
+included_in_history: includedInHistory,
+carry_forward: carryForward
+};
+}
+
 function parseTime(value){
 const raw = String(value || "").trim();
 if(!/^\d{2}:\d{2}$/.test(raw)){
@@ -2318,6 +2507,132 @@ console.error("SALON_PAYMENTS_ERROR",err);
 res.status(500).json({
 ok:false,
 error:"SALON_PAYMENTS_FETCH_FAILED"
+});
+
+}
+
+});
+
+/* SALON PAYMENT PROJECTION */
+r.get("/salons/:slug/payments/:paymentId/projection", internalReadRateLimit, async (req,res)=>{
+
+const { slug, paymentId } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id, name, slug FROM salons WHERE slug=$1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonRow = salon.rows[0];
+
+if(!hasSalonOwnership(req, salonRow.id)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
+const targetPaymentId = safeInt(paymentId);
+if(!targetPaymentId){
+return res.status(400).json({ok:false,error:"INVALID_PAYMENT_ID"});
+}
+
+const projection = await pool.query(`
+SELECT
+p.id AS payment_id,
+b.id AS booking_id,
+p.amount AS gross_amount,
+p.provider AS payment_provider,
+p.status AS payment_status,
+p.method,
+p.confirmed_by_user_id,
+p.confirmed_at,
+p.collector_owner_type,
+p.collector_owner_id,
+p.created_at AS payment_created_at,
+b.salon_id,
+b.master_id,
+b.status AS booking_status,
+b.start_at AS booking_start_at,
+b.end_at AS booking_end_at,
+b.created_at AS booking_created_at,
+b.service_id,
+COALESCE(svc.name, b.service_id::text) AS service_name,
+COALESCE(cli.name, b.client_name) AS client_name,
+COALESCE(sal.name, sal.slug, b.salon_id::text) AS salon_name,
+COALESCE(mas.name, mas.slug, b.master_id::text) AS master_name
+FROM public.payments p
+JOIN public.bookings b ON b.id = p.booking_id
+LEFT JOIN public.clients cli ON cli.id = b.client_id
+LEFT JOIN public.services svc ON svc.id = b.service_id
+LEFT JOIN public.salons sal ON sal.id = b.salon_id
+LEFT JOIN public.masters mas ON mas.id = b.master_id
+WHERE p.id = $1
+AND b.salon_id = $2
+LIMIT 1
+`,[
+targetPaymentId,
+salonRow.id
+]);
+
+if(!projection.rows.length){
+return res.status(404).json({ok:false,error:"PAYMENT_NOT_FOUND"});
+}
+
+const payment = projection.rows[0];
+
+const anchor = payment.booking_created_at || payment.payment_created_at || null;
+let contract = null;
+
+if(anchor){
+const contractResult = await pool.query(`
+SELECT
+c.id,
+c.terms_json,
+c.created_at,
+c.effective_from,
+c.archived_at,
+c.status
+FROM public.contracts c
+WHERE c.salon_id::text = $1::text
+AND c.master_id::text = $2::text
+AND LOWER(COALESCE(c.terms_json->>'model', '')) IN ('percentage', 'hybrid')
+AND c.created_at <= $3::timestamptz
+AND COALESCE(c.effective_from, c.created_at) <= $3::timestamptz
+AND (c.archived_at IS NULL OR c.archived_at > $3::timestamptz)
+ORDER BY COALESCE(c.effective_from, c.created_at) DESC, c.created_at DESC, c.id DESC
+LIMIT 1
+`,[
+String(payment.salon_id),
+String(payment.master_id),
+anchor
+]);
+
+contract = contractResult.rows[0] || null;
+}
+
+const response = buildPaymentProjectionResponse({
+payment,
+contract,
+scopeSalons: salonRow,
+scopeMasters: {
+name: payment.master_name,
+slug: String(payment.master_id)
+}
+});
+
+res.json(response);
+
+}catch(err){
+
+console.error("SALON_PAYMENT_PROJECTION_ERROR",err);
+
+res.status(500).json({
+ok:false,
+error:"SALON_PAYMENT_PROJECTION_FAILED"
 });
 
 }
