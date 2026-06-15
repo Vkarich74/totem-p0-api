@@ -2584,7 +2584,9 @@ return res.status(404).json({ok:false,error:"PAYMENT_NOT_FOUND"});
 
 const payment = projection.rows[0];
 
-const anchor = payment.booking_created_at || payment.payment_created_at || null;
+const bookingAnchor = payment.booking_created_at ? normalizeProjectionDate(payment.booking_created_at) : null;
+const paymentAnchor = payment.payment_created_at ? normalizeProjectionDate(payment.payment_created_at) : null;
+const anchor = bookingAnchor || paymentAnchor || null;
 let contract = null;
 
 if(anchor){
