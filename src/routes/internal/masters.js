@@ -2120,7 +2120,10 @@ WHERE c.salon_id::text = $1::text
 AND c.master_id::text = $2::text
 AND LOWER(COALESCE(c.terms_json->>'model', '')) IN ('percentage', 'hybrid')
 AND c.created_at <= $3::timestamptz
-AND COALESCE(c.effective_from, c.created_at) <= $3::timestamptz
+AND (
+  c.effective_from IS NULL
+  OR (c.effective_from AT TIME ZONE 'Asia/Bishkek') <= $3::timestamptz
+)
 AND (c.archived_at IS NULL OR c.archived_at > $3::timestamptz)
 ORDER BY COALESCE(c.effective_from, c.created_at) DESC, c.created_at DESC, c.id DESC
 LIMIT 1
