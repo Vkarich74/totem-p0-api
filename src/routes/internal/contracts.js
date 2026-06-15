@@ -325,6 +325,49 @@ summary.voided_count += 1;
 return summary;
 }
 
+function buildSalaryObligationsSummary(rows){
+const summary = {
+open_count: 0,
+open_amount: 0,
+paid_count: 0,
+paid_amount: 0,
+cancelled_count: 0,
+cancelled_amount: 0,
+voided_count: 0,
+voided_amount: 0
+};
+
+for(const row of rows){
+const amount = Number(row.amount || 0);
+const status = String(row.status || '').toLowerCase();
+
+if(status === 'open'){
+summary.open_count += 1;
+summary.open_amount += amount;
+continue;
+}
+
+if(status === 'paid'){
+summary.paid_count += 1;
+summary.paid_amount += amount;
+continue;
+}
+
+if(status === 'cancelled'){
+summary.cancelled_count += 1;
+summary.cancelled_amount += amount;
+continue;
+}
+
+if(status === 'voided'){
+summary.voided_count += 1;
+summary.voided_amount += amount;
+}
+}
+
+return summary;
+}
+
 async function fetchRentObligationsByOwner({
 db,
 ownerColumn,
@@ -1724,6 +1767,7 @@ filters: req.query || {}
 
 return res.json({
 ok:true,
+summary: buildSalaryObligationsSummary(obligations),
 obligations
 });
 
@@ -1779,6 +1823,7 @@ filters: req.query || {}
 
 return res.json({
 ok:true,
+summary: buildSalaryObligationsSummary(obligations),
 obligations
 });
 
