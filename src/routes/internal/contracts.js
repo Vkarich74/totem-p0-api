@@ -380,6 +380,65 @@ const result = await db.query(query, values);
 return result.rows;
 }
 
+async function fetchSalaryObligationsByOwner({
+db,
+ownerColumn,
+ownerId,
+filters = {}
+}){
+const values = [ownerId];
+const clauses = [`ro.${ownerColumn} = $1`];
+
+const statusList = parseStatusFilter(filters.status);
+if(statusList.length){
+values.push(statusList);
+clauses.push(`ro.status = ANY($${values.length}::text[])`);
+}
+
+const from = parseQueryDate(filters.from, 'INVALID_FROM_DATE');
+if(from){
+values.push(from);
+clauses.push(`ro.period_start >= $${values.length}::timestamptz`);
+}
+
+const to = parseQueryDate(filters.to, 'INVALID_TO_DATE');
+if(to){
+values.push(to);
+clauses.push(`ro.period_start <= $${values.length}::timestamptz`);
+}
+
+const query = `
+SELECT
+ro.id,
+ro.contract_id,
+ro.contract_salon_id,
+ro.contract_master_id,
+ro.salon_id,
+ro.master_id,
+ro.period_start,
+ro.period_end,
+ro.amount,
+ro.currency,
+ro.status,
+ro.due_at,
+ro.paid_at,
+ro.created_at,
+ro.updated_at,
+ro.cancelled_at,
+ro.metadata,
+COALESCE(m.name, m.slug, ro.contract_master_id) AS master_name,
+COALESCE(s.name, s.slug, ro.contract_salon_id) AS salon_name
+FROM public.contract_salary_obligations ro
+LEFT JOIN masters m ON m.id = ro.master_id
+LEFT JOIN salons s ON s.id = ro.salon_id
+WHERE ${clauses.join(' AND ')}
+ORDER BY ro.due_at ASC NULLS LAST, ro.created_at DESC
+`;
+
+const result = await db.query(query, values);
+return result.rows;
+}
+
 function isUuidLike(value){
 return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value ?? "").trim());
 }
@@ -1469,6 +1528,116 @@ console.error("MASTER_RENT_OBLIGATIONS_FETCH_ERROR", err);
 return res.status(500).json({
 ok:false,
 error:"RENT_OBLIGATIONS_FETCH_FAILED"
+});
+
+}
+
+});
+
+/* SALARY OBLIGATIONS FOR SALON */
+r.get("/salons/:slug/salary-obligations", internalReadRateLimit, async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id, name, slug
+ FROM salons
+ WHERE slug=$1
+ LIMIT 1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ ok:false, error:"SALON_NOT_FOUND" });
+}
+
+if(!hasSalonOwnership(req, salon.rows[0].id)){
+return res.status(403).json({ ok:false, error:"SALON_ACCESS_DENIED" });
+}
+
+const obligations = await fetchSalaryObligationsByOwner({
+db: pool,
+ownerColumn: 'salon_id',
+ownerId: salon.rows[0].id,
+filters: req.query || {}
+});
+
+return res.json({
+ok:true,
+obligations
+});
+
+}catch(err){
+
+if(err.message === 'INVALID_FROM_DATE' || err.message === 'INVALID_TO_DATE'){
+return res.status(400).json({
+ok:false,
+error:err.message
+});
+}
+
+console.error("SALON_SALARY_OBLIGATIONS_FETCH_ERROR", err);
+
+return res.status(500).json({
+ok:false,
+error:"SALARY_OBLIGATIONS_FETCH_FAILED"
+});
+
+}
+
+});
+
+/* SALARY OBLIGATIONS FOR MASTER */
+r.get("/masters/:slug/salary-obligations", internalReadRateLimit, async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const master = await pool.query(
+`SELECT id, name, slug
+ FROM masters
+ WHERE slug=$1
+ LIMIT 1`,
+[slug]
+);
+
+if(!master.rows.length){
+return res.status(404).json({ ok:false, error:"MASTER_NOT_FOUND" });
+}
+
+if(!hasMasterOwnership(req, master.rows[0].id)){
+return res.status(403).json({ ok:false, error:"MASTER_ACCESS_DENIED" });
+}
+
+const obligations = await fetchSalaryObligationsByOwner({
+db: pool,
+ownerColumn: 'master_id',
+ownerId: master.rows[0].id,
+filters: req.query || {}
+});
+
+return res.json({
+ok:true,
+obligations
+});
+
+}catch(err){
+
+if(err.message === 'INVALID_FROM_DATE' || err.message === 'INVALID_TO_DATE'){
+return res.status(400).json({
+ok:false,
+error:err.message
+});
+}
+
+console.error("MASTER_SALARY_OBLIGATIONS_FETCH_ERROR", err);
+
+return res.status(500).json({
+ok:false,
+error:"SALARY_OBLIGATIONS_FETCH_FAILED"
 });
 
 }
