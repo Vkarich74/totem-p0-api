@@ -351,6 +351,99 @@ async function upsertSalaryObligation(db, contract, source, createdByFlow){
   return existing.rows[0] || null;
 }
 
+function normalizeHybridBaseConfig(contract){
+  const model = String(contract?.terms_json?.model || "").trim().toLowerCase();
+  if(model !== "hybrid"){
+    const err = new Error("HYBRID_MODEL_REQUIRED");
+    err.code = "HYBRID_MODEL_REQUIRED";
+    throw err;
+  }
+
+  const baseType = normalizeText(contract?.terms_json?.base_type || "").toLowerCase();
+  if(!["salary", "fixed_rent"].includes(baseType)){
+    const err = new Error("HYBRID_BASE_TYPE_NOT_SUPPORTED");
+    err.code = "HYBRID_BASE_TYPE_NOT_SUPPORTED";
+    throw err;
+  }
+
+  const baseAmount = Number(contract?.terms_json?.base_amount);
+  if(!Number.isInteger(baseAmount) || baseAmount <= 0){
+    const err = new Error("HYBRID_BASE_AMOUNT_INVALID");
+    err.code = "HYBRID_BASE_AMOUNT_INVALID";
+    throw err;
+  }
+
+  const basePeriod = normalizeText(contract?.terms_json?.base_period || "monthly").toLowerCase();
+  if(baseType === "fixed_rent"){
+    if(basePeriod !== "monthly"){
+      const err = new Error("HYBRID_BASE_PERIOD_NOT_SUPPORTED");
+      err.code = "HYBRID_BASE_PERIOD_NOT_SUPPORTED";
+      throw err;
+    }
+  }else if(!["weekly", "monthly"].includes(basePeriod)){
+    const err = new Error("HYBRID_BASE_PERIOD_NOT_SUPPORTED");
+    err.code = "HYBRID_BASE_PERIOD_NOT_SUPPORTED";
+    throw err;
+  }
+
+  return {
+    baseType,
+    baseAmount,
+    basePeriod
+  };
+}
+
+async function upsertHybridObligation(db, contract, source, createdByFlow){
+  const { baseType, baseAmount, basePeriod } = normalizeHybridBaseConfig(contract);
+
+  if(baseType === "salary"){
+    const derivedContract = {
+      ...contract,
+      terms_json: {
+        ...contract.terms_json,
+        model: "salary",
+        salary_amount: baseAmount,
+        salary_period: basePeriod
+      }
+    };
+
+    try{
+      return await upsertSalaryObligation(db, derivedContract, source, createdByFlow);
+    }catch(err){
+      if(err?.code === "SALARY_PARTIES_RESOLVE_FAILED"){
+        const hybridErr = new Error("HYBRID_PARTIES_RESOLVE_FAILED");
+        hybridErr.code = "HYBRID_PARTIES_RESOLVE_FAILED";
+        throw hybridErr;
+      }
+
+      throw err;
+    }
+  }
+
+  const derivedContract = {
+    ...contract,
+    terms_json: {
+      ...contract.terms_json,
+      model: "fixed_rent",
+      rent_amount: baseAmount,
+      rent_period: basePeriod,
+      settlement_mode: normalizeText(contract?.terms_json?.settlement_mode || "accrued") || "accrued"
+    }
+  };
+
+  try{
+    return await upsertFixedRentObligation(db, derivedContract, source, createdByFlow);
+  }catch(err){
+    if(err?.code === "FIXED_RENT_PARTIES_RESOLVE_FAILED"){
+      const hybridErr = new Error("HYBRID_PARTIES_RESOLVE_FAILED");
+      hybridErr.code = "HYBRID_PARTIES_RESOLVE_FAILED";
+      throw hybridErr;
+    }
+
+    throw err;
+  }
+}
+
 function validateActivateInput(payload = {}){
   const salonSlug = normalizeText(payload.salon_slug);
   const masterSlug = normalizeText(payload.master_slug);
@@ -485,7 +578,9 @@ async function acceptPendingContractIfNeeded(db, salonId, masterId, acceptContra
       ? await upsertFixedRentObligation(db, activeContract, "fixed_rent_provisioning_accept", "activate_master_salon_canonical")
       : activeModel === "salary"
         ? await upsertSalaryObligation(db, activeContract, "salary_provisioning_accept", "activate_master_salon_canonical")
-        : null;
+        : activeModel === "hybrid"
+          ? await upsertHybridObligation(db, activeContract, "hybrid_provisioning_accept", "activate_master_salon_canonical")
+          : null;
 
     return {
       updated: false,
@@ -563,7 +658,9 @@ async function acceptPendingContractIfNeeded(db, salonId, masterId, acceptContra
     ? await upsertFixedRentObligation(db, activeContract, "fixed_rent_provisioning_accept", "activate_master_salon_canonical")
     : activeModel === "salary"
       ? await upsertSalaryObligation(db, activeContract, "salary_provisioning_accept", "activate_master_salon_canonical")
-      : null;
+      : activeModel === "hybrid"
+        ? await upsertHybridObligation(db, activeContract, "hybrid_provisioning_accept", "activate_master_salon_canonical")
+        : null;
 
   return {
     updated: true,

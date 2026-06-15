@@ -1004,6 +1004,130 @@ LIMIT 1`,
 return existing.rows[0] || null;
 }
 
+function normalizeHybridBaseConfig(contract){
+const model = String(contract?.terms_json?.model || "").trim().toLowerCase();
+if(model !== "hybrid"){
+const err = new Error("HYBRID_MODEL_REQUIRED");
+err.code = "HYBRID_MODEL_REQUIRED";
+throw err;
+}
+
+const baseType = normalizeContractText(contract?.terms_json?.base_type, "").toLowerCase();
+if(!["salary", "fixed_rent"].includes(baseType)){
+const err = new Error("HYBRID_BASE_TYPE_NOT_SUPPORTED");
+err.code = "HYBRID_BASE_TYPE_NOT_SUPPORTED";
+throw err;
+}
+
+const baseAmount = normalizePositiveAmount(contract?.terms_json?.base_amount, "HYBRID_BASE_AMOUNT_INVALID");
+const basePeriod = normalizeContractText(contract?.terms_json?.base_period, "monthly").toLowerCase();
+
+if(baseType === "fixed_rent"){
+if(basePeriod !== "monthly"){
+const err = new Error("HYBRID_BASE_PERIOD_NOT_SUPPORTED");
+err.code = "HYBRID_BASE_PERIOD_NOT_SUPPORTED";
+throw err;
+}
+}
+else if(!["weekly", "monthly"].includes(basePeriod)){
+const err = new Error("HYBRID_BASE_PERIOD_NOT_SUPPORTED");
+err.code = "HYBRID_BASE_PERIOD_NOT_SUPPORTED";
+throw err;
+}
+
+return {
+baseType,
+baseAmount,
+basePeriod
+};
+}
+
+async function upsertHybridObligation(db, contract, source, createdByFlow){
+const { baseType, baseAmount, basePeriod } = normalizeHybridBaseConfig(contract);
+
+if(baseType === "salary"){
+const derivedContract = {
+...contract,
+terms_json: {
+...contract.terms_json,
+model: "salary",
+salary_amount: baseAmount,
+salary_period: basePeriod
+}
+};
+
+try{
+return await upsertSalaryObligation(db, derivedContract, source, createdByFlow);
+}catch(err){
+if(err?.code === "SALARY_PARTIES_RESOLVE_FAILED"){
+const hybridErr = new Error("HYBRID_PARTIES_RESOLVE_FAILED");
+hybridErr.code = "HYBRID_PARTIES_RESOLVE_FAILED";
+throw hybridErr;
+}
+
+throw err;
+}
+}
+
+const derivedContract = {
+...contract,
+terms_json: {
+...contract.terms_json,
+model: "fixed_rent",
+rent_amount: baseAmount,
+rent_period: basePeriod,
+settlement_mode: normalizeContractText(contract?.terms_json?.settlement_mode, "accrued")
+}
+};
+
+try{
+return await upsertFixedRentObligation(db, derivedContract, source, createdByFlow);
+}catch(err){
+if(err?.code === "FIXED_RENT_PARTIES_RESOLVE_FAILED"){
+const hybridErr = new Error("HYBRID_PARTIES_RESOLVE_FAILED");
+hybridErr.code = "HYBRID_PARTIES_RESOLVE_FAILED";
+throw hybridErr;
+}
+
+throw err;
+}
+}
+
+async function activateHybridContract(db, contract, source){
+await db.query(
+`UPDATE contracts
+ SET status='archived',
+ archived_at=NOW()
+ WHERE salon_id=$1
+ AND master_id=$2
+ AND status='active'
+ AND id<>$3`,
+[contract.salon_id, contract.master_id, contract.id]
+);
+
+const activated = await db.query(
+`UPDATE contracts
+ SET status='active',
+ archived_at=NULL
+ WHERE id=$1
+ RETURNING *`,
+[contract.id]
+);
+
+const activeContract = activated.rows[0] || contract;
+const obligation = await upsertHybridObligation(
+db,
+activeContract,
+source,
+source === "hybrid_accept" ? "contract_accept" : source
+);
+
+return {
+contract: activeContract,
+obligation
+};
+}
+
 async function activateSalaryContract(db, contract, source){
 await db.query(
 `UPDATE contracts
@@ -1329,6 +1453,40 @@ error:err.message
 }
 
 console.error("CONTRACT_ACCEPT_FIXED_RENT_ERROR", err);
+
+return res.status(500).json({
+ok:false,
+error:"CONTRACT_ACCEPT_FAILED"
+});
+}
+}
+
+if(acceptModel === "hybrid"){
+try{
+const activated = await activateHybridContract(db, currentContract, "hybrid_accept");
+
+await db.query("COMMIT");
+
+return res.json({
+ok:true,
+contract:activated.contract,
+obligation:activated.obligation
+});
+}catch(err){
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+if(err.message === "HYBRID_BASE_TYPE_NOT_SUPPORTED"
+|| err.message === "HYBRID_BASE_AMOUNT_INVALID"
+|| err.message === "HYBRID_BASE_PERIOD_NOT_SUPPORTED"
+|| err.message === "HYBRID_PARTIES_RESOLVE_FAILED"
+|| err.message === "HYBRID_MODEL_REQUIRED"){
+return res.status(400).json({
+ok:false,
+error:err.message
+});
+}
+
+console.error("CONTRACT_ACCEPT_HYBRID_ERROR", err);
 
 return res.status(500).json({
 ok:false,
