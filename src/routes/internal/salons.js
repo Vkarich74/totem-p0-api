@@ -2968,11 +2968,23 @@ w.id AS wallet_id,
 w.owner_type,
 w.owner_id,
 w.currency,
-COALESCE(v.computed_balance_cents,0)::int AS balance
+COALESCE(SUM(CASE
+  WHEN le.id IS NULL THEN 0
+  WHEN le.reference_type='payment'
+    AND pay.provider='direct'
+    AND pay.status='confirmed'
+    AND (pay.collector_owner_type IS NULL OR pay.collector_owner_id IS NULL)
+  THEN 0
+  WHEN le.direction='credit' THEN COALESCE(le.amount_cents,0)
+  WHEN le.direction='debit' THEN -COALESCE(le.amount_cents,0)
+  ELSE 0
+END),0)::int AS balance
 FROM totem_test.wallets w
-LEFT JOIN totem_test.v_wallet_balance_computed v ON v.wallet_id=w.id
+LEFT JOIN totem_test.ledger_entries le ON le.wallet_id=w.id
+LEFT JOIN public.payments pay ON pay.id::text=le.reference_id::text
 WHERE w.owner_type='salon'
 AND w.owner_id=$1
+GROUP BY w.id, w.owner_type, w.owner_id, w.currency
 LIMIT 1
 `,[salonId]);
 
