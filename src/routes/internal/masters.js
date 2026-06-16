@@ -2761,7 +2761,20 @@ p.amount,
 p.status,
 p.created_at
 FROM payouts p LEFT JOIN bookings b ON b.id=p.booking_id
+LEFT JOIN LATERAL (
+  SELECT
+    pay.provider,
+    pay.status,
+    pay.collector_owner_type,
+    pay.collector_owner_id
+  FROM public.payments pay
+  WHERE pay.booking_id=p.booking_id
+    AND pay.is_active=true
+  ORDER BY pay.updated_at DESC NULLS LAST, pay.id DESC
+  LIMIT 1
+) pay ON true
 WHERE b.master_id=$1
+AND (pay.provider IS NULL OR NOT (pay.provider='direct' AND pay.status='confirmed' AND (pay.collector_owner_type IS NULL OR pay.collector_owner_id IS NULL)))
 ORDER BY p.created_at DESC
 LIMIT 50
 `,[master.id]);
