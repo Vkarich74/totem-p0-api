@@ -78,12 +78,7 @@ function buildPaymentProjectionResponse({
   scopeSalons,
   scopeMasters
 }){
-  const rawGrossAmount = roundProjectionMoney(payment.gross_amount ?? payment.amount ?? 0);
-  const paymentStatus = String(payment.payment_status || "").trim().toLowerCase();
-  const bookingStatus = String(payment.booking_status || "").trim().toLowerCase();
-  const isCancelledBooking = bookingStatus === "cancelled" || bookingStatus === "canceled" || bookingStatus === "rejected";
-  const isLiveMoney = paymentStatus === "confirmed" && !isCancelledBooking;
-  const grossAmount = isLiveMoney ? rawGrossAmount : 0;
+  const grossAmount = roundProjectionMoney(payment.gross_amount ?? payment.amount ?? 0);
   const contractTerms = contract?.terms_json && typeof contract.terms_json === "object"
     ? { ...contract.terms_json }
     : {};
@@ -120,7 +115,7 @@ function buildPaymentProjectionResponse({
   let transferToId = null;
   let transferAmount = null;
   let includedInOpenBalance = false;
-  let includedInHistory = isLiveMoney;
+  let includedInHistory = true;
   let carryForward = false;
   let openTransferAmount = 0;
   let settledTransferAmount = 0;
@@ -181,30 +176,12 @@ function buildPaymentProjectionResponse({
     }
   }
 
-  if(!isLiveMoney){
-    masterShare = 0;
-    salonShare = 0;
-    platformShare = 0;
-    shareResidual = 0;
-    transferAmount = 0;
-    calculationStatus = "not_financial_cancelled_or_rejected";
-    settlementStatus = "not_financial";
-    includedInOpenBalance = false;
-    includedInHistory = false;
-    carryForward = false;
-    openTransferAmount = 0;
-    settledTransferAmount = 0;
-    remainingTransferAmount = 0;
-  }
-
   return {
     payment_id: Number(payment.payment_id),
     booking_id: Number(payment.booking_id),
     salon_id: Number(payment.salon_id),
     master_id: Number(payment.master_id),
     gross_amount: grossAmount,
-    raw_gross_amount: rawGrossAmount,
-    live_money: isLiveMoney,
     currency,
     payment_status: payment.payment_status ?? null,
     payment_provider: payment.payment_provider ?? null,
@@ -357,13 +334,10 @@ ORDER BY b.created_at DESC, p.created_at DESC, p.id DESC
   return result.rows || [];
 }
 
-function buildProjectionSummary(rows, scopeType){
+function buildProjectionSummary(rows){
   const summary = {
     row_count: 0,
     gross_amount: 0,
-    live_gross_amount: 0,
-    master_income_amount: 0,
-    salon_income_amount: 0,
     open_balance_count: 0,
     open_balance_amount: 0,
     history_count: 0,
@@ -374,33 +348,16 @@ function buildProjectionSummary(rows, scopeType){
     settled_count: 0
   };
 
-  const normalizedScopeType = String(scopeType || "").trim().toLowerCase();
-
   for(const row of rows){
     const grossAmount = roundProjectionMoney(row?.gross_amount ?? 0);
-    const masterIncomeAmount = roundProjectionMoney(row?.master_share ?? 0);
-    const salonIncomeAmount = roundProjectionMoney(row?.salon_share ?? 0);
     const openBalanceAmount = roundProjectionMoney(row?.remaining_transfer_amount ?? row?.transfer_amount ?? 0);
     const calculationStatus = String(row?.calculation_status || "").toLowerCase();
     const settlementStatus = String(row?.settlement_status || "").toLowerCase();
-    const isLiveMoney = row?.live_money === true;
-    const scopedHistoryAmount = normalizedScopeType === "master"
-      ? masterIncomeAmount
-      : (normalizedScopeType === "salon" ? salonIncomeAmount : grossAmount);
 
     summary.row_count += 1;
-
-    if(isLiveMoney){
-      summary.gross_amount += grossAmount;
-      summary.live_gross_amount += grossAmount;
-      summary.master_income_amount += masterIncomeAmount;
-      summary.salon_income_amount += salonIncomeAmount;
-
-      if(row?.included_in_history){
-        summary.history_count += 1;
-        summary.history_amount += scopedHistoryAmount;
-      }
-    }
+    summary.gross_amount += grossAmount;
+    summary.history_count += 1;
+    summary.history_amount += grossAmount;
 
     if(row?.included_in_open_balance){
       summary.open_balance_count += 1;
@@ -426,7 +383,6 @@ function buildProjectionSummary(rows, scopeType){
 
   return summary;
 }
-
 
 function rowMatchesStatusFilter(row, statusList){
   if(!statusList.length){
@@ -493,7 +449,7 @@ export async function getPaymentProjectionList(pool, {
     ok: true,
     scope: buildProjectionScope(scopeType, scopeRow, masterIdFilter),
     filters,
-    summary: buildProjectionSummary(rows, scopeType),
+    summary: buildProjectionSummary(rows),
     rows
   };
 }
