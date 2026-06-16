@@ -2376,10 +2376,12 @@ const revenueToday = await pool.query(`
 SELECT COALESCE(SUM(COALESCE(le.amount_cents,0)),0)::int AS v
 FROM totem_test.ledger_entries le
 JOIN totem_test.wallets w ON w.id=le.wallet_id
+LEFT JOIN public.payments pay ON pay.id::text=le.reference_id::text
 WHERE w.owner_type='salon'
 AND w.owner_id=$1
 AND le.direction='credit'
 AND le.reference_type='payment'
+AND (pay.id IS NULL OR NOT (pay.provider='direct' AND pay.status='confirmed' AND (pay.collector_owner_type IS NULL OR pay.collector_owner_id IS NULL)))
 AND DATE(le.created_at)=CURRENT_DATE
 `,[salonId]);
 
@@ -2387,10 +2389,12 @@ const revenueMonth = await pool.query(`
 SELECT COALESCE(SUM(COALESCE(le.amount_cents,0)),0)::int AS v
 FROM totem_test.ledger_entries le
 JOIN totem_test.wallets w ON w.id=le.wallet_id
+LEFT JOIN public.payments pay ON pay.id::text=le.reference_id::text
 WHERE w.owner_type='salon'
 AND w.owner_id=$1
 AND le.direction='credit'
 AND le.reference_type='payment'
+AND (pay.id IS NULL OR NOT (pay.provider='direct' AND pay.status='confirmed' AND (pay.collector_owner_type IS NULL OR pay.collector_owner_id IS NULL)))
 AND le.created_at >= CURRENT_DATE - INTERVAL '29 days'
 `,[salonId]);
 
@@ -2398,10 +2402,12 @@ const paymentsTotal = await pool.query(`
 SELECT COUNT(*)::int AS v
 FROM totem_test.ledger_entries le
 JOIN totem_test.wallets w ON w.id=le.wallet_id
+LEFT JOIN public.payments pay ON pay.id::text=le.reference_id::text
 WHERE w.owner_type='salon'
 AND w.owner_id=$1
 AND le.direction='credit'
 AND le.reference_type='payment'
+AND (pay.id IS NULL OR NOT (pay.provider='direct' AND pay.status='confirmed' AND (pay.collector_owner_type IS NULL OR pay.collector_owner_id IS NULL)))
 `,[salonId]);
 
 const cashPendingExposure = await pool.query(`
