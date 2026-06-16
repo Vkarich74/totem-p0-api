@@ -267,6 +267,7 @@ export default function buildFinanceEngineRouter(pool){
         FROM payments p
         LEFT JOIN settlement_items si ON si.payment_id=p.id
         WHERE p.status='confirmed'
+        AND NOT (p.provider='direct' AND (p.collector_owner_type IS NULL OR p.collector_owner_id IS NULL))
         AND si.id IS NULL
       `);
 
@@ -330,6 +331,7 @@ export default function buildFinanceEngineRouter(pool){
         FROM payments p
         LEFT JOIN settlement_items si ON si.payment_id=p.id
         WHERE p.status='confirmed'
+        AND NOT (p.provider='direct' AND (p.collector_owner_type IS NULL OR p.collector_owner_id IS NULL))
         AND si.id IS NULL
       `);
 
@@ -374,6 +376,7 @@ export default function buildFinanceEngineRouter(pool){
         LEFT JOIN settlement_items si ON si.payment_id=p.id
         LEFT JOIN payouts po ON po.booking_id=b.id AND po.payment_id=p.id
         WHERE p.status='confirmed'
+        AND NOT (p.provider='direct' AND (p.collector_owner_type IS NULL OR p.collector_owner_id IS NULL))
         AND si.id IS NULL
         ORDER BY p.id ASC
         FOR UPDATE OF p SKIP LOCKED
