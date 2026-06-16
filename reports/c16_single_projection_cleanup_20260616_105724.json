@@ -1,0 +1,14 @@
+﻿{
+    "block":  "C16_SINGLE_PROJECTION_CLEANUP",
+    "status":  "PATCHED",
+    "time":  "20260616_105724",
+    "files":  [
+                  "src/routes/internal/salons.js",
+                  "src/routes/internal/masters.js"
+              ],
+    "source_of_truth":  "src/routes/internal/paymentProjection.js",
+    "backups":  [
+                    "reports\\c16_single_projection_cleanup_backup_20260616_105724_salons.js",
+                    "reports\\c16_single_projection_cleanup_backup_20260616_105724_masters.js"
+                ]
+}
