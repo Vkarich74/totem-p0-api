@@ -432,11 +432,23 @@ w.id,
 w.owner_type,
 w.owner_id,
 w.currency,
-COALESCE(v.computed_balance_cents,0)::int AS balance
+COALESCE(SUM(CASE
+  WHEN le.id IS NULL THEN 0
+  WHEN le.reference_type='payment'
+    AND pay.provider='direct'
+    AND pay.status='confirmed'
+    AND (pay.collector_owner_type IS NULL OR pay.collector_owner_id IS NULL)
+  THEN 0
+  WHEN le.direction='credit' THEN COALESCE(le.amount_cents,0)
+  WHEN le.direction='debit' THEN -COALESCE(le.amount_cents,0)
+  ELSE 0
+END),0)::int AS balance
 FROM totem_test.wallets w
-LEFT JOIN totem_test.v_wallet_balance_computed v ON v.wallet_id=w.id
+LEFT JOIN totem_test.ledger_entries le ON le.wallet_id=w.id
+LEFT JOIN public.payments pay ON pay.id::text=le.reference_id::text
 WHERE w.owner_type='master'
 AND w.owner_id=$1
+GROUP BY w.id, w.owner_type, w.owner_id, w.currency
 LIMIT 1
 `,[masterId]);
 
@@ -2594,17 +2606,14 @@ return res.status(403).json({ok:false,error:"FORBIDDEN"});
 
 const wallet = await getMasterWalletRow(pool, master.id);
 
-if(!wallet){
-return res.status(404).json({ok:false,error:"MASTER_WALLET_NOT_FOUND"});
-}
 
 const billing_access = await getMasterBillingAccess(pool, master.id);
 
 return res.json({
 ok:true,
-wallet_id:wallet.id,
-balance:Number(wallet.balance || 0),
-currency:wallet.currency || "KGS",
+wallet_id:wallet?.id || null,
+balance:Number(wallet?.balance || 0),
+currency:wallet?.currency || "KGS",
 billing_access
 });
 
