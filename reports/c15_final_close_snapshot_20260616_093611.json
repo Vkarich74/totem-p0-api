@@ -1,0 +1,20 @@
+﻿{
+    "block":  "C15_FINAL_CLOSE_SNAPSHOT",
+    "status":  "CLOSED_PASS",
+    "time":  "20260616_093611",
+    "production_git_sha":  "a503a00133563b07a9a09f920db9899224205153",
+    "production_build_id":  "3f12f2d2-293f-4055-a993-155d7399c174",
+    "git_status":  "## main...origin/main",
+    "commits":  "a503a00 fix: make master wallet balance null safe and exclude orphan direct payments\r\n9fc5cc2 fix: exclude orphan direct payments from master payouts\r\nafbff2f fix: exclude orphan direct payments from salon wallet balance\r\n1655264 fix: exclude orphan direct payments from salon payouts\r\nac57baf fix: exclude orphan direct payments from salon metrics\r\n0972ac2 fix: block orphan direct payments from finance engine payouts\r\ne1c62e8 feat: add role-scoped payment projection list endpoints\r\n35f3085 fix: compare projection contract effective date in salon timezone",
+    "gates":  {
+                  "salon_metrics":  "PASS_0",
+                  "salon_payouts":  "PASS_EMPTY",
+                  "salon_wallet_balance":  "PASS_0",
+                  "master_payouts":  "PASS_EMPTY",
+                  "master_wallet_balance":  "PASS_0",
+                  "projection_preserved":  "PASS",
+                  "payment_22_status":  "blocked_missing_collector",
+                  "open_balance":  "PASS_0",
+                  "history":  "PASS_7000"
+              }
+}
