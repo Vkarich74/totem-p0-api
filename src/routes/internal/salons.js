@@ -152,6 +152,35 @@ const [hoursText, minutesText] = parsed.split(":");
 return Number(hoursText) * 60 + Number(minutesText);
 }
 
+function normalizeTimeDisplay(value){
+if(value === null || value === undefined){
+return null;
+}
+
+const raw = String(value).trim();
+if(!raw){
+return null;
+}
+
+const match = raw.match(/^(\d{2}:\d{2})(?::\d{2})?$/);
+return match ? match[1] : raw;
+}
+
+function weekdayNameFromNumber(value){
+const map = [
+"sunday",
+"monday",
+"tuesday",
+"wednesday",
+"thursday",
+"friday",
+"saturday"
+];
+
+const weekday = Number(value);
+return Number.isInteger(weekday) && weekday >= 0 && weekday <= 6 ? map[weekday] : null;
+}
+
 function normalizeWorkingHoursRows(hours){
 if(!Array.isArray(hours)){
 const err = new Error("INVALID_HOURS");
@@ -249,6 +278,42 @@ break_end: breakEnd
 }
 
 return normalized;
+}
+
+function normalizeWorkingHoursReadRows(rows){
+const hours = [];
+const duplicateWeekdays = new Set();
+const seenWeekdays = new Set();
+
+for(const row of Array.isArray(rows) ? rows : []){
+const weekday = Number(row?.weekday);
+const weekdayName = weekdayNameFromNumber(weekday);
+
+if(seenWeekdays.has(weekday)){
+duplicateWeekdays.add(weekday);
+}
+
+seenWeekdays.add(weekday);
+hours.push({
+id: Number(row?.id),
+weekday,
+weekday_name: weekdayName,
+start_time: normalizeTimeDisplay(row?.start_time),
+end_time: normalizeTimeDisplay(row?.end_time),
+break_start: normalizeTimeDisplay(row?.break_start),
+break_end: normalizeTimeDisplay(row?.break_end)
+});
+}
+
+return {
+hours,
+summary: {
+rows_count: hours.length,
+configured_days_count: seenWeekdays.size,
+has_duplicates: duplicateWeekdays.size > 0,
+duplicate_weekdays: [...duplicateWeekdays].sort((a, b) => a - b)
+}
+};
 }
 
 async function getSalonBillingAccess(db, salonId){
@@ -1871,6 +1936,134 @@ error:"INTERNAL_ERROR"
 }finally{
 
 db.release();
+
+}
+
+});
+
+/* SALON MASTER WORKING HOURS READ */
+r.get("/salons/:slug/masters/:masterId/working-hours", internalReadRateLimit, async (req,res)=>{
+
+const { slug, masterId } = req.params;
+
+if(!req.auth){
+return res.status(401).json({
+ok:false,
+error:"AUTH_REQUIRED"
+});
+}
+
+try{
+const salon = await pool.query(
+`SELECT id,name,slug
+FROM salons
+WHERE slug=$1
+LIMIT 1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+}
+
+const salonRow = salon.rows[0];
+
+if(!hasSalonOwnership(req, salonRow.id)){
+return res.status(403).json({ok:false,error:"SALON_ACCESS_DENIED"});
+}
+
+const master = await pool.query(
+`SELECT
+ m.id,
+ m.slug,
+ m.name,
+ m.active,
+ ms.status AS relation_status
+FROM master_salon ms
+JOIN masters m ON m.id = ms.master_id
+WHERE ms.salon_id = $1
+AND ms.master_id = $2
+AND ms.status = 'active'
+AND COALESCE(m.active, true) = true
+LIMIT 1`,
+[
+salonRow.id,
+masterId
+]
+);
+
+if(!master.rows.length){
+const masterExists = await pool.query(
+`SELECT id
+FROM masters
+WHERE id = $1
+LIMIT 1`,
+[masterId]
+);
+
+if(!masterExists.rows.length){
+return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+}
+
+return res.status(404).json({ok:false,error:"MASTER_SALON_RELATION_NOT_FOUND"});
+}
+
+const masterRow = master.rows[0];
+const workingHoursRes = await pool.query(
+`SELECT
+  id,
+  weekday,
+  start_time,
+  end_time,
+  break_start,
+  break_end
+FROM master_working_hours
+WHERE salon_id = $1
+AND master_id = $2
+ORDER BY weekday ASC, start_time ASC`,
+[
+salonRow.id,
+masterRow.id
+]
+);
+
+const { hours, summary } = normalizeWorkingHoursReadRows(workingHoursRes.rows);
+
+return res.json({
+ok:true,
+salon:{
+id: Number(salonRow.id),
+slug: salonRow.slug,
+name: salonRow.name
+},
+master:{
+id: Number(masterRow.id),
+slug: masterRow.slug,
+name: masterRow.name,
+relation_status: masterRow.relation_status || "active",
+active: masterRow.active === undefined ? true : Boolean(masterRow.active)
+},
+weekday_mapping:{
+0:"sunday",
+1:"monday",
+2:"tuesday",
+3:"wednesday",
+4:"thursday",
+5:"friday",
+6:"saturday"
+},
+hours,
+summary
+});
+
+}catch(err){
+
+console.error("SALON_MASTER_WORKING_HOURS_FETCH_ERROR",err);
+
+return res.status(500).json({
+ok:false,
+error:"SALON_MASTER_WORKING_HOURS_FETCH_FAILED"
+});
 
 }
 
