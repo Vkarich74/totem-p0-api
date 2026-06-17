@@ -1914,7 +1914,7 @@ await client.query("ROLLBACK");
 return res.status(403).json({ ok:false, error:"RENT_OBLIGATION_SALON_MISMATCH" });
 }
 
-if(!['open','paid'].includes(String(obligation.status || "").toLowerCase())){
+if(!['open','overdue','paid'].includes(String(obligation.status || "").toLowerCase())){
 await client.query("ROLLBACK");
 return res.status(409).json({ ok:false, error:"RENT_OBLIGATION_STATUS_INVALID" });
 }
@@ -1943,14 +1943,21 @@ return res.status(404).json({ ok:false, error:"RENT_CONTRACT_NOT_FOUND" });
 }
 
 const contract = contractResult.rows[0];
-if(String(contract.status || "").toLowerCase() !== "active"){
+const contractStatus = String(contract.status || "").trim().toLowerCase();
+if(!["active", "archived"].includes(contractStatus)){
 await client.query("ROLLBACK");
-return res.status(409).json({ ok:false, error:"RENT_CONTRACT_NOT_ACTIVE" });
+return res.status(409).json({ ok:false, error:"RENT_CONTRACT_STATUS_NOT_SUPPORTED" });
 }
 
-if(String(contract.terms_json?.model || "").trim().toLowerCase() !== "fixed_rent"){
+const contractModel = String(contract.terms_json?.model || "").trim().toLowerCase();
+const contractBaseType = String(contract.terms_json?.base_type || "").trim().toLowerCase();
+const isRentContract =
+contractModel === "fixed_rent" ||
+(contractModel === "hybrid" && contractBaseType === "fixed_rent");
+
+if(!isRentContract){
 await client.query("ROLLBACK");
-return res.status(409).json({ ok:false, error:"RENT_CONTRACT_MODEL_NOT_FIXED_RENT" });
+return res.status(409).json({ ok:false, error:"RENT_CONTRACT_MODEL_NOT_SUPPORTED" });
 }
 
 const confirmedBeforeResult = await client.query(
@@ -2020,7 +2027,7 @@ SET status='paid',
       'rent_payment_id', $2::text
     )
 WHERE id=$3
-AND status IN ('open','paid')
+AND status IN ('open','overdue','paid')
 RETURNING
 id,
 contract_id,
