@@ -79,6 +79,369 @@ normalized.push(raw);
 return normalized;
 }
 
+function normalizeCollectionAnchorOwnerType(value){
+const raw = normalizeText(value).toLowerCase();
+if(!raw){
+return null;
+}
+
+if(["master", "salon", "unknown", "conflict"].includes(raw)){
+return raw;
+}
+
+return null;
+}
+
+function normalizeCollectionAnchorRow(row){
+if(!row){
+return null;
+}
+
+return {
+id: row.id || null,
+payment_id: row.payment_id === null || row.payment_id === undefined ? null : Number(row.payment_id),
+booking_id: row.booking_id === null || row.booking_id === undefined ? null : Number(row.booking_id),
+salon_id: row.salon_id === null || row.salon_id === undefined ? null : Number(row.salon_id),
+beneficiary_master_id: row.beneficiary_master_id === null || row.beneficiary_master_id === undefined ? null : Number(row.beneficiary_master_id),
+amount: row.amount === null || row.amount === undefined ? null : Number(row.amount),
+currency: row.currency || "KGS",
+provider: row.provider || null,
+method: row.method || null,
+collector_owner_type: row.collector_owner_type || null,
+collector_owner_id: row.collector_owner_id === null || row.collector_owner_id === undefined ? null : Number(row.collector_owner_id),
+anchor_status: row.anchor_status || null,
+source_type: row.source_type || null,
+source_id: row.source_id || null,
+closed_at: row.closed_at || null,
+closed_by_user_id: row.closed_by_user_id === null || row.closed_by_user_id === undefined ? null : Number(row.closed_by_user_id),
+close_note: row.close_note || null,
+close_batch_id: row.close_batch_id || null,
+created_at: row.created_at || null,
+updated_at: row.updated_at || null,
+metadata_json: row.metadata_json || {},
+existing_anchor_id: row.existing_anchor_id || null,
+existing_anchor_status: row.existing_anchor_status || null,
+existing_collector_owner_type: row.existing_collector_owner_type || null,
+existing_collector_owner_id: row.existing_collector_owner_id === null || row.existing_collector_owner_id === undefined ? null : Number(row.existing_collector_owner_id)
+};
+}
+
+function resolveCollectionAnchorClassification({
+explicitCollectorOwnerType = null,
+explicitCollectorOwnerId = null,
+paymentCollectorOwnerType = null,
+paymentCollectorOwnerId = null,
+bookingMasterId = null,
+bookingSalonId = null
+}){
+const explicitType = normalizeCollectionAnchorOwnerType(explicitCollectorOwnerType);
+const explicitId = safeInt(explicitCollectorOwnerId);
+
+if(explicitType){
+if(explicitType === "master" && explicitId && explicitId === safeInt(bookingMasterId)){
+return {
+collector_owner_type: "master",
+collector_owner_id: explicitId,
+anchor_status: "not_needed"
+};
+}
+
+if(explicitType === "salon" && explicitId && explicitId === safeInt(bookingSalonId)){
+return {
+collector_owner_type: "salon",
+collector_owner_id: explicitId,
+anchor_status: "open"
+};
+}
+
+return {
+collector_owner_type: "conflict",
+collector_owner_id: explicitId || null,
+anchor_status: "conflict"
+};
+}
+
+const paymentType = normalizeCollectionAnchorOwnerType(paymentCollectorOwnerType);
+const paymentId = safeInt(paymentCollectorOwnerId);
+const bookingMaster = safeInt(bookingMasterId);
+const bookingSalon = safeInt(bookingSalonId);
+
+if(!paymentType){
+const normalizedCollectorRaw = normalizeText(paymentCollectorOwnerType);
+if(normalizedCollectorRaw){
+return {
+collector_owner_type: "conflict",
+collector_owner_id: paymentId || null,
+anchor_status: "conflict"
+};
+}
+
+return {
+collector_owner_type: "unknown",
+collector_owner_id: null,
+anchor_status: "unknown"
+};
+}
+
+if(paymentType === "master" && paymentId && paymentId === bookingMaster){
+return {
+collector_owner_type: "master",
+collector_owner_id: paymentId,
+anchor_status: "not_needed"
+};
+}
+
+if(paymentType === "salon" && paymentId && paymentId === bookingSalon){
+return {
+collector_owner_type: "salon",
+collector_owner_id: paymentId,
+anchor_status: "open"
+};
+}
+
+if(paymentType === "unknown"){
+return {
+collector_owner_type: "unknown",
+collector_owner_id: null,
+anchor_status: "unknown"
+};
+}
+
+return {
+collector_owner_type: "conflict",
+collector_owner_id: paymentId || null,
+anchor_status: "conflict"
+};
+}
+
+export async function upsertPaymentCollectionAnchorForPayment(dbOrPool, input = {}){
+if(!dbOrPool || typeof dbOrPool.query !== "function"){
+throw new Error("PAYMENT_COLLECTION_ANCHOR_DB_REQUIRED");
+}
+
+const paymentId = safeInt(input.paymentId ?? input.payment_id ?? input.id);
+if(!paymentId){
+throw new Error("PAYMENT_COLLECTION_ANCHOR_PAYMENT_ID_INVALID");
+}
+
+const sourceType = normalizeText(input.sourceType ?? input.source_type);
+if(!sourceType){
+throw new Error("PAYMENT_COLLECTION_ANCHOR_SOURCE_TYPE_REQUIRED");
+}
+
+const sourceId = normalizeText(input.sourceId ?? input.source_id) || null;
+const metadata = input.metadata && typeof input.metadata === "object" && !Array.isArray(input.metadata)
+? input.metadata
+: {};
+
+const result = await dbOrPool.query(`
+SELECT
+  p.id AS payment_id,
+  p.booking_id AS payment_booking_id,
+  p.amount,
+  p.provider,
+  p.method,
+  p.status AS payment_status,
+  p.collector_owner_type AS payment_collector_owner_type,
+  p.collector_owner_id AS payment_collector_owner_id,
+  p.is_test AS payment_is_test,
+  p.created_at AS payment_created_at,
+  p.confirmed_by_user_id,
+  p.confirmed_at,
+  p.money_core_source_uid,
+  b.id AS booking_id,
+  b.salon_id,
+  b.master_id,
+  b.status AS booking_status,
+  b.is_test AS booking_is_test,
+  a.id AS existing_anchor_id,
+  a.collector_owner_type AS existing_collector_owner_type,
+  a.collector_owner_id AS existing_collector_owner_id,
+  a.anchor_status AS existing_anchor_status,
+  a.source_type AS existing_source_type,
+  a.source_id AS existing_source_id,
+  a.created_at AS existing_created_at,
+  a.updated_at AS existing_updated_at,
+  a.closed_at AS existing_closed_at,
+  a.closed_by_user_id AS existing_closed_by_user_id,
+  a.close_note AS existing_close_note,
+  a.close_batch_id AS existing_close_batch_id,
+  a.metadata_json AS existing_metadata_json
+FROM public.payments p
+JOIN public.bookings b ON b.id = p.booking_id
+LEFT JOIN public.payment_collection_anchors a ON a.payment_id = p.id
+WHERE p.id = $1
+LIMIT 1
+`, [paymentId]);
+
+if(!result.rows.length){
+return {
+ok: true,
+inserted: false,
+skipped: true,
+reason: "NOT_ELIGIBLE_OR_ALREADY_EXISTS",
+anchor: null
+};
+}
+
+const row = result.rows[0];
+const eligible =
+String(row.payment_status || "").trim().toLowerCase() === "confirmed"
+|| String(row.payment_status || "").trim().toLowerCase() === "paid"
+|| String(row.payment_status || "").trim().toLowerCase() === "captured";
+const bookingStatus = String(row.booking_status || "").trim().toLowerCase();
+const bookingExcluded = ["cancelled", "canceled", "отмена"].includes(bookingStatus);
+const paymentAmount = Number(row.amount ?? 0) || 0;
+const paymentIsTest = row.payment_is_test === true;
+const bookingIsTest = row.booking_is_test === true;
+const hasEligibleSource =
+eligible
+&& !bookingExcluded
+&& paymentAmount > 0
+&& row.payment_booking_id !== null
+&& row.master_id !== null
+&& row.salon_id !== null
+&& !paymentIsTest
+&& !bookingIsTest;
+
+if(!hasEligibleSource){
+return {
+ok: true,
+inserted: false,
+skipped: true,
+reason: "NOT_ELIGIBLE_OR_ALREADY_EXISTS",
+anchor: null
+};
+}
+
+if(row.existing_anchor_id){
+return {
+ok: true,
+inserted: false,
+skipped: true,
+reason: "ALREADY_EXISTS",
+anchor: normalizeCollectionAnchorRow(row)
+};
+}
+
+const classification = resolveCollectionAnchorClassification({
+explicitCollectorOwnerType: input.collectorOwnerType ?? input.collector_owner_type ?? null,
+explicitCollectorOwnerId: input.collectorOwnerId ?? input.collector_owner_id ?? null,
+paymentCollectorOwnerType: row.payment_collector_owner_type,
+paymentCollectorOwnerId: row.payment_collector_owner_id,
+bookingMasterId: row.master_id,
+bookingSalonId: row.salon_id
+});
+
+const metadataJson = {
+source: sourceType,
+source_id: sourceId,
+payment_id: paymentId,
+payment_status: row.payment_status,
+booking_id: Number(row.booking_id),
+booking_status: row.booking_status,
+amount: paymentAmount,
+collector_owner_type: classification.collector_owner_type,
+collector_owner_id: classification.collector_owner_id,
+anchor_status: classification.anchor_status,
+...metadata
+};
+
+const inserted = await dbOrPool.query(`
+INSERT INTO public.payment_collection_anchors (
+  payment_id,
+  booking_id,
+  salon_id,
+  beneficiary_master_id,
+  amount,
+  currency,
+  provider,
+  method,
+  collector_owner_type,
+  collector_owner_id,
+  anchor_status,
+  source_type,
+  source_id,
+  metadata_json
+)
+SELECT
+  p.id,
+  b.id,
+  b.salon_id,
+  b.master_id,
+  p.amount,
+  'KGS',
+  p.provider,
+  p.method,
+  $2::text,
+  $3::integer,
+  $4::text,
+  $5::text,
+  $6::text,
+  $7::jsonb
+FROM public.payments p
+JOIN public.bookings b ON b.id = p.booking_id
+WHERE p.id = $1
+  AND p.status IN ('confirmed', 'paid', 'captured')
+  AND LOWER(COALESCE(b.status, '')) NOT IN ('cancelled', 'canceled', 'отмена')
+  AND p.amount > 0
+  AND p.booking_id IS NOT NULL
+  AND b.master_id IS NOT NULL
+  AND b.salon_id IS NOT NULL
+  AND p.is_test IS NOT TRUE
+  AND b.is_test IS NOT TRUE
+ON CONFLICT (payment_id) DO NOTHING
+RETURNING
+  id,
+  payment_id,
+  booking_id,
+  salon_id,
+  beneficiary_master_id,
+  amount,
+  currency,
+  provider,
+  method,
+  collector_owner_type,
+  collector_owner_id,
+  anchor_status,
+  source_type,
+  source_id,
+  closed_at,
+  closed_by_user_id,
+  close_note,
+  close_batch_id,
+  created_at,
+  updated_at,
+  metadata_json
+`, [
+  paymentId,
+  classification.collector_owner_type,
+  classification.collector_owner_id,
+  classification.anchor_status,
+  sourceType,
+  sourceId,
+  JSON.stringify(metadataJson)
+]);
+
+if(!inserted.rows.length){
+return {
+ok: true,
+inserted: false,
+skipped: true,
+reason: "ALREADY_EXISTS",
+anchor: null
+};
+}
+
+return {
+ok: true,
+inserted: true,
+skipped: false,
+reason: null,
+anchor: normalizeCollectionAnchorRow(inserted.rows[0])
+};
+}
+
 export function buildCollectionAnchorBackfillPreviewSql(){
 return `
 SELECT

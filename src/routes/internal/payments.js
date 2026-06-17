@@ -7,6 +7,9 @@ import {
   rejectOwnerQrPayment,
   getOwnerQrPaymentOptions
 } from "../../money-core/ownerQrPayments.service.js";
+import {
+  upsertPaymentCollectionAnchorForPayment
+} from "../../services/paymentCollectionAnchors.service.js";
 
 function parsePositiveAmount(value) {
   const amount = Number(value);
@@ -866,7 +869,31 @@ LIMIT 1
         }
       }
 
-      if (Boolean(result.confirmed)) {
+      if (
+        result.confirmed &&
+        result.payment &&
+        String(result.payment.status || "").trim().toLowerCase() === "confirmed"
+      ) {
+        try {
+          await upsertPaymentCollectionAnchorForPayment(db, {
+            paymentId: Number(result.payment.id || result.payment.payment_id || paymentId || 0) || null,
+            collectorOwnerType: "salon",
+            collectorOwnerId: Number(result.booking?.salon_id || 0) || null,
+            sourceType: "direct_cash_salon_confirm",
+            sourceId: String(Number(result.payment.id || result.payment.payment_id || paymentId || 0) || ""),
+            metadata: {
+              route: "/payments/direct/salon/confirm-cash"
+            }
+          });
+        } catch (err) {
+          console.error("C15_COLLECTION_ANCHOR_HOOK_FAILED", {
+            flow: "direct_cash_salon_confirm",
+            payment_id: Number(result.payment.id || result.payment.payment_id || paymentId || 0) || null,
+            booking_id: Number(result.booking?.id || result.booking?.booking_id || 0) || null
+          }, err);
+          throw err;
+        }
+
         await emitCashConfirmNotifications(db, {
           booking: result.booking,
           payment: result.payment,
@@ -982,7 +1009,31 @@ LIMIT 1
         }
       }
 
-      if (Boolean(result.confirmed)) {
+      if (
+        result.confirmed &&
+        result.payment &&
+        String(result.payment.status || "").trim().toLowerCase() === "confirmed"
+      ) {
+        try {
+          await upsertPaymentCollectionAnchorForPayment(db, {
+            paymentId: Number(result.payment.id || result.payment.payment_id || paymentId || 0) || null,
+            collectorOwnerType: "master",
+            collectorOwnerId: Number(result.booking?.master_id || 0) || null,
+            sourceType: "direct_cash_master_confirm",
+            sourceId: String(Number(result.payment.id || result.payment.payment_id || paymentId || 0) || ""),
+            metadata: {
+              route: "/payments/direct/master/confirm-cash"
+            }
+          });
+        } catch (err) {
+          console.error("C15_COLLECTION_ANCHOR_HOOK_FAILED", {
+            flow: "direct_cash_master_confirm",
+            payment_id: Number(result.payment.id || result.payment.payment_id || paymentId || 0) || null,
+            booking_id: Number(result.booking?.id || result.booking?.booking_id || 0) || null
+          }, err);
+          throw err;
+        }
+
         await emitCashConfirmNotifications(db, {
           booking: result.booking,
           payment: result.payment,

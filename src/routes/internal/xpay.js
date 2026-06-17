@@ -1,6 +1,7 @@
 import express from "express";
 import { createNotification } from "../../services/notifications/notificationService.js";
 import { buildBookingConfirmedNotificationTemplate } from "../../services/notifications/notificationTemplates.js";
+import { upsertPaymentCollectionAnchorForPayment } from "../../services/paymentCollectionAnchors.service.js";
 
 export default function buildXpayRouter({
 pool,
@@ -409,6 +410,32 @@ if(bookingConfirmedResult?.changed){
 bookingConfirmedContext = await loadBookingConfirmedNotificationContext(client, updatedPayment.booking_id);
 }
 }
+
+if(updatedPayment.status === "confirmed"){
+try{
+await upsertPaymentCollectionAnchorForPayment(client, {
+paymentId: updatedPayment.id,
+collectorOwnerType: null,
+collectorOwnerId: null,
+sourceType: "xpay_status_confirm",
+sourceId: String(updatedPayment.id),
+metadata: {
+provider: "xpay",
+qr_transaction_id: transactionId,
+route: "/payments/xpay/status"
+}
+});
+}catch(error){
+console.error("C15_COLLECTION_ANCHOR_HOOK_FAILED", {
+flow: "xpay_status_confirm",
+payment_id: updatedPayment.id,
+qr_transaction_id: transactionId
+}, error);
+if(nextStatus !== paymentRow.status){
+throw error;
+}
+}
+}
 }
 
 await client.query("COMMIT");
@@ -591,6 +618,32 @@ const bookingConfirmedResult = await setBookingConfirmedIfNeeded(client, updated
 
 if(bookingConfirmedResult?.changed){
 bookingConfirmedContext = await loadBookingConfirmedNotificationContext(client, updatedPayment.booking_id);
+}
+}
+
+if(updatedPayment.status === "confirmed"){
+try{
+await upsertPaymentCollectionAnchorForPayment(client, {
+paymentId: updatedPayment.id,
+collectorOwnerType: null,
+collectorOwnerId: null,
+sourceType: "xpay_status_confirm",
+sourceId: String(updatedPayment.id),
+metadata: {
+provider: "xpay",
+qr_transaction_id: transactionId,
+route: "/payments/xpay/static/status"
+}
+});
+}catch(error){
+console.error("C15_COLLECTION_ANCHOR_HOOK_FAILED", {
+flow: "xpay_status_confirm",
+payment_id: updatedPayment.id,
+qr_transaction_id: transactionId
+}, error);
+if(nextStatus !== paymentRow.status){
+throw error;
+}
 }
 }
 }

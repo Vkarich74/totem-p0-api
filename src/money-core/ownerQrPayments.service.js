@@ -1,6 +1,7 @@
 'use strict';
 
 import { assertMoneyCoreWriteAllowed } from './config.js';
+import { upsertPaymentCollectionAnchorForPayment } from '../services/paymentCollectionAnchors.service.js';
 
 const OWNER_QR_SOURCE_TYPE = 'owner_qr_payment';
 const OWNER_QR_PLATFORM_OWNER_TYPE = 'system';
@@ -965,6 +966,27 @@ async function confirmOwnerQrPayment({
 
     if (normalizedStatus === 'confirmed') {
       if (normalizeText(payment.money_core_source_uid) === expectedSourceUid) {
+        try {
+          await upsertPaymentCollectionAnchorForPayment(client, {
+            paymentId: payment.id,
+            collectorOwnerType: payment.collector_owner_type,
+            collectorOwnerId: payment.collector_owner_id,
+            sourceType: 'owner_qr_confirm',
+            sourceId: String(payment.id),
+            metadata: {
+              route: '/money-core/owner-qr/payments/confirm',
+              qr_destination_id: payment.qr_destination_id,
+              money_core_source_uid: payment.money_core_source_uid,
+            },
+          });
+        } catch (error) {
+          console.error('C15_COLLECTION_ANCHOR_HOOK_FAILED', {
+            flow: 'owner_qr_confirm',
+            payment_id: payment.id,
+            booking_id: payment.booking_id,
+          }, error);
+        }
+
         const obligations = await loadObligationsByPayment(client, payment.id);
         await client.query('COMMIT');
 
@@ -1116,6 +1138,29 @@ RETURNING
     }
 
     const confirmedPayment = normalizePaymentRow(updatedPaymentResult.rows[0]);
+
+    try {
+      await upsertPaymentCollectionAnchorForPayment(client, {
+        paymentId: confirmedPayment.id,
+        collectorOwnerType: confirmedPayment.collector_owner_type,
+        collectorOwnerId: confirmedPayment.collector_owner_id,
+        sourceType: 'owner_qr_confirm',
+        sourceId: String(confirmedPayment.id),
+        metadata: {
+          route: '/money-core/owner-qr/payments/confirm',
+          qr_destination_id: confirmedPayment.qr_destination_id,
+          money_core_source_uid: confirmedPayment.money_core_source_uid,
+        },
+      });
+    } catch (error) {
+      console.error('C15_COLLECTION_ANCHOR_HOOK_FAILED', {
+        flow: 'owner_qr_confirm',
+        payment_id: confirmedPayment.id,
+        booking_id: confirmedPayment.booking_id,
+      }, error);
+      throw error;
+    }
+
     const obligations = await loadObligationsByPayment(client, payment.id);
 
     await client.query('COMMIT');
