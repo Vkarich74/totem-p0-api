@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 const DEFAULT_TIMEZONE = "Asia/Bishkek";
 const ALLOWED_ANCHOR_STATUSES = new Set(["open", "closed", "not_needed", "unknown", "conflict"]);
 
@@ -83,6 +85,19 @@ function normalizeCollectionAnchorOwnerType(value){
 const raw = normalizeText(value).toLowerCase();
 if(!raw){
 return null;
+}
+
+function normalizeCollectionAnchorUuid(value){
+const raw = normalizeText(value);
+if(!raw){
+return null;
+}
+
+if(!/^[0-9a-f-]{36}$/i.test(raw)){
+return null;
+}
+
+return raw;
 }
 
 if(["master", "salon", "unknown", "conflict"].includes(raw)){
@@ -438,7 +453,236 @@ ok: true,
 inserted: true,
 skipped: false,
 reason: null,
-anchor: normalizeCollectionAnchorRow(inserted.rows[0])
+  anchor: normalizeCollectionAnchorRow(inserted.rows[0])
+  };
+}
+
+export async function closePaymentCollectionAnchorsForSalon(poolOrClient, input = {}){
+if(!poolOrClient || typeof poolOrClient.query !== "function"){
+throw new Error("PAYMENT_COLLECTION_ANCHOR_DB_REQUIRED");
+}
+
+const salonId = safeInt(input.salonId ?? input.salon_id);
+if(!salonId){
+throw new Error("COLLECTION_ANCHOR_SALON_ID_INVALID");
+}
+
+const normalizedAnchorIds = Array.isArray(input.anchorIds ?? input.anchor_ids)
+? Array.from(new Set((input.anchorIds ?? input.anchor_ids).map(normalizeCollectionAnchorUuid).filter(Boolean)))
+: [];
+const normalizedPaymentIds = Array.isArray(input.paymentIds ?? input.payment_ids)
+? Array.from(new Set((input.paymentIds ?? input.payment_ids).map(safeInt).filter(Boolean)))
+: [];
+
+if(!normalizedAnchorIds.length && !normalizedPaymentIds.length){
+throw new Error("COLLECTION_ANCHOR_CLOSE_TARGET_REQUIRED");
+}
+
+const requestedCount = normalizedAnchorIds.length + normalizedPaymentIds.length;
+if(requestedCount > 100){
+throw new Error("COLLECTION_ANCHOR_CLOSE_BATCH_TOO_LARGE");
+}
+
+const closeNoteRaw = normalizeText(input.closeNote ?? input.close_note);
+const closeNote = closeNoteRaw || null;
+const closedByUserId = safeInt(input.closedByUserId ?? input.closed_by_user_id);
+if(!closedByUserId){
+throw new Error("COLLECTION_ANCHOR_CLOSED_BY_USER_ID_INVALID");
+}
+
+const closeBatchId = normalizeCollectionAnchorUuid(input.closeBatchId ?? input.close_batch_id) || randomUUID();
+
+const result = await poolOrClient.query(`
+SELECT
+  a.id AS anchor_id,
+  a.payment_id,
+  a.salon_id,
+  a.beneficiary_master_id,
+  a.amount,
+  a.currency,
+  a.provider,
+  a.method,
+  a.collector_owner_type,
+  a.collector_owner_id,
+  a.anchor_status,
+  a.source_type,
+  a.source_id,
+  a.closed_at,
+  a.closed_by_user_id,
+  a.close_note,
+  a.close_batch_id,
+  a.created_at,
+  a.updated_at,
+  a.metadata_json,
+  p.status AS payment_status,
+  b.status AS booking_status
+FROM public.payment_collection_anchors a
+JOIN public.payments p ON p.id = a.payment_id
+JOIN public.bookings b ON b.id = a.booking_id
+WHERE a.id = ANY($1::uuid[])
+   OR a.payment_id = ANY($2::int[])
+ORDER BY a.created_at DESC, a.id DESC
+`, [
+  normalizedAnchorIds,
+  normalizedPaymentIds
+]);
+
+const byAnchorId = new Map();
+const byPaymentId = new Map();
+for(const row of result.rows || []){
+byAnchorId.set(String(row.anchor_id), row);
+byPaymentId.set(Number(row.payment_id), row);
+}
+
+const closedRows = [];
+const skippedRows = [];
+const processedAnchorIds = new Set();
+
+async function closeRow(row){
+const updated = await poolOrClient.query(`
+UPDATE public.payment_collection_anchors
+SET
+  anchor_status = 'closed',
+  closed_at = COALESCE(closed_at, NOW()),
+  closed_by_user_id = $2,
+  close_note = $3,
+  close_batch_id = $4,
+  updated_at = NOW(),
+  metadata_json = COALESCE(metadata_json, '{}'::jsonb) || jsonb_build_object('closed_source', 'salon_close_action_v1')
+WHERE id = $1
+  AND salon_id = $5
+  AND anchor_status = 'open'
+  AND collector_owner_type = 'salon'
+RETURNING
+  id,
+  payment_id,
+  booking_id,
+  salon_id,
+  beneficiary_master_id,
+  amount,
+  currency,
+  provider,
+  method,
+  collector_owner_type,
+  collector_owner_id,
+  anchor_status,
+  source_type,
+  source_id,
+  closed_at,
+  closed_by_user_id,
+  close_note,
+  close_batch_id,
+  created_at,
+  updated_at,
+  metadata_json
+`, [
+  row.anchor_id,
+  closedByUserId,
+  closeNote,
+  closeBatchId,
+  salonId
+]);
+
+if(updated.rows.length){
+closedRows.push(normalizeCollectionAnchorRow(updated.rows[0]));
+return;
+}
+
+const refreshed = await poolOrClient.query(`
+SELECT
+  id,
+  payment_id,
+  booking_id,
+  salon_id,
+  beneficiary_master_id,
+  amount,
+  currency,
+  provider,
+  method,
+  collector_owner_type,
+  collector_owner_id,
+  anchor_status,
+  source_type,
+  source_id,
+  closed_at,
+  closed_by_user_id,
+  close_note,
+  close_batch_id,
+  created_at,
+  updated_at,
+  metadata_json
+FROM public.payment_collection_anchors
+WHERE id = $1
+LIMIT 1
+`, [row.anchor_id]);
+
+const current = refreshed.rows[0] || row;
+const normalizedCurrent = normalizeCollectionAnchorRow(current);
+let reason = "NOT_FOUND_OR_NOT_IN_SALON";
+
+if(normalizeCollectionAnchorOwnerType(current.collector_owner_type) !== "salon"){
+reason = "INVALID_COLLECTOR";
+}
+
+if(String(current.anchor_status || "").trim().toLowerCase() === "closed"){
+reason = "ALREADY_CLOSED";
+}else if(!["open", "closed", "not_needed", "unknown", "conflict"].includes(String(current.anchor_status || "").trim().toLowerCase())){
+reason = "INVALID_STATUS";
+}
+
+if(Number(current.salon_id) !== salonId){
+reason = "NOT_FOUND_OR_NOT_IN_SALON";
+}
+
+skippedRows.push({
+...normalizedCurrent,
+reason
+});
+}
+
+for(const anchorId of normalizedAnchorIds){
+const row = byAnchorId.get(anchorId);
+if(!row){
+skippedRows.push({
+id: anchorId,
+payment_id: null,
+reason: "NOT_FOUND_OR_NOT_IN_SALON"
+});
+continue;
+}
+
+if(processedAnchorIds.has(String(row.anchor_id))){
+continue;
+}
+processedAnchorIds.add(String(row.anchor_id));
+await closeRow(row);
+}
+
+for(const paymentId of normalizedPaymentIds){
+const row = byPaymentId.get(paymentId);
+if(!row){
+skippedRows.push({
+payment_id: paymentId,
+reason: "NOT_FOUND_OR_NOT_IN_SALON"
+});
+continue;
+}
+
+if(processedAnchorIds.has(String(row.anchor_id))){
+continue;
+}
+processedAnchorIds.add(String(row.anchor_id));
+await closeRow(row);
+}
+
+return {
+ok: true,
+requested_count: requestedCount,
+closed_count: closedRows.length,
+skipped_count: skippedRows.length,
+close_batch_id: closeBatchId,
+closed_rows: closedRows,
+skipped_rows: skippedRows
 };
 }
 

@@ -16,7 +16,8 @@ buildPaymentProjectionResponse as buildSharedPaymentProjectionResponse,
 getPaymentProjectionList
 } from "./paymentProjection.js";
 import {
-getCollectionAnchors
+  getCollectionAnchors,
+  closePaymentCollectionAnchorsForSalon
 } from "../../services/paymentCollectionAnchors.service.js";
 
 export default function buildSalonsRouter(pool, internalReadRateLimit){
@@ -30,6 +31,10 @@ if(!Number.isInteger(n) || n <= 0){
 return null;
 }
 return n;
+}
+
+function isUuidLike(value){
+return /^[0-9a-f-]{36}$/i.test(String(value || "").trim());
 }
 
 function getIdentitySalonIds(identity){
@@ -2879,6 +2884,132 @@ ok:false,
 error:"SALON_COLLECTION_ANCHORS_FAILED"
 });
 
+}
+
+});
+
+/* SALON COLLECTION ANCHORS CLOSE */
+r.post("/salons/:slug/collection-anchors/close", async (req,res)=>{
+
+const { slug } = req.params;
+const db = await pool.connect();
+
+try{
+
+await db.query("BEGIN");
+
+const salon = await db.query(
+`SELECT id, name, slug FROM salons WHERE slug=$1 LIMIT 1`,
+[slug]
+);
+
+if(!salon.rows.length){
+await db.query("ROLLBACK");
+return res.status(404).json({ ok:false, error:"SALON_NOT_FOUND" });
+}
+
+const salonRow = salon.rows[0];
+
+if(!hasSalonOwnership(req, salonRow.id)){
+await db.query("ROLLBACK");
+return res.status(403).json({ ok:false, error:"COLLECTION_ANCHOR_FORBIDDEN" });
+}
+
+const body = req.body || {};
+const rawAnchorIds = body.anchor_ids;
+const rawPaymentIds = body.payment_ids;
+const closeNote = body.close_note === undefined || body.close_note === null ? null : String(body.close_note).trim();
+
+if(closeNote !== null && closeNote.length > 500){
+await db.query("ROLLBACK");
+return res.status(400).json({ ok:false, error:"COLLECTION_ANCHOR_INVALID_CLOSE_REQUEST" });
+}
+
+if((!Array.isArray(rawAnchorIds) || rawAnchorIds.length === 0) && (!Array.isArray(rawPaymentIds) || rawPaymentIds.length === 0)){
+await db.query("ROLLBACK");
+return res.status(400).json({ ok:false, error:"COLLECTION_ANCHOR_INVALID_CLOSE_REQUEST" });
+}
+
+const anchorIds = [];
+if(Array.isArray(rawAnchorIds)){
+for(const value of rawAnchorIds){
+if(!isUuidLike(value)){
+await db.query("ROLLBACK");
+return res.status(400).json({ ok:false, error:"COLLECTION_ANCHOR_INVALID_CLOSE_REQUEST" });
+}
+anchorIds.push(String(value).trim());
+}
+}
+
+const paymentIds = [];
+if(Array.isArray(rawPaymentIds)){
+for(const value of rawPaymentIds){
+const paymentId = safeInt(value);
+if(!paymentId){
+await db.query("ROLLBACK");
+return res.status(400).json({ ok:false, error:"COLLECTION_ANCHOR_INVALID_CLOSE_REQUEST" });
+}
+paymentIds.push(paymentId);
+}
+}
+
+const requestedCount = anchorIds.length + paymentIds.length;
+if(requestedCount > 100){
+await db.query("ROLLBACK");
+return res.status(400).json({ ok:false, error:"COLLECTION_ANCHOR_INVALID_CLOSE_REQUEST" });
+}
+
+const closedByUserId = Number(req.auth?.user_id ?? req.user?.id ?? req.user?.user_id ?? req.identity?.user_id ?? null);
+if(!Number.isInteger(closedByUserId) || closedByUserId <= 0){
+await db.query("ROLLBACK");
+return res.status(400).json({ ok:false, error:"COLLECTION_ANCHOR_INVALID_CLOSE_REQUEST" });
+}
+
+const result = await closePaymentCollectionAnchorsForSalon(db, {
+salonId: salonRow.id,
+anchorIds,
+paymentIds,
+closeNote,
+closedByUserId
+});
+
+await db.query("COMMIT");
+
+return res.json({
+ok: true,
+scope: {
+type: "salon",
+salon_id: Number(salonRow.id),
+salon_slug: salonRow.slug
+},
+result
+});
+
+}catch(err){
+
+try{ await db.query("ROLLBACK"); }catch(e){}
+
+const controlledBadRequestCodes = new Set([
+"COLLECTION_ANCHOR_INVALID_CLOSE_REQUEST",
+"COLLECTION_ANCHOR_SALON_ID_INVALID",
+"COLLECTION_ANCHOR_CLOSE_TARGET_REQUIRED",
+"COLLECTION_ANCHOR_CLOSE_BATCH_TOO_LARGE",
+"COLLECTION_ANCHOR_CLOSED_BY_USER_ID_INVALID"
+]);
+
+if(controlledBadRequestCodes.has(err?.code || err?.message)){
+return res.status(400).json({ ok:false, error: err.code || err.message });
+}
+
+console.error("SALON_COLLECTION_ANCHORS_CLOSE_ERROR", err);
+
+return res.status(500).json({
+ok:false,
+error:"COLLECTION_ANCHOR_CLOSE_FAILED"
+});
+
+}finally{
+db.release();
 }
 
 });
