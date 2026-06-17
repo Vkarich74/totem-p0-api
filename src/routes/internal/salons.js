@@ -15,6 +15,9 @@ import {
 buildPaymentProjectionResponse as buildSharedPaymentProjectionResponse,
 getPaymentProjectionList
 } from "./paymentProjection.js";
+import {
+getCollectionAnchors
+} from "../../services/paymentCollectionAnchors.service.js";
 
 export default function buildSalonsRouter(pool, internalReadRateLimit){
 
@@ -2560,6 +2563,7 @@ const masterSlugRaw = String(req.query.master_slug || "").trim();
 const hasMasterId = masterIdRaw !== undefined && masterIdRaw !== null && String(masterIdRaw).trim() !== "";
 const hasMasterSlug = masterSlugRaw !== "";
 let masterIdFilter = null;
+let masterFilterRow = null;
 let masterRowFilter = null;
 
 if(hasMasterId){
@@ -2769,6 +2773,110 @@ console.error("SALON_LOST_PROFIT_FETCH_ERROR", err);
 return res.status(500).json({
 ok:false,
 error:"SALON_LOST_PROFIT_FETCH_FAILED"
+});
+
+}
+
+});
+
+/* SALON COLLECTION ANCHORS */
+r.get("/salons/:slug/collection-anchors", internalReadRateLimit, async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id, name, slug FROM salons WHERE slug=$1 LIMIT 1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ ok:false, error:"SALON_NOT_FOUND" });
+}
+
+const salonRow = salon.rows[0];
+
+if(!hasSalonOwnership(req, salonRow.id)){
+return res.status(403).json({ ok:false, error:"SALON_ACCESS_DENIED" });
+}
+
+const rawMasterId = req.query.master_id;
+const rawMasterSlug = String(req.query.master_slug || "").trim();
+const hasMasterId = rawMasterId !== undefined && rawMasterId !== null && String(rawMasterId).trim() !== "";
+const hasMasterSlug = rawMasterSlug !== "";
+let masterIdFilter = null;
+
+if(hasMasterId || hasMasterSlug){
+let masterLookup = null;
+const lookupValues = [salonRow.id];
+const lookupClauses = ["ms.salon_id = $1"];
+
+if(hasMasterId){
+const masterId = safeInt(rawMasterId);
+if(!masterId){
+return res.status(400).json({ ok:false, error:"COLLECTION_ANCHOR_MASTER_ID_INVALID" });
+}
+
+lookupValues.push(masterId);
+lookupClauses.push(`m.id = $${lookupValues.length}`);
+}
+
+if(hasMasterSlug){
+lookupValues.push(rawMasterSlug);
+lookupClauses.push(`m.slug = $${lookupValues.length}`);
+}
+
+masterLookup = await pool.query(`
+SELECT m.id, m.slug, m.name
+FROM masters m
+JOIN master_salon ms ON ms.master_id = m.id
+WHERE ${lookupClauses.join(" AND ")}
+LIMIT 1
+`, lookupValues);
+
+if(!masterLookup.rows.length){
+return res.status(404).json({ ok:false, error:"COLLECTION_ANCHOR_MASTER_NOT_IN_SALON" });
+}
+
+masterFilterRow = masterLookup.rows[0];
+masterIdFilter = Number(masterFilterRow.id);
+}
+
+const openOnlyRaw = String(req.query.open_only ?? "").trim().toLowerCase();
+const openOnly = openOnlyRaw === "true" || openOnlyRaw === "1" || openOnlyRaw === "yes";
+
+const response = await getCollectionAnchors(pool, {
+scopeType: "salon",
+scopeRow: salonRow,
+scopeId: salonRow.id,
+masterFilterRow,
+from: req.query.from ?? null,
+to: req.query.to ?? null,
+status: req.query.status ?? null,
+openOnly
+});
+
+res.json(response);
+
+}catch(err){
+
+const controlledBadRequestCodes = new Set([
+"COLLECTION_ANCHORS_FROM_DATE_INVALID",
+"COLLECTION_ANCHORS_TO_DATE_INVALID",
+"COLLECTION_ANCHOR_STATUS_INVALID",
+"COLLECTION_ANCHOR_MASTER_ID_INVALID"
+]);
+
+if(controlledBadRequestCodes.has(err?.code || err?.message)){
+return res.status(400).json({ ok:false, error: err.code || err.message });
+}
+
+console.error("SALON_COLLECTION_ANCHORS_ERROR", err);
+
+res.status(500).json({
+ok:false,
+error:"SALON_COLLECTION_ANCHORS_FAILED"
 });
 
 }

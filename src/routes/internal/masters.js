@@ -16,6 +16,9 @@ import {
 buildPaymentProjectionResponse as buildSharedPaymentProjectionResponse,
 getPaymentProjectionList
 } from "./paymentProjection.js";
+import {
+getCollectionAnchors
+} from "../../services/paymentCollectionAnchors.service.js";
 
 export default function buildMastersRouter(pool, internalReadRateLimit){
 
@@ -2318,6 +2321,67 @@ console.error("MASTER_LOST_PROFIT_FETCH_ERROR", err);
 return res.status(500).json({
 ok:false,
 error:"MASTER_LOST_PROFIT_FETCH_FAILED"
+});
+
+}
+
+});
+
+/* MASTER COLLECTION ANCHORS */
+r.get("/masters/:slug/collection-anchors", internalReadRateLimit, async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const master = await pool.query(
+`SELECT id, name, slug FROM masters WHERE slug=$1 LIMIT 1`,
+[slug]
+);
+
+if(!master.rows.length){
+return res.status(404).json({ ok:false, error:"MASTER_NOT_FOUND" });
+}
+
+const masterRow = master.rows[0];
+
+if(!hasMasterOwnership(req, masterRow.id)){
+return res.status(403).json({ ok:false, error:"MASTER_ACCESS_DENIED" });
+}
+
+const openOnlyRaw = String(req.query.open_only ?? "").trim().toLowerCase();
+const openOnly = openOnlyRaw === "true" || openOnlyRaw === "1" || openOnlyRaw === "yes";
+
+const response = await getCollectionAnchors(pool, {
+scopeType: "master",
+scopeRow: masterRow,
+scopeId: masterRow.id,
+from: req.query.from ?? null,
+to: req.query.to ?? null,
+status: req.query.status ?? null,
+openOnly
+});
+
+res.json(response);
+
+}catch(err){
+
+const controlledBadRequestCodes = new Set([
+"COLLECTION_ANCHORS_FROM_DATE_INVALID",
+"COLLECTION_ANCHORS_TO_DATE_INVALID",
+"COLLECTION_ANCHOR_STATUS_INVALID",
+"COLLECTION_ANCHOR_MASTER_ID_INVALID"
+]);
+
+if(controlledBadRequestCodes.has(err?.code || err?.message)){
+return res.status(400).json({ ok:false, error: err.code || err.message });
+}
+
+console.error("MASTER_COLLECTION_ANCHORS_ERROR", err);
+
+res.status(500).json({
+ok:false,
+error:"MASTER_COLLECTION_ANCHORS_FAILED"
 });
 
 }
