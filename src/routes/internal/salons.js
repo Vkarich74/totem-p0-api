@@ -20,6 +20,7 @@ import {
   closePaymentCollectionAnchorsForSalon
 } from "../../services/paymentCollectionAnchors.service.js";
 import { releaseCalendarSlotForBooking } from "../../services/calendarSlots.service.js";
+import { buildSalonCalendarResponse } from "../../services/salonCalendar.service.js";
 
 export default function buildSalonsRouter(pool, internalReadRateLimit){
 
@@ -1420,6 +1421,55 @@ console.error('SALON_SERVICES_FETCH_ERROR',err);
 return res.status(500).json({
 ok:false,
 error:'SALON_SERVICES_FETCH_FAILED'
+});
+
+}
+
+});
+
+/* SALON CALENDAR */
+r.get("/salons/:slug/calendar", internalReadRateLimit, async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id, slug, name, city, status, enabled
+ FROM salons
+ WHERE slug=$1
+ LIMIT 1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ ok:false, error:"SALON_NOT_FOUND" });
+}
+
+const salonRow = salon.rows[0];
+
+if(!hasSalonOwnership(req, salonRow.id)){
+return res.status(403).json({ ok:false, error:"SALON_ACCESS_DENIED" });
+}
+
+const response = await buildSalonCalendarResponse(pool, {
+salonRow,
+requestedDate: req.query.date ?? null
+});
+
+return res.json(response);
+
+}catch(err){
+
+if(err?.code === "BAD_CALENDAR_DATE" || err?.message === "BAD_CALENDAR_DATE"){
+return res.status(400).json({ ok:false, error:"BAD_CALENDAR_DATE" });
+}
+
+console.error("SALON_CALENDAR_FETCH_ERROR", err);
+
+return res.status(500).json({
+ok:false,
+error:"SALON_CALENDAR_FETCH_FAILED"
 });
 
 }
