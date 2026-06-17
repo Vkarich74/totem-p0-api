@@ -3,6 +3,7 @@ import {
   buildProvisionMeta,
   resolveProvisionError
 } from "./provisionShared.js";
+import { releaseCalendarSlotForBooking } from "../calendarSlots.service.js";
 
 function normalizeText(value){
   return String(value || "").trim();
@@ -217,6 +218,10 @@ export async function terminateMasterSalonCanonical({ pool, payload }){
        RETURNING id`,
       [salon.id, master.id]
     );
+
+    for (const bookingRow of bookingsCanceled.rows) {
+      await releaseCalendarSlotForBooking(db, bookingRow.id, "master_terminated");
+    }
 
     const masterServicesDisabled = await db.query(
       `UPDATE master_services_v2

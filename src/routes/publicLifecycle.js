@@ -1,6 +1,7 @@
 import { pool } from "../db.js";
 import { createNotification } from "../services/notifications/notificationService.js";
 import { buildBookingLifecycleNotificationTemplate } from "../services/notifications/notificationTemplates.js";
+import { releaseCalendarSlotForBooking } from "../services/calendarSlots.service.js";
 
 function getPublicLifecyclePaymentLabelRu(provider, status, hasPayment) {
   if (!hasPayment) {
@@ -260,26 +261,45 @@ export async function publicLifecycle(req, res) {
         });
       }
 
-      await pool.query(
-        `UPDATE bookings SET status = 'cancelled' WHERE id = $1`,
-        [bookingId]
-      );
+      const cancelDb = await pool.connect();
 
-      await pool.query(
-        `
-        UPDATE payments
-           SET status = 'rejected',
-               is_active = false,
-               rejected_at = NOW(),
-               rejection_reason = 'booking_cancelled',
-               updated_at = NOW()
-         WHERE booking_id = $1
-           AND provider = 'direct'
-           AND status = 'pending'
-           AND is_active = true
-        `,
-        [bookingId]
-      );
+      try {
+        await cancelDb.query("BEGIN");
+
+        await cancelDb.query(
+          `UPDATE bookings SET status = 'cancelled' WHERE id = $1`,
+          [bookingId]
+        );
+
+        await cancelDb.query(
+          `
+          UPDATE payments
+             SET status = 'rejected',
+                 is_active = false,
+                 rejected_at = NOW(),
+                 rejection_reason = 'booking_cancelled',
+                 updated_at = NOW()
+           WHERE booking_id = $1
+             AND provider = 'direct'
+             AND status = 'pending'
+             AND is_active = true
+          `,
+          [bookingId]
+        );
+
+        await releaseCalendarSlotForBooking(cancelDb, bookingId, "booking_cancelled");
+
+        await cancelDb.query("COMMIT");
+      } catch (error) {
+        try {
+          await cancelDb.query("ROLLBACK");
+        } catch (rollbackError) {
+          console.error("PUBLIC_LIFECYCLE_CANCEL_ROLLBACK_ERROR", rollbackError);
+        }
+        throw error;
+      } finally {
+        cancelDb.release();
+      }
 
       try {
         const booking = rows[0];

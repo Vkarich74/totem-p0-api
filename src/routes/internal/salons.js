@@ -19,6 +19,7 @@ import {
   getCollectionAnchors,
   closePaymentCollectionAnchorsForSalon
 } from "../../services/paymentCollectionAnchors.service.js";
+import { releaseCalendarSlotForBooking } from "../../services/calendarSlots.service.js";
 
 export default function buildSalonsRouter(pool, internalReadRateLimit){
 
@@ -1945,6 +1946,10 @@ RETURNING id
 salonId,
 masterId
 ]);
+
+for (const bookingRow of bookingsCanceled.rows) {
+await releaseCalendarSlotForBooking(db, bookingRow.id, "master_terminated");
+}
 
 const masterServicesDisabled = await db.query(`
 UPDATE master_services_v2
