@@ -2811,6 +2811,7 @@ const rawMasterSlug = String(req.query.master_slug || "").trim();
 const hasMasterId = rawMasterId !== undefined && rawMasterId !== null && String(rawMasterId).trim() !== "";
 const hasMasterSlug = rawMasterSlug !== "";
 let masterIdFilter = null;
+let masterFilterRow = null;
 
 if(hasMasterId || hasMasterSlug){
 let masterLookup = null;
