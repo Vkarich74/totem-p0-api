@@ -193,17 +193,20 @@ return null;
 return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
 }
 
-function buildSyntheticWorkingRow(master){
-return {
-master_id: Number(master.id),
-status: "unknown",
-weekday: null,
-start_time: null,
-end_time: null,
-break_start: null,
-break_end: null,
-availability_status: "unknown"
-};
+const DEFAULT_WORK_START_TIME = "07:00";
+const DEFAULT_WORK_END_TIME = "23:00";
+
+function buildDefaultWorkingRow(master, weekday){
+  return {
+  master_id: Number(master.id),
+  status: "configured",
+  weekday: Number.isInteger(Number(weekday)) ? Number(weekday) : null,
+  start_time: DEFAULT_WORK_START_TIME,
+  end_time: DEFAULT_WORK_END_TIME,
+  break_start: null,
+  break_end: null,
+  availability_status: "configured"
+  };
 }
 
 function buildConfiguredWorkingRow(row){
@@ -287,13 +290,13 @@ calendar_status: "unknown"
 }));
 
 const activeMasterIds = activeMasters.map((row) => row.id);
+const weekday = normalizeWeekdayFromDate(requested);
 
 let workingRows = [];
 if(activeMasterIds.length){
-const weekday = normalizeWeekdayFromDate(requested);
 const workingRes = await pool.query(
-`SELECT
-   master_id,
+  `SELECT
+    master_id,
    weekday,
    start_time,
    end_time,
@@ -320,7 +323,8 @@ if(configured){
 master.calendar_status = "configured";
 return configured;
 }
-return buildSyntheticWorkingRow(master);
+master.calendar_status = "configured";
+return buildDefaultWorkingRow(master, weekday);
 });
 
 const eventsRes = activeMasterIds.length ? await pool.query(
