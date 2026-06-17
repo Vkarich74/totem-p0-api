@@ -2418,6 +2418,363 @@ error:"SALON_PAYMENT_PROJECTION_LIST_FAILED"
 
 });
 
+function parseLostProfitDate(value, errorCode){
+const raw = String(value || "").trim();
+if(!raw){
+return null;
+}
+
+if(!/^\d{4}-\d{2}-\d{2}$/.test(raw)){
+const err = new Error(errorCode);
+err.code = errorCode;
+throw err;
+}
+
+const [yearText, monthText, dayText] = raw.split("-");
+const year = Number(yearText);
+const month = Number(monthText);
+const day = Number(dayText);
+const date = new Date(Date.UTC(year, month - 1, day));
+
+if(
+!Number.isInteger(year) ||
+!Number.isInteger(month) ||
+!Number.isInteger(day) ||
+date.getUTCFullYear() !== year ||
+date.getUTCMonth() !== month - 1 ||
+date.getUTCDate() !== day
+){
+const err = new Error(errorCode);
+err.code = errorCode;
+throw err;
+}
+
+return raw;
+}
+
+function getBishkekMonthRange(referenceDate = new Date()){
+const formatter = new Intl.DateTimeFormat("en-CA", {
+timeZone: "Asia/Bishkek",
+year: "numeric",
+month: "2-digit",
+day: "2-digit"
+});
+
+const parts = formatter.formatToParts(referenceDate).reduce((acc, part)=>{
+if(part.type !== "literal"){
+acc[part.type] = part.value;
+}
+return acc;
+}, {});
+
+const year = Number(parts.year);
+const month = Number(parts.month);
+const from = `${year}-${String(month).padStart(2, "0")}-01`;
+const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+const to = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+
+return { from, to };
+}
+
+function normalizeLostProfitLimit(value){
+if(value === undefined || value === null || String(value).trim() === ""){
+return 50;
+}
+
+const limit = safeInt(value);
+if(!limit || limit > 200){
+const err = new Error("LOST_PROFIT_LIMIT_INVALID");
+err.code = "LOST_PROFIT_LIMIT_INVALID";
+throw err;
+}
+
+return limit;
+}
+
+function buildLostProfitSummary(rows){
+const summary = {
+cancelled_count: 0,
+lost_profit_amount: 0,
+currency: "KGS",
+missing_price_count: 0
+};
+
+for(const row of rows){
+summary.cancelled_count += 1;
+summary.lost_profit_amount += Number(row.price_snapshot ?? 0) || 0;
+if(row.price_snapshot === null || row.price_snapshot === undefined){
+summary.missing_price_count += 1;
+}
+}
+
+return summary;
+}
+
+function buildLostProfitRow(row){
+const lostProfitAmount = Number(row.price_snapshot ?? 0) || 0;
+
+return {
+booking_id: Number(row.booking_id),
+booking_code: row.booking_code,
+salon_id: Number(row.salon_id),
+master_id: Number(row.master_id),
+master_slug: row.master_slug || null,
+master_name: row.master_name || null,
+service_id: Number(row.service_id),
+service_name: row.service_name || null,
+start_at: row.start_at,
+local_start_at: row.local_start_at,
+canceled_at: row.canceled_at,
+status: row.status,
+lost_profit_amount: lostProfitAmount,
+currency: "KGS",
+missing_price: row.price_snapshot === null || row.price_snapshot === undefined,
+is_test: row.is_test === true
+};
+}
+
+/* SALON LOST PROFIT */
+r.get("/salons/:slug/lost-profit", internalReadRateLimit, async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const salon = await pool.query(
+`SELECT id, name, slug FROM salons WHERE slug=$1 LIMIT 1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ ok:false, error:"SALON_NOT_FOUND" });
+}
+
+const salonRow = salon.rows[0];
+
+if(!hasSalonOwnership(req, salonRow.id)){
+return res.status(403).json({ ok:false, error:"SALON_ACCESS_DENIED" });
+}
+
+const masterIdRaw = req.query.master_id;
+const masterSlugRaw = String(req.query.master_slug || "").trim();
+const hasMasterId = masterIdRaw !== undefined && masterIdRaw !== null && String(masterIdRaw).trim() !== "";
+const hasMasterSlug = masterSlugRaw !== "";
+let masterIdFilter = null;
+let masterRowFilter = null;
+
+if(hasMasterId){
+masterIdFilter = safeInt(masterIdRaw);
+if(!masterIdFilter){
+return res.status(400).json({ ok:false, error:"LOST_PROFIT_MASTER_ID_INVALID" });
+}
+}
+
+if(hasMasterSlug){
+const masterLookup = await pool.query(
+`SELECT m.id, m.name, m.slug
+ FROM masters m
+ JOIN master_salon ms ON ms.master_id = m.id
+ WHERE ms.salon_id=$1
+ AND m.slug=$2
+ LIMIT 1`,
+[salonRow.id, masterSlugRaw]
+);
+
+if(!masterLookup.rows.length){
+return res.status(404).json({ ok:false, error:"MASTER_NOT_FOUND" });
+}
+
+masterRowFilter = masterLookup.rows[0];
+
+if(masterIdFilter !== null && Number(masterIdFilter) !== Number(masterRowFilter.id)){
+return res.status(409).json({ ok:false, error:"LOST_PROFIT_MASTER_FILTER_CONFLICT" });
+}
+
+masterIdFilter = Number(masterRowFilter.id);
+}else if(masterIdFilter !== null){
+const masterLookup = await pool.query(
+`SELECT m.id, m.name, m.slug
+ FROM masters m
+ JOIN master_salon ms ON ms.master_id = m.id
+ WHERE ms.salon_id=$1
+ AND m.id=$2
+ LIMIT 1`,
+[salonRow.id, masterIdFilter]
+);
+
+if(!masterLookup.rows.length){
+return res.status(404).json({ ok:false, error:"MASTER_NOT_FOUND" });
+}
+
+masterRowFilter = masterLookup.rows[0];
+}
+
+const limit = normalizeLostProfitLimit(req.query.limit);
+
+const fromProvided = req.query.from !== undefined && req.query.from !== null && String(req.query.from).trim() !== "";
+const toProvided = req.query.to !== undefined && req.query.to !== null && String(req.query.to).trim() !== "";
+let from = fromProvided ? parseLostProfitDate(req.query.from, "LOST_PROFIT_FROM_DATE_INVALID") : null;
+let to = toProvided ? parseLostProfitDate(req.query.to, "LOST_PROFIT_TO_DATE_INVALID") : null;
+
+if(from && to && from > to){
+return res.status(400).json({ ok:false, error:"LOST_PROFIT_DATE_RANGE_INVALID" });
+}
+
+if(!from && !to){
+const monthRange = getBishkekMonthRange();
+from = monthRange.from;
+to = monthRange.to;
+}
+
+const values = [salonRow.id];
+const clauses = ["b.salon_id = $1", "LOWER(COALESCE(b.status, '')) IN ('cancelled','canceled','отмена')"];
+
+if(from){
+values.push(from);
+clauses.push(`(b.start_at AT TIME ZONE 'Asia/Bishkek')::date >= $${values.length}::date`);
+}
+
+if(to){
+values.push(to);
+clauses.push(`(b.start_at AT TIME ZONE 'Asia/Bishkek')::date <= $${values.length}::date`);
+}
+
+if(masterIdFilter !== null){
+values.push(masterIdFilter);
+clauses.push(`b.master_id = $${values.length}`);
+}
+
+const rowsResult = await pool.query(`
+SELECT
+b.id AS booking_id,
+b.salon_id,
+b.master_id,
+b.service_id,
+b.status,
+b.start_at,
+b.canceled_at,
+b.price_snapshot,
+b.is_test,
+to_char(b.start_at AT TIME ZONE 'Asia/Bishkek', 'YYYY-MM') AS month_key,
+'BR-' || LPAD(b.id::text, 5, '0') AS booking_code,
+to_char(b.start_at AT TIME ZONE 'Asia/Bishkek', 'YYYY-MM-DD HH24:MI:SS') AS local_start_at,
+COALESCE(s.name, s.service_id, b.service_id::text) AS service_name,
+COALESCE(m.name, m.slug, b.master_id::text) AS master_name,
+m.slug AS master_slug
+FROM public.bookings b
+LEFT JOIN public.services s ON s.id = b.service_id
+LEFT JOIN public.masters m ON m.id = b.master_id
+WHERE ${clauses.join(" AND ")}
+ORDER BY b.start_at DESC, b.created_at DESC, b.id DESC
+`, values);
+
+const allRows = rowsResult.rows || [];
+const summary = buildLostProfitSummary(allRows);
+const rows = allRows.slice(0, limit).map(buildLostProfitRow);
+const byMasterMap = new Map();
+const monthlyMap = new Map();
+
+for(const row of allRows){
+const masterKey = String(row.master_id);
+const existingMaster = byMasterMap.get(masterKey) || {
+master_id: Number(row.master_id),
+master_slug: row.master_slug || null,
+master_name: row.master_name || null,
+cancelled_count: 0,
+lost_profit_amount: 0,
+currency: "KGS",
+missing_price_count: 0
+};
+
+existingMaster.cancelled_count += 1;
+existingMaster.lost_profit_amount += Number(row.price_snapshot ?? 0) || 0;
+if(row.price_snapshot === null || row.price_snapshot === undefined){
+existingMaster.missing_price_count += 1;
+}
+byMasterMap.set(masterKey, existingMaster);
+
+const monthKey = String(row.month_key || "").trim();
+if(monthKey){
+const existingMonth = monthlyMap.get(monthKey) || {
+month: monthKey,
+cancelled_count: 0,
+lost_profit_amount: 0,
+currency: "KGS",
+missing_price_count: 0
+};
+
+existingMonth.cancelled_count += 1;
+existingMonth.lost_profit_amount += Number(row.price_snapshot ?? 0) || 0;
+if(row.price_snapshot === null || row.price_snapshot === undefined){
+existingMonth.missing_price_count += 1;
+}
+monthlyMap.set(monthKey, existingMonth);
+}
+}
+
+const byMaster = Array.from(byMasterMap.values()).sort((a, b)=>{
+if(b.cancelled_count !== a.cancelled_count){
+return b.cancelled_count - a.cancelled_count;
+}
+
+if(b.lost_profit_amount !== a.lost_profit_amount){
+return b.lost_profit_amount - a.lost_profit_amount;
+}
+
+return String(a.master_name || a.master_slug || a.master_id).localeCompare(String(b.master_name || b.master_slug || b.master_id));
+});
+
+const monthly = Array.from(monthlyMap.values()).sort((a, b)=>String(a.month).localeCompare(String(b.month)));
+
+return res.json({
+ok: true,
+scope: {
+type: "salon",
+salon_id: Number(salonRow.id),
+salon_slug: salonRow.slug,
+salon_name: salonRow.name || null,
+master_id: masterRowFilter ? Number(masterRowFilter.id) : null,
+master_slug: masterRowFilter ? masterRowFilter.slug : null,
+master_name: masterRowFilter ? masterRowFilter.name || null : null
+},
+filters: {
+from,
+to,
+status: ["cancelled", "canceled", "отмена"],
+master_id: masterRowFilter ? Number(masterRowFilter.id) : null,
+master_slug: masterRowFilter ? masterRowFilter.slug : null,
+timezone: "Asia/Bishkek",
+limit
+},
+summary,
+by_master: byMaster,
+monthly,
+rows
+});
+
+}catch(err){
+
+const controlledBadRequestCodes = new Set([
+"LOST_PROFIT_LIMIT_INVALID",
+"LOST_PROFIT_FROM_DATE_INVALID",
+"LOST_PROFIT_TO_DATE_INVALID"
+]);
+
+if(controlledBadRequestCodes.has(err?.code || err?.message)){
+return res.status(400).json({ ok:false, error: err.code || err.message });
+}
+
+console.error("SALON_LOST_PROFIT_FETCH_ERROR", err);
+
+return res.status(500).json({
+ok:false,
+error:"SALON_LOST_PROFIT_FETCH_FAILED"
+});
+
+}
+
+});
+
 /* SALON PAYMENT PROJECTION */
 r.get("/salons/:slug/payments/:paymentId/projection", internalReadRateLimit, async (req,res)=>{
 

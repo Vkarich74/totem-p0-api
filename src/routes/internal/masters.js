@@ -2061,6 +2061,269 @@ error:"MASTER_PAYMENT_PROJECTION_LIST_FAILED"
 
 });
 
+function parseLostProfitDate(value, errorCode){
+const raw = String(value || "").trim();
+if(!raw){
+return null;
+}
+
+if(!/^\d{4}-\d{2}-\d{2}$/.test(raw)){
+const err = new Error(errorCode);
+err.code = errorCode;
+throw err;
+}
+
+const [yearText, monthText, dayText] = raw.split("-");
+const year = Number(yearText);
+const month = Number(monthText);
+const day = Number(dayText);
+const date = new Date(Date.UTC(year, month - 1, day));
+
+if(
+!Number.isInteger(year) ||
+!Number.isInteger(month) ||
+!Number.isInteger(day) ||
+date.getUTCFullYear() !== year ||
+date.getUTCMonth() !== month - 1 ||
+date.getUTCDate() !== day
+){
+const err = new Error(errorCode);
+err.code = errorCode;
+throw err;
+}
+
+return raw;
+}
+
+function getBishkekMonthRange(referenceDate = new Date()){
+const formatter = new Intl.DateTimeFormat("en-CA", {
+timeZone: "Asia/Bishkek",
+year: "numeric",
+month: "2-digit",
+day: "2-digit"
+});
+
+const parts = formatter.formatToParts(referenceDate).reduce((acc, part)=>{
+if(part.type !== "literal"){
+acc[part.type] = part.value;
+}
+return acc;
+}, {});
+
+const year = Number(parts.year);
+const month = Number(parts.month);
+const from = `${year}-${String(month).padStart(2, "0")}-01`;
+const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+const to = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+
+return { from, to };
+}
+
+function normalizeLostProfitLimit(value){
+if(value === undefined || value === null || String(value).trim() === ""){
+return 50;
+}
+
+const limit = safeInt(value);
+if(!limit || limit > 200){
+const err = new Error("LOST_PROFIT_LIMIT_INVALID");
+err.code = "LOST_PROFIT_LIMIT_INVALID";
+throw err;
+}
+
+return limit;
+}
+
+function buildLostProfitSummary(rows){
+const summary = {
+cancelled_count: 0,
+lost_profit_amount: 0,
+currency: "KGS",
+missing_price_count: 0
+};
+
+for(const row of rows){
+summary.cancelled_count += 1;
+summary.lost_profit_amount += Number(row.price_snapshot ?? 0) || 0;
+if(row.price_snapshot === null || row.price_snapshot === undefined){
+summary.missing_price_count += 1;
+}
+}
+
+return summary;
+}
+
+function buildLostProfitRow(row){
+const lostProfitAmount = Number(row.price_snapshot ?? 0) || 0;
+
+return {
+booking_id: Number(row.booking_id),
+booking_code: row.booking_code,
+salon_id: Number(row.salon_id),
+master_id: Number(row.master_id),
+master_slug: row.master_slug || null,
+master_name: row.master_name || null,
+service_id: Number(row.service_id),
+service_name: row.service_name || null,
+start_at: row.start_at,
+local_start_at: row.local_start_at,
+canceled_at: row.canceled_at,
+status: row.status,
+lost_profit_amount: lostProfitAmount,
+currency: "KGS",
+missing_price: row.price_snapshot === null || row.price_snapshot === undefined,
+is_test: row.is_test === true
+};
+}
+
+/* MASTER LOST PROFIT */
+r.get("/masters/:slug/lost-profit", internalReadRateLimit, async (req,res)=>{
+
+const { slug } = req.params;
+
+try{
+
+const master = await pool.query(
+`SELECT id, name, slug FROM masters WHERE slug=$1 LIMIT 1`,
+[slug]
+);
+
+if(!master.rows.length){
+return res.status(404).json({ ok:false, error:"MASTER_NOT_FOUND" });
+}
+
+const masterRow = master.rows[0];
+
+if(!hasMasterOwnership(req, masterRow.id)){
+return res.status(403).json({ ok:false, error:"MASTER_ACCESS_DENIED" });
+}
+
+const limit = normalizeLostProfitLimit(req.query.limit);
+
+const fromProvided = req.query.from !== undefined && req.query.from !== null && String(req.query.from).trim() !== "";
+const toProvided = req.query.to !== undefined && req.query.to !== null && String(req.query.to).trim() !== "";
+let from = fromProvided ? parseLostProfitDate(req.query.from, "LOST_PROFIT_FROM_DATE_INVALID") : null;
+let to = toProvided ? parseLostProfitDate(req.query.to, "LOST_PROFIT_TO_DATE_INVALID") : null;
+
+if(from && to && from > to){
+return res.status(400).json({ ok:false, error:"LOST_PROFIT_DATE_RANGE_INVALID" });
+}
+
+if(!from && !to){
+const monthRange = getBishkekMonthRange();
+from = monthRange.from;
+to = monthRange.to;
+}
+
+const values = [masterRow.id];
+const clauses = ["b.master_id = $1", "LOWER(COALESCE(b.status, '')) IN ('cancelled','canceled','отмена')"];
+
+if(from){
+values.push(from);
+clauses.push(`(b.start_at AT TIME ZONE 'Asia/Bishkek')::date >= $${values.length}::date`);
+}
+
+if(to){
+values.push(to);
+clauses.push(`(b.start_at AT TIME ZONE 'Asia/Bishkek')::date <= $${values.length}::date`);
+}
+
+const rowsResult = await pool.query(`
+SELECT
+b.id AS booking_id,
+b.salon_id,
+b.master_id,
+b.service_id,
+b.status,
+b.start_at,
+b.canceled_at,
+b.price_snapshot,
+b.is_test,
+to_char(b.start_at AT TIME ZONE 'Asia/Bishkek', 'YYYY-MM') AS month_key,
+'BR-' || LPAD(b.id::text, 5, '0') AS booking_code,
+to_char(b.start_at AT TIME ZONE 'Asia/Bishkek', 'YYYY-MM-DD HH24:MI:SS') AS local_start_at,
+COALESCE(s.name, s.service_id, b.service_id::text) AS service_name,
+COALESCE(m.name, m.slug, b.master_id::text) AS master_name,
+m.slug AS master_slug
+FROM public.bookings b
+LEFT JOIN public.services s ON s.id = b.service_id
+LEFT JOIN public.masters m ON m.id = b.master_id
+WHERE ${clauses.join(" AND ")}
+ORDER BY b.start_at DESC, b.created_at DESC, b.id DESC
+`, values);
+
+const allRows = rowsResult.rows || [];
+const summary = buildLostProfitSummary(allRows);
+const rows = allRows.slice(0, limit).map(buildLostProfitRow);
+const monthlyMap = new Map();
+
+for(const row of allRows){
+const monthKey = String(row.month_key || "").trim();
+if(!monthKey){
+continue;
+}
+
+const existingMonth = monthlyMap.get(monthKey) || {
+month: monthKey,
+cancelled_count: 0,
+lost_profit_amount: 0,
+currency: "KGS",
+missing_price_count: 0
+};
+
+existingMonth.cancelled_count += 1;
+existingMonth.lost_profit_amount += Number(row.price_snapshot ?? 0) || 0;
+if(row.price_snapshot === null || row.price_snapshot === undefined){
+existingMonth.missing_price_count += 1;
+}
+monthlyMap.set(monthKey, existingMonth);
+}
+
+const monthly = Array.from(monthlyMap.values()).sort((a, b)=>String(a.month).localeCompare(String(b.month)));
+
+return res.json({
+ok: true,
+scope: {
+type: "master",
+master_id: Number(masterRow.id),
+master_slug: masterRow.slug,
+master_name: masterRow.name || null
+},
+filters: {
+from,
+to,
+status: ["cancelled", "canceled", "отмена"],
+timezone: "Asia/Bishkek",
+limit
+},
+summary,
+monthly,
+rows
+});
+
+}catch(err){
+
+const controlledBadRequestCodes = new Set([
+"LOST_PROFIT_LIMIT_INVALID",
+"LOST_PROFIT_FROM_DATE_INVALID",
+"LOST_PROFIT_TO_DATE_INVALID"
+]);
+
+if(controlledBadRequestCodes.has(err?.code || err?.message)){
+return res.status(400).json({ ok:false, error: err.code || err.message });
+}
+
+console.error("MASTER_LOST_PROFIT_FETCH_ERROR", err);
+
+return res.status(500).json({
+ok:false,
+error:"MASTER_LOST_PROFIT_FETCH_FAILED"
+});
+
+}
+
+});
+
 /* MASTER OWNER QR PAYMENTS */
 r.get("/masters/:slug/owner-qr-payments", internalReadRateLimit, async (req,res)=>{
 
