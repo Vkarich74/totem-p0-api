@@ -2087,6 +2087,193 @@ client.release();
 
 });
 
+r.post("/salons/:slug/salary-obligations/confirm", async (req,res)=>{
+
+const { slug } = req.params;
+const body = req.body || {};
+const obligationId = String(body.obligation_id ?? body.obligationId ?? "").trim();
+const amount = normalizePositiveInteger(body.amount, "SALARY_PAYMENT_AMOUNT_INVALID");
+const rawCurrency = normalizeContractText(body.currency, "");
+const currency = String(rawCurrency || "").trim().toUpperCase();
+const idempotencyKey = String(body.idempotency_key ?? body.idempotencyKey ?? "").trim();
+
+if(!obligationId || !isUuidLike(obligationId)){
+return res.status(400).json({ ok:false, error:"SALARY_OBLIGATION_ID_REQUIRED" });
+}
+
+if(!currency){
+return res.status(400).json({ ok:false, error:"SALARY_PAYMENT_CURRENCY_INVALID" });
+}
+
+if(!idempotencyKey){
+return res.status(400).json({ ok:false, error:"SALARY_PAYMENT_IDEMPOTENCY_KEY_REQUIRED" });
+}
+
+let client = null;
+
+try{
+
+const salon = await pool.query(
+`SELECT id, slug
+ FROM salons
+ WHERE slug=$1
+ LIMIT 1`,
+[slug]
+);
+
+if(!salon.rows.length){
+return res.status(404).json({ ok:false, error:"SALON_NOT_FOUND" });
+}
+
+if(!hasSalonOwnership(req, salon.rows[0].id)){
+return res.status(403).json({ ok:false, error:"SALON_ACCESS_DENIED" });
+}
+
+client = await pool.connect();
+await client.query("BEGIN");
+
+const obligationResult = await client.query(
+`SELECT so.*
+ FROM public.contract_salary_obligations so
+ WHERE so.id=$1
+ FOR UPDATE`,
+[obligationId]
+);
+
+if(!obligationResult.rows.length){
+await client.query("ROLLBACK");
+return res.status(404).json({ ok:false, error:"SALARY_OBLIGATION_NOT_FOUND" });
+}
+
+const obligation = obligationResult.rows[0];
+
+if(Number(obligation.salon_id) !== Number(salon.rows[0].id)){
+await client.query("ROLLBACK");
+return res.status(403).json({ ok:false, error:"SALARY_OBLIGATION_SALON_MISMATCH" });
+}
+
+if(Number(obligation.amount) !== amount){
+await client.query("ROLLBACK");
+return res.status(409).json({ ok:false, error:"SALARY_PAYMENT_AMOUNT_MISMATCH" });
+}
+
+if(String(obligation.currency || "").trim().toUpperCase() !== currency){
+await client.query("ROLLBACK");
+return res.status(409).json({ ok:false, error:"SALARY_PAYMENT_CURRENCY_MISMATCH" });
+}
+
+const contractResult = await client.query(
+`SELECT *
+ FROM public.contracts
+ WHERE id=$1
+ LIMIT 1`,
+[obligation.contract_id]
+);
+
+if(!contractResult.rows.length){
+await client.query("ROLLBACK");
+return res.status(500).json({ ok:false, error:"SALARY_PAYMENT_CONFIRM_FAILED" });
+}
+
+const contract = contractResult.rows[0];
+const contractModel = String(contract.terms_json?.model || "").trim().toLowerCase();
+const contractBaseType = String(contract.terms_json?.base_type || "").trim().toLowerCase();
+const isSalaryContract = contractModel === "salary" || (contractModel === "hybrid" && contractBaseType === "salary");
+
+if(!isSalaryContract){
+await client.query("ROLLBACK");
+return res.status(409).json({ ok:false, error:"SALARY_CONTRACT_MODEL_NOT_SUPPORTED" });
+}
+
+const normalizedStatus = String(obligation.status || "").trim().toLowerCase();
+
+if(!['open','overdue','paid'].includes(normalizedStatus)){
+await client.query("ROLLBACK");
+return res.status(409).json({ ok:false, error:"SALARY_OBLIGATION_STATUS_INVALID" });
+}
+
+let updatedObligation = obligation;
+let idempotent = false;
+
+if(normalizedStatus === 'paid'){
+idempotent = true;
+} else {
+const confirmAt = new Date().toISOString();
+const updateResult = await client.query(
+`UPDATE public.contract_salary_obligations
+SET status='paid',
+    paid_at = COALESCE(paid_at, $1::timestamptz),
+    updated_at = now(),
+    metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+      'paid_by_flow', 'salon_salary_obligation_confirm',
+      'salary_confirm_idempotency_key', $2::text
+    )
+WHERE id=$3
+AND status IN ('open','overdue','paid')
+RETURNING
+  id,
+  contract_id,
+  contract_salon_id,
+  contract_master_id,
+  salon_id,
+  master_id,
+  period_start,
+  period_end,
+  amount,
+  currency,
+  status,
+  due_at,
+  paid_at,
+  created_at,
+  updated_at,
+  cancelled_at,
+  metadata`,
+[confirmAt, idempotencyKey, obligation.id]
+);
+
+if(!updateResult.rows.length){
+await client.query("ROLLBACK");
+return res.status(409).json({ ok:false, error:"SALARY_OBLIGATION_STATUS_INVALID" });
+}
+
+updatedObligation = updateResult.rows[0];
+}
+
+await client.query("COMMIT");
+
+return res.json({
+ok:true,
+obligation: updatedObligation,
+idempotent
+});
+
+}catch(err){
+
+if(client){
+try{ await client.query("ROLLBACK"); }catch(e){}
+}
+
+if(err?.message === "SALARY_PAYMENT_AMOUNT_INVALID"){
+return res.status(400).json({ ok:false, error:"SALARY_PAYMENT_AMOUNT_INVALID" });
+}
+
+console.error("SALARY_PAYMENT_CONFIRM_ERROR", err);
+
+return res.status(500).json({
+ok:false,
+error:"SALARY_PAYMENT_CONFIRM_FAILED"
+});
+
+}finally{
+
+if(client){
+client.release();
+}
+
+}
+
+});
+
 /* ============================= */
 /* MASTER CONTRACTS (FIX)        */
 /* ============================= */
