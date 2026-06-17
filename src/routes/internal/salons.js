@@ -2111,23 +2111,29 @@ if(!hasSalonOwnership(req, salonId)){
 return res.status(403).json({ok:false,error:"FORBIDDEN"});
 }
 
-const bookings = await pool.query(`
-SELECT
-b.id,
-b.start_at,
-b.status,
-c.name,
-c.phone,
-pay.id AS payment_id,
-pay.provider AS payment_provider,
-pay.status AS payment_status,
-COALESCE(pay.is_active, false) AS payment_is_active,
-pay.amount AS payment_amount
-FROM bookings b
-LEFT JOIN clients c ON c.id=b.client_id
-LEFT JOIN LATERAL (
-SELECT
-p.id,
+    const bookings = await pool.query(`
+    SELECT
+      b.id,
+      ('BR-' || LPAD(b.id::text, 5, '0')) AS booking_code,
+      b.start_at,
+      b.status,
+      c.name AS client_name,
+      c.phone AS client_phone,
+      m.name AS master_name,
+      s.name AS service_name,
+      b.price_snapshot AS price,
+      pay.id AS payment_id,
+      pay.provider AS payment_provider,
+      pay.status AS payment_status,
+      COALESCE(pay.is_active, false) AS payment_is_active,
+      pay.amount AS payment_amount
+    FROM bookings b
+    LEFT JOIN clients c ON c.id=b.client_id
+    LEFT JOIN masters m ON m.id=b.master_id
+    LEFT JOIN services s ON s.id=b.service_id
+    LEFT JOIN LATERAL (
+      SELECT
+        p.id,
 p.provider,
 p.status,
 p.is_active,
