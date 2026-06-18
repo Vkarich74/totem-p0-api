@@ -1,0 +1,302 @@
+diff --git a/src/routes/internal/money-core.js b/src/routes/internal/money-core.js
+index c75ad48..c6b40e8 100644
+--- a/src/routes/internal/money-core.js
++++ b/src/routes/internal/money-core.js
+@@ -329,6 +329,22 @@ function requireMoneyCoreAuth(res, req) {
+   return true;
+ }
+ 
++function requireMoneyCorePrivilegedWriteAccess(res, req, errorCode = 'MONEY_CORE_FORBIDDEN') {
++  if (!requireMoneyCoreAuth(res, req)) {
++    return false;
++  }
++
++  if (!hasMoneyCorePrivilegedAccess(req)) {
++    safeJson(res, 403, {
++      ok: false,
++      error: errorCode,
++    });
++    return false;
++  }
++
++  return true;
++}
++
+ function buildMoneyCoreRouter(pool) {
+   const r = express.Router();
+ 
+@@ -414,6 +430,10 @@ function buildMoneyCoreRouter(pool) {
+ 
+     r.post(`${basePath}/money-core/owner-qr-destinations`, async (req, res, next) => {
+       try {
++        if (!requireMoneyCorePrivilegedWriteAccess(res, req, 'OWNER_QR_FORBIDDEN')) {
++          return;
++        }
++
+         const owner = await resolveMoneyCoreOwnerBySlug(pool, ownerType, req.params.slug);
+ 
+         if (!owner.ok) {
+@@ -446,6 +466,10 @@ function buildMoneyCoreRouter(pool) {
+ 
+     r.patch(`${basePath}/money-core/owner-qr-destinations/:id`, async (req, res, next) => {
+       try {
++        if (!requireMoneyCorePrivilegedWriteAccess(res, req, 'OWNER_QR_FORBIDDEN')) {
++          return;
++        }
++
+         const owner = await resolveMoneyCoreOwnerBySlug(pool, ownerType, req.params.slug);
+ 
+         if (!owner.ok) {
+@@ -478,6 +502,10 @@ function buildMoneyCoreRouter(pool) {
+ 
+     r.patch(`${basePath}/money-core/owner-qr-destinations/:id/deactivate`, async (req, res, next) => {
+       try {
++        if (!requireMoneyCorePrivilegedWriteAccess(res, req, 'OWNER_QR_FORBIDDEN')) {
++          return;
++        }
++
+         const owner = await resolveMoneyCoreOwnerBySlug(pool, ownerType, req.params.slug);
+ 
+         if (!owner.ok) {
+@@ -509,6 +537,10 @@ function buildMoneyCoreRouter(pool) {
+ 
+     r.post(`${basePath}/money-core/owner-qr-destinations/:id/image`, async (req, res, next) => {
+       try {
++        if (!requireMoneyCorePrivilegedWriteAccess(res, req, 'OWNER_QR_FORBIDDEN')) {
++          return;
++        }
++
+         const owner = await resolveMoneyCoreOwnerBySlug(pool, ownerType, req.params.slug);
+ 
+         if (!owner.ok) {
+@@ -518,10 +550,6 @@ function buildMoneyCoreRouter(pool) {
+           });
+         }
+ 
+-        if (!hasMoneyCoreOwnerAccess(req, owner.owner_type, owner.owner_id)) {
+-          return sendOwnerQrAuthError(res);
+-        }
+-
+         try {
+           await runMiddleware(req, res, ownerQrImageUpload);
+         } catch (err) {
+@@ -583,6 +611,10 @@ function buildMoneyCoreRouter(pool) {
+ 
+     r.delete(`${basePath}/money-core/owner-qr-destinations/:id/image`, async (req, res, next) => {
+       try {
++        if (!requireMoneyCorePrivilegedWriteAccess(res, req, 'OWNER_QR_FORBIDDEN')) {
++          return;
++        }
++
+         const owner = await resolveMoneyCoreOwnerBySlug(pool, ownerType, req.params.slug);
+ 
+         if (!owner.ok) {
+@@ -592,10 +624,6 @@ function buildMoneyCoreRouter(pool) {
+           });
+         }
+ 
+-        if (!hasMoneyCoreOwnerAccess(req, owner.owner_type, owner.owner_id)) {
+-          return sendOwnerQrAuthError(res);
+-        }
+-
+         const deletionResult = await deleteOwnerQrDestinationImage({
+           pool,
+           ownerType: owner.owner_type,
+@@ -750,6 +778,10 @@ function buildMoneyCoreRouter(pool) {
+ 
+   r.post('/money-core/provider-events/import', async (req, res, next) => {
+     try {
++      if (!requireMoneyCorePrivilegedWriteAccess(res, req)) {
++        return;
++      }
++
+       assertProviderEventsEnabled();
+       const event = await createProviderEvent(pool, req.body || {});
+ 
+@@ -832,6 +864,10 @@ function buildMoneyCoreRouter(pool) {
+ 
+   r.post('/money-core/settlements/manual', async (req, res, next) => {
+     try {
++      if (!requireMoneyCorePrivilegedWriteAccess(res, req)) {
++        return;
++      }
++
+       assertProviderSettlementsEnabled();
+       const settlement = await createManualSettlement(pool, req.body || {}, {
+         user_id: req.user?.id ?? req.user?.user_id ?? null,
+@@ -855,6 +891,10 @@ function buildMoneyCoreRouter(pool) {
+ 
+   r.post('/money-core/settlements/:id/confirm-bank-received', async (req, res, next) => {
+     try {
++      if (!requireMoneyCorePrivilegedWriteAccess(res, req)) {
++        return;
++      }
++
+       assertProviderSettlementsEnabled();
+       const settlement = await confirmBankReceived(
+         pool,
+@@ -890,6 +930,10 @@ function buildMoneyCoreRouter(pool) {
+ 
+   r.post('/money-core/settlements/:id/fail', async (req, res, next) => {
+     try {
++      if (!requireMoneyCorePrivilegedWriteAccess(res, req)) {
++        return;
++      }
++
+       assertProviderSettlementsEnabled();
+       const settlement = await failProviderSettlement(
+         pool,
+@@ -984,6 +1028,10 @@ function buildMoneyCoreRouter(pool) {
+ 
+   r.post('/money-core/settlements/:id/split/apply', async (req, res, next) => {
+     try {
++      if (!requireMoneyCorePrivilegedWriteAccess(res, req)) {
++        return;
++      }
++
+       assertProviderSettlementsEnabled();
+       const settlement = await createSettlementSplitAllocations(pool, req.params.id, req.body || {}, {
+         user_id: req.user?.id ?? req.user?.user_id ?? null,
+@@ -1160,6 +1208,10 @@ function buildMoneyCoreRouter(pool) {
+ 
+   r.post('/money-core/ledger/movements', async (req, res, next) => {
+     try {
++      if (!requireMoneyCorePrivilegedWriteAccess(res, req)) {
++        return;
++      }
++
+       assertLedgerMovementsEnabled();
+       const result = await createMoneyLedgerMovement(pool, req.body || {}, {
+         user_id: req.user?.id ?? req.user?.user_id ?? null,
+@@ -1418,6 +1470,10 @@ function buildMoneyCoreRouter(pool) {
+ 
+   r.patch('/money-core/owners/:ownerType/:ownerId/withdraw-settings', async (req, res, next) => {
+     try {
++      if (!requireMoneyCorePrivilegedWriteAccess(res, req)) {
++        return;
++      }
++
+       assertWithdrawRequestsEnabled();
+       const settings = await upsertWithdrawSettings(pool, req.params.ownerType, req.params.ownerId, req.body || {}, {
+         user_id: req.user?.id ?? req.user?.user_id ?? null,
+@@ -1466,6 +1522,10 @@ function buildMoneyCoreRouter(pool) {
+ 
+   r.post('/money-core/owners/:ownerType/:ownerId/withdraw-requests', async (req, res, next) => {
+     try {
++      if (!requireMoneyCorePrivilegedWriteAccess(res, req)) {
++        return;
++      }
++
+       assertWithdrawRequestsEnabled();
+       const result = await createWithdrawRequest(pool, req.params.ownerType, req.params.ownerId, req.body || {}, {
+         user_id: req.user?.id ?? req.user?.user_id ?? null,
+@@ -1559,6 +1619,10 @@ function buildMoneyCoreRouter(pool) {
+ 
+   r.post('/money-core/payout-executions', async (req, res, next) => {
+     try {
++      if (!requireMoneyCorePrivilegedWriteAccess(res, req)) {
++        return;
++      }
++
+       assertPayoutExecutionsEnabled();
+       const payout = await createPayoutExecution(pool, req.body || {}, {
+         user_id: req.user?.id ?? req.user?.user_id ?? null,
+@@ -1590,6 +1654,10 @@ function buildMoneyCoreRouter(pool) {
+ 
+   r.post('/money-core/payout-executions/:id/submit-manual', async (req, res, next) => {
+     try {
++      if (!requireMoneyCorePrivilegedWriteAccess(res, req)) {
++        return;
++      }
++
+       assertPayoutExecutionsEnabled();
+       const payout = await submitManualPayoutExecution(pool, req.params.id, req.body || {}, {
+         user_id: req.user?.id ?? req.user?.user_id ?? null,
+@@ -1628,6 +1696,10 @@ function buildMoneyCoreRouter(pool) {
+ 
+   r.post('/money-core/payout-executions/:id/complete', async (req, res, next) => {
+     try {
++      if (!requireMoneyCorePrivilegedWriteAccess(res, req)) {
++        return;
++      }
++
+       assertPayoutExecutionsEnabled();
+       const result = await completePayoutExecution(pool, req.params.id, req.body || {}, {
+         user_id: req.user?.id ?? req.user?.user_id ?? null,
+@@ -1666,6 +1738,10 @@ function buildMoneyCoreRouter(pool) {
+ 
+   r.post('/money-core/payout-executions/:id/fail', async (req, res, next) => {
+     try {
++      if (!requireMoneyCorePrivilegedWriteAccess(res, req)) {
++        return;
++      }
++
+       assertPayoutExecutionsEnabled();
+       const result = await failPayoutExecution(pool, req.params.id, req.body || {}, {
+         user_id: req.user?.id ?? req.user?.user_id ?? null,
+@@ -1764,6 +1840,10 @@ function buildMoneyCoreRouter(pool) {
+ 
+   r.post('/money-core/reconciliation/run', async (req, res, next) => {
+     try {
++      if (!requireMoneyCorePrivilegedWriteAccess(res, req)) {
++        return;
++      }
++
+       assertReconciliationEnabled();
+       const result = await runReconciliation(pool, req.body || {}, {
+         user_id: req.user?.id ?? req.user?.user_id ?? null,
+@@ -1795,6 +1875,10 @@ function buildMoneyCoreRouter(pool) {
+ 
+   r.post('/money-core/reconciliation-mismatches/:id/resolve', async (req, res, next) => {
+     try {
++      if (!requireMoneyCorePrivilegedWriteAccess(res, req)) {
++        return;
++      }
++
+       assertReconciliationEnabled();
+       const mismatch = await resolveReconciliationMismatch(pool, req.params.id, req.body || {}, {
+         user_id: req.user?.id ?? req.user?.user_id ?? null,
+@@ -2112,6 +2196,10 @@ function buildMoneyCoreRouter(pool) {
+ 
+   r.patch('/salons/:slug/money-core/withdraw-settings', async (req, res, next) => {
+     try {
++      if (!requireMoneyCorePrivilegedWriteAccess(res, req)) {
++        return;
++      }
++
+       assertWithdrawRequestsEnabled();
+       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'salon', req.params.slug);
+ 
+@@ -2178,6 +2266,10 @@ function buildMoneyCoreRouter(pool) {
+ 
+   r.post('/salons/:slug/money-core/withdraw-requests', async (req, res, next) => {
+     try {
++      if (!requireMoneyCorePrivilegedWriteAccess(res, req)) {
++        return;
++      }
++
+       assertWithdrawRequestsEnabled();
+       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'salon', req.params.slug);
+ 
+@@ -2329,6 +2421,10 @@ function buildMoneyCoreRouter(pool) {
+ 
+   r.patch('/masters/:slug/money-core/withdraw-settings', async (req, res, next) => {
+     try {
++      if (!requireMoneyCorePrivilegedWriteAccess(res, req)) {
++        return;
++      }
++
+       assertWithdrawRequestsEnabled();
+       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'master', req.params.slug);
+ 
+@@ -2395,6 +2491,10 @@ function buildMoneyCoreRouter(pool) {
+ 
+   r.post('/masters/:slug/money-core/withdraw-requests', async (req, res, next) => {
+     try {
++      if (!requireMoneyCorePrivilegedWriteAccess(res, req)) {
++        return;
++      }
++
+       assertWithdrawRequestsEnabled();
+       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'master', req.params.slug);
+ 
