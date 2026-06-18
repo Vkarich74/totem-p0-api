@@ -311,6 +311,23 @@ function hasMoneyCoreOwnerAccess(req, ownerType, ownerId) {
   return identityOwnerIds.has(normalizedOwnerId) || authOwnerIds.has(normalizedOwnerId);
 }
 
+function hasMoneyCorePrivilegedAccess(req) {
+  const role = String(req?.auth?.role || '').trim().toLowerCase();
+  return role === 'system' || role === 'owner';
+}
+
+function requireMoneyCoreAuth(res, req) {
+  if (!req?.auth || !req.auth.user_id || !req.auth.role) {
+    safeJson(res, 401, {
+      ok: false,
+      error: 'UNAUTHORIZED',
+    });
+    return false;
+  }
+
+  return true;
+}
+
 function buildMoneyCoreRouter(pool) {
   const r = express.Router();
 
@@ -1184,6 +1201,17 @@ function buildMoneyCoreRouter(pool) {
 
   r.get('/money-core/owners/:ownerType/:ownerId/withdraw-destinations', async (req, res, next) => {
     try {
+      if (!requireMoneyCoreAuth(res, req)) {
+        return;
+      }
+
+      if (!hasMoneyCorePrivilegedAccess(req)) {
+        return safeJson(res, 403, {
+          ok: false,
+          error: 'WITHDRAW_DESTINATION_FORBIDDEN',
+        });
+      }
+
       const destinations = await listWithdrawDestinations(pool, req.params.ownerType, req.params.ownerId, {
         method: req.query?.method,
         status: req.query?.status,
@@ -1200,6 +1228,17 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/owners/:ownerType/:ownerId/withdraw-destinations', async (req, res, next) => {
     try {
+      if (!requireMoneyCoreAuth(res, req)) {
+        return;
+      }
+
+      if (!hasMoneyCorePrivilegedAccess(req)) {
+        return safeJson(res, 403, {
+          ok: false,
+          error: 'WITHDRAW_DESTINATION_FORBIDDEN',
+        });
+      }
+
       assertWithdrawRequestsEnabled();
       const destination = await createWithdrawDestination(pool, req.params.ownerType, req.params.ownerId, req.body || {}, {
         user_id: req.user?.id ?? req.user?.user_id ?? null,
@@ -1230,11 +1269,22 @@ function buildMoneyCoreRouter(pool) {
 
   r.get('/money-core/withdraw-destinations/:id', async (req, res, next) => {
     try {
+      if (!requireMoneyCoreAuth(res, req)) {
+        return;
+      }
+
       const destination = await getWithdrawDestinationById(pool, req.params.id);
       if (!destination) {
         return safeJson(res, 404, {
           ok: false,
           error: 'WITHDRAW_DESTINATION_NOT_FOUND',
+        });
+      }
+
+      if (!hasMoneyCorePrivilegedAccess(req) && !hasMoneyCoreOwnerAccess(req, destination.owner_type, destination.owner_id)) {
+        return safeJson(res, 403, {
+          ok: false,
+          error: 'WITHDRAW_DESTINATION_FORBIDDEN',
         });
       }
 
@@ -1249,6 +1299,25 @@ function buildMoneyCoreRouter(pool) {
 
   r.patch('/money-core/withdraw-destinations/:id', async (req, res, next) => {
     try {
+      if (!requireMoneyCoreAuth(res, req)) {
+        return;
+      }
+
+      const current = await getWithdrawDestinationById(pool, req.params.id);
+      if (!current) {
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'WITHDRAW_DESTINATION_NOT_FOUND',
+        });
+      }
+
+      if (!hasMoneyCorePrivilegedAccess(req) && !hasMoneyCoreOwnerAccess(req, current.owner_type, current.owner_id)) {
+        return safeJson(res, 403, {
+          ok: false,
+          error: 'WITHDRAW_DESTINATION_FORBIDDEN',
+        });
+      }
+
       assertWithdrawRequestsEnabled();
       const destination = await updateWithdrawDestination(pool, req.params.id, req.body || {}, {
         user_id: req.user?.id ?? req.user?.user_id ?? null,
@@ -1286,6 +1355,25 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/withdraw-destinations/:id/archive', async (req, res, next) => {
     try {
+      if (!requireMoneyCoreAuth(res, req)) {
+        return;
+      }
+
+      const current = await getWithdrawDestinationById(pool, req.params.id);
+      if (!current) {
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'WITHDRAW_DESTINATION_NOT_FOUND',
+        });
+      }
+
+      if (!hasMoneyCorePrivilegedAccess(req) && !hasMoneyCoreOwnerAccess(req, current.owner_type, current.owner_id)) {
+        return safeJson(res, 403, {
+          ok: false,
+          error: 'WITHDRAW_DESTINATION_FORBIDDEN',
+        });
+      }
+
       assertWithdrawRequestsEnabled();
       const destination = await archiveWithdrawDestination(pool, req.params.id, {
         user_id: req.user?.id ?? req.user?.user_id ?? null,
@@ -1913,12 +2001,23 @@ function buildMoneyCoreRouter(pool) {
 
   r.get('/salons/:slug/money-core/withdraw-destinations', async (req, res, next) => {
     try {
+      if (!requireMoneyCoreAuth(res, req)) {
+        return;
+      }
+
       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'salon', req.params.slug);
 
       if (!owner.ok) {
         return safeJson(res, owner.statusCode || 400, {
           ok: false,
           error: owner.error,
+        });
+      }
+
+      if (!hasMoneyCorePrivilegedAccess(req) && !hasMoneyCoreOwnerAccess(req, owner.owner_type, owner.owner_id)) {
+        return safeJson(res, 403, {
+          ok: false,
+          error: 'WITHDRAW_DESTINATION_FORBIDDEN',
         });
       }
 
@@ -1938,6 +2037,10 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/salons/:slug/money-core/withdraw-destinations', async (req, res, next) => {
     try {
+      if (!requireMoneyCoreAuth(res, req)) {
+        return;
+      }
+
       assertWithdrawRequestsEnabled();
       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'salon', req.params.slug);
 
@@ -1945,6 +2048,13 @@ function buildMoneyCoreRouter(pool) {
         return safeJson(res, owner.statusCode || 400, {
           ok: false,
           error: owner.error,
+        });
+      }
+
+      if (!hasMoneyCorePrivilegedAccess(req) && !hasMoneyCoreOwnerAccess(req, owner.owner_type, owner.owner_id)) {
+        return safeJson(res, 403, {
+          ok: false,
+          error: 'WITHDRAW_DESTINATION_FORBIDDEN',
         });
       }
 
@@ -2108,12 +2218,23 @@ function buildMoneyCoreRouter(pool) {
 
   r.get('/masters/:slug/money-core/withdraw-destinations', async (req, res, next) => {
     try {
+      if (!requireMoneyCoreAuth(res, req)) {
+        return;
+      }
+
       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'master', req.params.slug);
 
       if (!owner.ok) {
         return safeJson(res, owner.statusCode || 400, {
           ok: false,
           error: owner.error,
+        });
+      }
+
+      if (!hasMoneyCorePrivilegedAccess(req) && !hasMoneyCoreOwnerAccess(req, owner.owner_type, owner.owner_id)) {
+        return safeJson(res, 403, {
+          ok: false,
+          error: 'WITHDRAW_DESTINATION_FORBIDDEN',
         });
       }
 
@@ -2133,6 +2254,10 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/masters/:slug/money-core/withdraw-destinations', async (req, res, next) => {
     try {
+      if (!requireMoneyCoreAuth(res, req)) {
+        return;
+      }
+
       assertWithdrawRequestsEnabled();
       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'master', req.params.slug);
 
@@ -2140,6 +2265,13 @@ function buildMoneyCoreRouter(pool) {
         return safeJson(res, owner.statusCode || 400, {
           ok: false,
           error: owner.error,
+        });
+      }
+
+      if (!hasMoneyCorePrivilegedAccess(req) && !hasMoneyCoreOwnerAccess(req, owner.owner_type, owner.owner_id)) {
+        return safeJson(res, 403, {
+          ok: false,
+          error: 'WITHDRAW_DESTINATION_FORBIDDEN',
         });
       }
 
