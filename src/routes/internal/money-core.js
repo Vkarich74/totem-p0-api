@@ -5,6 +5,7 @@ import {
   getMoneyCoreFlags,
   assertProviderEventsEnabled,
   assertProviderSettlementsEnabled,
+  assertWithdrawDestinationsWriteEnabled,
   assertWithdrawRequestsEnabled,
   assertPayoutExecutionsEnabled,
   assertLedgerMovementsEnabled,
@@ -1239,7 +1240,7 @@ function buildMoneyCoreRouter(pool) {
         });
       }
 
-      assertWithdrawRequestsEnabled();
+      assertWithdrawDestinationsWriteEnabled();
       const destination = await createWithdrawDestination(pool, req.params.ownerType, req.params.ownerId, req.body || {}, {
         user_id: req.user?.id ?? req.user?.user_id ?? null,
       });
@@ -1318,7 +1319,7 @@ function buildMoneyCoreRouter(pool) {
         });
       }
 
-      assertWithdrawRequestsEnabled();
+      assertWithdrawDestinationsWriteEnabled();
       const destination = await updateWithdrawDestination(pool, req.params.id, req.body || {}, {
         user_id: req.user?.id ?? req.user?.user_id ?? null,
       });
@@ -1374,7 +1375,7 @@ function buildMoneyCoreRouter(pool) {
         });
       }
 
-      assertWithdrawRequestsEnabled();
+      assertWithdrawDestinationsWriteEnabled();
       const destination = await archiveWithdrawDestination(pool, req.params.id, {
         user_id: req.user?.id ?? req.user?.user_id ?? null,
       });
@@ -2041,7 +2042,7 @@ function buildMoneyCoreRouter(pool) {
         return;
       }
 
-      assertWithdrawRequestsEnabled();
+      assertWithdrawDestinationsWriteEnabled();
       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'salon', req.params.slug);
 
       if (!owner.ok) {
@@ -2258,7 +2259,7 @@ function buildMoneyCoreRouter(pool) {
         return;
       }
 
-      assertWithdrawRequestsEnabled();
+      assertWithdrawDestinationsWriteEnabled();
       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'master', req.params.slug);
 
       if (!owner.ok) {
