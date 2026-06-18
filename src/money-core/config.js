@@ -128,12 +128,34 @@ function assertWithdrawRequestsEnabled(env = process.env) {
 }
 
 function assertWithdrawDestinationsWriteEnabled(env = process.env) {
-  return assertMoneyCoreFeatureEnabled(
-    'WITHDRAW_DESTINATIONS_WRITE_ENABLED',
-    'WITHDRAW_DESTINATIONS_WRITE_DISABLED',
-    'Money Core withdraw destinations write is disabled',
-    env,
-  );
+  const flags = getMoneyCoreFlags(env);
+
+  if (!flags.MONEY_CORE_ENABLED) {
+    const err = new Error('Money Core is disabled');
+    err.code = 'MONEY_CORE_DISABLED';
+    throw err;
+  }
+
+  if (flags.MONEY_CORE_READ_ONLY) {
+    const err = new Error('Money Core is read-only');
+    err.code = 'MONEY_CORE_READ_ONLY';
+    throw err;
+  }
+
+  if (!flags.MONEY_CORE_WRITE_ENABLED) {
+    const err = new Error('Money Core write is disabled');
+    err.code = 'MONEY_CORE_WRITE_DISABLED';
+    throw err;
+  }
+
+  if (!flags.WITHDRAW_DESTINATIONS_WRITE_ENABLED) {
+    const err = new Error('Withdraw destination writes are disabled');
+    err.code = 'MONEY_CORE_WITHDRAW_DESTINATIONS_WRITE_DISABLED';
+    err.statusCode = 403;
+    throw err;
+  }
+
+  return true;
 }
 
 function assertPayoutExecutionsEnabled(env = process.env) {
