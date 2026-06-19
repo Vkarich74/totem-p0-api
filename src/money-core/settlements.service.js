@@ -1,5 +1,7 @@
 'use strict';
 
+import { createLedgerEntriesForXpaySettlement } from './xpayLedgerBridge.service.js';
+
 function normalizeText(value) {
   const text = String(value ?? '').trim();
   return text || null;
@@ -350,6 +352,19 @@ async function confirmBankReceived(pool, id, input = {}, actor = {}) {
         manual_confirmed_by: Number.isInteger(Number(actor.user_id)) && Number(actor.user_id) > 0 ? Number(actor.user_id) : null,
       },
     });
+
+    if (String(settlement?.provider_code || '').trim().toLowerCase() === 'xpay') {
+      await createLedgerEntriesForXpaySettlement(client, {
+        providerSettlementId: settlement.id,
+        actor: {
+          user_type: actor.user_type,
+          user_id: actor.user_id,
+        },
+        route: '/money-core/settlements/:id/confirm-bank-received',
+        reason: 'provider_settlement_bank_received',
+      });
+    }
+
     await client.query('COMMIT');
     return settlement;
   } catch (error) {

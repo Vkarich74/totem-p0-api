@@ -938,6 +938,7 @@ function buildMoneyCoreRouter(pool) {
         req.body || {},
         {
           user_id: req.user?.id ?? req.user?.user_id ?? null,
+          user_type: req.user?.type ?? null,
         }
       );
 
