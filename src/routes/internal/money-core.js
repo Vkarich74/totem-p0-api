@@ -861,6 +861,10 @@ function buildMoneyCoreRouter(pool) {
 
   r.get('/money-core/settlements', async (req, res, next) => {
     try {
+      if (!requireMoneyCoreAuth(res, req)) {
+        return;
+      }
+
       const settlements = await listProviderSettlements(pool, {
         provider_code: req.query?.provider_code,
         status: req.query?.status,
@@ -1006,6 +1010,10 @@ function buildMoneyCoreRouter(pool) {
 
   r.get('/money-core/split-allocations', async (req, res, next) => {
     try {
+      if (!requireMoneyCoreAuth(res, req)) {
+        return;
+      }
+
       const allocations = await listSplitAllocations(pool, {
         provider_settlement_id: req.query?.provider_settlement_id,
         payment_id: req.query?.payment_id,
@@ -1109,6 +1117,10 @@ function buildMoneyCoreRouter(pool) {
 
   r.get('/money-core/ledger', async (req, res, next) => {
     try {
+      if (!requireMoneyCoreAuth(res, req)) {
+        return;
+      }
+
       const entries = await listMoneyLedgerEntries(pool, {
         owner_type: req.query?.owner_type,
         owner_id: req.query?.owner_id,
@@ -1967,6 +1979,17 @@ function buildMoneyCoreRouter(pool) {
 
   r.get('/money-core/admin/owner-balances', async (req, res, next) => {
     try {
+      if (!requireMoneyCoreAuth(res, req)) {
+        return;
+      }
+
+      if (!hasMoneyCorePrivilegedAccess(req)) {
+        return safeJson(res, 403, {
+          ok: false,
+          error: 'MONEY_CORE_PRIVILEGED_ACCESS_REQUIRED',
+        });
+      }
+
       const data = await listAdminOwnerBalances(pool, {
         owner_type: req.query?.owner_type,
         owner_id: req.query?.owner_id,
