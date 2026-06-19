@@ -1,6 +1,7 @@
 'use strict';
 
 import express from 'express';
+import AdminRuntimeGuard from '../../middleware/AdminRuntimeGuard.js';
 import {
   getMoneyCoreFlags,
   assertMoneyCoreWriteAllowed,
@@ -2073,7 +2074,7 @@ function buildMoneyCoreRouter(pool) {
     }
   });
 
-  r.get('/money-core/admin/overview', async (req, res, next) => {
+  r.get('/money-core/admin/overview', AdminRuntimeGuard, async (req, res, next) => {
     try {
       const data = await buildAdminMoneyCoreOverview(pool);
       return safeJson(res, 200, {
@@ -2086,12 +2087,8 @@ function buildMoneyCoreRouter(pool) {
     }
   });
 
-  r.get('/money-core/admin/owner-balances', async (req, res, next) => {
+  r.get('/money-core/admin/owner-balances', AdminRuntimeGuard, async (req, res, next) => {
     try {
-      if (!requireMoneyCorePrivilegedAccess(res, req)) {
-        return;
-      }
-
       const data = await listAdminOwnerBalances(pool, {
         owner_type: req.query?.owner_type,
         owner_id: req.query?.owner_id,
@@ -2107,7 +2104,7 @@ function buildMoneyCoreRouter(pool) {
     }
   });
 
-  r.get('/money-core/admin/withdraw-requests', async (req, res, next) => {
+  r.get('/money-core/admin/withdraw-requests', AdminRuntimeGuard, async (req, res, next) => {
     try {
       const data = await listAdminWithdrawRequests(pool, {
         owner_type: req.query?.owner_type,
@@ -2124,7 +2121,7 @@ function buildMoneyCoreRouter(pool) {
     }
   });
 
-  r.get('/money-core/admin/payout-executions', async (req, res, next) => {
+  r.get('/money-core/admin/payout-executions', AdminRuntimeGuard, async (req, res, next) => {
     try {
       const data = await listAdminPayoutExecutions(pool, {
         owner_type: req.query?.owner_type,
@@ -2141,7 +2138,7 @@ function buildMoneyCoreRouter(pool) {
     }
   });
 
-  r.get('/money-core/admin/reconciliation', async (req, res, next) => {
+  r.get('/money-core/admin/reconciliation', AdminRuntimeGuard, async (req, res, next) => {
     try {
       const data = await listAdminReconciliationRuns(pool, {
         owner_type: req.query?.owner_type,
@@ -2158,7 +2155,7 @@ function buildMoneyCoreRouter(pool) {
     }
   });
 
-  r.get('/money-core/admin/exceptions', async (req, res, next) => {
+  r.get('/money-core/admin/exceptions', AdminRuntimeGuard, async (req, res, next) => {
     try {
       const data = await listAdminMoneyCoreExceptions(pool, {
         owner_type: req.query?.owner_type,
@@ -2175,7 +2172,7 @@ function buildMoneyCoreRouter(pool) {
     }
   });
 
-  r.get('/money-core/admin/provider-events', async (req, res, next) => {
+  r.get('/money-core/admin/provider-events', AdminRuntimeGuard, async (req, res, next) => {
     try {
       const data = await listAdminProviderEvents(pool, {
         provider_code: req.query?.provider_code,
@@ -2193,7 +2190,7 @@ function buildMoneyCoreRouter(pool) {
     }
   });
 
-  r.get('/money-core/admin/settlements', async (req, res, next) => {
+  r.get('/money-core/admin/settlements', AdminRuntimeGuard, async (req, res, next) => {
     try {
       const data = await listAdminProviderSettlements(pool, {
         provider_code: req.query?.provider_code,
@@ -2209,7 +2206,7 @@ function buildMoneyCoreRouter(pool) {
     }
   });
 
-  r.get('/money-core/admin/receipts', async (req, res, next) => {
+  r.get('/money-core/admin/receipts', AdminRuntimeGuard, async (req, res, next) => {
     try {
       const data = await listAdminMoneyReceipts(pool, {
         receipt_type: req.query?.receipt_type,
@@ -2227,7 +2224,7 @@ function buildMoneyCoreRouter(pool) {
     }
   });
 
-  r.get('/money-core/admin/audit-events', async (req, res, next) => {
+  r.get('/money-core/admin/audit-events', AdminRuntimeGuard, async (req, res, next) => {
     try {
       const data = await listAdminMoneyAuditEvents(pool, {
         event_type: req.query?.event_type,
