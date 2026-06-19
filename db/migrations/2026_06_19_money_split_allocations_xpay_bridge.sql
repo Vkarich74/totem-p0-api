@@ -9,9 +9,9 @@ BEGIN
     SELECT 1
     FROM pg_indexes
     WHERE schemaname = 'public'
-      AND indexname = 'ux_money_split_allocations_provider_settlement_payment_owner_role'
+      AND indexname = 'ux_money_split_allocations_provider_settlement_payment_owner_ro'
   ) THEN
-    CREATE UNIQUE INDEX ux_money_split_allocations_provider_settlement_payment_owner_role
+    CREATE UNIQUE INDEX ux_money_split_allocations_provider_settlement_payment_owner_ro
       ON public.money_split_allocations (
         provider_settlement_id,
         payment_id,
