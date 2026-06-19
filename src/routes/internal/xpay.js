@@ -3,6 +3,7 @@ import { createNotification } from "../../services/notifications/notificationSer
 import { buildBookingConfirmedNotificationTemplate } from "../../services/notifications/notificationTemplates.js";
 import { upsertPaymentCollectionAnchorForPayment } from "../../services/paymentCollectionAnchors.service.js";
 import { createProviderSettlementItemForXpayPayment } from "../../money-core/xpayProviderSettlementItems.service.js";
+import { createXpaySplitAllocationsForPayment } from "../../money-core/xpaySplitAllocations.service.js";
 
 export default function buildXpayRouter({
 pool,
@@ -164,6 +165,18 @@ console.error("XPAY_PAYMENT_EVENT_WRITE_FAILED",err?.message || err);
 
 async function createXpayProviderSettlementItemIfNeeded(client, paymentId, route, actor = {}) {
 return createProviderSettlementItemForXpayPayment(client, {
+paymentId,
+route,
+reason: 'xpay_confirmed_payment',
+actor: {
+user_id: actor?.user_id ?? null,
+user_type: actor?.user_type ?? null
+}
+});
+}
+
+async function createXpaySplitAllocationsIfNeeded(client, paymentId, route, actor = {}) {
+return createXpaySplitAllocationsForPayment(client, {
 paymentId,
 route,
 reason: 'xpay_confirmed_payment',
@@ -451,9 +464,14 @@ throw error;
 }
 
 if(updatedPayment.status === "confirmed"){
-await createXpayProviderSettlementItemIfNeeded(client, updatedPayment.id, "/payments/xpay/status", {
+const xpayProviderSettlementItemResult = await createXpayProviderSettlementItemIfNeeded(client, updatedPayment.id, "/payments/xpay/status", {
 user_id: req.user?.id ?? req.user?.user_id ?? null,
 user_type: req.user?.type ?? null
+});
+await createXpaySplitAllocationsIfNeeded(client, updatedPayment.id, "/payments/xpay/status", {
+user_id: req.user?.id ?? req.user?.user_id ?? null,
+user_type: req.user?.type ?? null,
+provider_settlement_id: xpayProviderSettlementItemResult?.provider_settlement_id ?? null
 });
 }
 
@@ -669,9 +687,14 @@ throw error;
 }
 
 if(updatedPayment.status === "confirmed"){
-await createXpayProviderSettlementItemIfNeeded(client, updatedPayment.id, "/payments/xpay/static/status", {
+const xpayProviderSettlementItemResult = await createXpayProviderSettlementItemIfNeeded(client, updatedPayment.id, "/payments/xpay/static/status", {
 user_id: req.user?.id ?? req.user?.user_id ?? null,
 user_type: req.user?.type ?? null
+});
+await createXpaySplitAllocationsIfNeeded(client, updatedPayment.id, "/payments/xpay/static/status", {
+user_id: req.user?.id ?? req.user?.user_id ?? null,
+user_type: req.user?.type ?? null,
+provider_settlement_id: xpayProviderSettlementItemResult?.provider_settlement_id ?? null
 });
 }
 
