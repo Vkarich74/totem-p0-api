@@ -303,6 +303,16 @@ LIMIT 1
   async function confirmDirectPendingCashPayment(db, input = {}) {
     const bookingId = Number(input.booking_id ?? input.bookingId ?? null);
     const paymentId = Number(input.payment_id ?? input.paymentId ?? null);
+    const collectorOwnerType = String(input.collector_owner_type ?? input.collectorOwnerType ?? "").trim().toLowerCase();
+    const confirmedByUserId = Number(input.confirmed_by_user_id ?? input.confirmedByUserId ?? null);
+
+    if (collectorOwnerType && !["salon", "master"].includes(collectorOwnerType)) {
+      return {
+        ok: false,
+        statusCode: 400,
+        error: "INVALID_COLLECTOR_OWNER_TYPE"
+      };
+    }
 
     if (!Number.isInteger(bookingId) && !Number.isInteger(paymentId)) {
       return {
@@ -433,6 +443,10 @@ LIMIT 1
 UPDATE payments
 SET
 status='confirmed',
+collector_owner_type=$2,
+collector_owner_id=$3,
+confirmed_by_user_id=COALESCE($4, confirmed_by_user_id),
+confirmed_at=COALESCE(confirmed_at, now()),
 updated_at=now()
 WHERE id=$1
 AND provider='direct'
@@ -444,9 +458,26 @@ booking_id,
 provider,
 status,
 amount,
+collector_owner_type,
+collector_owner_id,
+confirmed_by_user_id,
+confirmed_at,
 created_at
 `,
-      [paymentRow.id]
+      [
+        paymentRow.id,
+        collectorOwnerType || null,
+        collectorOwnerType === "salon"
+          ? Number.isInteger(bookingRow.salon_id) && bookingRow.salon_id > 0
+            ? bookingRow.salon_id
+            : null
+          : collectorOwnerType === "master"
+            ? Number.isInteger(bookingRow.master_id) && bookingRow.master_id > 0
+              ? bookingRow.master_id
+              : null
+            : null,
+        Number.isInteger(confirmedByUserId) && confirmedByUserId > 0 ? confirmedByUserId : null
+      ]
     );
 
     if (!updated.rows.length) {
@@ -819,7 +850,11 @@ RETURNING id,booking_id,amount,status,provider,created_at
       await db.query("BEGIN");
 
       const body = req.body || {};
-      const result = await confirmDirectPendingCashPayment(db, body);
+      const result = await confirmDirectPendingCashPayment(db, {
+        ...body,
+        collector_owner_type: "salon",
+        confirmed_by_user_id: Number(req.auth?.user_id ?? req.user?.id ?? req.user?.user_id ?? null)
+      });
 
       if (!result.ok) {
         await db.query("ROLLBACK");
@@ -946,7 +981,11 @@ LIMIT 1
       await db.query("BEGIN");
 
       const body = req.body || {};
-      const result = await confirmDirectPendingCashPayment(db, body);
+      const result = await confirmDirectPendingCashPayment(db, {
+        ...body,
+        collector_owner_type: "master",
+        confirmed_by_user_id: Number(req.auth?.user_id ?? req.user?.id ?? req.user?.user_id ?? null)
+      });
 
       if (!result.ok) {
         await db.query("ROLLBACK");
