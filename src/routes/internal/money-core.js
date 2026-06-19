@@ -65,6 +65,9 @@ import {
 import {
   listWithdrawRequests,
   getWithdrawRequestById,
+  decorateWithdrawRequestRow,
+  buildAdminWithdrawRequestsSummary,
+  getAdminWithdrawRequestDetail,
   createWithdrawRequest,
 } from '../../money-core/withdrawRequests.service.js';
 import {
@@ -2115,7 +2118,44 @@ function buildMoneyCoreRouter(pool) {
         limit: req.query?.limit,
         offset: req.query?.offset,
       });
-      return safeJson(res, 200, { ok: true, data, meta: {} });
+      const decorated = Array.isArray(data)
+        ? data.map((row) => decorateWithdrawRequestRow(row))
+        : [];
+      return safeJson(res, 200, { ok: true, data: decorated, meta: {} });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/admin/withdraw-requests-summary', AdminRuntimeGuard, async (req, res, next) => {
+    try {
+      const data = await buildAdminWithdrawRequestsSummary(pool);
+      return safeJson(res, 200, {
+        ok: true,
+        summary: data.summary,
+        by_status: data.by_status,
+        generated_at: data.generated_at,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.get('/money-core/admin/withdraw-requests/:id', AdminRuntimeGuard, async (req, res, next) => {
+    try {
+      const data = await getAdminWithdrawRequestDetail(pool, req.params.id);
+      if (!data) {
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'WITHDRAW_REQUEST_NOT_FOUND',
+        });
+      }
+
+      return safeJson(res, 200, {
+        ok: true,
+        data,
+        meta: {},
+      });
     } catch (err) {
       return next(err);
     }
