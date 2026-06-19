@@ -3,6 +3,7 @@
 import express from 'express';
 import {
   getMoneyCoreFlags,
+  assertMoneyCoreWriteAllowed,
   assertProviderEventsEnabled,
   assertProviderSettlementsEnabled,
   assertWithdrawDestinationsWriteEnabled,
@@ -343,6 +344,41 @@ function requireMoneyCorePrivilegedWriteAccess(res, req) {
   }
 
   return true;
+}
+
+async function insertMoneyAuditEvent(client, payload = {}) {
+  const result = await client.query(
+    `
+    INSERT INTO public.money_audit_events (
+      event_type,
+      actor_type,
+      actor_id,
+      owner_type,
+      owner_id,
+      source_type,
+      source_id,
+      amount,
+      currency,
+      data
+    ) VALUES (
+      $1, $2, $3, $4, $5, $6, $7, $8, 'KGS', $9::jsonb
+    )
+    RETURNING *
+    `,
+    [
+      String(payload.event_type || '').trim(),
+      String(payload.actor_type || 'system').trim().toLowerCase(),
+      Number.isFinite(Number(payload.actor_id)) ? Number(payload.actor_id) : null,
+      String(payload.owner_type || '').trim().toLowerCase() || null,
+      Number.isFinite(Number(payload.owner_id)) ? Number(payload.owner_id) : null,
+      String(payload.source_type || '').trim().toLowerCase() || null,
+      Number.isFinite(Number(payload.source_id)) ? Number(payload.source_id) : null,
+      Number.isFinite(Number(payload.amount)) ? Number(payload.amount) : null,
+      JSON.stringify(payload.data && typeof payload.data === 'object' ? payload.data : {}),
+    ]
+  );
+
+  return result.rows[0] || null;
 }
 
 function buildMoneyCoreRouter(pool) {
@@ -2167,6 +2203,255 @@ function buildMoneyCoreRouter(pool) {
         });
       }
       return next(err);
+    }
+  });
+
+  r.patch('/money-core/payments/:paymentId/collector', async (req, res, next) => {
+    const db = await pool.connect();
+
+    try {
+      if (!requireMoneyCorePrivilegedWriteAccess(res, req)) {
+        return;
+      }
+
+      assertMoneyCoreWriteAllowed();
+
+      const paymentId = Number.parseInt(String(req.params.paymentId || '').trim(), 10);
+      if (!Number.isInteger(paymentId) || paymentId <= 0) {
+        return safeJson(res, 400, {
+          ok: false,
+          error: 'PAYMENT_ID_INVALID',
+        });
+      }
+
+      const body = req.body || {};
+      const collectorOwnerType = String(body.collector_owner_type || body.collectorOwnerType || '').trim().toLowerCase();
+      const collectorOwnerId = Number.parseInt(String(body.collector_owner_id || body.collectorOwnerId || '').trim(), 10);
+      const reason = String(body.reason || '').trim();
+      const actorUserId = Number(req.auth?.user_id ?? req.user?.id ?? req.user?.user_id ?? null);
+
+      if (!['salon', 'master'].includes(collectorOwnerType)) {
+        return safeJson(res, 400, {
+          ok: false,
+          error: 'INVALID_COLLECTOR_OWNER_TYPE',
+        });
+      }
+
+      if (!Number.isInteger(collectorOwnerId) || collectorOwnerId <= 0) {
+        return safeJson(res, 400, {
+          ok: false,
+          error: 'INVALID_COLLECTOR_OWNER_ID',
+        });
+      }
+
+      if (reason.length < 10) {
+        return safeJson(res, 400, {
+          ok: false,
+          error: 'COLLECTOR_REPAIR_REASON_REQUIRED',
+        });
+      }
+
+      await db.query('BEGIN');
+
+      const paymentRes = await db.query(
+        `
+SELECT
+  id,
+  booking_id,
+  provider,
+  status,
+  amount,
+  collector_owner_type,
+  collector_owner_id
+FROM public.payments
+WHERE id = $1
+FOR UPDATE
+LIMIT 1
+`,
+        [paymentId]
+      );
+
+      const payment = paymentRes.rows[0] || null;
+
+      if (!payment) {
+        await db.query('ROLLBACK');
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'COLLECTOR_REPAIR_PAYMENT_NOT_FOUND',
+        });
+      }
+
+      if (String(payment.provider || '').trim().toLowerCase() !== 'direct') {
+        await db.query('ROLLBACK');
+        return safeJson(res, 409, {
+          ok: false,
+          error: 'COLLECTOR_REPAIR_PAYMENT_NOT_DIRECT',
+        });
+      }
+
+      if (String(payment.status || '').trim().toLowerCase() !== 'confirmed') {
+        await db.query('ROLLBACK');
+        return safeJson(res, 409, {
+          ok: false,
+          error: 'COLLECTOR_REPAIR_PAYMENT_NOT_CONFIRMED',
+        });
+      }
+
+      if (payment.collector_owner_type != null || payment.collector_owner_id != null) {
+        await db.query('ROLLBACK');
+        return safeJson(res, 409, {
+          ok: false,
+          error: 'COLLECTOR_REPAIR_COLLECTOR_ALREADY_SET',
+        });
+      }
+
+      const bookingRes = await db.query(
+        `
+SELECT
+  id,
+  salon_id,
+  master_id,
+  status
+FROM public.bookings
+WHERE id = $1
+FOR UPDATE
+LIMIT 1
+`,
+        [payment.booking_id]
+      );
+
+      const booking = bookingRes.rows[0] || null;
+
+      if (!booking) {
+        await db.query('ROLLBACK');
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'COLLECTOR_REPAIR_BOOKING_NOT_FOUND',
+        });
+      }
+
+      const bookingStatus = String(booking.status || '').trim().toLowerCase();
+      if (bookingStatus === 'cancelled' || bookingStatus === 'canceled') {
+        await db.query('ROLLBACK');
+        return safeJson(res, 409, {
+          ok: false,
+          error: 'COLLECTOR_REPAIR_BOOKING_CANCELLED',
+        });
+      }
+
+      const expectedOwnerId = collectorOwnerType === 'salon' ? Number(booking.salon_id || 0) : Number(booking.master_id || 0);
+      if (!Number.isInteger(expectedOwnerId) || expectedOwnerId <= 0 || expectedOwnerId !== collectorOwnerId) {
+        await db.query('ROLLBACK');
+        return safeJson(res, 409, {
+          ok: false,
+          error: 'COLLECTOR_REPAIR_OWNER_MISMATCH',
+        });
+      }
+
+      const updateRes = await db.query(
+        `
+UPDATE public.payments
+SET
+  collector_owner_type = $1,
+  collector_owner_id = $2,
+  updated_at = now()
+WHERE id = $3
+RETURNING
+  id,
+  booking_id,
+  provider,
+  status,
+  amount,
+  collector_owner_type,
+  collector_owner_id,
+  updated_at
+`,
+        [collectorOwnerType, collectorOwnerId, paymentId]
+      );
+
+      const updatedPayment = updateRes.rows[0] || null;
+      if (!updatedPayment) {
+        await db.query('ROLLBACK');
+        return safeJson(res, 404, {
+          ok: false,
+          error: 'COLLECTOR_REPAIR_PAYMENT_NOT_FOUND',
+        });
+      }
+
+      const auditEvent = await insertMoneyAuditEvent(db, {
+        event_type: 'money_core_direct_payment_collector_repair',
+        actor_type: req.auth?.role || 'system',
+        actor_id: actorUserId,
+        owner_type: collectorOwnerType,
+        owner_id: collectorOwnerId,
+        source_type: 'payment',
+        source_id: paymentId,
+        amount: Number(payment.amount || 0),
+        data: {
+          reason,
+          payment_id: paymentId,
+          booking_id: Number(payment.booking_id || 0) || null,
+          salon_id: Number(booking.salon_id || 0) || null,
+          master_id: Number(booking.master_id || 0) || null,
+          route: "/internal/money-core/payments/:paymentId/collector",
+          before: {
+            collector_owner_type: payment.collector_owner_type ?? null,
+            collector_owner_id: payment.collector_owner_id ?? null,
+          },
+          after: {
+            collector_owner_type: collectorOwnerType,
+            collector_owner_id: collectorOwnerId,
+          },
+        },
+      });
+
+      if (!auditEvent) {
+        throw new Error('COLLECTOR_REPAIR_AUDIT_FAILED');
+      }
+
+      await db.query('COMMIT');
+
+      return safeJson(res, 200, {
+        ok: true,
+        payment: updatedPayment,
+        audit_event_id: auditEvent.id || null,
+      });
+    } catch (err) {
+      try {
+        await db.query('ROLLBACK');
+      } catch (rollbackErr) {
+        console.error('COLLECTOR_REPAIR_ROLLBACK_ERROR', rollbackErr);
+      }
+
+      if (err && String(err.code || '').startsWith('MONEY_CORE_')) {
+        return safeJson(res, err.statusCode || 403, {
+          ok: false,
+          error: err.code,
+          message: err.message,
+        });
+      }
+
+      if (err && err.statusCode) {
+        return safeJson(res, err.statusCode, {
+          ok: false,
+          error: err.code || 'COLLECTOR_REPAIR_FAILED',
+          message: err.message,
+        });
+      }
+
+      if (String(err?.message || '') === 'COLLECTOR_REPAIR_AUDIT_FAILED') {
+        return safeJson(res, 500, {
+          ok: false,
+          error: 'COLLECTOR_REPAIR_FAILED',
+        });
+      }
+
+      return safeJson(res, 500, {
+        ok: false,
+        error: 'COLLECTOR_REPAIR_FAILED',
+      });
+    } finally {
+      db.release();
     }
   });
 
