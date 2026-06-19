@@ -2,6 +2,7 @@ import express from "express";
 import { createNotification } from "../../services/notifications/notificationService.js";
 import { buildBookingConfirmedNotificationTemplate } from "../../services/notifications/notificationTemplates.js";
 import { upsertPaymentCollectionAnchorForPayment } from "../../services/paymentCollectionAnchors.service.js";
+import { createProviderSettlementItemForXpayPayment } from "../../money-core/xpayProviderSettlementItems.service.js";
 
 export default function buildXpayRouter({
 pool,
@@ -159,6 +160,18 @@ JSON.stringify(payload || {})
 }catch(err){
 console.error("XPAY_PAYMENT_EVENT_WRITE_FAILED",err?.message || err);
 }
+}
+
+async function createXpayProviderSettlementItemIfNeeded(client, paymentId, route, actor = {}) {
+return createProviderSettlementItemForXpayPayment(client, {
+paymentId,
+route,
+reason: 'xpay_confirmed_payment',
+actor: {
+user_id: actor?.user_id ?? null,
+user_type: actor?.user_type ?? null
+}
+});
 }
 
 async function setBookingConfirmedIfNeeded(client, bookingId){
@@ -436,6 +449,12 @@ throw error;
 }
 }
 }
+
+if(updatedPayment.status === "confirmed"){
+await createXpayProviderSettlementItemIfNeeded(client, updatedPayment.id, "/payments/xpay/status", {
+user_id: req.user?.id ?? req.user?.user_id ?? null,
+user_type: req.user?.type ?? null
+});
 }
 
 await client.query("COMMIT");
@@ -475,6 +494,8 @@ totem_status:updatedPayment.status,
 status:providerStatus
 }
 };
+
+}
 
 }catch(err){
 try{
@@ -646,6 +667,12 @@ throw error;
 }
 }
 }
+
+if(updatedPayment.status === "confirmed"){
+await createXpayProviderSettlementItemIfNeeded(client, updatedPayment.id, "/payments/xpay/static/status", {
+user_id: req.user?.id ?? req.user?.user_id ?? null,
+user_type: req.user?.type ?? null
+});
 }
 
 await client.query("COMMIT");
@@ -685,6 +712,8 @@ totem_status:updatedPayment.status,
 status:providerStatus
 }
 };
+
+}
 
 }catch(err){
 try{
