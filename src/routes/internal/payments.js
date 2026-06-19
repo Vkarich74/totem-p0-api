@@ -8,8 +8,31 @@ import {
   getOwnerQrPaymentOptions
 } from "../../money-core/ownerQrPayments.service.js";
 import {
+  createDirectCashObligationsForConfirmedPayment
+} from "../../money-core/directCashObligations.service.js";
+import {
   upsertPaymentCollectionAnchorForPayment
 } from "../../services/paymentCollectionAnchors.service.js";
+
+const SAFE_DIRECT_CASH_OBLIGATION_RESULTS = new Set([
+  "NO_SHARE_DUE",
+  "OBLIGATION_ALREADY_EXISTS",
+  "PLATFORM_SHARE_NONZERO_UNSUPPORTED_C20C"
+]);
+
+function assertDirectCashObligationResult(result) {
+  if (result?.status === "created" || result?.status === "exists") {
+    return;
+  }
+
+  if (result?.status === "skipped" && SAFE_DIRECT_CASH_OBLIGATION_RESULTS.has(result?.reason)) {
+    return;
+  }
+
+  const error = new Error(result?.reason || "DIRECT_CASH_OBLIGATION_FAILED");
+  error.code = result?.reason || "DIRECT_CASH_OBLIGATION_FAILED";
+  throw error;
+}
 
 function parsePositiveAmount(value) {
   const amount = Number(value);
@@ -905,6 +928,24 @@ LIMIT 1
       }
 
       if (
+        result.payment &&
+        String(result.payment.provider || "").trim().toLowerCase() === "direct" &&
+        String(result.payment.status || "").trim().toLowerCase() === "confirmed"
+      ) {
+        const directCashObligationResult = await createDirectCashObligationsForConfirmedPayment(db, {
+          paymentId: Number(result.payment.id || result.payment.payment_id || body.payment_id || body.paymentId || 0) || null,
+          actor: {
+            type: req.user?.type ?? req.auth?.role ?? "system",
+            user_id: Number(req.auth?.user_id ?? req.user?.id ?? req.user?.user_id ?? null)
+          },
+          reason: "direct_cash_confirm",
+          route: "/payments/direct/salon/confirm-cash"
+        });
+
+        assertDirectCashObligationResult(directCashObligationResult);
+      }
+
+      if (
         result.confirmed &&
         result.payment &&
         String(result.payment.status || "").trim().toLowerCase() === "confirmed"
@@ -1046,6 +1087,24 @@ LIMIT 1
             return res.status(403).json({ ok: false, error: "MASTER_SLUG_MISMATCH" });
           }
         }
+      }
+
+      if (
+        result.payment &&
+        String(result.payment.provider || "").trim().toLowerCase() === "direct" &&
+        String(result.payment.status || "").trim().toLowerCase() === "confirmed"
+      ) {
+        const directCashObligationResult = await createDirectCashObligationsForConfirmedPayment(db, {
+          paymentId: Number(result.payment.id || result.payment.payment_id || body.payment_id || body.paymentId || 0) || null,
+          actor: {
+            type: req.user?.type ?? req.auth?.role ?? "system",
+            user_id: Number(req.auth?.user_id ?? req.user?.id ?? req.user?.user_id ?? null)
+          },
+          reason: "direct_cash_confirm",
+          route: "/payments/direct/master/confirm-cash"
+        });
+
+        assertDirectCashObligationResult(directCashObligationResult);
       }
 
       if (
