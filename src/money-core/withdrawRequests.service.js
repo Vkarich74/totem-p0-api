@@ -181,6 +181,111 @@ async function createMoneyOwnerNotification(client, payload = {}) {
   }
 }
 
+function buildWithdrawRequestOwnerLabel(owner = {}) {
+  const ownerName = normalizeText(owner.owner_name);
+  if (ownerName) {
+    return ownerName;
+  }
+
+  const ownerSlug = normalizeText(owner.owner_slug);
+  if (ownerSlug) {
+    return ownerSlug;
+  }
+
+  const ownerType = normalizeText(owner.owner_type);
+  const ownerId = normalizeInt(owner.owner_id);
+  if (ownerType && ownerId) {
+    return `${ownerType}/${ownerId}`;
+  }
+
+  return 'owner';
+}
+
+async function createWithdrawRequestAdminNotifications(client, request = {}, owner = {}) {
+  try {
+    const adminsResult = await client.query(
+      `
+      SELECT id, email
+      FROM public.auth_users
+      WHERE role = 'admin'
+        AND enabled = true
+      ORDER BY id ASC
+      `
+    );
+
+    const adminUsers = Array.isArray(adminsResult.rows) ? adminsResult.rows : [];
+    if (!adminUsers.length) {
+      return [];
+    }
+
+    const ownerLabel = buildWithdrawRequestOwnerLabel(owner);
+    const amount = normalizeNumber(request.amount);
+    const currency = normalizeText(request.currency) || 'KGS';
+    const status = normalizeText(request.status) || 'pending_validation';
+    const createdNotifications = [];
+
+    for (const admin of adminUsers) {
+      const adminUserId = normalizeInt(admin.id);
+      if (!adminUserId) {
+        continue;
+      }
+
+      try {
+        const notification = await createNotification(client, {
+          notification_uid: `withdraw_request_admin_${request.id}_${adminUserId}`,
+          target_type: 'auth_user',
+          target_id: String(adminUserId),
+          owner_type: 'admin',
+          owner_id: adminUserId,
+          channel: 'in_app',
+          priority: 'normal',
+          title_ru: 'Новая заявка на вывод',
+          body_ru: `${ownerLabel} запросил вывод ${Number.isFinite(amount) ? `${amount} ${currency}` : currency}.`,
+          action_type: 'money',
+          action_url: '#/admin/withdrawals',
+          status: 'sent',
+          payload_json: {
+            event_type: 'withdraw_request_admin_created',
+            route: '#/admin/withdrawals',
+            withdraw_request_id: normalizeInt(request.id),
+            owner_type: normalizeText(request.owner_type),
+            owner_id: normalizeInt(request.owner_id),
+            owner_slug: normalizeText(owner.owner_slug),
+            amount,
+            currency,
+            status,
+            recipient_user_id: adminUserId,
+          },
+        });
+
+        if (notification) {
+          createdNotifications.push(notification);
+        }
+      } catch (err) {
+        console.warn('MONEY_ADMIN_WITHDRAW_NOTIFICATION_ERROR', {
+          event_type: 'withdraw_request_admin_created',
+          admin_user_id: adminUserId,
+          request_id: normalizeInt(request.id),
+          owner_type: normalizeText(request.owner_type),
+          owner_id: normalizeInt(request.owner_id),
+          error: err?.message || err,
+        });
+      }
+    }
+
+    return createdNotifications;
+  } catch (err) {
+    console.warn('MONEY_ADMIN_WITHDRAW_NOTIFICATION_ERROR', {
+      event_type: 'withdraw_request_admin_created',
+      request_id: normalizeInt(request.id),
+      owner_type: normalizeText(request.owner_type),
+      owner_id: normalizeInt(request.owner_id),
+      error: err?.message || err,
+    });
+    return [];
+  }
+}
+
 function buildBalanceFromLedgerRows(rows = []) {
   const balance = {
     provider_hold: 0,
@@ -1140,6 +1245,8 @@ async function createWithdrawRequest(pool, ownerType, ownerId, input = {}, actor
         status: 'locked',
       },
     });
+
+    await createWithdrawRequestAdminNotifications(client, updatedRequestResult.rows[0] || request, owner);
 
     await client.query('COMMIT');
 
