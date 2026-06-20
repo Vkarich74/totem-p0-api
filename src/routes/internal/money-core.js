@@ -1981,6 +1981,10 @@ function buildMoneyCoreRouter(pool) {
 
   r.get('/money-core/payout-executions', async (req, res, next) => {
     try {
+      if (!requireMoneyCorePrivilegedAccess(res, req)) {
+        return;
+      }
+
       const payouts = await listPayoutExecutions(pool, {
         owner_type: req.query?.owner_type,
         owner_id: req.query?.owner_id,
