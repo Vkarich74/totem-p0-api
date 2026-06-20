@@ -421,8 +421,264 @@ async function insertMoneyAuditEvent(client, payload = {}) {
   return result.rows[0] || null;
 }
 
+function normalizeWithdrawRequestAdminActionText(value) {
+  const text = String(value ?? '').trim();
+  return text || null;
+}
+
+function buildWithdrawRequestAdminActionError(code, message, statusCode = 400) {
+  const error = new Error(message);
+  error.code = code;
+  error.statusCode = statusCode;
+  return error;
+}
+
+async function processAdminWithdrawRequestAction(pool, requestId, action, body = {}, actor = {}) {
+  const normalizedAction = normalizeWithdrawRequestAdminActionText(action)?.toLowerCase();
+  const normalizedRequestId = Number.parseInt(String(requestId || '').trim(), 10);
+
+  if (!Number.isFinite(normalizedRequestId) || normalizedRequestId <= 0) {
+    throw buildWithdrawRequestAdminActionError('WITHDRAW_REQUEST_ID_INVALID', 'Withdraw request id is invalid', 400);
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const requestResult = await client.query(
+      `
+      SELECT *
+      FROM public.withdraw_requests
+      WHERE id = $1
+      FOR UPDATE
+      `,
+      [normalizedRequestId]
+    );
+
+    const currentRequest = requestResult.rows[0] || null;
+
+    if (!currentRequest) {
+      throw buildWithdrawRequestAdminActionError('WITHDRAW_REQUEST_NOT_FOUND', 'Withdraw request not found', 404);
+    }
+
+    const currentStatus = normalizeWithdrawRequestAdminActionText(currentRequest.status)?.toLowerCase() || '';
+    const adminUserId = Number.isFinite(Number(actor?.user_id)) ? Number(actor.user_id) : null;
+
+    if (normalizedAction === 'comment') {
+      const comment = normalizeWithdrawRequestAdminActionText(body?.comment);
+      if (!comment) {
+        throw buildWithdrawRequestAdminActionError('COMMENT_REQUIRED', 'Comment is required', 400);
+      }
+
+      const currentNote = normalizeWithdrawRequestAdminActionText(currentRequest.admin_note);
+      if (currentNote === comment) {
+        await client.query('COMMIT');
+        return {
+          action: 'comment',
+          audit_event_id: null,
+          request: decorateWithdrawRequestRow(currentRequest),
+        };
+      }
+
+      const updateResult = await client.query(
+        `
+        UPDATE public.withdraw_requests
+        SET
+          admin_note = $2,
+          updated_at = now()
+        WHERE id = $1
+        RETURNING *
+        `,
+        [currentRequest.id, comment]
+      );
+
+      const updatedRequest = updateResult.rows[0] || currentRequest;
+      const auditEvent = await insertMoneyAuditEvent(client, {
+        event_type: 'withdraw_request_admin_comment_added',
+        actor_type: 'admin',
+        actor_id: adminUserId,
+        owner_type: updatedRequest.owner_type,
+        owner_id: updatedRequest.owner_id,
+        source_type: 'withdraw_request',
+        source_id: updatedRequest.id,
+        amount: updatedRequest.amount,
+        data: {
+          action: 'comment',
+          comment,
+          previous_status: currentStatus,
+          previous_admin_note: currentNote,
+        },
+      });
+
+      await client.query('COMMIT');
+
+      return {
+        action: 'comment',
+        audit_event_id: auditEvent?.id || null,
+        request: decorateWithdrawRequestRow(updatedRequest),
+      };
+    }
+
+    if (normalizedAction === 'claim') {
+      const allowedStatuses = new Set(['created', 'pending_validation']);
+
+      if (currentStatus === 'requires_review') {
+        await client.query('COMMIT');
+        return {
+          action: 'claim',
+          audit_event_id: null,
+          request: decorateWithdrawRequestRow(currentRequest),
+        };
+      }
+
+      if (!allowedStatuses.has(currentStatus)) {
+        throw buildWithdrawRequestAdminActionError('WITHDRAW_REQUEST_INVALID_STATUS', 'Withdraw request status is not valid for claim', 409);
+      }
+
+      const updateResult = await client.query(
+        `
+        UPDATE public.withdraw_requests
+        SET
+          status = 'requires_review',
+          updated_at = now()
+        WHERE id = $1
+          AND status = ANY($2::text[])
+        RETURNING *
+        `,
+        [currentRequest.id, ['created', 'pending_validation']]
+      );
+
+      const updatedRequest = updateResult.rows[0] || null;
+      if (!updatedRequest) {
+        throw buildWithdrawRequestAdminActionError('WITHDRAW_REQUEST_INVALID_STATUS', 'Withdraw request status is not valid for claim', 409);
+      }
+
+      const auditEvent = await insertMoneyAuditEvent(client, {
+        event_type: 'withdraw_request_admin_claimed',
+        actor_type: 'admin',
+        actor_id: adminUserId,
+        owner_type: updatedRequest.owner_type,
+        owner_id: updatedRequest.owner_id,
+        source_type: 'withdraw_request',
+        source_id: updatedRequest.id,
+        amount: updatedRequest.amount,
+        data: {
+          action: 'claim',
+          previous_status: currentStatus,
+          next_status: 'requires_review',
+        },
+      });
+
+      await client.query('COMMIT');
+
+      return {
+        action: 'claim',
+        audit_event_id: auditEvent?.id || null,
+        request: decorateWithdrawRequestRow(updatedRequest),
+      };
+    }
+
+    if (normalizedAction === 'reject') {
+      const reason = normalizeWithdrawRequestAdminActionText(body?.reason);
+      if (!reason) {
+        throw buildWithdrawRequestAdminActionError('REASON_REQUIRED', 'Reason is required', 400);
+      }
+
+      const adminNote = normalizeWithdrawRequestAdminActionText(body?.admin_note);
+      if (currentStatus === 'rejected') {
+        await client.query('COMMIT');
+        return {
+          action: 'reject',
+          audit_event_id: null,
+          request: decorateWithdrawRequestRow(currentRequest),
+        };
+      }
+
+      const allowedStatuses = new Set(['created', 'pending_validation', 'requires_review']);
+      if (!allowedStatuses.has(currentStatus)) {
+        throw buildWithdrawRequestAdminActionError('WITHDRAW_REQUEST_INVALID_STATUS', 'Withdraw request status is not valid for reject', 409);
+      }
+
+      const updateResult = await client.query(
+        `
+        UPDATE public.withdraw_requests
+        SET
+          status = 'rejected',
+          rejected_at = now(),
+          failure_reason = $2,
+          admin_note = COALESCE(NULLIF($3, ''), admin_note),
+          updated_at = now()
+        WHERE id = $1
+          AND status = ANY($4::text[])
+        RETURNING *
+        `,
+        [currentRequest.id, reason, adminNote, ['created', 'pending_validation', 'requires_review']]
+      );
+
+      const updatedRequest = updateResult.rows[0] || null;
+      if (!updatedRequest) {
+        throw buildWithdrawRequestAdminActionError('WITHDRAW_REQUEST_INVALID_STATUS', 'Withdraw request status is not valid for reject', 409);
+      }
+
+      const auditEvent = await insertMoneyAuditEvent(client, {
+        event_type: 'withdraw_request_admin_rejected',
+        actor_type: 'admin',
+        actor_id: adminUserId,
+        owner_type: updatedRequest.owner_type,
+        owner_id: updatedRequest.owner_id,
+        source_type: 'withdraw_request',
+        source_id: updatedRequest.id,
+        amount: updatedRequest.amount,
+        data: {
+          action: 'reject',
+          reason,
+          admin_note: adminNote,
+          previous_status: currentStatus,
+          next_status: 'rejected',
+        },
+      });
+
+      await client.query('COMMIT');
+
+      return {
+        action: 'reject',
+        audit_event_id: auditEvent?.id || null,
+        request: decorateWithdrawRequestRow(updatedRequest),
+      };
+    }
+
+    throw buildWithdrawRequestAdminActionError('WITHDRAW_REQUEST_ACTION_INVALID', 'Withdraw request action is invalid', 400);
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (_) {
+      // ignore rollback failure
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 function buildMoneyCoreRouter(pool) {
   const r = express.Router();
+
+  function sendWithdrawRequestAdminActionError(res, err) {
+    if (!err) {
+      return null;
+    }
+
+    if (String(err.code || '').startsWith('WITHDRAW_REQUEST_') || err.statusCode) {
+      return safeJson(res, err.statusCode || 400, {
+        ok: false,
+        error: err.code || 'WITHDRAW_REQUEST_ACTION_FAILED',
+        message: err.message,
+      });
+    }
+
+    return null;
+  }
 
   function sendOwnerQrError(res, err, fallbackError = 'OWNER_QR_DESTINATION_INVALID_PAYLOAD', fallbackStatusCode = 400) {
     if (err && (String(err.code || '').startsWith('OWNER_QR_') || String(err.code || '').startsWith('MONEY_CORE_'))) {
@@ -2157,6 +2413,60 @@ function buildMoneyCoreRouter(pool) {
         meta: {},
       });
     } catch (err) {
+      return next(err);
+    }
+  });
+
+  r.post('/money-core/admin/withdraw-requests/:id/claim', AdminRuntimeGuard, async (req, res, next) => {
+    try {
+      const result = await processAdminWithdrawRequestAction(pool, req.params.id, 'claim', req.body || {}, req.admin || {});
+      return safeJson(res, 200, {
+        ok: true,
+        request: result.request,
+        audit_event_id: result.audit_event_id,
+        action: result.action,
+      });
+    } catch (err) {
+      const handled = sendWithdrawRequestAdminActionError(res, err);
+      if (handled) {
+        return handled;
+      }
+      return next(err);
+    }
+  });
+
+  r.post('/money-core/admin/withdraw-requests/:id/reject', AdminRuntimeGuard, async (req, res, next) => {
+    try {
+      const result = await processAdminWithdrawRequestAction(pool, req.params.id, 'reject', req.body || {}, req.admin || {});
+      return safeJson(res, 200, {
+        ok: true,
+        request: result.request,
+        audit_event_id: result.audit_event_id,
+        action: result.action,
+      });
+    } catch (err) {
+      const handled = sendWithdrawRequestAdminActionError(res, err);
+      if (handled) {
+        return handled;
+      }
+      return next(err);
+    }
+  });
+
+  r.post('/money-core/admin/withdraw-requests/:id/comment', AdminRuntimeGuard, async (req, res, next) => {
+    try {
+      const result = await processAdminWithdrawRequestAction(pool, req.params.id, 'comment', req.body || {}, req.admin || {});
+      return safeJson(res, 200, {
+        ok: true,
+        request: result.request,
+        audit_event_id: result.audit_event_id,
+        action: result.action,
+      });
+    } catch (err) {
+      const handled = sendWithdrawRequestAdminActionError(res, err);
+      if (handled) {
+        return handled;
+      }
       return next(err);
     }
   });
