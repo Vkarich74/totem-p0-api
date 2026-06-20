@@ -538,6 +538,20 @@ async function getPayoutExecutionById(pool, id) {
   return result.rows[0] || null;
 }
 
+async function loadPayoutForUpdate(pool, payoutId) {
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM public.payout_executions
+    WHERE id = $1
+    FOR UPDATE
+    `,
+    [payoutId]
+  );
+
+  return result.rows[0] || null;
+}
+
 async function createPayoutExecution(pool, input = {}, actor = {}) {
   assertMoneyCoreWriteAllowed();
 
@@ -798,7 +812,7 @@ async function completePayoutExecution(pool, id, input = {}, actor = {}) {
   try {
     await client.query('BEGIN');
 
-    const payout = await loadPayout(client, payoutId);
+    const payout = await loadPayoutForUpdate(client, payoutId);
     if (!payout) {
       return null;
     }
@@ -948,7 +962,7 @@ async function failPayoutExecution(pool, id, input = {}, actor = {}) {
   try {
     await client.query('BEGIN');
 
-    const payout = await loadPayout(client, payoutId);
+    const payout = await loadPayoutForUpdate(client, payoutId);
     if (!payout) {
       return null;
     }
