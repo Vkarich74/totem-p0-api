@@ -66,6 +66,7 @@ import {
   listWithdrawRequests,
   getWithdrawRequestById,
   decorateWithdrawRequestRow,
+  attachOwnerSafeWithdrawRequestSummaries,
   buildAdminWithdrawRequestsSummary,
   getAdminWithdrawRequestDetail,
   createWithdrawRequest,
@@ -2422,9 +2423,13 @@ function buildMoneyCoreRouter(pool) {
         });
       }
 
+      const [ownerSafeRequest] = await attachOwnerSafeWithdrawRequestSummaries(pool, [request]);
+
       return safeJson(res, 200, {
         ok: true,
         request,
+        payout_result: ownerSafeRequest?.payout_result || null,
+        destination_summary: ownerSafeRequest?.destination_summary || null,
       });
     } catch (err) {
       return next(err);

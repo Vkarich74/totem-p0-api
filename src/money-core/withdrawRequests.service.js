@@ -468,6 +468,153 @@ function decorateWithdrawRequestRow(row = {}, context = {}) {
   };
 }
 
+function maskOwnerWithdrawPhone(value) {
+  const text = normalizeText(value);
+  if (!text) {
+    return null;
+  }
+
+  if (text.includes('*')) {
+    return text;
+  }
+
+  const digits = text.replace(/\D/g, '');
+  if (digits.length <= 4) {
+    return text;
+  }
+
+  const last4 = digits.slice(-4);
+  if (digits.startsWith('996')) {
+    return `+996•••${last4}`;
+  }
+
+  if (text.startsWith('+')) {
+    return `+•••${last4}`;
+  }
+
+  return `•••${last4}`;
+}
+
+function buildOwnerSafeWithdrawDestinationSummary(destination = null) {
+  if (!destination) {
+    return null;
+  }
+
+  const method = normalizeText(destination.method) || null;
+  const provider = normalizeText(destination.provider_code || destination.wallet_provider) || null;
+  const walletProvider = normalizeText(destination.wallet_provider) || null;
+  const bankName = normalizeText(destination.bank_name) || null;
+  const accountMasked = normalizeText(destination.account_masked) || null;
+  const cardLast4 = normalizeText(destination.card_last4) || null;
+  const phoneMasked = maskOwnerWithdrawPhone(destination.phone);
+  const destinationRelation = normalizeText(destination.destination_relation) || null;
+
+  if (
+    !method &&
+    !provider &&
+    !walletProvider &&
+    !bankName &&
+    !accountMasked &&
+    !cardLast4 &&
+    !phoneMasked &&
+    !destinationRelation
+  ) {
+    return null;
+  }
+
+  return {
+    method,
+    provider,
+    wallet_provider: walletProvider,
+    bank_name: bankName,
+    account_masked: accountMasked,
+    card_last4: cardLast4,
+    phone_masked: phoneMasked,
+    destination_relation: destinationRelation,
+  };
+}
+
+function buildOwnerSafeWithdrawPayoutResult(request = {}) {
+  const status = normalizeText(request.status)?.toLowerCase() || null;
+  const completedAt = normalizeText(request.completed_at) || null;
+  const failedAt = normalizeText(request.failed_at) || null;
+  const failureReason = normalizeText(request.failure_reason) || null;
+
+  let userMessage = null;
+  if (status === 'completed') {
+    userMessage = 'Выплата выполнена';
+  } else if (status === 'failed') {
+    userMessage = failureReason ? `Ошибка выплаты: ${failureReason}` : 'Ошибка выплаты';
+  } else if (status === 'rejected' || status === 'canceled') {
+    userMessage = failureReason ? `Заявка отклонена: ${failureReason}` : 'Заявка отклонена';
+  } else if (['locked', 'requires_review', 'queued_for_payout', 'bank_processing'].includes(status)) {
+    userMessage = 'Выплата в процессе';
+  }
+
+  return {
+    status,
+    completed_at: completedAt,
+    failed_at: failedAt,
+    failure_reason: failureReason,
+    user_message: userMessage,
+  };
+}
+
+async function loadOwnerWithdrawDestinationSummaryMap(pool, destinationIds = []) {
+  const normalizedIds = [...new Set(destinationIds.map((value) => normalizeInt(value)).filter((value) => value && value > 0))];
+
+  if (!normalizedIds.length) {
+    return new Map();
+  }
+
+  const result = await pool.query(
+    `
+    SELECT
+      id,
+      method,
+      provider_code,
+      wallet_provider,
+      bank_name,
+      account_masked,
+      card_last4,
+      phone,
+      destination_relation
+    FROM public.withdraw_destinations
+    WHERE id = ANY($1::bigint[])
+    `,
+    [normalizedIds],
+  );
+
+  const map = new Map();
+  for (const row of result.rows || []) {
+    const destinationId = Number(row.id || 0);
+    if (!destinationId) {
+      continue;
+    }
+    map.set(destinationId, buildOwnerSafeWithdrawDestinationSummary(row));
+  }
+
+  return map;
+}
+
+async function attachOwnerSafeWithdrawRequestSummaries(pool, requests = []) {
+  const rows = Array.isArray(requests) ? requests.filter(Boolean) : [];
+  if (!rows.length) {
+    return [];
+  }
+
+  const destinationMap = await loadOwnerWithdrawDestinationSummaryMap(
+    pool,
+    rows.map((row) => row.destination_id),
+  );
+
+  return rows.map((row) => ({
+    ...row,
+    payout_result: buildOwnerSafeWithdrawPayoutResult(row),
+    destination_summary: row.destination_id ? destinationMap.get(Number(row.destination_id)) || null : null,
+  }));
+}
+
 async function buildAdminWithdrawRequestsSummary(pool) {
   const summaryResult = await pool.query(
     `
@@ -826,7 +973,7 @@ async function listWithdrawRequests(pool, ownerType, ownerId, filters = {}) {
     values
   );
 
-  return result.rows;
+  return attachOwnerSafeWithdrawRequestSummaries(pool, result.rows || []);
 }
 
 async function getWithdrawRequestById(pool, id) {
@@ -1272,6 +1419,9 @@ async function createWithdrawRequest(pool, ownerType, ownerId, input = {}, actor
 
 export {
   decorateWithdrawRequestRow,
+  buildOwnerSafeWithdrawDestinationSummary,
+  buildOwnerSafeWithdrawPayoutResult,
+  attachOwnerSafeWithdrawRequestSummaries,
   buildAdminWithdrawRequestsSummary,
   getAdminWithdrawRequestDetail,
   listWithdrawRequests,
