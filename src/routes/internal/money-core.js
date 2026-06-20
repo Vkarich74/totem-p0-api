@@ -433,6 +433,46 @@ function buildWithdrawRequestAdminActionError(code, message, statusCode = 400) {
   return error;
 }
 
+const FORBIDDEN_START_PROCESSING_BODY_FIELDS = new Set([
+  'external_ref',
+  'bank_reference',
+  'receipt_url',
+  'completed_at',
+  'failure_reason',
+]);
+
+function hasForbiddenStartProcessingBodyFields(body = {}) {
+  if (!body || typeof body !== 'object') {
+    return false;
+  }
+
+  return Array.from(FORBIDDEN_START_PROCESSING_BODY_FIELDS).some((field) =>
+    Object.prototype.hasOwnProperty.call(body, field)
+  );
+}
+
+function sendWithdrawRequestStartProcessingError(res, err) {
+  if (!err) {
+    return null;
+  }
+
+  if (
+    String(err.code || '').startsWith('MONEY_CORE_') ||
+    String(err.code || '').startsWith('WITHDRAW_REQUEST_') ||
+    String(err.code || '').startsWith('PAYOUT_') ||
+    err.code === 'PAYOUT_PROOF_NOT_ALLOWED_AT_START_PROCESSING' ||
+    err.statusCode
+  ) {
+    return safeJson(res, err.statusCode || 400, {
+      ok: false,
+      error: err.code || 'WITHDRAW_REQUEST_START_PROCESSING_FAILED',
+      message: err.message,
+    });
+  }
+
+  return null;
+}
+
 async function processAdminWithdrawRequestAction(pool, requestId, action, body = {}, actor = {}) {
   const normalizedAction = normalizeWithdrawRequestAdminActionText(action)?.toLowerCase();
   const normalizedRequestId = Number.parseInt(String(requestId || '').trim(), 10);
@@ -659,6 +699,198 @@ async function processAdminWithdrawRequestAction(pool, requestId, action, body =
   } finally {
     client.release();
   }
+}
+
+async function processAdminWithdrawRequestStartProcessing(pool, requestId, body = {}, actor = {}) {
+  const normalizedRequestId = Number.parseInt(String(requestId || '').trim(), 10);
+  if (!Number.isFinite(normalizedRequestId) || normalizedRequestId <= 0) {
+    throw buildWithdrawRequestAdminActionError('WITHDRAW_REQUEST_ID_INVALID', 'Withdraw request id is invalid', 400);
+  }
+
+  if (hasForbiddenStartProcessingBodyFields(body)) {
+    const error = new Error('Payout proof fields are not allowed at start-processing');
+    error.code = 'PAYOUT_PROOF_NOT_ALLOWED_AT_START_PROCESSING';
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const currentRequestResult = await pool.query(
+    `
+    SELECT *
+    FROM public.withdraw_requests
+    WHERE id = $1
+    LIMIT 1
+    `,
+    [normalizedRequestId]
+  );
+
+  const currentRequest = currentRequestResult.rows[0] || null;
+  if (!currentRequest) {
+    throw buildWithdrawRequestAdminActionError('WITHDRAW_REQUEST_NOT_FOUND', 'Withdraw request not found', 404);
+  }
+
+  const currentStatus = normalizeWithdrawRequestAdminActionText(currentRequest.status)?.toLowerCase() || '';
+  const normalizedPayoutProvider = normalizeWithdrawRequestAdminActionText(body?.payout_provider);
+  const adminNote = normalizeWithdrawRequestAdminActionText(body?.internal_note) || normalizeWithdrawRequestAdminActionText(body?.reason);
+  const adminUserId = Number.isFinite(Number(actor?.user_id)) ? Number(actor.user_id) : null;
+
+  if (['completed', 'failed', 'canceled', 'rejected'].includes(currentStatus)) {
+    throw buildWithdrawRequestAdminActionError('WITHDRAW_REQUEST_INVALID_STATUS', 'Withdraw request status is not valid for start_processing', 409);
+  }
+
+  let effectiveRequest = currentRequest;
+  let existingPayout = null;
+
+  if (effectiveRequest.payout_execution_id) {
+    const payoutResult = await pool.query(
+      `
+      SELECT *
+      FROM public.payout_executions
+      WHERE id = $1
+      LIMIT 1
+      `,
+      [effectiveRequest.payout_execution_id]
+    );
+    existingPayout = payoutResult.rows[0] || null;
+  }
+
+  if (existingPayout) {
+    const payoutStatus = normalizeWithdrawRequestAdminActionText(existingPayout.status)?.toLowerCase() || '';
+    if (['submitted', 'processing', 'completed', 'failed'].includes(payoutStatus)) {
+      const detail = await getAdminWithdrawRequestDetail(pool, normalizedRequestId);
+      if (!detail) {
+        throw buildWithdrawRequestAdminActionError('WITHDRAW_REQUEST_NOT_FOUND', 'Withdraw request not found', 404);
+      }
+
+      return {
+        action: 'start_processing',
+        audit_event_id: null,
+        request: detail.withdraw_request,
+        payout_execution: detail.payout_execution,
+        detail,
+      };
+    }
+  }
+
+  if (currentStatus === 'requires_review' && !existingPayout) {
+    if (
+      !Number(currentRequest.locked_amount || 0) ||
+      !currentRequest.locked_ledger_group_id ||
+      !currentRequest.destination_id ||
+      currentRequest.payout_execution_id
+    ) {
+      throw buildWithdrawRequestAdminActionError(
+        'WITHDRAW_REQUEST_START_PROCESSING_LOCK_EVIDENCE_REQUIRED',
+        'Withdraw request lock evidence is required for start_processing',
+        409
+      );
+    }
+
+    const lockResult = await pool.query(
+      `
+      UPDATE public.withdraw_requests
+      SET
+        status = 'locked',
+        updated_at = now()
+      WHERE id = $1
+        AND status = 'requires_review'
+        AND locked_amount > 0
+        AND locked_ledger_group_id IS NOT NULL
+        AND destination_id IS NOT NULL
+        AND payout_execution_id IS NULL
+      RETURNING *
+      `,
+      [normalizedRequestId]
+    );
+
+    effectiveRequest = lockResult.rows[0] || effectiveRequest;
+    if (normalizeWithdrawRequestAdminActionText(effectiveRequest.status)?.toLowerCase() === 'requires_review') {
+      const refreshedResult = await pool.query(
+        `
+        SELECT *
+        FROM public.withdraw_requests
+        WHERE id = $1
+        LIMIT 1
+        `,
+        [normalizedRequestId]
+      );
+      effectiveRequest = refreshedResult.rows[0] || effectiveRequest;
+
+      if (normalizeWithdrawRequestAdminActionText(effectiveRequest.status)?.toLowerCase() === 'requires_review') {
+        throw buildWithdrawRequestAdminActionError(
+          'WITHDRAW_REQUEST_START_PROCESSING_LOCK_EVIDENCE_REQUIRED',
+          'Withdraw request lock evidence is required for start_processing',
+          409
+        );
+      }
+    }
+  }
+
+  if (!existingPayout) {
+    if (!['locked', 'queued_for_payout'].includes(normalizeWithdrawRequestAdminActionText(effectiveRequest.status)?.toLowerCase() || '')) {
+      throw buildWithdrawRequestAdminActionError(
+        'WITHDRAW_REQUEST_INVALID_STATUS',
+        'Withdraw request status is not valid for start_processing',
+        409
+      );
+    }
+
+    existingPayout = await createPayoutExecution(pool, {
+      withdraw_request_id: normalizedRequestId,
+    }, {
+      user_id: adminUserId,
+      user_type: 'admin',
+    });
+  }
+
+  const payoutStatus = normalizeWithdrawRequestAdminActionText(existingPayout?.status)?.toLowerCase() || '';
+  let submittedPayout = existingPayout;
+
+  if (payoutStatus === 'draft') {
+    submittedPayout = await submitManualPayoutExecution(pool, existingPayout.id, {
+      payout_provider: normalizedPayoutProvider,
+    }, {
+      user_id: adminUserId,
+      user_type: 'admin',
+    });
+  } else if (!['submitted', 'processing', 'completed', 'failed'].includes(payoutStatus)) {
+    throw buildWithdrawRequestAdminActionError(
+      'PAYOUT_STATUS_INVALID',
+      'Payout execution status is not valid for start_processing',
+      409
+    );
+  }
+
+  const detail = await getAdminWithdrawRequestDetail(pool, normalizedRequestId);
+  if (!detail) {
+    throw buildWithdrawRequestAdminActionError('WITHDRAW_REQUEST_NOT_FOUND', 'Withdraw request not found', 404);
+  }
+
+  const auditEvent = await insertMoneyAuditEvent(pool, {
+    event_type: 'withdraw_request_admin_start_processing',
+    actor_type: 'admin',
+    actor_id: adminUserId,
+    owner_type: detail.withdraw_request.owner_type,
+    owner_id: detail.withdraw_request.owner_id,
+    source_type: 'withdraw_request',
+    source_id: detail.withdraw_request.id,
+    amount: detail.withdraw_request.amount,
+    data: {
+      previous_status: currentStatus,
+      next_status: 'bank_processing',
+      payout_execution_id: detail.payout_execution?.id || submittedPayout?.id || existingPayout?.id || null,
+      payout_provider: normalizedPayoutProvider,
+      internal_note: adminNote,
+    },
+  });
+
+  return {
+    action: 'start_processing',
+    audit_event_id: auditEvent?.id || null,
+    request: detail.withdraw_request,
+    payout_execution: detail.payout_execution,
+    detail,
+  };
 }
 
 function buildMoneyCoreRouter(pool) {
@@ -2468,6 +2700,27 @@ function buildMoneyCoreRouter(pool) {
       });
     } catch (err) {
       const handled = sendWithdrawRequestAdminActionError(res, err);
+      if (handled) {
+        return handled;
+      }
+      return next(err);
+    }
+  });
+
+  r.post('/money-core/admin/withdraw-requests/:id/start-processing', AdminRuntimeGuard, async (req, res, next) => {
+    try {
+      assertPayoutExecutionsEnabled();
+      const result = await processAdminWithdrawRequestStartProcessing(pool, req.params.id, req.body || {}, req.admin || {});
+      return safeJson(res, 200, {
+        ok: true,
+        action: result.action,
+        audit_event_id: result.audit_event_id,
+        request: result.request,
+        payout_execution: result.payout_execution,
+        data: result.detail,
+      });
+    } catch (err) {
+      const handled = sendWithdrawRequestStartProcessingError(res, err);
       if (handled) {
         return handled;
       }
