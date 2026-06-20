@@ -451,6 +451,38 @@ function hasForbiddenStartProcessingBodyFields(body = {}) {
   );
 }
 
+const FORBIDDEN_COMPLETE_BODY_FIELDS = new Set([
+  'failure_reason',
+  'completed_at',
+  'failed_at',
+  'payout_provider',
+  'payout_mode',
+  'payout_execution_id',
+  'metadata_json',
+]);
+
+const FORBIDDEN_FAIL_BODY_FIELDS = new Set([
+  'external_ref',
+  'bank_reference',
+  'receipt_url',
+  'completed_at',
+  'failed_at',
+  'payout_provider',
+  'payout_mode',
+  'payout_execution_id',
+  'metadata_json',
+]);
+
+function hasForbiddenWithdrawRequestPayoutFields(body = {}, forbiddenFields = FORBIDDEN_COMPLETE_BODY_FIELDS) {
+  if (!body || typeof body !== 'object') {
+    return false;
+  }
+
+  return Array.from(forbiddenFields).some((field) =>
+    Object.prototype.hasOwnProperty.call(body, field)
+  );
+}
+
 function sendWithdrawRequestStartProcessingError(res, err) {
   if (!err) {
     return null;
@@ -466,6 +498,31 @@ function sendWithdrawRequestStartProcessingError(res, err) {
     return safeJson(res, err.statusCode || 400, {
       ok: false,
       error: err.code || 'WITHDRAW_REQUEST_START_PROCESSING_FAILED',
+      message: err.message,
+    });
+  }
+
+  return null;
+}
+
+function sendWithdrawRequestPayoutActionError(res, err) {
+  if (!err) {
+    return null;
+  }
+
+  const code = String(err.code || '');
+  if (code.startsWith('WITHDRAW_REQUEST_') || code.startsWith('PAYOUT_') || code.startsWith('MONEY_CORE_')) {
+    return safeJson(res, err.statusCode || (code.startsWith('MONEY_CORE_') ? 403 : 400), {
+      ok: false,
+      error: err.code || 'WITHDRAW_REQUEST_PAYOUT_ACTION_FAILED',
+      message: err.message,
+    });
+  }
+
+  if (err.statusCode) {
+    return safeJson(res, err.statusCode, {
+      ok: false,
+      error: err.code || 'WITHDRAW_REQUEST_PAYOUT_ACTION_FAILED',
       message: err.message,
     });
   }
@@ -890,6 +947,169 @@ async function processAdminWithdrawRequestStartProcessing(pool, requestId, body 
     request: detail.withdraw_request,
     payout_execution: detail.payout_execution,
     detail,
+  };
+}
+
+async function processAdminWithdrawRequestComplete(pool, requestId, body = {}, actor = {}) {
+  const normalizedRequestId = Number.parseInt(String(requestId || '').trim(), 10);
+  if (!Number.isFinite(normalizedRequestId) || normalizedRequestId <= 0) {
+    throw buildWithdrawRequestAdminActionError('WITHDRAW_REQUEST_ID_INVALID', 'Withdraw request id is invalid', 400);
+  }
+
+  if (hasForbiddenWithdrawRequestPayoutFields(body, FORBIDDEN_COMPLETE_BODY_FIELDS)) {
+    throw buildWithdrawRequestAdminActionError('PAYOUT_PROOF_FIELD_FORBIDDEN', 'Payout proof fields are forbidden', 400);
+  }
+
+  const externalRef = normalizeWithdrawRequestAdminActionText(body?.external_ref);
+  const bankReference = normalizeWithdrawRequestAdminActionText(body?.bank_reference);
+  const receiptUrl = normalizeWithdrawRequestAdminActionText(body?.receipt_url);
+
+  if (!externalRef && !bankReference) {
+    throw buildWithdrawRequestAdminActionError('PAYOUT_PROOF_REQUIRED', 'external_ref or bank_reference is required', 400);
+  }
+
+  const detail = await getAdminWithdrawRequestDetail(pool, normalizedRequestId);
+  if (!detail) {
+    throw buildWithdrawRequestAdminActionError('WITHDRAW_REQUEST_NOT_FOUND', 'Withdraw request not found', 404);
+  }
+
+  const request = detail.withdraw_request || null;
+  const payout = detail.payout_execution || null;
+  const requestStatus = normalizeWithdrawRequestAdminActionText(request?.status)?.toLowerCase() || '';
+  const payoutStatus = normalizeWithdrawRequestAdminActionText(payout?.status)?.toLowerCase() || '';
+
+  if (!payout) {
+    throw buildWithdrawRequestAdminActionError(
+      'WITHDRAW_REQUEST_PAYOUT_EXECUTION_REQUIRED',
+      'Withdraw request payout execution is required',
+      409
+    );
+  }
+
+  if (!['bank_processing', 'queued_for_payout'].includes(requestStatus)) {
+    throw buildWithdrawRequestAdminActionError(
+      'WITHDRAW_REQUEST_COMPLETE_NOT_ALLOWED',
+      'Withdraw request status is not valid for complete',
+      409
+    );
+  }
+
+  if (!['submitted', 'processing'].includes(payoutStatus)) {
+    throw buildWithdrawRequestAdminActionError(
+      'PAYOUT_COMPLETE_NOT_ALLOWED',
+      'Payout execution status is not valid for complete',
+      409
+    );
+  }
+
+  const adminUserId = Number.isFinite(Number(actor?.user_id)) ? Number(actor.user_id) : null;
+  const completedPayout = await completePayoutExecution(
+    pool,
+    payout.id,
+    {
+      external_ref: externalRef,
+      bank_reference: bankReference,
+      receipt_url: receiptUrl,
+    },
+    {
+      user_id: adminUserId,
+      user_type: 'admin',
+    }
+  );
+
+  const freshDetail = await getAdminWithdrawRequestDetail(pool, normalizedRequestId);
+  if (!freshDetail) {
+    throw buildWithdrawRequestAdminActionError('WITHDRAW_REQUEST_NOT_FOUND', 'Withdraw request not found', 404);
+  }
+
+  return {
+    action: 'complete',
+    request: freshDetail.withdraw_request,
+    payout_execution: freshDetail.payout_execution || completedPayout?.payout || null,
+    data: freshDetail,
+  };
+}
+
+async function processAdminWithdrawRequestFail(pool, requestId, body = {}, actor = {}) {
+  const normalizedRequestId = Number.parseInt(String(requestId || '').trim(), 10);
+  if (!Number.isFinite(normalizedRequestId) || normalizedRequestId <= 0) {
+    throw buildWithdrawRequestAdminActionError('WITHDRAW_REQUEST_ID_INVALID', 'Withdraw request id is invalid', 400);
+  }
+
+  if (hasForbiddenWithdrawRequestPayoutFields(body, FORBIDDEN_FAIL_BODY_FIELDS)) {
+    throw buildWithdrawRequestAdminActionError('PAYOUT_PROOF_FIELD_FORBIDDEN', 'Payout proof fields are forbidden', 400);
+  }
+
+  const failureReason = normalizeWithdrawRequestAdminActionText(body?.failure_reason);
+  if (!failureReason) {
+    throw buildWithdrawRequestAdminActionError('PAYOUT_FAILURE_REASON_REQUIRED', 'Failure reason is required', 400);
+  }
+
+  const detail = await getAdminWithdrawRequestDetail(pool, normalizedRequestId);
+  if (!detail) {
+    throw buildWithdrawRequestAdminActionError('WITHDRAW_REQUEST_NOT_FOUND', 'Withdraw request not found', 404);
+  }
+
+  const request = detail.withdraw_request || null;
+  const payout = detail.payout_execution || null;
+  const requestStatus = normalizeWithdrawRequestAdminActionText(request?.status)?.toLowerCase() || '';
+  const payoutStatus = normalizeWithdrawRequestAdminActionText(payout?.status)?.toLowerCase() || '';
+  const hasLockEvidence =
+    Number(request?.locked_amount || 0) > 0 &&
+    Boolean(request?.locked_ledger_group_id) &&
+    Boolean(request?.destination_id);
+
+  if (!payout) {
+    throw buildWithdrawRequestAdminActionError(
+      'WITHDRAW_REQUEST_PAYOUT_EXECUTION_REQUIRED',
+      'Withdraw request payout execution is required',
+      409
+    );
+  }
+
+  const requestAllowed =
+    ['bank_processing', 'queued_for_payout'].includes(requestStatus) ||
+    (requestStatus === 'requires_review' && payoutStatus === 'requires_review' && hasLockEvidence);
+
+  if (!requestAllowed) {
+    throw buildWithdrawRequestAdminActionError(
+      'WITHDRAW_REQUEST_FAIL_NOT_ALLOWED',
+      'Withdraw request status is not valid for fail',
+      409
+    );
+  }
+
+  if (!['submitted', 'processing', 'requires_review'].includes(payoutStatus)) {
+    throw buildWithdrawRequestAdminActionError(
+      'PAYOUT_FAIL_NOT_ALLOWED',
+      'Payout execution status is not valid for fail',
+      409
+    );
+  }
+
+  const adminUserId = Number.isFinite(Number(actor?.user_id)) ? Number(actor.user_id) : null;
+  const failedPayout = await failPayoutExecution(
+    pool,
+    payout.id,
+    {
+      failure_reason: failureReason,
+    },
+    {
+      user_id: adminUserId,
+      user_type: 'admin',
+    }
+  );
+
+  const freshDetail = await getAdminWithdrawRequestDetail(pool, normalizedRequestId);
+  if (!freshDetail) {
+    throw buildWithdrawRequestAdminActionError('WITHDRAW_REQUEST_NOT_FOUND', 'Withdraw request not found', 404);
+  }
+
+  return {
+    action: 'fail',
+    request: freshDetail.withdraw_request,
+    payout_execution: freshDetail.payout_execution || failedPayout?.payout || null,
+    data: freshDetail,
   };
 }
 
@@ -2721,6 +2941,46 @@ function buildMoneyCoreRouter(pool) {
       });
     } catch (err) {
       const handled = sendWithdrawRequestStartProcessingError(res, err);
+      if (handled) {
+        return handled;
+      }
+      return next(err);
+    }
+  });
+
+  r.post('/money-core/admin/withdraw-requests/:id/complete', AdminRuntimeGuard, async (req, res, next) => {
+    try {
+      assertPayoutExecutionsEnabled();
+      const result = await processAdminWithdrawRequestComplete(pool, req.params.id, req.body || {}, req.admin || {});
+      return safeJson(res, 200, {
+        ok: true,
+        action: result.action,
+        request: result.request,
+        payout_execution: result.payout_execution,
+        data: result.data,
+      });
+    } catch (err) {
+      const handled = sendWithdrawRequestPayoutActionError(res, err);
+      if (handled) {
+        return handled;
+      }
+      return next(err);
+    }
+  });
+
+  r.post('/money-core/admin/withdraw-requests/:id/fail', AdminRuntimeGuard, async (req, res, next) => {
+    try {
+      assertPayoutExecutionsEnabled();
+      const result = await processAdminWithdrawRequestFail(pool, req.params.id, req.body || {}, req.admin || {});
+      return safeJson(res, 200, {
+        ok: true,
+        action: result.action,
+        request: result.request,
+        payout_execution: result.payout_execution,
+        data: result.data,
+      });
+    } catch (err) {
+      const handled = sendWithdrawRequestPayoutActionError(res, err);
       if (handled) {
         return handled;
       }
