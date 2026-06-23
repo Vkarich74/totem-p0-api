@@ -964,7 +964,7 @@ LIMIT 1
         } catch (err) {
           console.error("C15_COLLECTION_ANCHOR_HOOK_FAILED", {
             flow: "direct_cash_salon_confirm",
-            payment_id: Number(result.payment.id || result.payment.payment_id || paymentId || 0) || null,
+            payment_id: Number(result.payment.id || result.payment.payment_id || 0) || null,
             booking_id: Number(result.booking?.id || result.booking?.booking_id || 0) || null
           }, err);
           throw err;
@@ -1126,7 +1126,7 @@ LIMIT 1
         } catch (err) {
           console.error("C15_COLLECTION_ANCHOR_HOOK_FAILED", {
             flow: "direct_cash_master_confirm",
-            payment_id: Number(result.payment.id || result.payment.payment_id || paymentId || 0) || null,
+            payment_id: Number(result.payment.id || result.payment.payment_id || 0) || null,
             booking_id: Number(result.booking?.id || result.booking?.booking_id || 0) || null
           }, err);
           throw err;
