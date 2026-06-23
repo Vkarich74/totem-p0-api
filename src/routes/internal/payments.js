@@ -1016,10 +1016,7 @@ LIMIT 1
       console.error("DIRECT_SALON_CONFIRM_CASH_ERROR", err);
       return res.status(500).json({
         ok: false,
-        error: "DIRECT_SALON_CONFIRM_CASH_FAILED",
-        diagnostic_stage: diagnosticStage,
-        diagnostic_error_name: err?.name || "Error",
-        diagnostic_error_code: err?.code || null
+        error: "DIRECT_SALON_CONFIRM_CASH_FAILED"
       });
     } finally {
       db.release();
@@ -1189,10 +1186,7 @@ LIMIT 1
       console.error("DIRECT_MASTER_CONFIRM_CASH_ERROR", err);
       return res.status(500).json({
         ok: false,
-        error: "DIRECT_MASTER_CONFIRM_CASH_FAILED",
-        diagnostic_stage: diagnosticStage,
-        diagnostic_error_name: err?.name || "Error",
-        diagnostic_error_code: err?.code || null
+        error: "DIRECT_MASTER_CONFIRM_CASH_FAILED"
       });
     } finally {
       db.release();
