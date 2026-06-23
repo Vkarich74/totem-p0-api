@@ -952,11 +952,11 @@ LIMIT 1
       ) {
         try {
           await upsertPaymentCollectionAnchorForPayment(db, {
-            paymentId: Number(result.payment.id || result.payment.payment_id || paymentId || 0) || null,
+            paymentId: Number(result.payment.id || result.payment.payment_id || 0) || null,
             collectorOwnerType: "salon",
             collectorOwnerId: Number(result.booking?.salon_id || 0) || null,
             sourceType: "direct_cash_salon_confirm",
-            sourceId: String(Number(result.payment.id || result.payment.payment_id || paymentId || 0) || ""),
+            sourceId: String(Number(result.payment.id || result.payment.payment_id || 0) || ""),
             metadata: {
               route: "/payments/direct/salon/confirm-cash"
             }
@@ -1114,11 +1114,11 @@ LIMIT 1
       ) {
         try {
           await upsertPaymentCollectionAnchorForPayment(db, {
-            paymentId: Number(result.payment.id || result.payment.payment_id || paymentId || 0) || null,
+            paymentId: Number(result.payment.id || result.payment.payment_id || 0) || null,
             collectorOwnerType: "master",
             collectorOwnerId: Number(result.booking?.master_id || 0) || null,
             sourceType: "direct_cash_master_confirm",
-            sourceId: String(Number(result.payment.id || result.payment.payment_id || paymentId || 0) || ""),
+            sourceId: String(Number(result.payment.id || result.payment.payment_id || 0) || ""),
             metadata: {
               route: "/payments/direct/master/confirm-cash"
             }
