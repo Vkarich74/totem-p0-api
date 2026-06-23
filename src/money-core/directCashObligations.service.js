@@ -33,7 +33,7 @@ SELECT
   p.provider,
   p.status,
   p.amount,
-  p.currency,
+  'KGS'::text AS currency,
   p.collector_owner_type,
   p.collector_owner_id,
   p.confirmed_at,
