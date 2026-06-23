@@ -868,11 +868,14 @@ RETURNING id,booking_id,amount,status,provider,created_at
 
   r.post("/payments/direct/salon/confirm-cash", async (req, res) => {
     const db = await pool.connect();
+    let diagnosticStage = "start";
 
     try {
+      diagnosticStage = "parse_request";
       await db.query("BEGIN");
 
       const body = req.body || {};
+      diagnosticStage = "load_payment_or_booking_context";
       const result = await confirmDirectPendingCashPayment(db, {
         ...body,
         collector_owner_type: "salon",
@@ -932,6 +935,8 @@ LIMIT 1
         String(result.payment.provider || "").trim().toLowerCase() === "direct" &&
         String(result.payment.status || "").trim().toLowerCase() === "confirmed"
       ) {
+        diagnosticStage = "payment_update_to_confirmed";
+        diagnosticStage = "direct_cash_obligations";
         const directCashObligationResult = await createDirectCashObligationsForConfirmedPayment(db, {
           paymentId: Number(result.payment.id || result.payment.payment_id || body.payment_id || body.paymentId || 0) || null,
           actor: {
@@ -950,6 +955,7 @@ LIMIT 1
         result.payment &&
         String(result.payment.status || "").trim().toLowerCase() === "confirmed"
       ) {
+        diagnosticStage = "payment_collection_anchor";
         try {
           await upsertPaymentCollectionAnchorForPayment(db, {
             paymentId: Number(result.payment.id || result.payment.payment_id || 0) || null,
@@ -970,6 +976,7 @@ LIMIT 1
           throw err;
         }
 
+        diagnosticStage = "cash_confirm_notifications";
         await emitCashConfirmNotifications(db, {
           booking: result.booking,
           payment: result.payment,
@@ -978,6 +985,7 @@ LIMIT 1
         });
       }
 
+      diagnosticStage = "commit";
       await db.query("COMMIT");
 
       return res.json({
@@ -1008,7 +1016,10 @@ LIMIT 1
       console.error("DIRECT_SALON_CONFIRM_CASH_ERROR", err);
       return res.status(500).json({
         ok: false,
-        error: "DIRECT_SALON_CONFIRM_CASH_FAILED"
+        error: "DIRECT_SALON_CONFIRM_CASH_FAILED",
+        diagnostic_stage: diagnosticStage,
+        diagnostic_error_name: err?.name || "Error",
+        diagnostic_error_code: err?.code || null
       });
     } finally {
       db.release();
@@ -1017,11 +1028,14 @@ LIMIT 1
 
   r.post("/payments/direct/master/confirm-cash", async (req, res) => {
     const db = await pool.connect();
+    let diagnosticStage = "start";
 
     try {
+      diagnosticStage = "parse_request";
       await db.query("BEGIN");
 
       const body = req.body || {};
+      diagnosticStage = "load_payment_or_booking_context";
       const result = await confirmDirectPendingCashPayment(db, {
         ...body,
         collector_owner_type: "master",
@@ -1094,6 +1108,8 @@ LIMIT 1
         String(result.payment.provider || "").trim().toLowerCase() === "direct" &&
         String(result.payment.status || "").trim().toLowerCase() === "confirmed"
       ) {
+        diagnosticStage = "payment_update_to_confirmed";
+        diagnosticStage = "direct_cash_obligations";
         const directCashObligationResult = await createDirectCashObligationsForConfirmedPayment(db, {
           paymentId: Number(result.payment.id || result.payment.payment_id || body.payment_id || body.paymentId || 0) || null,
           actor: {
@@ -1112,6 +1128,7 @@ LIMIT 1
         result.payment &&
         String(result.payment.status || "").trim().toLowerCase() === "confirmed"
       ) {
+        diagnosticStage = "payment_collection_anchor";
         try {
           await upsertPaymentCollectionAnchorForPayment(db, {
             paymentId: Number(result.payment.id || result.payment.payment_id || 0) || null,
@@ -1132,6 +1149,7 @@ LIMIT 1
           throw err;
         }
 
+        diagnosticStage = "cash_confirm_notifications";
         await emitCashConfirmNotifications(db, {
           booking: result.booking,
           payment: result.payment,
@@ -1140,6 +1158,7 @@ LIMIT 1
         });
       }
 
+      diagnosticStage = "commit";
       await db.query("COMMIT");
 
       return res.json({
@@ -1170,7 +1189,10 @@ LIMIT 1
       console.error("DIRECT_MASTER_CONFIRM_CASH_ERROR", err);
       return res.status(500).json({
         ok: false,
-        error: "DIRECT_MASTER_CONFIRM_CASH_FAILED"
+        error: "DIRECT_MASTER_CONFIRM_CASH_FAILED",
+        diagnostic_stage: diagnosticStage,
+        diagnostic_error_name: err?.name || "Error",
+        diagnostic_error_code: err?.code || null
       });
     } finally {
       db.release();
