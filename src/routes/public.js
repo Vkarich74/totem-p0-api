@@ -674,27 +674,6 @@ export function createPublicRouter(deps) {
           [clientId]
         );
 
-        await db.query(
-          `
-          INSERT INTO client_audit_events (
-            client_id,
-            booking_id,
-            actor_type,
-            action,
-            metadata
-          )
-          VALUES ($1, $2, 'client', 'cabinet_opened', $3)
-          `,
-          [
-            clientId,
-            tokenRes.rows[0].booking_id,
-            {
-              token_last4: tokenRes.rows[0].token_last4,
-              source: "public_client_cabinet"
-            }
-          ]
-        );
-
         return res.json({
           ok: true,
           client: clientRes.rows[0],
