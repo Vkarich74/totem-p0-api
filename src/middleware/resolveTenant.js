@@ -1,4 +1,5 @@
 import pkg from "pg";
+import { resolveMarketContext } from "../market-context/index.js";
 
 const { Pool } = pkg;
 
@@ -235,9 +236,26 @@ export async function resolveTenant(req, res, next) {
       }
     };
 
+    const requestedLocale = String(req.headers["x-totem-locale"] || "").trim();
+    const marketContext = await resolveMarketContext({
+      db: pool,
+      salonId: tenantRow.salon_id,
+      requestedLocale
+    });
+
+    req.market_context = marketContext;
+    req.tenant.market_context = marketContext;
+
     return next();
   } catch (err) {
     console.error("TENANT_RESOLVE_ERROR", err);
+
+    if (err?.code && Number.isInteger(err?.statusCode)) {
+      return res.status(err.statusCode).json({
+        ok: false,
+        error: err.code
+      });
+    }
 
     return res.status(500).json({
       ok: false,

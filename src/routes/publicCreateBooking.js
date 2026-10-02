@@ -2,29 +2,7 @@ import { pool } from "../db.js";
 import crypto from "crypto";
 import { createNotification } from "../services/notifications/notificationService.js";
 import { buildBookingCreatedNotificationTemplate } from "../services/notifications/notificationTemplates.js";
-
-function normalizeKgMobilePhone(value) {
-  const raw = String(value || "").trim();
-  const compact = raw.replace(/[\s\-()]/g, "");
-
-  if (!compact) {
-    return { ok: false, error: "PHONE_REQUIRED" };
-  }
-
-  let canonical = compact;
-
-  if (/^996[0-9]{9}$/.test(compact)) {
-    canonical = `+${compact}`;
-  } else if (/^0[0-9]{9}$/.test(compact)) {
-    canonical = `+996${compact.slice(1)}`;
-  }
-
-  if (!/^\+996[579][0-9]{8}$/.test(canonical)) {
-    return { ok: false, error: "INVALID_KG_MOBILE_PHONE" };
-  }
-
-  return { ok: true, phone: canonical };
-}
+import { getCountryPack } from "../market-context/index.js";
 
 function buildClientCabinetUrl(clientId, token) {
   return `#/client/${clientId}/${token}`;
@@ -217,6 +195,16 @@ export async function publicCreateBooking(req, res) {
       phone
     } = req.body;
     const { slug } = req.params;
+    const marketContext = req.market_context;
+
+    if (!marketContext) {
+      return res.status(500).json({ ok: false, error: "MARKET_CONTEXT_REQUIRED" });
+    }
+
+    const countryPack = getCountryPack(
+      marketContext.country_pack_code,
+      marketContext.country_pack_version
+    );
 
     if (!master_id || !service_id || (!start_at && (!date || !time))) {
       return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
@@ -225,7 +213,7 @@ export async function publicCreateBooking(req, res) {
     const rawClientPhone = client_payload?.phone ?? phone;
     const normalizedClientPhone = client_id
       ? { ok: true, phone: null }
-      : normalizeKgMobilePhone(rawClientPhone);
+      : countryPack.normalizeMobilePhone(rawClientPhone);
 
     if (!normalizedClientPhone.ok) {
       return res.status(400).json({ ok: false, error: normalizedClientPhone.error });
@@ -290,6 +278,7 @@ export async function publicCreateBooking(req, res) {
          sms.master_id,
          sms.service_pk,
          sms.price,
+         sms.currency_code,
          sms.duration_min,
          sms.active
        FROM public.salon_master_services sms
@@ -310,6 +299,13 @@ export async function publicCreateBooking(req, res) {
     const durationMin = Number(serviceLink.duration_min);
     const price = Number(serviceLink.price);
     const servicePk = Number(serviceLink.service_pk);
+    const bookingCurrency = String(marketContext.currency_code || "").trim().toUpperCase();
+    const serviceCurrency = String(serviceLink.currency_code || "").trim().toUpperCase();
+
+    if (serviceCurrency && serviceCurrency !== bookingCurrency) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ ok: false, error: "SERVICE_CURRENCY_MISMATCH" });
+    }
 
     const masterRes = await client.query(
       `SELECT ms.id
@@ -457,9 +453,9 @@ export async function publicCreateBooking(req, res) {
     const bookingInsert = await client.query(
       `INSERT INTO public.bookings
        (salon_id, salon_slug, master_id, start_at, end_at, status, request_id,
-        calendar_slot_id, client_id, service_id, price_snapshot)
+        calendar_slot_id, client_id, service_id, price_snapshot, currency_code)
        VALUES ($1, $2, $3, $4, $5, 'reserved', $6,
-               $7, $8, $9, $10)
+               $7, $8, $9, $10, $11)
        RETURNING id`,
       [
         salonId,
@@ -471,7 +467,8 @@ export async function publicCreateBooking(req, res) {
         slot_id,
         finalClientId,
         servicePk,
-        price
+        price,
+        bookingCurrency
       ]
     );
 
@@ -574,7 +571,8 @@ export async function publicCreateBooking(req, res) {
       service_id: Number(servicePk),
       start_at: new Date(start_at).toISOString(),
       end_at: new Date(end_at).toISOString(),
-      price: Number(price)
+      price: Number(price),
+      currency_code: bookingCurrency
     };
 
     await client.query("SAVEPOINT booking_created_notifications");

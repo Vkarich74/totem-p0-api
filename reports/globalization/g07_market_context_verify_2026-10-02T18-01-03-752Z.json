@@ -1,0 +1,393 @@
+{
+  "status": "PASS",
+  "production_db_write": false,
+  "identity": {
+    "database": "railway",
+    "read_only": "on"
+  },
+  "salon_count": 27,
+  "tenant_counts": {
+    "total": 27,
+    "linked_city": 14,
+    "null_city": 13
+  },
+  "default_market_code": "KG",
+  "markets": [
+    {
+      "code": "KG",
+      "country_code": "KG",
+      "active": true
+    }
+  ],
+  "kz": {
+    "code": "KZ",
+    "status": "planned"
+  },
+  "g06_currency_columns": 15,
+  "currency_distributions": {
+    "contracts": {
+      "total": 18,
+      "null_currency": 0,
+      "non_kgs": 0
+    },
+    "services": {
+      "total": 22,
+      "null_currency": 0,
+      "non_kgs": 0
+    },
+    "services_v2": {
+      "total": 7,
+      "null_currency": 0,
+      "non_kgs": 0
+    },
+    "salon_master_services": {
+      "total": 30,
+      "null_currency": 0,
+      "non_kgs": 0
+    },
+    "bookings": {
+      "total": 48,
+      "null_currency": 0,
+      "non_kgs": 0
+    },
+    "payments": {
+      "total": 23,
+      "null_currency": 0,
+      "non_kgs": 0
+    },
+    "payment_refunds": {
+      "total": 0,
+      "null_currency": 0,
+      "non_kgs": 0
+    },
+    "payouts": {
+      "total": 15,
+      "null_currency": 0,
+      "non_kgs": 0
+    },
+    "settlement_items": {
+      "total": 7,
+      "null_currency": 0,
+      "non_kgs": 0
+    },
+    "settlement_periods": {
+      "total": 3,
+      "null_currency": 0,
+      "non_kgs": 0
+    },
+    "settlement_payout_batches": {
+      "total": 0,
+      "null_currency": 0,
+      "non_kgs": 0
+    },
+    "settlement_reconciliation_reports": {
+      "total": 0,
+      "null_currency": 0,
+      "non_kgs": 0
+    },
+    "money_reconciliation_mismatches": {
+      "total": 0,
+      "null_currency": 0,
+      "non_kgs": 0
+    },
+    "withdraw_settings": {
+      "total": 0,
+      "null_currency": 0,
+      "non_kgs": 0
+    },
+    "withdraws": {
+      "total": 7,
+      "null_currency": 0,
+      "non_kgs": 0
+    }
+  },
+  "resolved_count": 27,
+  "resolved": [
+    {
+      "salon_id": 1,
+      "salon_slug": "totem-demo-salon",
+      "market_code": "KG",
+      "city_id": 1,
+      "city_slug": "bishkek",
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 4,
+      "salon_slug": "salon-1",
+      "market_code": "KG",
+      "city_id": null,
+      "city_slug": null,
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 5,
+      "salon_slug": "salon-3",
+      "market_code": "KG",
+      "city_id": null,
+      "city_slug": null,
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 6,
+      "salon_slug": "s2",
+      "market_code": "KG",
+      "city_id": null,
+      "city_slug": null,
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 7,
+      "salon_slug": "s1",
+      "market_code": "KG",
+      "city_id": null,
+      "city_slug": null,
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 8,
+      "salon_slug": "test",
+      "market_code": "KG",
+      "city_id": null,
+      "city_slug": null,
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 9,
+      "salon_slug": ":slug",
+      "market_code": "KG",
+      "city_id": null,
+      "city_slug": null,
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 10,
+      "salon_slug": "verify-ui-salon",
+      "market_code": "KG",
+      "city_id": null,
+      "city_slug": null,
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 11,
+      "salon_slug": "master-slug",
+      "market_code": "KG",
+      "city_id": null,
+      "city_slug": null,
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 12,
+      "salon_slug": "test-master",
+      "market_code": "KG",
+      "city_id": null,
+      "city_slug": null,
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 13,
+      "salon_slug": "salon-test",
+      "market_code": "KG",
+      "city_id": null,
+      "city_slug": null,
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 14,
+      "salon_slug": "salon-prod",
+      "market_code": "KG",
+      "city_id": null,
+      "city_slug": null,
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 15,
+      "salon_slug": "test-salon-1775282571422",
+      "market_code": "KG",
+      "city_id": 1,
+      "city_slug": "bishkek",
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 16,
+      "salon_slug": "curl-salon-1",
+      "market_code": "KG",
+      "city_id": 1,
+      "city_slug": "bishkek",
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 17,
+      "salon_slug": "validation-salon-1775291292226",
+      "market_code": "KG",
+      "city_id": 1,
+      "city_slug": "bishkek",
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 18,
+      "salon_slug": "validation-salon-1775291668624",
+      "market_code": "KG",
+      "city_id": 1,
+      "city_slug": "bishkek",
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 19,
+      "salon_slug": "validation-salon-1775292016464",
+      "market_code": "KG",
+      "city_id": 1,
+      "city_slug": "bishkek",
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 20,
+      "salon_slug": "validation-salon-1775292449972",
+      "market_code": "KG",
+      "city_id": 1,
+      "city_slug": "bishkek",
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 21,
+      "salon_slug": "prod-test",
+      "market_code": "KG",
+      "city_id": null,
+      "city_slug": null,
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 24,
+      "salon_slug": "provision-test-salon-20260411-2",
+      "market_code": "KG",
+      "city_id": null,
+      "city_slug": null,
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 25,
+      "salon_slug": "provision-smoke-salon-1777276078649",
+      "market_code": "KG",
+      "city_id": 1,
+      "city_slug": "bishkek",
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 27,
+      "salon_slug": "smoke-owner-salon-1777275453116",
+      "market_code": "KG",
+      "city_id": 1,
+      "city_slug": "bishkek",
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 28,
+      "salon_slug": "smoke-public-salon",
+      "market_code": "KG",
+      "city_id": 1,
+      "city_slug": "bishkek",
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 29,
+      "salon_slug": "smoke-guard-salon",
+      "market_code": "KG",
+      "city_id": 1,
+      "city_slug": "bishkek",
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 30,
+      "salon_slug": "final-accept-salon-20260428",
+      "market_code": "KG",
+      "city_id": 1,
+      "city_slug": "bishkek",
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 31,
+      "salon_slug": "islam-shah-barbershop",
+      "market_code": "KG",
+      "city_id": 1,
+      "city_slug": "bishkek",
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "salon_id": 32,
+      "salon_slug": "master-prime",
+      "market_code": "KG",
+      "city_id": 1,
+      "city_slug": "bishkek",
+      "locale": "ru-KG",
+      "currency_code": "KGS",
+      "timezone": "Asia/Bishkek"
+    }
+  ],
+  "tenantless": {
+    "market_code": "KG",
+    "country_code": "KG",
+    "locale": "ru-KG",
+    "currency_code": "KGS",
+    "timezone": "Asia/Bishkek",
+    "phone_country_code": "+996",
+    "default_phone_region": "KG"
+  },
+  "capability_rows": 0,
+  "payment_binding_rows": 0,
+  "payout_binding_rows": 0,
+  "notification_binding_rows": 0,
+  "fiscal_binding_rows": 0,
+  "historical_currency_protection": "PASS",
+  "nonexistent_market_controlled_error": "MARKET_NOT_FOUND"
+}

@@ -1,6 +1,7 @@
 import express from "express";
 import crypto from "crypto";
 import { pool } from "../db.js";
+import { resolveHistoricalCurrencyCode, resolveMarketContext } from "../market-context/index.js";
 
 import { publicCreateBooking } from "./publicCreateBooking.js";
 import { publicMasterAvailability } from "./publicAvailability.js";
@@ -121,6 +122,34 @@ export function createPublicRouter(deps) {
    */
   r.use("/auth", authRouter);
   r.use("/mobile", mobileRouter);
+
+  /**
+   * RESOLVED MARKET CONTEXT
+   */
+  r.get("/market-context", async (req, res) => {
+    try {
+      const marketContext = await resolveMarketContext({
+        db: pool,
+        salonSlug: String(req.query?.salon_slug || "").trim(),
+        marketCode: String(req.query?.market_code || "").trim(),
+        requestedLocale: String(
+          req.query?.locale || req.headers["x-totem-locale"] || ""
+        ).trim()
+      });
+
+      return res.json({
+        ok: true,
+        market_context: marketContext
+      });
+    } catch (err) {
+      console.error("PUBLIC_MARKET_CONTEXT_ERROR", err);
+
+      return res.status(Number.isInteger(err?.statusCode) ? err.statusCode : 500).json({
+        ok: false,
+        error: err?.code || "MARKET_CONTEXT_RESOLVE_FAILED"
+      });
+    }
+  });
 
   /**
    * WEB PUSH CONFIG
@@ -383,7 +412,8 @@ export function createPublicRouter(deps) {
             b.start_at,
             b.end_at,
             b.status,
-            b.price_snapshot
+            b.price_snapshot,
+            b.currency_code
           FROM bookings b
           LEFT JOIN masters m ON m.id = b.master_id
           LEFT JOIN clients c ON c.id = b.client_id
@@ -413,6 +443,7 @@ export function createPublicRouter(deps) {
             datetime_end: row.end_at,
             status: uiStatus,
             price: row.price_snapshot ?? 0,
+            currency_code: resolveHistoricalCurrencyCode(row),
           };
         });
 
@@ -449,6 +480,7 @@ export function createPublicRouter(deps) {
             s.service_id AS catalog_service_id,
             s.name,
             sms.price,
+            sms.currency_code,
             sms.duration_min,
             sms.active
           FROM salon_master_services sms
