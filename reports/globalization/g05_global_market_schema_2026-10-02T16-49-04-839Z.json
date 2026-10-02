@@ -1,0 +1,84 @@
+{
+  "status": "PASS",
+  "mode": "APPLY",
+  "migration_sha256": "adcd6dd302cbc382b14aae85ff1765a007538112a87110c8abc132c1fbb2fce1",
+  "production_db_write": true,
+  "pre": {
+    "identity": {
+      "database": "railway",
+      "db_user": "postgres",
+      "read_only": "on",
+      "version": "PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit"
+    },
+    "structure": {
+      "base_tables": 108,
+      "views": 17
+    },
+    "salon_count": 27,
+    "salon_city_distribution": [
+      {
+        "city": null,
+        "n": 13
+      },
+      {
+        "city": "Bishkek",
+        "n": 8
+      },
+      {
+        "city": "Бишкек",
+        "n": 6
+      }
+    ],
+    "legacy_counts": {
+      "bookings": 48,
+      "contracts": 18,
+      "payments": 23,
+      "payouts": 15,
+      "auth_users": 49
+    },
+    "hashes": {
+      "countries": "c828646f13482d1aa78e1fd5b1378cbcda556e81ac423040538fdf85cb5f777f",
+      "cities": "b17d71820d53b28cac27b55bcad069f74a7f94fb19184c3f9494c8e923213063",
+      "salons": "0cb61e9f6615819876cd42283b2246c6c7a1657460ca27ce51dcf1c756b4acef",
+      "platformConfig": "0f2e717c2c4c3a9c47e19ed74431890bac17ae4359dbcf16116ad1c4467fc186"
+    }
+  },
+  "post": {
+    "market_count": 1,
+    "market": {
+      "code": "KG",
+      "country_code": "KG",
+      "default_locale": "ru-KG",
+      "supported_locales": [
+        "ru-KG"
+      ],
+      "default_currency": "KGS",
+      "supported_currencies": [
+        "KGS"
+      ],
+      "default_timezone": "Asia/Bishkek",
+      "country_pack_code": "KG",
+      "country_pack_version": "1",
+      "active": true
+    },
+    "tenant_total": 27,
+    "bishkek_links": 14,
+    "null_city": 13,
+    "capability_rows": 0,
+    "provider_binding_rows": 0,
+    "base_tables": 112,
+    "views": 17,
+    "validation_triggers": [
+      "trg_validate_market_row",
+      "trg_validate_tenant_market_settings_row"
+    ],
+    "legacy_counts": {
+      "bookings": 48,
+      "contracts": 18,
+      "payments": 23,
+      "payouts": 15,
+      "auth_users": 49
+    }
+  },
+  "error": null
+}

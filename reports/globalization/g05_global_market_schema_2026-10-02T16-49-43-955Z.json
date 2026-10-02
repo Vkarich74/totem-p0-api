@@ -1,0 +1,55 @@
+{
+  "status": "ALREADY_APPLIED_PASS",
+  "mode": "APPLY_REQUESTED_NOOP",
+  "migration_sha256": "adcd6dd302cbc382b14aae85ff1765a007538112a87110c8abc132c1fbb2fce1",
+  "production_db_write": false,
+  "pre": {
+    "identity": {
+      "database": "railway",
+      "db_user": "postgres",
+      "read_only": "on",
+      "version": "PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit"
+    },
+    "structure": {
+      "base_tables": 112,
+      "views": 17
+    },
+    "salon_count": 27,
+    "salon_city_distribution": [
+      {
+        "city": null,
+        "n": 13
+      },
+      {
+        "city": "Bishkek",
+        "n": 8
+      },
+      {
+        "city": "Бишкек",
+        "n": 6
+      }
+    ],
+    "legacy_counts": {
+      "bookings": 48,
+      "contracts": 18,
+      "payments": 23,
+      "payouts": 15,
+      "auth_users": 49
+    },
+    "hashes": {
+      "countries": "c828646f13482d1aa78e1fd5b1378cbcda556e81ac423040538fdf85cb5f777f",
+      "cities": "b17d71820d53b28cac27b55bcad069f74a7f94fb19184c3f9494c8e923213063",
+      "salons": "0cb61e9f6615819876cd42283b2246c6c7a1657460ca27ce51dcf1c756b4acef",
+      "platformConfig": "3c82dbd31a70f1cc81335a604983f0b17da77e3567af1198463980b84a95770b"
+    }
+  },
+  "post": {
+    "market_count": 1,
+    "tenant_total": 27,
+    "bishkek_links": 14,
+    "null_city": 13,
+    "base_tables": 112,
+    "views": 17
+  },
+  "error": null
+}
