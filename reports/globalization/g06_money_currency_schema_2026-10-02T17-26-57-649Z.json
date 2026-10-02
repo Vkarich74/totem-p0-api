@@ -1,0 +1,413 @@
+{
+  "status": "PASS",
+  "mode": "APPLY",
+  "migration_sha256": "a641a3ac445c1153c9688ae0d2b33b5f6f3ebe53e02523937a1accdc9c4c33f4",
+  "production_db_write": true,
+  "pre": {
+    "identity": {
+      "database": "railway",
+      "db_user": "postgres",
+      "read_only": "on",
+      "version": "PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit"
+    },
+    "structure": {
+      "base_tables": 112,
+      "views": 17
+    },
+    "targetCounts": {
+      "contracts": 18,
+      "services": 22,
+      "services_v2": 7,
+      "salon_master_services": 30,
+      "bookings": 48,
+      "payments": 23,
+      "payment_refunds": 0,
+      "payouts": 15,
+      "settlement_items": 7,
+      "settlement_periods": 3,
+      "settlement_payout_batches": 0,
+      "settlement_reconciliation_reports": 0,
+      "money_reconciliation_mismatches": 0,
+      "withdraw_settings": 0,
+      "withdraws": 7
+    },
+    "targetHashes": {
+      "contracts": "a5f7611474aff210043ce988c1ad1bc0897f64b0f20007b6bb5afbe337cc5ccf",
+      "services": "99738d0ad5d5c30d14407036e333923703f4a3f7e426ebbab80692157ba752ce",
+      "services_v2": "573b7c4a108b4b38b250af910001f5bdd28abaf17528c004bac9ce6f32767e6e",
+      "salon_master_services": "7bcebb5249e96170061d39d5a2a7ff08dd1603524aa4102723b647efd047bf88",
+      "bookings": "719c458c89e2625d34909cbaad4fb5f36d6281f42a7d6faa27ee851e7da017d3",
+      "payments": "c93fa5348dff1e63f31c096e9f82e7435cdae5f5dd39426718e3623a802a20db",
+      "payment_refunds": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "payouts": "cf00c04082a3a9e1f1574eb0a044eba0bb2a66bdd36b4ca105580a9492393562",
+      "settlement_items": "3e387b12fe1f5a0723668b94be68cf702577b7d2b1671853cb819e993be54795",
+      "settlement_periods": "8d12669520e1e5b6dd36c2e33285b7f88c1ded85ff6b1a107fef96c01ebd2cf2",
+      "settlement_payout_batches": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "settlement_reconciliation_reports": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "money_reconciliation_mismatches": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "withdraw_settings": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "withdraws": "d1280062fefb13528cc561f8d8345928a6f6c488ce54cfa27daa8b900b466b84"
+    },
+    "columnCount": 0,
+    "constraintCount": 0,
+    "market": [
+      {
+        "code": "KG",
+        "country_code": "KG",
+        "default_currency": "KGS",
+        "supported_currencies": [
+          "KGS"
+        ],
+        "active": true
+      }
+    ],
+    "tenants": [
+      {
+        "code": "KG",
+        "default_currency": "KGS",
+        "n": 27
+      }
+    ],
+    "referral": {
+      "n": 10,
+      "with_amount": 0,
+      "with_currency": 0
+    },
+    "withdrawWallets": [
+      {
+        "currency": "KGS",
+        "n": 7
+      }
+    ],
+    "existingCurrency": {
+      "payment_intents": {
+        "total": 0,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "finance_events": {
+        "total": 12,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "payment_collection_anchors": {
+        "total": 15,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "provider_events": {
+        "total": 1,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "provider_settlements": {
+        "total": 2,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "provider_settlement_items": {
+        "total": 0,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "money_audit_events": {
+        "total": 5,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "money_ledger_entries": {
+        "total": 5,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "money_owner_balances": {
+        "total": 1,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "money_owner_obligations": {
+        "total": 1,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "money_receipts": {
+        "total": 1,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "money_split_allocations": {
+        "total": 0,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "payout_executions": {
+        "total": 1,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "withdraw_requests": {
+        "total": 1,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "contract_rent_obligations": {
+        "total": 2,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "contract_rent_payments": {
+        "total": 2,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "contract_salary_obligations": {
+        "total": 2,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "billing_subscriptions": {
+        "total": 4,
+        "nulls": 0,
+        "non_kgs": 0
+      }
+    },
+    "currencyDistributions": {}
+  },
+  "post": {
+    "identity": {
+      "database": "railway",
+      "db_user": "postgres",
+      "read_only": "on",
+      "version": "PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit"
+    },
+    "structure": {
+      "base_tables": 112,
+      "views": 17
+    },
+    "targetCounts": {
+      "contracts": 18,
+      "services": 22,
+      "services_v2": 7,
+      "salon_master_services": 30,
+      "bookings": 48,
+      "payments": 23,
+      "payment_refunds": 0,
+      "payouts": 15,
+      "settlement_items": 7,
+      "settlement_periods": 3,
+      "settlement_payout_batches": 0,
+      "settlement_reconciliation_reports": 0,
+      "money_reconciliation_mismatches": 0,
+      "withdraw_settings": 0,
+      "withdraws": 7
+    },
+    "targetHashes": {
+      "contracts": "a5f7611474aff210043ce988c1ad1bc0897f64b0f20007b6bb5afbe337cc5ccf",
+      "services": "99738d0ad5d5c30d14407036e333923703f4a3f7e426ebbab80692157ba752ce",
+      "services_v2": "573b7c4a108b4b38b250af910001f5bdd28abaf17528c004bac9ce6f32767e6e",
+      "salon_master_services": "7bcebb5249e96170061d39d5a2a7ff08dd1603524aa4102723b647efd047bf88",
+      "bookings": "719c458c89e2625d34909cbaad4fb5f36d6281f42a7d6faa27ee851e7da017d3",
+      "payments": "c93fa5348dff1e63f31c096e9f82e7435cdae5f5dd39426718e3623a802a20db",
+      "payment_refunds": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "payouts": "cf00c04082a3a9e1f1574eb0a044eba0bb2a66bdd36b4ca105580a9492393562",
+      "settlement_items": "3e387b12fe1f5a0723668b94be68cf702577b7d2b1671853cb819e993be54795",
+      "settlement_periods": "8d12669520e1e5b6dd36c2e33285b7f88c1ded85ff6b1a107fef96c01ebd2cf2",
+      "settlement_payout_batches": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "settlement_reconciliation_reports": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "money_reconciliation_mismatches": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "withdraw_settings": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "withdraws": "d1280062fefb13528cc561f8d8345928a6f6c488ce54cfa27daa8b900b466b84"
+    },
+    "columnCount": 15,
+    "constraintCount": 15,
+    "market": [
+      {
+        "code": "KG",
+        "country_code": "KG",
+        "default_currency": "KGS",
+        "supported_currencies": [
+          "KGS"
+        ],
+        "active": true
+      }
+    ],
+    "tenants": [
+      {
+        "code": "KG",
+        "default_currency": "KGS",
+        "n": 27
+      }
+    ],
+    "referral": {
+      "n": 10,
+      "with_amount": 0,
+      "with_currency": 0
+    },
+    "withdrawWallets": [
+      {
+        "currency": "KGS",
+        "n": 7
+      }
+    ],
+    "existingCurrency": {
+      "payment_intents": {
+        "total": 0,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "finance_events": {
+        "total": 12,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "payment_collection_anchors": {
+        "total": 15,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "provider_events": {
+        "total": 1,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "provider_settlements": {
+        "total": 2,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "provider_settlement_items": {
+        "total": 0,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "money_audit_events": {
+        "total": 5,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "money_ledger_entries": {
+        "total": 5,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "money_owner_balances": {
+        "total": 1,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "money_owner_obligations": {
+        "total": 1,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "money_receipts": {
+        "total": 1,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "money_split_allocations": {
+        "total": 0,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "payout_executions": {
+        "total": 1,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "withdraw_requests": {
+        "total": 1,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "contract_rent_obligations": {
+        "total": 2,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "contract_rent_payments": {
+        "total": 2,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "contract_salary_obligations": {
+        "total": 2,
+        "nulls": 0,
+        "non_kgs": 0
+      },
+      "billing_subscriptions": {
+        "total": 4,
+        "nulls": 0,
+        "non_kgs": 0
+      }
+    },
+    "currencyDistributions": {
+      "contracts": [
+        {
+          "currency_code": "KGS",
+          "n": 18
+        }
+      ],
+      "services": [
+        {
+          "currency_code": "KGS",
+          "n": 22
+        }
+      ],
+      "services_v2": [
+        {
+          "currency_code": "KGS",
+          "n": 7
+        }
+      ],
+      "salon_master_services": [
+        {
+          "currency_code": "KGS",
+          "n": 30
+        }
+      ],
+      "bookings": [
+        {
+          "currency_code": "KGS",
+          "n": 48
+        }
+      ],
+      "payments": [
+        {
+          "currency_code": "KGS",
+          "n": 23
+        }
+      ],
+      "payment_refunds": [],
+      "payouts": [
+        {
+          "currency_code": "KGS",
+          "n": 15
+        }
+      ],
+      "settlement_items": [
+        {
+          "currency_code": "KGS",
+          "n": 7
+        }
+      ],
+      "settlement_periods": [
+        {
+          "currency_code": "KGS",
+          "n": 3
+        }
+      ],
+      "settlement_payout_batches": [],
+      "settlement_reconciliation_reports": [],
+      "money_reconciliation_mismatches": [],
+      "withdraw_settings": [],
+      "withdraws": [
+        {
+          "currency_code": "KGS",
+          "n": 7
+        }
+      ]
+    }
+  },
+  "error": null
+}
