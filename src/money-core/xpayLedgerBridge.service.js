@@ -3,6 +3,7 @@
 import { randomUUID } from 'node:crypto';
 import { getMoneyCoreFlags } from './config.js';
 import { rebuildOwnerBalanceFromLedger } from './ledger.service.js';
+import { XPAY_CURRENCY } from './providers/xpay.adapter.js';
 
 const ALLOWED_OWNER_TYPES = new Set(['salon', 'master', 'platform']);
 const ALLOWED_ROLE_IN_SPLIT = new Set(['salon', 'master', 'platform']);
@@ -91,7 +92,7 @@ function buildBridgeMetadata({
     role_in_split: normalizeText(allocationRow.role_in_split),
     owner_net_amount: normalizeAmount(allocationRow.owner_net_amount),
     gross_amount: normalizeAmount(allocationRow.gross_amount),
-    currency: normalizeText(allocationRow.currency) || 'KGS',
+    currency: normalizeText(allocationRow.currency) || XPAY_CURRENCY,
   });
 }
 
@@ -253,12 +254,12 @@ async function createLedgerEntriesForXpaySettlement(client, input = {}) {
 
   const eligibleAllocations = allocationRows.filter((row) => {
     const ownerNetAmount = normalizeAmount(row.owner_net_amount);
-    const currency = normalizeText(row.currency) || 'KGS';
+    const currency = normalizeText(row.currency) || XPAY_CURRENCY;
     const status = normalizeText(row.status);
     return (
       ownerNetAmount !== null &&
       ownerNetAmount > 0 &&
-      currency === 'KGS' &&
+      currency === XPAY_CURRENCY &&
       ALLOWED_OWNER_TYPES.has(normalizeText(row.owner_type) || '') &&
       ALLOWED_ROLE_IN_SPLIT.has(normalizeText(row.role_in_split) || '') &&
       ALLOWED_LEDGER_SPLIT_STATUSES.has(status)
@@ -296,7 +297,7 @@ async function createLedgerEntriesForXpaySettlement(client, input = {}) {
       throw createError('INVALID_SPLIT_ALLOCATION', 'Split allocation role is invalid', 409);
     }
 
-    if ((normalizeText(allocation.currency) || 'KGS') !== 'KGS') {
+    if ((normalizeText(allocation.currency) || XPAY_CURRENCY) !== XPAY_CURRENCY) {
       throw createError('INVALID_SPLIT_ALLOCATION', 'Split allocation currency is invalid', 409);
     }
   }
@@ -341,7 +342,7 @@ INSERT INTO public.money_ledger_entries (
   'available',
   'credit',
   $4,
-  'KGS',
+  $10,
   'xpay_split_allocation',
   $5,
   $6,
@@ -364,6 +365,7 @@ RETURNING id
         normalizeText(input.actor?.user_type) || 'system',
         Number.isInteger(Number(input.actor?.user_id)) && Number(input.actor?.user_id) > 0 ? Number(input.actor.user_id) : null,
         JSON.stringify(metadata),
+        XPAY_CURRENCY,
       ]
     );
 
@@ -372,7 +374,7 @@ RETURNING id
         source_id: normalizePositiveInt(allocation.id),
         owner_type: normalizeText(allocation.owner_type),
         owner_id: allocationOwnerId,
-        currency: 'KGS',
+        currency: XPAY_CURRENCY,
       });
     }
   }
@@ -381,13 +383,13 @@ RETURNING id
   for (const allocation of eligibleAllocations) {
     const ownerType = normalizeText(allocation.owner_type);
     const ownerId = normalizeOwnerId(allocation.owner_id);
-    const key = `${ownerType}:${ownerId}:KGS`;
+    const key = `${ownerType}:${ownerId}:${XPAY_CURRENCY}`;
     if (!touchedOwners.some((item) => item.key === key)) {
       touchedOwners.push({
         key,
         owner_type: ownerType,
         owner_id: ownerId,
-        currency: 'KGS',
+        currency: XPAY_CURRENCY,
       });
     }
   }

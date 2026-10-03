@@ -21,6 +21,7 @@ import {
 } from "../../services/paymentCollectionAnchors.service.js";
 import { releaseCalendarSlotForBooking } from "../../services/calendarSlots.service.js";
 import { buildSalonCalendarResponse } from "../../services/salonCalendar.service.js";
+import { requireCurrencyCode, resolveBusinessMarketContext, resolveOwnerMarketContext } from "../../market-context/BusinessContext.js";
 
 export default function buildSalonsRouter(pool, internalReadRateLimit){
 
@@ -343,14 +344,16 @@ return access;
 
 
 
-async function getSystemWalletId(db){
+async function getSystemWalletId(db, currency){
+const normalizedCurrency = requireCurrencyCode(currency, "SYSTEM_WALLET_CURRENCY_REQUIRED");
 const wallet = await db.query(`
 SELECT id
 FROM totem_test.wallets
 WHERE owner_type='system'
+AND currency=$1
 ORDER BY id ASC
 LIMIT 1
-`);
+`,[normalizedCurrency]);
 
 if(!wallet.rows.length){
 const err = new Error("SYSTEM_WALLET_NOT_FOUND");
@@ -361,7 +364,7 @@ throw err;
 return wallet.rows[0].id;
 }
 
-async function getSalonWalletRowForCharge(db, salonId){
+async function getSalonWalletRowForCharge(db, salonId, currency){
 const wallet = await db.query(`
 SELECT
 id,
@@ -371,9 +374,10 @@ currency
 FROM totem_test.wallets
 WHERE owner_type='salon'
 AND owner_id=$1
+AND currency=$2
 FOR UPDATE
 LIMIT 1
-`,[salonId]);
+`,[salonId, requireCurrencyCode(currency, "WALLET_CURRENCY_REQUIRED")]);
 
 if(!wallet.rows.length){
 const err = new Error("SALON_WALLET_NOT_FOUND");
@@ -580,7 +584,9 @@ await db.query("ROLLBACK");
 return res.status(400).json({ok:false,error:"SUBSCRIPTION_AMOUNT_INVALID"});
 }
 
-const salonWallet = await getSalonWalletRowForCharge(db, salonId);
+const billingCurrency = requireCurrencyCode(billing.currency, "BILLING_CURRENCY_REQUIRED");
+
+const salonWallet = await getSalonWalletRowForCharge(db, salonId, billingCurrency);
 const salonWalletId = salonWallet.id;
 const salonBalance = await getWalletBalanceById(db, salonWalletId);
 
@@ -604,7 +610,7 @@ last_charge_at:billing.last_charge_at
 });
 }
 
-const systemWalletId = await getSystemWalletId(db);
+const systemWalletId = await getSystemWalletId(db, billingCurrency);
 
 await db.query(`
 INSERT INTO totem_test.ledger_entries(
@@ -660,7 +666,7 @@ charged:true,
 owner_type:"salon",
 owner_id:salonId,
 amount,
-currency:billing.currency || "KGS",
+currency:requireCurrencyCode(billing.currency, "BILLING_CURRENCY_REQUIRED"),
 reference_type:"subscription",
 reference_id:String(billing.id),
 billing_access:{
@@ -2714,9 +2720,9 @@ throw err;
 return raw;
 }
 
-function getBishkekMonthRange(referenceDate = new Date()){
+function getBusinessMonthRange(referenceDate = new Date(), timezone){
 const formatter = new Intl.DateTimeFormat("en-CA", {
-timeZone: "Asia/Bishkek",
+timeZone: timezone,
 year: "numeric",
 month: "2-digit",
 day: "2-digit"
@@ -2753,11 +2759,11 @@ throw err;
 return limit;
 }
 
-function buildLostProfitSummary(rows){
+function buildLostProfitSummary(rows, currency){
 const summary = {
 cancelled_count: 0,
 lost_profit_amount: 0,
-currency: "KGS",
+currency,
 missing_price_count: 0
 };
 
@@ -2772,7 +2778,7 @@ summary.missing_price_count += 1;
 return summary;
 }
 
-function buildLostProfitRow(row){
+function buildLostProfitRow(row, currency){
 const lostProfitAmount = Number(row.price_snapshot ?? 0) || 0;
 
 return {
@@ -2789,7 +2795,7 @@ local_start_at: row.local_start_at,
 canceled_at: row.canceled_at,
 status: row.status,
 lost_profit_amount: lostProfitAmount,
-currency: "KGS",
+currency,
 missing_price: row.price_snapshot === null || row.price_snapshot === undefined,
 is_test: row.is_test === true
 };
@@ -2816,6 +2822,10 @@ const salonRow = salon.rows[0];
 if(!hasSalonOwnership(req, salonRow.id)){
 return res.status(403).json({ ok:false, error:"SALON_ACCESS_DENIED" });
 }
+
+const marketContext = await resolveOwnerMarketContext(pool, { ownerType: "salon", ownerId: salonRow.id });
+const timezone = marketContext.timezone;
+const currency = requireCurrencyCode(req.query.currency || marketContext.currency_code, "LOST_PROFIT_CURRENCY_INVALID");
 
 const masterIdRaw = req.query.master_id;
 const masterSlugRaw = String(req.query.master_slug || "").trim();
@@ -2884,22 +2894,22 @@ return res.status(400).json({ ok:false, error:"LOST_PROFIT_DATE_RANGE_INVALID" }
 }
 
 if(!from && !to){
-const monthRange = getBishkekMonthRange();
+const monthRange = getBusinessMonthRange(new Date(), timezone);
 from = monthRange.from;
 to = monthRange.to;
 }
 
-const values = [salonRow.id];
+const values = [salonRow.id, timezone, currency];
 const clauses = ["b.salon_id = $1", "LOWER(COALESCE(b.status, '')) IN ('cancelled','canceled','отмена')"];
 
 if(from){
 values.push(from);
-clauses.push(`(b.start_at AT TIME ZONE 'Asia/Bishkek')::date >= $${values.length}::date`);
+clauses.push(`(b.start_at AT TIME ZONE $2)::date >= $${values.length}::date`);
 }
 
 if(to){
 values.push(to);
-clauses.push(`(b.start_at AT TIME ZONE 'Asia/Bishkek')::date <= $${values.length}::date`);
+clauses.push(`(b.start_at AT TIME ZONE $2)::date <= $${values.length}::date`);
 }
 
 if(masterIdFilter !== null){
@@ -2917,10 +2927,11 @@ b.status,
 b.start_at,
 b.canceled_at,
 b.price_snapshot,
+b.currency_code,
 b.is_test,
-to_char(b.start_at AT TIME ZONE 'Asia/Bishkek', 'YYYY-MM') AS month_key,
+to_char(b.start_at AT TIME ZONE $2, 'YYYY-MM') AS month_key,
 'BR-' || LPAD(b.id::text, 5, '0') AS booking_code,
-to_char(b.start_at AT TIME ZONE 'Asia/Bishkek', 'YYYY-MM-DD HH24:MI:SS') AS local_start_at,
+to_char(b.start_at AT TIME ZONE $2, 'YYYY-MM-DD HH24:MI:SS') AS local_start_at,
 COALESCE(s.name, s.service_id, b.service_id::text) AS service_name,
 COALESCE(m.name, m.slug, b.master_id::text) AS master_name,
 m.slug AS master_slug
@@ -2932,8 +2943,8 @@ ORDER BY b.start_at DESC, b.created_at DESC, b.id DESC
 `, values);
 
 const allRows = rowsResult.rows || [];
-const summary = buildLostProfitSummary(allRows);
-const rows = allRows.slice(0, limit).map(buildLostProfitRow);
+const summary = buildLostProfitSummary(allRows, currency);
+const rows = allRows.slice(0, limit).map((row)=>buildLostProfitRow(row, currency));
 const byMasterMap = new Map();
 const monthlyMap = new Map();
 
@@ -2945,7 +2956,7 @@ master_slug: row.master_slug || null,
 master_name: row.master_name || null,
 cancelled_count: 0,
 lost_profit_amount: 0,
-currency: "KGS",
+currency,
 missing_price_count: 0
 };
 
@@ -2962,7 +2973,7 @@ const existingMonth = monthlyMap.get(monthKey) || {
 month: monthKey,
 cancelled_count: 0,
 lost_profit_amount: 0,
-currency: "KGS",
+currency,
 missing_price_count: 0
 };
 
@@ -3006,7 +3017,8 @@ to,
 status: ["cancelled", "canceled", "отмена"],
 master_id: masterRowFilter ? Number(masterRowFilter.id) : null,
 master_slug: masterRowFilter ? masterRowFilter.slug : null,
-timezone: "Asia/Bishkek",
+timezone,
+currency,
 limit
 },
 summary,
@@ -3301,6 +3313,7 @@ SELECT
 p.id AS payment_id,
 b.id AS booking_id,
 p.amount AS gross_amount,
+p.currency_code,
 p.provider AS payment_provider,
 p.status AS payment_status,
 p.method,
@@ -3343,6 +3356,7 @@ const payment = projection.rows[0];
 const bookingAnchor = payment.booking_created_at ? normalizeProjectionDate(payment.booking_created_at) : null;
 const paymentAnchor = payment.payment_created_at ? normalizeProjectionDate(payment.payment_created_at) : null;
 const anchor = bookingAnchor || paymentAnchor || null;
+const paymentMarketContext = await resolveBusinessMarketContext(pool, { salonId: payment.salon_id });
 let contract = null;
 
 if(anchor){
@@ -3361,7 +3375,7 @@ AND LOWER(COALESCE(c.terms_json->>'model', '')) IN ('percentage', 'hybrid')
 AND c.created_at <= $3::timestamptz
 AND (
   c.effective_from IS NULL
-  OR (c.effective_from AT TIME ZONE 'Asia/Bishkek') <= $3::timestamptz
+  OR (c.effective_from AT TIME ZONE $4) <= $3::timestamptz
 )
 AND (c.archived_at IS NULL OR c.archived_at > $3::timestamptz)
 ORDER BY COALESCE(c.effective_from, c.created_at) DESC, c.created_at DESC, c.id DESC
@@ -3369,7 +3383,8 @@ LIMIT 1
 `,[
 String(payment.salon_id),
 String(payment.master_id),
-anchor
+anchor,
+paymentMarketContext.timezone
 ]);
 
 contract = contractResult.rows[0] || null;
@@ -3684,7 +3699,7 @@ res.json({
 ok:true,
 wallet_id: balance.rows[0]?.wallet_id || null,
 balance: balance.rows[0]?.balance || 0,
-currency: balance.rows[0]?.currency || "KGS",
+currency: requireCurrencyCode(balance.rows[0]?.currency, "WALLET_CURRENCY_REQUIRED"),
 billing_access:{
 exists:access.exists,
 subscription_status:access.subscription_status,

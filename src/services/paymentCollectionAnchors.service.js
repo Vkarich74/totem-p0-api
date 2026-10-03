@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
-
-const DEFAULT_TIMEZONE = "Asia/Bishkek";
+import {
+  requireCurrencyCode,
+  resolveOwnerMarketContext,
+} from "../market-context/BusinessContext.js";
 const ALLOWED_ANCHOR_STATUSES = new Set(["open", "closed", "not_needed", "unknown", "conflict"]);
 
 function safeInt(value){
@@ -119,7 +121,7 @@ booking_id: row.booking_id === null || row.booking_id === undefined ? null : Num
 salon_id: row.salon_id === null || row.salon_id === undefined ? null : Number(row.salon_id),
 beneficiary_master_id: row.beneficiary_master_id === null || row.beneficiary_master_id === undefined ? null : Number(row.beneficiary_master_id),
 amount: row.amount === null || row.amount === undefined ? null : Number(row.amount),
-currency: row.currency || "KGS",
+currency: requireCurrencyCode(row.currency, "COLLECTION_ANCHOR_CURRENCY_REQUIRED"),
 provider: row.provider || null,
 method: row.method || null,
 collector_owner_type: row.collector_owner_type || null,
@@ -385,7 +387,7 @@ SELECT
   b.salon_id,
   b.master_id,
   p.amount,
-  'KGS',
+  COALESCE(p.currency_code, b.currency_code),
   p.provider,
   p.method,
   $2::text,
@@ -746,7 +748,7 @@ master_id: Number(row.master_id),
 master_slug: row.master_slug || null,
 master_name: row.master_name || null,
 amount,
-currency: row.currency || "KGS",
+currency: requireCurrencyCode(row.currency, "COLLECTION_ANCHOR_CURRENCY_REQUIRED"),
 provider: row.provider || null,
 method: row.method || null,
 collector_owner_type: row.collector_owner_type || null,
@@ -946,10 +948,13 @@ from = null,
 to = null,
 status = null,
 openOnly = false,
-timezone = DEFAULT_TIMEZONE
+currency = null
 }){
-const queryValues = [scopeId];
-const queryClauses = [];
+const ownerContext = await resolveOwnerMarketContext(pool, { ownerType: scopeType, ownerId: scopeId });
+const timezone = ownerContext.timezone;
+const resolvedCurrency = requireCurrencyCode(currency || ownerContext.currency_code, "COLLECTION_ANCHOR_CURRENCY_REQUIRED");
+const queryValues = [scopeId, timezone, resolvedCurrency];
+const queryClauses = [`a.currency = $3`];
 
 if(scopeType === "salon"){
 queryClauses.push(`a.salon_id = $1`);
@@ -972,12 +977,12 @@ const toDate = parseCollectionAnchorsDate(to, "COLLECTION_ANCHORS_TO_DATE_INVALI
 
 if(fromDate){
 queryValues.push(fromDate);
-queryClauses.push(`(a.created_at AT TIME ZONE '${timezone}')::date >= $${queryValues.length}::date`);
+queryClauses.push(`(a.created_at AT TIME ZONE $2)::date >= $${queryValues.length}::date`);
 }
 
 if(toDate){
 queryValues.push(toDate);
-queryClauses.push(`(a.created_at AT TIME ZONE '${timezone}')::date <= $${queryValues.length}::date`);
+queryClauses.push(`(a.created_at AT TIME ZONE $2)::date <= $${queryValues.length}::date`);
 }
 
 const parsedMasterIdFilter = masterFilterRow && masterFilterRow.id !== undefined && masterFilterRow.id !== null ? safeInt(masterFilterRow.id) : null;
@@ -1056,6 +1061,7 @@ to: toDate,
 status: normalizedStatus,
 open_only: openOnly === true,
 timezone,
+ currency: resolvedCurrency,
  master_id: parsedMasterIdFilter || null,
  master_slug: masterFilterRow?.slug || null,
  master_name: masterFilterRow?.name || null
@@ -1100,6 +1106,7 @@ to: toDate,
 status: normalizedStatus,
 open_only: openOnly === true,
 timezone,
+ currency: resolvedCurrency,
  master_id: parsedMasterIdFilter || null,
  master_slug: masterFilterRow?.slug || null,
  master_name: masterFilterRow?.name || null

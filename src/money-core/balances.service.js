@@ -1,5 +1,7 @@
 'use strict';
 
+import { resolveOwnerCurrencyCode } from '../market-context/BusinessContext.js';
+
 function normalizeOwnerType(ownerType) {
   const value = String(ownerType || '').trim().toLowerCase();
   if (value === 'salon' || value === 'master') {
@@ -23,7 +25,7 @@ function toZeroBalanceRow() {
   };
 }
 
-function buildOwnerMoneyCoreSummary(pool, { ownerType, slug }) {
+function buildOwnerMoneyCoreSummary(pool, { ownerType, slug, currency = null }) {
   const normalizedOwnerType = normalizeOwnerType(ownerType);
   const normalizedSlug = String(slug || '').trim();
 
@@ -78,6 +80,12 @@ function buildOwnerMoneyCoreSummary(pool, { ownerType, slug }) {
             : 'inactive',
     };
 
+    const resolvedCurrency = await resolveOwnerCurrencyCode(pool, {
+      ownerType: normalizedOwnerType,
+      ownerId: ownerRow.id,
+      requestedCurrency: currency,
+    });
+
     const legacyWarnings = [];
 
     if (normalizedOwnerType === 'salon') {
@@ -107,10 +115,10 @@ function buildOwnerMoneyCoreSummary(pool, { ownerType, slug }) {
       FROM public.money_owner_balances
       WHERE owner_type = $1
         AND owner_id = $2
-        AND currency = 'KGS'
+        AND currency = $3
       LIMIT 1
       `,
-      [normalizedOwnerType, ownerRow.id]
+      [normalizedOwnerType, ownerRow.id, resolvedCurrency]
     );
 
     const balanceRow = balanceQuery.rows[0] || toZeroBalanceRow();
@@ -129,12 +137,14 @@ function buildOwnerMoneyCoreSummary(pool, { ownerType, slug }) {
       FROM public.withdraw_requests
       WHERE owner_type = $1
         AND owner_id = $2
-        AND status = ANY($3::text[])
+        AND currency = $3
+        AND status = ANY($4::text[])
       ORDER BY created_at DESC, id DESC
       `,
       [
         normalizedOwnerType,
         ownerRow.id,
+        resolvedCurrency,
         [
           'created',
           'pending_validation',
@@ -149,7 +159,7 @@ function buildOwnerMoneyCoreSummary(pool, { ownerType, slug }) {
     return {
       ok: true,
       owner,
-      currency: 'KGS',
+      currency: resolvedCurrency,
       provider_hold: balanceRow.provider_hold,
       pending_settlement: balanceRow.pending_settlement,
       available: balanceRow.available,

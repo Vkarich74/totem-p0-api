@@ -1,6 +1,7 @@
 'use strict';
 
 import { computePaymentShareBreakdown } from './paymentProjectionMath.js';
+import { requireCurrencyCode, resolveBusinessTimezone } from '../market-context/BusinessContext.js';
 
 function normalizeText(value) {
   const text = String(value ?? '').trim();
@@ -75,6 +76,7 @@ async function loadApplicableContract(client, paymentRow, bookingRow) {
     return null;
   }
 
+  const timezone = await resolveBusinessTimezone(client, { salonId: bookingRow.salon_id });
   const contractResult = await client.query(
     `
 SELECT
@@ -91,7 +93,7 @@ AND LOWER(COALESCE(c.terms_json->>'model', '')) IN ('percentage', 'hybrid')
 AND c.created_at <= $3::timestamptz
 AND (
   c.effective_from IS NULL
-  OR (c.effective_from AT TIME ZONE 'Asia/Bishkek') <= $3::timestamptz
+  OR (c.effective_from AT TIME ZONE $4) <= $3::timestamptz
 )
 AND (c.archived_at IS NULL OR c.archived_at > $3::timestamptz)
 ORDER BY COALESCE(c.effective_from, c.created_at) DESC, c.created_at DESC, c.id DESC
@@ -101,6 +103,7 @@ LIMIT 1
       String(bookingRow.salon_id ?? ''),
       String(bookingRow.master_id ?? ''),
       anchor,
+      timezone,
     ]
   );
 
@@ -108,7 +111,10 @@ LIMIT 1
 }
 
 function toAllocationRows({ paymentRow, bookingRow, shares, settlementId, input = {} }) {
-  const currency = normalizeText(paymentRow.currency) || normalizeText(shares.currency) || 'KGS';
+  const currency = requireCurrencyCode(
+    paymentRow.currency_code || paymentRow.currency || shares.currency,
+    'XPAY_SPLIT_CURRENCY_REQUIRED'
+  );
   const rows = [];
 
   const sharedMetadata = sanitizeJson({

@@ -1,6 +1,7 @@
 'use strict';
 
 import { assertMoneyCoreWriteAllowed } from './config.js';
+import { requireCurrencyCode, resolveOperationCurrency } from '../market-context/BusinessContext.js';
 
 const ALLOWED_RUN_TYPES = new Set([
   'provider_payments',
@@ -52,6 +53,9 @@ function sanitizeAuditJson(value) {
 }
 
 async function insertMoneyAuditEvent(client, payload = {}) {
+  const currency = payload.currency
+    ? requireCurrencyCode(payload.currency, 'MONEY_AUDIT_CURRENCY_REQUIRED')
+    : await resolveOperationCurrency(client);
   const result = await client.query(
     `
     INSERT INTO public.money_audit_events (
@@ -66,7 +70,7 @@ async function insertMoneyAuditEvent(client, payload = {}) {
       currency,
       data
     ) VALUES (
-      $1, $2, $3, $4, $5, $6, $7, $8, 'KGS', $9::jsonb
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb
     )
     RETURNING *
     `,
@@ -79,6 +83,7 @@ async function insertMoneyAuditEvent(client, payload = {}) {
       normalizeText(payload.source_type),
       normalizeInt(payload.source_id),
       null,
+      currency,
       JSON.stringify(sanitizeAuditJson(payload.data || {})),
     ]
   );

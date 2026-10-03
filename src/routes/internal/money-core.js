@@ -14,6 +14,7 @@ import {
   assertReconciliationEnabled,
 } from '../../money-core/config.js';
 import { buildOwnerMoneyCoreSummary } from '../../money-core/balances.service.js';
+import { requireCurrencyCode, resolveOwnerCurrencyCode } from '../../market-context/BusinessContext.js';
 import {
   createProviderEvent,
   listProviderEvents,
@@ -402,7 +403,7 @@ async function insertMoneyAuditEvent(client, payload = {}) {
       currency,
       data
     ) VALUES (
-      $1, $2, $3, $4, $5, $6, $7, $8, 'KGS', $9::jsonb
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb
     )
     RETURNING *
     `,
@@ -415,6 +416,7 @@ async function insertMoneyAuditEvent(client, payload = {}) {
       String(payload.source_type || '').trim().toLowerCase() || null,
       Number.isFinite(Number(payload.source_id)) ? Number(payload.source_id) : null,
       Number.isFinite(Number(payload.amount)) ? Number(payload.amount) : null,
+      requireCurrencyCode(payload.currency, 'MONEY_AUDIT_CURRENCY_REQUIRED'),
       JSON.stringify(payload.data && typeof payload.data === 'object' ? payload.data : {}),
     ]
   );
@@ -601,6 +603,7 @@ async function processAdminWithdrawRequestAction(pool, requestId, action, body =
         source_type: 'withdraw_request',
         source_id: updatedRequest.id,
         amount: updatedRequest.amount,
+        currency: updatedRequest.currency,
         data: {
           action: 'comment',
           comment,
@@ -661,6 +664,7 @@ async function processAdminWithdrawRequestAction(pool, requestId, action, body =
         source_type: 'withdraw_request',
         source_id: updatedRequest.id,
         amount: updatedRequest.amount,
+        currency: updatedRequest.currency,
         data: {
           action: 'claim',
           previous_status: currentStatus,
@@ -728,6 +732,7 @@ async function processAdminWithdrawRequestAction(pool, requestId, action, body =
         source_type: 'withdraw_request',
         source_id: updatedRequest.id,
         amount: updatedRequest.amount,
+        currency: updatedRequest.currency,
         data: {
           action: 'reject',
           reason,
@@ -933,6 +938,7 @@ async function processAdminWithdrawRequestStartProcessing(pool, requestId, body 
     source_type: 'withdraw_request',
     source_id: detail.withdraw_request.id,
     amount: detail.withdraw_request.amount,
+    currency: detail.withdraw_request.currency,
     data: {
       previous_status: currentStatus,
       next_status: 'bank_processing',
@@ -2020,11 +2026,16 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/owners/:ownerType/:ownerId/balance/rebuild', async (req, res, next) => {
     try {
+      const currency = await resolveOwnerCurrencyCode(pool, {
+        ownerType: req.params.ownerType,
+        ownerId: req.params.ownerId,
+        requestedCurrency: req.body?.currency,
+      });
       const balance = await rebuildOwnerBalanceFromLedger(
         pool,
         req.params.ownerType,
         req.params.ownerId,
-        req.body?.currency || 'KGS',
+        currency,
         {
           user_id: req.user?.id ?? req.user?.user_id ?? null,
         }
@@ -3256,6 +3267,7 @@ SELECT
   provider,
   status,
   amount,
+  currency_code,
   collector_owner_type,
   collector_owner_id
 FROM public.payments
@@ -3382,6 +3394,7 @@ RETURNING
         source_type: 'payment',
         source_id: paymentId,
         amount: Number(payment.amount || 0),
+        currency: payment.currency_code,
         data: {
           reason,
           payment_id: paymentId,
@@ -3838,6 +3851,7 @@ RETURNING
       const summary = await buildOwnerMoneyCoreSummary(pool, {
         ownerType: 'salon',
         slug: req.params.slug,
+        currency: req.query?.currency ?? null,
       });
 
       if (!summary.ok) {
@@ -3874,6 +3888,7 @@ RETURNING
       const summary = await buildOwnerMoneyCoreSummary(pool, {
         ownerType: 'master',
         slug: req.params.slug,
+        currency: req.query?.currency ?? null,
       });
 
       if (!summary.ok) {

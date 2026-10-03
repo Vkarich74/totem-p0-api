@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import { assertMoneyCoreWriteAllowed } from './config.js';
 import { createNotification } from '../services/notifications/notificationService.js';
 import { buildPayoutExecutionNotificationTemplate } from '../services/notifications/notificationTemplates.js';
+import { requireCurrencyCode } from '../market-context/BusinessContext.js';
 
 const ALLOWED_PAYOUT_STATUSES = new Set([
   'draft',
@@ -114,7 +115,7 @@ async function insertMoneyAuditEvent(client, payload = {}) {
       currency,
       data
     ) VALUES (
-      $1, $2, $3, $4, $5, $6, $7, $8, 'KGS', $9::jsonb
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb
     )
     RETURNING *
     `,
@@ -127,6 +128,7 @@ async function insertMoneyAuditEvent(client, payload = {}) {
       normalizeText(payload.source_type),
       normalizeInt(payload.source_id),
       normalizeNumber(payload.amount),
+      requireCurrencyCode(payload.currency, 'MONEY_AUDIT_CURRENCY_REQUIRED'),
       JSON.stringify(sanitizeJson(payload.data || {})),
     ]
   );
@@ -205,7 +207,7 @@ async function insertMoneyReceipt(client, payload = {}) {
       external_ref,
       file_url
     ) VALUES (
-      'payout', 'payout_execution', $1, $2, $3, $4, 'KGS', $5, $6, $7
+      'payout', 'payout_execution', $1, $2, $3, $4, $5, $6, $7, $8
     )
     ON CONFLICT (receipt_type, source_type, source_id) DO NOTHING
     RETURNING *
@@ -215,6 +217,7 @@ async function insertMoneyReceipt(client, payload = {}) {
       normalizeText(payload.owner_type),
       normalizeInt(payload.owner_id),
       normalizeNumber(payload.amount),
+      requireCurrencyCode(payload.currency, 'MONEY_RECEIPT_CURRENCY_REQUIRED'),
       normalizeText(payload.destination_summary),
       normalizeText(payload.external_ref),
       normalizeText(payload.file_url),
@@ -314,6 +317,7 @@ async function insertLedgerEntriesAndRebuildBalance(
   ownerType,
   ownerId,
   amount,
+  currency,
   fromZone,
   toZone,
   sourceType,
@@ -322,6 +326,7 @@ async function insertLedgerEntriesAndRebuildBalance(
   actor
 ) {
   const entryGroupId = randomUUID();
+  const normalizedCurrency = requireCurrencyCode(currency, 'PAYOUT_CURRENCY_INVALID');
   const sanitizedMetadata = sanitizeJson(metadata ?? {});
   const createdByType = normalizeText(actor?.user_type) || 'system';
   const createdById = normalizeInt(actor?.user_id);
@@ -357,14 +362,14 @@ async function insertLedgerEntriesAndRebuildBalance(
         $4,
         $5,
         $6,
-        'KGS',
         $7,
         $8,
         $9,
-        NULL,
         $10,
+        NULL,
         $11,
-        $12::jsonb,
+        $12,
+        $13::jsonb,
         now()
       )
       RETURNING *
@@ -376,6 +381,7 @@ async function insertLedgerEntriesAndRebuildBalance(
         entry.money_zone,
         entry.direction,
         amount,
+        normalizedCurrency,
         sourceType,
         sourceId,
         `${sourceType} ${fromZone} to ${toZone}`,
@@ -394,10 +400,10 @@ async function insertLedgerEntriesAndRebuildBalance(
     FROM public.money_ledger_entries
     WHERE owner_type = $1
       AND owner_id = $2
-      AND currency = 'KGS'
+      AND currency = $3
     ORDER BY id ASC
     `,
-    [ownerType, ownerId]
+    [ownerType, ownerId, normalizedCurrency]
   );
 
   const balance = buildBalanceFromLedgerRows(ledgerRowsResult.rows);
@@ -428,7 +434,7 @@ async function insertLedgerEntriesAndRebuildBalance(
       requires_review,
       updated_at
     ) VALUES (
-      $1, $2, 'KGS', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now()
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now()
     )
     ON CONFLICT (owner_type, owner_id, currency)
     DO UPDATE SET
@@ -448,6 +454,7 @@ async function insertLedgerEntriesAndRebuildBalance(
     [
       ownerType,
       ownerId,
+      normalizedCurrency,
       balance.provider_hold,
       balance.pending_settlement,
       balance.available,
@@ -599,6 +606,7 @@ async function createPayoutExecution(pool, input = {}, actor = {}) {
     }
 
     const amount = normalizeNumber(withdrawRequest.locked_amount) || normalizeNumber(withdrawRequest.amount);
+    const currency = requireCurrencyCode(withdrawRequest.currency, 'PAYOUT_CURRENCY_INVALID');
     if (!amount || amount <= 0) {
       const error = new Error('Invalid payout amount');
       error.code = 'PAYOUT_AMOUNT_INVALID';
@@ -629,8 +637,8 @@ async function createPayoutExecution(pool, input = {}, actor = {}) {
         created_at,
         updated_at
       ) VALUES (
-        $1, $2, $3, $4, NULL, 'manual', $5, 'KGS', 'draft',
-        NULL, NULL, NULL, NULL, NULL, NULL, NULL, $6::jsonb, now(), now()
+        $1, $2, $3, $4, NULL, 'manual', $5, $6, 'draft',
+        NULL, NULL, NULL, NULL, NULL, NULL, NULL, $7::jsonb, now(), now()
       )
       RETURNING *
       `,
@@ -640,6 +648,7 @@ async function createPayoutExecution(pool, input = {}, actor = {}) {
         withdrawRequest.owner_id,
         withdrawRequest.destination_id,
         amount,
+        currency,
         JSON.stringify(sanitizeJson(input.metadata_json ?? input.metadata ?? {})),
       ]
     );
@@ -653,6 +662,7 @@ async function createPayoutExecution(pool, input = {}, actor = {}) {
       source_type: 'payout_execution',
       source_id: createResult.rows[0].id,
       amount,
+      currency,
       data: {
         payout: createResult.rows[0],
         withdraw_request_id: withdrawRequestId,
@@ -679,7 +689,7 @@ async function createPayoutExecution(pool, input = {}, actor = {}) {
         owner_type: withdrawRequest.owner_type,
         owner_id: withdrawRequest.owner_id,
         amount,
-        currency: 'KGS',
+        currency,
         status: 'draft',
       },
     });
@@ -758,6 +768,7 @@ async function submitManualPayoutExecution(pool, id, input = {}, actor = {}) {
       source_type: 'payout_execution',
       source_id: updatedResult.rows[0].id,
       amount,
+      currency: payout.currency,
       data: {
         payout: updatedResult.rows[0],
         previous_status: payout.status,
@@ -784,7 +795,7 @@ async function submitManualPayoutExecution(pool, id, input = {}, actor = {}) {
         owner_type: payout.owner_type,
         owner_id: payout.owner_id,
         amount,
-        currency: 'KGS',
+        currency: requireCurrencyCode(payout.currency, 'PAYOUT_CURRENCY_INVALID'),
         status: 'submitted',
       },
     });
@@ -875,6 +886,7 @@ async function completePayoutExecution(pool, id, input = {}, actor = {}) {
       payout.owner_type,
       payout.owner_id,
       amount,
+      requireCurrencyCode(payout.currency, 'PAYOUT_CURRENCY_INVALID'),
       'locked',
       'paid_out',
       'payout_execution',
@@ -888,6 +900,7 @@ async function completePayoutExecution(pool, id, input = {}, actor = {}) {
       owner_type: payout.owner_type,
       owner_id: payout.owner_id,
       amount: normalizeNumber(payout.amount),
+      currency: requireCurrencyCode(payout.currency, 'PAYOUT_CURRENCY_INVALID'),
       destination_summary: `provider=${payout.payout_provider}; mode=${payout.payout_mode}; destination_id=${payout.destination_id}`,
       external_ref: externalRef || bankReference,
       file_url: normalizeText(input.receipt_url),
@@ -902,6 +915,7 @@ async function completePayoutExecution(pool, id, input = {}, actor = {}) {
       source_type: 'payout_execution',
       source_id: updatedPayoutResult.rows[0].id,
       amount: normalizeNumber(payout.amount),
+      currency: requireCurrencyCode(payout.currency, 'PAYOUT_CURRENCY_INVALID'),
       data: {
         payout: updatedPayoutResult.rows[0],
         withdraw_request: updatedWithdrawResult.rows[0],
@@ -930,7 +944,7 @@ async function completePayoutExecution(pool, id, input = {}, actor = {}) {
         owner_type: payout.owner_type,
         owner_id: payout.owner_id,
         amount,
-        currency: 'KGS',
+        currency: requireCurrencyCode(payout.currency, 'PAYOUT_CURRENCY_INVALID'),
         status: 'completed',
       },
     });
@@ -1023,6 +1037,7 @@ async function failPayoutExecution(pool, id, input = {}, actor = {}) {
       payout.owner_type,
       payout.owner_id,
       amount,
+      requireCurrencyCode(payout.currency, 'PAYOUT_CURRENCY_INVALID'),
       'locked',
       'available',
       'payout_execution',
@@ -1040,6 +1055,7 @@ async function failPayoutExecution(pool, id, input = {}, actor = {}) {
       source_type: 'payout_execution',
       source_id: updatedPayoutResult.rows[0].id,
       amount: normalizeNumber(payout.amount),
+      currency: requireCurrencyCode(payout.currency, 'PAYOUT_CURRENCY_INVALID'),
       data: {
         payout: updatedPayoutResult.rows[0],
         withdraw_request: updatedWithdrawResult.rows[0],
@@ -1066,7 +1082,7 @@ async function failPayoutExecution(pool, id, input = {}, actor = {}) {
         owner_type: payout.owner_type,
         owner_id: payout.owner_id,
         amount,
-        currency: 'KGS',
+        currency: requireCurrencyCode(payout.currency, 'PAYOUT_CURRENCY_INVALID'),
         status: 'failed',
       },
     });

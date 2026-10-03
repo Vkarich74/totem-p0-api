@@ -1,3 +1,5 @@
+import { resolveBusinessTimezone } from "../market-context/BusinessContext.js";
+
 function normalizeText(value){
 return String(value || "").trim();
 }
@@ -19,26 +21,6 @@ return true;
 } catch (error) {
 return false;
 }
-}
-
-function resolveSalonCalendarTimeZone(salonRow = {}){
-const explicitZone = normalizeText(salonRow.timezone || salonRow.time_zone || salonRow.tz);
-if(isIanaTimeZone(explicitZone)){
-return explicitZone;
-}
-
-const city = normalizeText(salonRow.city).toLowerCase();
-const slug = normalizeText(salonRow.slug).toLowerCase();
-
-if(city === "бишкек" || city === "bishkek"){
-return "Asia/Bishkek";
-}
-
-if(slug === "master-prime"){
-return "Asia/Bishkek";
-}
-
-return "Asia/Bishkek";
 }
 
 function getLocalDateString(date, timeZone){
@@ -251,7 +233,7 @@ if(!salonRow || !pool){
 throw new Error("SALON_CALENDAR_INVALID_INPUT");
 }
 
-const timeZone = resolveSalonCalendarTimeZone(salonRow);
+const timeZone = await resolveBusinessTimezone(pool, { salonId: salonRow.id });
 const currentToday = getLocalDateString(new Date(), timeZone);
 const requested = parseCalendarDateOrThrow(requestedDate) || currentToday;
 

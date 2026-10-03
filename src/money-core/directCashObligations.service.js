@@ -1,6 +1,7 @@
 'use strict';
 
 import { computePaymentShareBreakdown } from './paymentProjectionMath.js';
+import { requireCurrencyCode, resolveBusinessTimezone } from '../market-context/BusinessContext.js';
 
 function normalizeText(value) {
   const text = String(value ?? '').trim();
@@ -33,7 +34,7 @@ SELECT
   p.provider,
   p.status,
   p.amount,
-  'KGS'::text AS currency,
+  p.currency_code AS currency,
   p.collector_owner_type,
   p.collector_owner_id,
   p.confirmed_at,
@@ -88,6 +89,8 @@ async function loadApplicableContract(client, paymentRow, bookingRow) {
     return null;
   }
 
+  const timezone = await resolveBusinessTimezone(client, { salonId: bookingRow.salon_id });
+
   const contractResult = await client.query(
     `
 SELECT
@@ -104,7 +107,7 @@ AND LOWER(COALESCE(c.terms_json->>'model', '')) IN ('percentage', 'hybrid')
 AND c.created_at <= $3::timestamptz
 AND (
   c.effective_from IS NULL
-  OR (c.effective_from AT TIME ZONE 'Asia/Bishkek') <= $3::timestamptz
+  OR (c.effective_from AT TIME ZONE $4) <= $3::timestamptz
 )
 AND (c.archived_at IS NULL OR c.archived_at > $3::timestamptz)
 ORDER BY COALESCE(c.effective_from, c.created_at) DESC, c.created_at DESC, c.id DESC
@@ -114,6 +117,7 @@ LIMIT 1
       String(bookingRow.salon_id ?? ''),
       String(bookingRow.master_id ?? ''),
       anchor,
+      timezone,
     ]
   );
 
@@ -278,7 +282,7 @@ async function createDirectCashObligationsForConfirmedPayment(client, input = {}
     };
   }
 
-  const currency = normalizeText(paymentRow.currency) || normalizeText(shares.currency) || 'KGS';
+  const currency = requireCurrencyCode(paymentRow.currency || shares.currency, 'DIRECT_CASH_CURRENCY_REQUIRED');
   const paymentNumericId = Number(paymentRow.id);
   const bookingNumericId = Number(bookingRow.id);
 

@@ -4,6 +4,7 @@ import {
   checkSlugAvailability,
   reserveSlug
 } from "./slugReservation.js";
+import { normalizePhoneForMarket } from "../../market-context/BusinessContext.js";
 import {
   buildCanonicalProvisionResponse,
   buildProvisionMeta,
@@ -67,31 +68,7 @@ async function authUsersHasColumn(db, columnName){
   return result.rows.length > 0;
 }
 
-function normalizePhone(value){
-  const raw = String(value || "").trim();
-  if(!raw){
-    return null;
-  }
 
-  const digits = raw.replace(/\D/g, "");
-  if(digits.startsWith("996") && digits.length === 12){
-    const local = digits.slice(3);
-    if(local[0] === "0"){
-      return null;
-    }
-    return `+996${local}`;
-  }
-
-  if(raw.startsWith("+996")){
-    const local = raw.slice(4).replace(/\D/g, "");
-    if(local.length !== 9 || local[0] === "0"){
-      return null;
-    }
-    return `+996${local}`;
-  }
-
-  return null;
-}
 
 async function createProvisionMasterAuthUser(db, { input, masterSlug }){
   const hasSalonSlug = await authUsersHasColumn(db, "salon_slug");
@@ -150,7 +127,7 @@ async function createProvisionMasterAuthUser(db, { input, masterSlug }){
   }
 
   if(hasPhone){
-    pushParamColumn("phone", normalizePhone(input.phone));
+    pushParamColumn("phone", input.phone);
   }
 
   const created = await db.query(
@@ -250,6 +227,11 @@ export async function createMasterCanonical({ pool, payload }){
 
   try{
     await db.query("BEGIN");
+
+    if(input.phone){
+      const phoneResult = await normalizePhoneForMarket(db, input.phone, { marketCode: input.market_code || "" });
+      input.phone = phoneResult?.ok ? phoneResult.phone : null;
+    }
 
     const existingUser = await findExistingAuthUser(db, input.email, "master");
 

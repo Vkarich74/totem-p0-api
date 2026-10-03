@@ -2,6 +2,7 @@
 
 import { assertMoneyCoreWriteAllowed } from './config.js';
 import { upsertPaymentCollectionAnchorForPayment } from '../services/paymentCollectionAnchors.service.js';
+import { requireCurrencyCode } from '../market-context/BusinessContext.js';
 
 const OWNER_QR_SOURCE_TYPE = 'owner_qr_payment';
 const OWNER_QR_PLATFORM_OWNER_TYPE = 'system';
@@ -388,6 +389,7 @@ SELECT
   id,
   booking_id,
   amount,
+  currency_code,
   provider,
   method,
   confirmation_mode,
@@ -426,6 +428,7 @@ SELECT
   b.salon_id,
   b.master_id,
   b.price_snapshot,
+  b.currency_code,
   b.status
 FROM public.bookings b
 WHERE b.id = $1
@@ -558,6 +561,10 @@ function buildOwnerQrObligations({
   const bookingId = Number(payment.booking_id || booking.id);
   const collectorType = String(payment.collector_owner_type || '').trim();
   const collectorId = normalizePositiveInt(payment.collector_owner_id);
+  const currency = requireCurrencyCode(
+    payment.currency_code || booking.currency_code,
+    'OWNER_QR_CURRENCY_REQUIRED'
+  );
 
   const obligations = [];
 
@@ -573,7 +580,7 @@ function buildOwnerQrObligations({
         to_owner_type: 'master',
         to_owner_id: normalizePositiveInt(booking.master_id),
         amount: amounts.master_amount,
-        currency: 'KGS',
+        currency,
         status: 'open',
         obligation_type: 'owner_qr_split_due',
         split_role: 'master',
@@ -594,7 +601,7 @@ function buildOwnerQrObligations({
         to_owner_type: OWNER_QR_PLATFORM_OWNER_TYPE,
         to_owner_id: OWNER_QR_PLATFORM_OWNER_ID,
         amount: amounts.platform_amount,
-        currency: 'KGS',
+        currency,
         status: 'open',
         obligation_type: 'platform_fee_due',
         split_role: 'platform',
@@ -615,7 +622,7 @@ function buildOwnerQrObligations({
         to_owner_type: 'salon',
         to_owner_id: normalizePositiveInt(booking.salon_id),
         amount: amounts.salon_amount,
-        currency: 'KGS',
+        currency,
         status: 'open',
         obligation_type: 'owner_qr_split_due',
         split_role: 'salon',
@@ -636,7 +643,7 @@ function buildOwnerQrObligations({
         to_owner_type: OWNER_QR_PLATFORM_OWNER_TYPE,
         to_owner_id: OWNER_QR_PLATFORM_OWNER_ID,
         amount: amounts.platform_amount,
-        currency: 'KGS',
+        currency,
         status: 'open',
         obligation_type: 'platform_fee_due',
         split_role: 'platform',

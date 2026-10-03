@@ -2,6 +2,7 @@
 
 import { randomUUID } from 'crypto';
 import { assertMoneyCoreWriteAllowed } from './config.js';
+import { requireCurrencyCode } from '../market-context/BusinessContext.js';
 
 const ALLOWED_OWNER_TYPES = new Set(['salon', 'master', 'platform', 'system']);
 const ALLOWED_MONEY_ZONES = new Set([
@@ -80,7 +81,7 @@ function validateLedgerMovement(movement = {}) {
   const moneyZone = normalizeText(movement.money_zone);
   const direction = normalizeText(movement.direction);
   const amount = normalizeNumber(movement.amount);
-  const currency = normalizeText(movement.currency) || 'KGS';
+  const currency = requireCurrencyCode(movement.currency, 'MONEY_LEDGER_CURRENCY_INVALID');
   const sourceType = normalizeText(movement.source_type);
   const sourceId = normalizeInt(movement.source_id);
 
@@ -122,13 +123,6 @@ function validateLedgerMovement(movement = {}) {
   if (!sourceId || sourceId <= 0) {
     const error = new Error('source_id is required');
     error.code = 'MONEY_LEDGER_SOURCE_ID_REQUIRED';
-    error.statusCode = 400;
-    throw error;
-  }
-
-  if (currency !== 'KGS') {
-    const error = new Error('Invalid currency');
-    error.code = 'MONEY_LEDGER_CURRENCY_INVALID';
     error.statusCode = 400;
     throw error;
   }
@@ -337,12 +331,12 @@ async function resolveDbClient(poolOrClient) {
   throw error;
 }
 
-async function rebuildOwnerBalanceFromLedger(pool, ownerType, ownerId, currency = 'KGS', actor = {}) {
+async function rebuildOwnerBalanceFromLedger(pool, ownerType, ownerId, currency, actor = {}) {
   assertMoneyCoreWriteAllowed();
 
   const normalizedOwnerType = normalizeText(ownerType);
   const normalizedOwnerId = normalizeInt(ownerId);
-  const normalizedCurrency = normalizeText(currency) || 'KGS';
+  const normalizedCurrency = requireCurrencyCode(currency, 'MONEY_LEDGER_CURRENCY_INVALID');
 
   if (!normalizedOwnerType || !ALLOWED_OWNER_TYPES.has(normalizedOwnerType) || !normalizedOwnerId || normalizedOwnerId <= 0) {
     const error = new Error('Invalid owner reference');

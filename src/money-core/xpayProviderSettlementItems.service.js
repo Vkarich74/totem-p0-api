@@ -1,5 +1,7 @@
 'use strict';
 
+import { XPAY_CURRENCY } from './providers/xpay.adapter.js';
+
 function normalizeText(value) {
   const text = String(value ?? '').trim();
   return text || null;
@@ -175,7 +177,7 @@ INSERT INTO public.provider_settlements (
   $2,
   0,
   $3,
-  COALESCE($4, 'KGS'),
+  $4,
   COALESCE($5::timestamptz, now()),
   NULL,
   NULL,
@@ -197,7 +199,7 @@ RETURNING id
       deterministicSettlementId,
       amountGross,
       amountNet,
-      paymentRow.currency || 'KGS',
+      paymentRow.currency || XPAY_CURRENCY,
       paymentRow.confirmed_at || paymentRow.created_at || bookingRow.created_at || null,
       JSON.stringify(sanitizeJson({
         source: 'c20_h_xpay_provider_settlement_item_bridge',
@@ -353,7 +355,7 @@ INSERT INTO public.provider_settlement_items (
   $5,
   0,
   $6,
-  COALESCE($7, 'KGS'),
+  $7,
   'created',
   now()
 )
@@ -367,7 +369,7 @@ RETURNING id
       bookingRow.id,
       amount,
       amount,
-      paymentRow.currency || 'KGS',
+      paymentRow.currency || XPAY_CURRENCY,
     ]
   );
 

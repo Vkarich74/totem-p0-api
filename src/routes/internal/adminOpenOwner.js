@@ -3,6 +3,7 @@ import { google } from "googleapis";
 import { createSalonCanonical } from "../../services/provision/createSalonCanonical.js";
 import { createMasterCanonical } from "../../services/provision/createMasterCanonical.js";
 import { bindMasterToSalonCanonical } from "../../services/provision/bindMasterToSalonCanonical.js";
+import { normalizePhoneForMarket } from "../../market-context/BusinessContext.js";
 
 const GMAIL_CLIENT_ID = process.env.GMAIL_CLIENT_ID || "";
 const GMAIL_CLIENT_SECRET = process.env.GMAIL_CLIENT_SECRET || "";
@@ -150,40 +151,7 @@ function isValidEmail(value){
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
-function normalizeKgPhone(value){
-  const raw = normalizeText(value);
 
-  if(!raw){
-    return "";
-  }
-
-  const digits = raw.replace(/\D/g, "");
-
-  if(digits.length === 10 && digits.startsWith("0")){
-    const local = digits.slice(1);
-    if(/^[579]\d{8}$/.test(local)){
-      return `+996${local}`;
-    }
-    return "";
-  }
-
-  if(digits.length === 12 && digits.startsWith("996")){
-    const local = digits.slice(3);
-    if(/^[579]\d{8}$/.test(local)){
-      return `+996${local}`;
-    }
-    return "";
-  }
-
-  if(raw.startsWith("+996")){
-    const local = raw.slice(4).replace(/\D/g, "");
-    if(/^[579]\d{8}$/.test(local)){
-      return `+996${local}`;
-    }
-  }
-
-  return "";
-}
 
 function addCheck(checks, code, ok, details = {}){
   checks.push({
@@ -284,7 +252,11 @@ async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
   const slugFinal = normalizeSlug(slugSource);
   const email = normalizeEmail(body.email);
   const phoneRaw = normalizeText(body.phone || body.phone_raw || body.phone_normalized);
-  const phoneNormalized = normalizeKgPhone(phoneRaw);
+  const marketCode = normalizeText(body.market_code).toUpperCase();
+  const phoneResult = phoneRaw
+    ? await normalizePhoneForMarket(pool, phoneRaw, { marketCode })
+    : { ok: true, phone: null };
+  const phoneNormalized = phoneResult?.ok ? phoneResult.phone : "";
   const city = normalizeText(body.city);
   const workMode = normalizeText(body.work_mode || (ownerType === "master" ? "independent" : ""));
   const salonSlug = normalizeSlug(body.salon_slug);
@@ -420,6 +392,7 @@ async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
       slug_requested: slugSource,
       slug_final: slugFinal || null,
       email,
+      market_code: marketCode || null,
       phone_raw: phoneRaw || null,
       phone_normalized: phoneNormalized || null,
       city: city || null,
@@ -443,6 +416,7 @@ function normalizeOdooCoreFormIntakePayload(body = {}){
   const name = ownerType === "salon" ? (salonName || baseName) : baseName;
   const slugSource = normalizeText(body.slug || body.slug_requested || name);
   const phone = normalizeText(body.phone);
+  const marketCode = normalizeText(body.market_code).toUpperCase();
   const city = normalizeText(body.city);
   const workMode = normalizeText(body.work_mode || (ownerType === "master" ? "independent" : ""));
   const salonSlug = normalizeText(body.salon_slug);
@@ -461,6 +435,7 @@ function normalizeOdooCoreFormIntakePayload(body = {}){
     slug: slugSource,
     email: normalizeEmail(body.email),
     phone,
+    market_code: marketCode || null,
     city,
     address: "",
     description,
@@ -478,6 +453,7 @@ function normalizeOdooCoreFormIntakePayload(body = {}){
       name,
       email: normalizeEmail(body.email),
       phone: phone || null,
+      market_code: marketCode || null,
       city: city || null,
       slug: slugSource || null,
       salon_name: salonName || null,
@@ -881,6 +857,7 @@ function buildSalonProvisionPayload(request){
     salon_name: request.name,
     salon_slug: request.slug_final,
     phone: request.phone_normalized || request.phone_raw || null,
+    market_code: request.precheck_result_json?.normalized?.market_code || request.precheck_result_json?.market_code || null,
     city: request.city || null,
     description: request.description || null,
     requested_role: "salon_admin",
@@ -893,6 +870,7 @@ function buildMasterProvisionPayload(request){
     name: request.name,
     master_slug: request.slug_final,
     phone: request.phone_normalized || request.phone_raw || null,
+    market_code: request.precheck_result_json?.normalized?.market_code || request.precheck_result_json?.market_code || null,
     requested_role: "master",
   };
 }
@@ -1308,7 +1286,11 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       const slugFinal = normalizeSlug(slugSource);
       const email = normalizeEmail(body.email);
       const phoneRaw = normalizeText(body.phone || body.phone_raw || body.phone_normalized);
-      const phoneNormalized = normalizeKgPhone(phoneRaw);
+      const marketCode = normalizeText(body.market_code).toUpperCase();
+      const phoneResult = phoneRaw
+        ? await normalizePhoneForMarket(pool, phoneRaw, { marketCode })
+        : { ok: true, phone: null };
+      const phoneNormalized = phoneResult?.ok ? phoneResult.phone : "";
       const city = normalizeText(body.city);
       const workMode = normalizeText(body.work_mode || (ownerType === "master" ? "independent" : ""));
       const salonSlug = normalizeSlug(body.salon_slug);
@@ -1444,6 +1426,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
           slug_requested: slugSource,
           slug_final: slugFinal || null,
           email,
+          market_code: marketCode || null,
           phone_raw: phoneRaw,
           phone_normalized: phoneNormalized || null,
           city,

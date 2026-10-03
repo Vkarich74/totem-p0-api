@@ -1,6 +1,7 @@
 'use strict';
 
 import { createLedgerEntriesForXpaySettlement } from './xpayLedgerBridge.service.js';
+import { requireCurrencyCode } from '../market-context/BusinessContext.js';
 
 function normalizeText(value) {
   const text = String(value ?? '').trim();
@@ -65,7 +66,7 @@ async function insertMoneyAuditEvent(client, payload = {}) {
       currency,
       data
     ) VALUES (
-      $1, $2, $3, $4, $5, $6, $7, $8, 'KGS', $9::jsonb
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb
     )
     RETURNING *
     `,
@@ -78,6 +79,7 @@ async function insertMoneyAuditEvent(client, payload = {}) {
       normalizeText(payload.source_type),
       Number.isFinite(Number(payload.source_id)) ? Number(payload.source_id) : null,
       normalizeNumeric(payload.amount, null),
+      requireCurrencyCode(payload.currency, 'MONEY_AUDIT_CURRENCY_REQUIRED'),
       JSON.stringify(sanitizeJson(payload.data || {})),
     ]
   );
@@ -173,18 +175,18 @@ async function createManualSettlement(pool, input = {}, actor = {}) {
         GREATEST(COALESCE($5, 0), 0),
         GREATEST(COALESCE($6, 0), 0),
         GREATEST(COALESCE($7, 0), 0),
-        'KGS',
-        $8::timestamptz,
+        $8,
         $9::timestamptz,
         $10::timestamptz,
         $11::timestamptz,
         $12::timestamptz,
-        $13::date,
-        $14::timestamptz,
-        $15,
+        $13::timestamptz,
+        $14::date,
+        $15::timestamptz,
         $16,
-        CASE WHEN $14::timestamptz IS NOT NULL THEN now() ELSE NULL END,
-        $17::jsonb,
+        $17,
+        CASE WHEN $15::timestamptz IS NOT NULL THEN now() ELSE NULL END,
+        $18::jsonb,
         now(),
         now()
       )
@@ -198,6 +200,7 @@ async function createManualSettlement(pool, input = {}, actor = {}) {
         normalizeNumeric(input.amount_gross, 0),
         normalizeNumeric(input.amount_fee, 0),
         normalizeNumeric(input.amount_net, 0),
+        requireCurrencyCode(input.currency, 'PROVIDER_SETTLEMENT_CURRENCY_REQUIRED'),
         input.hold_started_at ?? null,
         input.hold_until ?? null,
         input.settlement_eligible_at ?? null,
@@ -220,6 +223,7 @@ async function createManualSettlement(pool, input = {}, actor = {}) {
       source_type: 'provider_settlement',
       source_id: insertResult.rows[0].id,
       amount: normalizeNumeric(input.amount_net, 0),
+      currency: requireCurrencyCode(input.currency, 'PROVIDER_SETTLEMENT_CURRENCY_REQUIRED'),
       data: {
         provider_code: normalizeText(input.provider_code) || 'manual',
         settlement_source: normalizeText(input.settlement_source) || 'manual',
@@ -345,6 +349,7 @@ async function confirmBankReceived(pool, id, input = {}, actor = {}) {
       source_type: 'provider_settlement',
       source_id: settlementResult.rows[0].id,
       amount: normalizeNumeric(settlement?.amount_net, null),
+      currency: settlement?.currency,
       data: {
         settlement,
         bank_received_at: input.bank_received_at ?? null,
@@ -415,6 +420,7 @@ async function failProviderSettlement(pool, id, input = {}, actor = {}) {
       source_type: 'provider_settlement',
       source_id: settlementResult.rows[0].id,
       amount: normalizeNumeric(settlement?.amount_net, null),
+      currency: settlement?.currency,
       data: {
         settlement,
         failure_reason: normalizeText(input.failure_reason) || 'UNKNOWN_FAILURE',

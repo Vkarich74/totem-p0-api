@@ -1,4 +1,5 @@
 import express from "express";
+import { requireCurrencyCode } from "../../market-context/BusinessContext.js";
 
 function normalizeContractText(value, fallback){
 const text = String(value ?? '').trim();
@@ -38,7 +39,7 @@ return n;
 }
 
 function normalizeCurrency(terms){
-return normalizeContractText(terms?.currency, 'KGS').toUpperCase();
+return requireCurrencyCode(terms?.currency, 'CONTRACT_CURRENCY_REQUIRED');
 }
 
 function normalizePayoutSchedule(terms){
@@ -959,7 +960,7 @@ periodEndDate.setUTCDate(periodEndDate.getUTCDate() + 7);
 periodEndDate.setUTCMonth(periodEndDate.getUTCMonth() + 1);
 }
 const periodEnd = periodEndDate.toISOString();
-const currency = String(contract?.terms_json?.currency || "KGS").trim().toUpperCase();
+const currency = requireCurrencyCode(contract?.currency_code || contract?.terms_json?.currency, "CONTRACT_CURRENCY_REQUIRED");
 const metadata = JSON.stringify({
 source,
 salary_period: salaryPeriod,

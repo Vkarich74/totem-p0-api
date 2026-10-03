@@ -1,5 +1,7 @@
 'use strict';
 
+import { requireCurrencyCode } from '../market-context/BusinessContext.js';
+
 import { assertMoneyCoreWriteAllowed } from './config.js';
 
 function normalizeText(value) {
@@ -231,7 +233,7 @@ async function previewSettlementSplit(pool, settlementId, input = {}) {
       provider_fee_amount: providerFeeAmount,
       platform_fee_amount: 0,
       owner_net_amount: ownerNetAmount,
-      currency: item.currency || settlement.currency || 'KGS',
+      currency: requireCurrencyCode(item.currency || settlement.currency, 'SPLIT_CURRENCY_REQUIRED'),
       status: 'draft',
     };
   });
@@ -307,7 +309,7 @@ async function createSettlementSplitAllocations(pool, settlementId, input = {}, 
       provider_fee_amount: normalizeNumber(allocation.provider_fee_amount, 0),
       platform_fee_amount: normalizeNumber(allocation.platform_fee_amount, 0),
       owner_net_amount: normalizeNumber(allocation.owner_net_amount, 0),
-      currency: normalizeText(allocation.currency) || 'KGS',
+      currency: requireCurrencyCode(allocation.currency, 'SPLIT_CURRENCY_REQUIRED'),
       status: normalizeText(allocation.status) || 'draft',
       ledger_group_id: allocation.ledger_group_id ?? null,
       metadata_json: sanitizeJson(allocation.metadata_json ?? allocation.metadata ?? {}),

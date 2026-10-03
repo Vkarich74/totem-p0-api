@@ -2,6 +2,7 @@
 
 import { getProviderDefinition } from './providers/registry.js';
 import { normalizeXpayEvent } from './providers/xpay.adapter.js';
+import { requireCurrencyCode } from '../market-context/BusinessContext.js';
 
 const ALLOWED_PROCESSING_STATUSES = new Set([
   'received',
@@ -104,7 +105,7 @@ function normalizeProviderEvent(input = {}) {
     payment_id: normalizeOwnerLikeNumber(input.payment_id ?? null),
     booking_id: normalizeOwnerLikeNumber(input.booking_id ?? null),
     amount: Number.isFinite(amount) && amount >= 0 ? amount : null,
-    currency: 'KGS',
+    currency: requireCurrencyCode(input.currency, 'PROVIDER_EVENT_CURRENCY_REQUIRED'),
     status_raw: normalizeText(rawStatus),
     status_normalized: statusNormalized,
     payload_sanitized: deepSanitizePayload(input.payload ?? input.body ?? input.raw_payload ?? input),
@@ -163,7 +164,7 @@ async function createProviderEvent(pool, input = {}) {
       event.payment_id,
       event.booking_id,
       event.amount,
-      event.currency || 'KGS',
+      requireCurrencyCode(event.currency, 'PROVIDER_EVENT_CURRENCY_REQUIRED'),
       event.status_raw,
       event.status_normalized,
       event.payload_sanitized,

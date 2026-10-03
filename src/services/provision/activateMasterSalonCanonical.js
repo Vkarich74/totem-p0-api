@@ -3,6 +3,7 @@ import {
   buildProvisionMeta,
   resolveProvisionError
 } from "./provisionShared.js";
+import { requireCurrencyCode } from "../../market-context/BusinessContext.js";
 
 function normalizeText(value){
   return String(value || "").trim();
@@ -91,7 +92,7 @@ async function upsertFixedRentObligation(db, contract, source, createdByFlow){
 
   const ownership = await resolveFixedRentOwnership(db, contract);
   const periodStart = resolveFixedRentPeriodStart(contract);
-  const currency = normalizeText(contract?.terms_json?.currency || "KGS").toUpperCase();
+  const currency = requireCurrencyCode(contract?.currency_code || contract?.terms_json?.currency, "CONTRACT_CURRENCY_REQUIRED");
   const metadata = JSON.stringify({
     source,
     rent_period: rentPeriod,
@@ -263,7 +264,7 @@ async function upsertSalaryObligation(db, contract, source, createdByFlow){
     periodEndDate.setUTCMonth(periodEndDate.getUTCMonth() + 1);
   }
   const periodEnd = periodEndDate.toISOString();
-  const currency = normalizeText(contract?.terms_json?.currency || "KGS").toUpperCase();
+  const currency = requireCurrencyCode(contract?.currency_code || contract?.terms_json?.currency, "CONTRACT_CURRENCY_REQUIRED");
   const metadata = JSON.stringify({
     source,
     salary_period: salaryPeriod,

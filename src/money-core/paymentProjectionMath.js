@@ -10,6 +10,15 @@ function normalizeProjectionPercent(value) {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
+
+function normalizeProjectionCurrency(...values) {
+  for (const value of values) {
+    const code = String(value ?? '').trim().toUpperCase();
+    if (/^[A-Z]{3}$/.test(code)) return code;
+  }
+  return null;
+}
+
 function computePaymentShareBreakdown(input = {}) {
   const payment = input.payment || input || {};
   const booking = input.booking || null;
@@ -31,7 +40,14 @@ function computePaymentShareBreakdown(input = {}) {
       : {};
 
   const contractModel = String(contractTerms.model || '').trim().toLowerCase() || null;
-  const currency = String(contractTerms.currency || 'KGS').trim().toUpperCase() || 'KGS';
+  const currency = normalizeProjectionCurrency(
+    payment.currency_code,
+    payment.currency,
+    booking?.currency_code,
+    booking?.currency,
+    contract?.currency_code,
+    contractTerms.currency
+  );
 
   const collectorOwnerType = String(payment.collector_owner_type || '').trim() || null;
   const collectorOwnerId = payment.collector_owner_id == null ? null : Number(payment.collector_owner_id);
@@ -177,4 +193,5 @@ export {
   computePaymentShareBreakdown,
   roundProjectionMoney,
   normalizeProjectionPercent,
+  normalizeProjectionCurrency,
 };

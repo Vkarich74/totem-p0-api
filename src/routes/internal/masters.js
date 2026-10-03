@@ -19,6 +19,7 @@ getPaymentProjectionList
 import {
 getCollectionAnchors
 } from "../../services/paymentCollectionAnchors.service.js";
+import { normalizePhoneForMarket, requireCurrencyCode, resolveBusinessMarketContext, resolveOwnerMarketContext } from "../../market-context/BusinessContext.js";
 
 export default function buildMastersRouter(pool, internalReadRateLimit){
 
@@ -32,28 +33,7 @@ return null;
 return n;
 }
 
-function normalizeKgMobilePhone(value){
-const raw = String(value || "").trim();
-const compact = raw.replace(/[\s\-()]/g, "");
 
-if(!compact){
-return { ok:false, error:"PHONE_REQUIRED" };
-}
-
-let canonical = compact;
-
-if(/^996[0-9]{9}$/.test(compact)){
-canonical = `+${compact}`;
-}else if(/^0[0-9]{9}$/.test(compact)){
-canonical = `+996${compact.slice(1)}`;
-}
-
-if(!/^\+996[579][0-9]{8}$/.test(canonical)){
-return { ok:false, error:"INVALID_KG_MOBILE_PHONE" };
-}
-
-return { ok:true, phone:canonical };
-}
 
 function getIdentityMasterIds(identity){
 const ids = new Set();
@@ -302,14 +282,16 @@ return wallet.rows[0];
 }
 
 
-async function getSystemWalletId(db){
+async function getSystemWalletId(db, currency){
+const normalizedCurrency = requireCurrencyCode(currency, "SYSTEM_WALLET_CURRENCY_REQUIRED");
 const wallet = await db.query(`
 SELECT id
 FROM totem_test.wallets
 WHERE owner_type='system'
+AND currency=$1
 ORDER BY id ASC
 LIMIT 1
-`);
+`,[normalizedCurrency]);
 
 if(!wallet.rows.length){
 const err = new Error("SYSTEM_WALLET_NOT_FOUND");
@@ -320,7 +302,7 @@ throw err;
 return wallet.rows[0].id;
 }
 
-async function getMasterWalletRowForCharge(db, masterId){
+async function getMasterWalletRowForCharge(db, masterId, currency){
 const wallet = await db.query(`
 SELECT
 id,
@@ -330,9 +312,10 @@ currency
 FROM totem_test.wallets
 WHERE owner_type='master'
 AND owner_id=$1
+AND currency=$2
 FOR UPDATE
 LIMIT 1
-`,[masterId]);
+`,[masterId, requireCurrencyCode(currency, "WALLET_CURRENCY_REQUIRED")]);
 
 if(!wallet.rows.length){
 const err = new Error("MASTER_WALLET_NOT_FOUND");
@@ -356,6 +339,8 @@ return Number(balance.rows[0]?.balance || 0);
 }
 
 async function ensureMasterBillingSubscription(db, masterId){
+const ownerContext = await resolveOwnerMarketContext(db, { ownerType: "master", ownerId: masterId });
+const billingCurrency = requireCurrencyCode(ownerContext.currency_code, "BILLING_CURRENCY_REQUIRED");
 const existing = await db.query(`
 SELECT
 id,
@@ -382,7 +367,7 @@ WHERE owner_type='master'
 AND owner_id=$1
 FOR UPDATE
 LIMIT 1
-`,[masterId]);
+`,[masterId, billingCurrency]);
 
 if(existing.rows.length){
 return existing.rows[0];
@@ -416,7 +401,7 @@ $1,
 'active',
 30,
 1000,
-'KGS',
+$2,
 true,
 NULL,
 NULL,
@@ -514,7 +499,9 @@ await db.query("ROLLBACK");
 return res.status(400).json({ok:false,error:"SUBSCRIPTION_AMOUNT_INVALID"});
 }
 
-const masterWallet = await getMasterWalletRowForCharge(db, master.id);
+const billingCurrency = requireCurrencyCode(billing.currency, "BILLING_CURRENCY_REQUIRED");
+
+const masterWallet = await getMasterWalletRowForCharge(db, master.id, billingCurrency);
 const masterWalletId = masterWallet.id;
 const masterBalance = await getWalletBalanceById(db, masterWalletId);
 
@@ -538,7 +525,7 @@ last_charge_at:billing.last_charge_at
 });
 }
 
-const systemWalletId = await getSystemWalletId(db);
+const systemWalletId = await getSystemWalletId(db, billingCurrency);
 
 await db.query(`
 INSERT INTO totem_test.ledger_entries(
@@ -594,7 +581,7 @@ charged:true,
 owner_type:"master",
 owner_id:master.id,
 amount,
-currency:billing.currency || "KGS",
+currency:requireCurrencyCode(billing.currency, "BILLING_CURRENCY_REQUIRED"),
 reference_type:"subscription",
 reference_id:String(billing.id),
 billing_access
@@ -1919,6 +1906,7 @@ SELECT
 p.id AS payment_id,
 b.id AS booking_id,
 p.amount AS gross_amount,
+p.currency_code,
 p.provider AS payment_provider,
 p.status AS payment_status,
 p.method,
@@ -1961,6 +1949,7 @@ const payment = projection.rows[0];
 const bookingAnchor = payment.booking_created_at ? normalizeProjectionDate(payment.booking_created_at) : null;
 const paymentAnchor = payment.payment_created_at ? normalizeProjectionDate(payment.payment_created_at) : null;
 const anchor = bookingAnchor || paymentAnchor || null;
+const paymentMarketContext = await resolveBusinessMarketContext(pool, { salonId: payment.salon_id });
 let contract = null;
 
 if(anchor){
@@ -1979,7 +1968,7 @@ AND LOWER(COALESCE(c.terms_json->>'model', '')) IN ('percentage', 'hybrid')
 AND c.created_at <= $3::timestamptz
 AND (
   c.effective_from IS NULL
-  OR (c.effective_from AT TIME ZONE 'Asia/Bishkek') <= $3::timestamptz
+  OR (c.effective_from AT TIME ZONE $4) <= $3::timestamptz
 )
 AND (c.archived_at IS NULL OR c.archived_at > $3::timestamptz)
 ORDER BY COALESCE(c.effective_from, c.created_at) DESC, c.created_at DESC, c.id DESC
@@ -1987,7 +1976,8 @@ LIMIT 1
 `,[
 String(payment.salon_id),
 String(payment.master_id),
-anchor
+anchor,
+paymentMarketContext.timezone
 ]);
 
 contract = contractResult.rows[0] || null;
@@ -2098,9 +2088,9 @@ throw err;
 return raw;
 }
 
-function getBishkekMonthRange(referenceDate = new Date()){
+function getBusinessMonthRange(referenceDate = new Date(), timezone){
 const formatter = new Intl.DateTimeFormat("en-CA", {
-timeZone: "Asia/Bishkek",
+timeZone: timezone,
 year: "numeric",
 month: "2-digit",
 day: "2-digit"
@@ -2137,11 +2127,11 @@ throw err;
 return limit;
 }
 
-function buildLostProfitSummary(rows){
+function buildLostProfitSummary(rows, currency){
 const summary = {
 cancelled_count: 0,
 lost_profit_amount: 0,
-currency: "KGS",
+currency,
 missing_price_count: 0
 };
 
@@ -2156,7 +2146,7 @@ summary.missing_price_count += 1;
 return summary;
 }
 
-function buildLostProfitRow(row){
+function buildLostProfitRow(row, currency){
 const lostProfitAmount = Number(row.price_snapshot ?? 0) || 0;
 
 return {
@@ -2173,7 +2163,7 @@ local_start_at: row.local_start_at,
 canceled_at: row.canceled_at,
 status: row.status,
 lost_profit_amount: lostProfitAmount,
-currency: "KGS",
+currency,
 missing_price: row.price_snapshot === null || row.price_snapshot === undefined,
 is_test: row.is_test === true
 };
@@ -2201,6 +2191,10 @@ if(!hasMasterOwnership(req, masterRow.id)){
 return res.status(403).json({ ok:false, error:"MASTER_ACCESS_DENIED" });
 }
 
+const marketContext = await resolveOwnerMarketContext(pool, { ownerType: "master", ownerId: masterRow.id });
+const timezone = marketContext.timezone;
+const currency = requireCurrencyCode(req.query.currency || marketContext.currency_code, "LOST_PROFIT_CURRENCY_INVALID");
+
 const limit = normalizeLostProfitLimit(req.query.limit);
 
 const fromProvided = req.query.from !== undefined && req.query.from !== null && String(req.query.from).trim() !== "";
@@ -2213,22 +2207,22 @@ return res.status(400).json({ ok:false, error:"LOST_PROFIT_DATE_RANGE_INVALID" }
 }
 
 if(!from && !to){
-const monthRange = getBishkekMonthRange();
+const monthRange = getBusinessMonthRange(new Date(), timezone);
 from = monthRange.from;
 to = monthRange.to;
 }
 
-const values = [masterRow.id];
+const values = [masterRow.id, timezone, currency];
 const clauses = ["b.master_id = $1", "LOWER(COALESCE(b.status, '')) IN ('cancelled','canceled','отмена')"];
 
 if(from){
 values.push(from);
-clauses.push(`(b.start_at AT TIME ZONE 'Asia/Bishkek')::date >= $${values.length}::date`);
+clauses.push(`(b.start_at AT TIME ZONE $2)::date >= $${values.length}::date`);
 }
 
 if(to){
 values.push(to);
-clauses.push(`(b.start_at AT TIME ZONE 'Asia/Bishkek')::date <= $${values.length}::date`);
+clauses.push(`(b.start_at AT TIME ZONE $2)::date <= $${values.length}::date`);
 }
 
 const rowsResult = await pool.query(`
@@ -2241,10 +2235,11 @@ b.status,
 b.start_at,
 b.canceled_at,
 b.price_snapshot,
+b.currency_code,
 b.is_test,
-to_char(b.start_at AT TIME ZONE 'Asia/Bishkek', 'YYYY-MM') AS month_key,
+to_char(b.start_at AT TIME ZONE $2, 'YYYY-MM') AS month_key,
 'BR-' || LPAD(b.id::text, 5, '0') AS booking_code,
-to_char(b.start_at AT TIME ZONE 'Asia/Bishkek', 'YYYY-MM-DD HH24:MI:SS') AS local_start_at,
+to_char(b.start_at AT TIME ZONE $2, 'YYYY-MM-DD HH24:MI:SS') AS local_start_at,
 COALESCE(s.name, s.service_id, b.service_id::text) AS service_name,
 COALESCE(m.name, m.slug, b.master_id::text) AS master_name,
 m.slug AS master_slug
@@ -2256,8 +2251,8 @@ ORDER BY b.start_at DESC, b.created_at DESC, b.id DESC
 `, values);
 
 const allRows = rowsResult.rows || [];
-const summary = buildLostProfitSummary(allRows);
-const rows = allRows.slice(0, limit).map(buildLostProfitRow);
+const summary = buildLostProfitSummary(allRows, currency);
+const rows = allRows.slice(0, limit).map((row)=>buildLostProfitRow(row, currency));
 const monthlyMap = new Map();
 
 for(const row of allRows){
@@ -2270,7 +2265,7 @@ const existingMonth = monthlyMap.get(monthKey) || {
 month: monthKey,
 cancelled_count: 0,
 lost_profit_amount: 0,
-currency: "KGS",
+currency,
 missing_price_count: 0
 };
 
@@ -2296,7 +2291,8 @@ filters: {
 from,
 to,
 status: ["cancelled", "canceled", "отмена"],
-timezone: "Asia/Bishkek",
+timezone,
+currency,
 limit
 },
 summary,
@@ -2570,7 +2566,7 @@ const servicePk = Number(serviceLink.rows[0].service_pk);
 const priceSnapshot = Number(serviceLink.rows[0].price);
 
 const safeName = String(client_name || "").trim() || "client";
-const normalizedPhone = normalizeKgMobilePhone(phone);
+const normalizedPhone = await normalizePhoneForMarket(db, phone, { salonId });
 
 if(!normalizedPhone.ok){
 await db.query("ROLLBACK");
@@ -2779,7 +2775,7 @@ return res.json({
 ok:true,
 wallet_id:wallet?.id || null,
 balance:Number(wallet?.balance || 0),
-currency:wallet?.currency || "KGS",
+currency:requireCurrencyCode(wallet?.currency, "WALLET_CURRENCY_REQUIRED"),
 billing_access
 });
 

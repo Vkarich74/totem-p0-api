@@ -74,23 +74,23 @@ const WITHDRAW_REQUEST_LOCKED_TEMPLATE = buildTemplate(
 const PAYOUT_EXECUTION_TEMPLATES = {
   created: buildTemplate(
     "Выплата создана",
-    (context = {}) => `Выплата ${context.amount} KGS создана.`,
+    (context = {}) => `Выплата ${context.amount} ${context.currency} создана.`,
     "money"
   ),
   submitted: buildTemplate(
     "Выплата отправлена в обработку",
-    (context = {}) => `Выплата ${context.amount} KGS отправлена в обработку.`,
+    (context = {}) => `Выплата ${context.amount} ${context.currency} отправлена в обработку.`,
     "money"
   ),
   completed: buildTemplate(
     "Выплата завершена",
-    (context = {}) => `Выплата ${context.amount} KGS завершена.`,
+    (context = {}) => `Выплата ${context.amount} ${context.currency} завершена.`,
     "money"
   ),
   failed: buildTemplate(
     "Выплата не прошла",
     (context = {}) =>
-      `Выплата ${context.amount} KGS не прошла. Проверьте причину в финансовом разделе.`,
+      `Выплата ${context.amount} ${context.currency} не прошла. Проверьте причину в финансовом разделе.`,
     "money"
   ),
 };

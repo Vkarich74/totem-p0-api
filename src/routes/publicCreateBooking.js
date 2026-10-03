@@ -34,17 +34,9 @@ function isIanaTimeZone(value) {
   }
 }
 
-function getSalonBookingTimeZone({ salonSlug, salonId, salonTimeZone }) {
-  const explicitZone = String(salonTimeZone || "").trim();
-  if (isIanaTimeZone(explicitZone)) {
-    return explicitZone;
-  }
-
-  if (String(salonSlug || "").trim() === "master-prime" || Number(salonId) === 32) {
-    return "Asia/Bishkek";
-  }
-
-  return "UTC";
+function getSalonBookingTimeZone(marketTimeZone) {
+  const zone = String(marketTimeZone || "").trim();
+  return isIanaTimeZone(zone) ? zone : null;
 }
 
 function formatZoneParts(date, timeZone) {
@@ -138,12 +130,9 @@ function extractLocalDateTimeFromStartAt(startAt) {
   };
 }
 
-function normalizePublicStartAt(input, { salonSlug, salonId, salonTimeZone }) {
-  const targetTimeZone = getSalonBookingTimeZone({
-    salonSlug,
-    salonId,
-    salonTimeZone
-  });
+function normalizePublicStartAt(input, { marketTimeZone }) {
+  const targetTimeZone = getSalonBookingTimeZone(marketTimeZone);
+  if (!targetTimeZone) return null;
 
   const providedDate = String(input?.date || input?.booking_date || "").trim();
   const providedTime = String(input?.time || input?.booking_time || "").trim();
@@ -269,7 +258,6 @@ export async function publicCreateBooking(req, res) {
 
     const salonId = salonRes.rows[0].id;
     const salonSlug = salonRes.rows[0].slug;
-    const salonTimeZone = salonRes.rows[0].timezone || salonRes.rows[0].time_zone || salonRes.rows[0].tz || null;
 
     const serviceLinkRes = await client.query(
       `SELECT
@@ -332,9 +320,7 @@ export async function publicCreateBooking(req, res) {
         time
       },
       {
-        salonSlug,
-        salonId,
-        salonTimeZone
+        marketTimeZone: marketContext.timezone
       }
     );
 

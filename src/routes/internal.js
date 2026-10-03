@@ -4,6 +4,7 @@ import { google } from "googleapis";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import { pool } from "../db.js";
+import { normalizePhoneForMarket, requireCurrencyCode } from "../market-context/BusinessContext.js";
 // import nodemailer from "nodemailer";  // quarantined sender
 import { xpayCreateQR, xpayCheckStatus } from "../payments/xpay.js";
 import { rateLimit } from "../middleware/rateLimit.js";
@@ -277,31 +278,7 @@ function normalizeAuthIdentifier(value){
 return String(value || "").trim().toLowerCase();
 }
 
-function normalizePhone(value){
-const raw = String(value || "").trim();
-if(!raw){
-return null;
-}
 
-const digits = raw.replace(/\D/g, "");
-if(digits.startsWith("996") && digits.length === 12){
-const local = digits.slice(3);
-if(local[0] === "0"){
-return null;
-}
-return `+996${local}`;
-}
-
-if(raw.startsWith("+996")){
-const local = raw.slice(4).replace(/\D/g, "");
-if(local.length !== 9 || local[0] === "0"){
-return null;
-}
-return `+996${local}`;
-}
-
-return null;
-}
 
 function normalizeEmail(value){
 const email = normalizeAuthIdentifier(value);
@@ -311,8 +288,12 @@ return null;
 return email;
 }
 
-function resolveAuthTarget(body = {}){
-const phone = normalizePhone(body?.phone);
+async function resolveAuthTarget(db, body = {}){
+let phone = null;
+if(body?.phone){
+const result = await normalizePhoneForMarket(db, body.phone);
+phone = result?.ok ? result.phone : null;
+}
 if(phone){
 return {
 channel: "whatsapp",
@@ -1038,7 +1019,7 @@ r.post("/auth/login", async (req,res)=>{
 const db = await pool.connect();
 
 try{
-const authTarget = resolveAuthTarget(req.body || {});
+const authTarget = await resolveAuthTarget(db, req.body || {});
 const email = authTarget?.lookup === "email" ? authTarget.value : null;
 const phone = authTarget?.lookup === "phone" ? authTarget.value : null;
 const password = String(req.body?.password || "");
@@ -1197,68 +1178,47 @@ const reportsRouter = buildReportsRouter(pool, internalReadRateLimit);
 
 r.use(reportsRouter);
 
-async function getOrCreateSystemWallet(db){
-const systemWallet = await db.query(`
-SELECT wallet_id
-FROM totem_test.system_wallets
-FOR UPDATE
-LIMIT 1
-`);
-
-if(systemWallet.rows.length){
-return systemWallet.rows[0].wallet_id;
-}
-
+async function getOrCreateSystemWallet(db, currency){
+const normalizedCurrency = requireCurrencyCode(currency, "SYSTEM_WALLET_CURRENCY_REQUIRED");
 const existingWallet = await db.query(`
 SELECT id
 FROM totem_test.wallets
 WHERE owner_type='system'
-AND owner_id=0
+AND currency=$1
+ORDER BY created_at ASC, id ASC
 FOR UPDATE
 LIMIT 1
-`);
+`,[normalizedCurrency]);
 
-let walletId = existingWallet.rows[0]?.id || null;
+if(existingWallet.rows.length){
+return existingWallet.rows[0].id;
+}
 
-if(!walletId){
 const createdWallet = await db.query(`
-INSERT INTO totem_test.wallets(
-owner_type,
-owner_id,
-currency
-)
-VALUES('system',0,'KGS')
+INSERT INTO totem_test.wallets(owner_type, owner_id, currency)
+VALUES('system',0,$1)
+ON CONFLICT (owner_type, owner_id, currency)
+DO UPDATE SET currency=EXCLUDED.currency
 RETURNING id
-`);
+`,[normalizedCurrency]);
 
-walletId = createdWallet.rows[0].id;
+return createdWallet.rows[0].id;
 }
 
-await db.query(`
-INSERT INTO totem_test.system_wallets(wallet_id)
-SELECT $1
-WHERE NOT EXISTS (
-SELECT 1
-FROM totem_test.system_wallets
-WHERE wallet_id=$1
-)
-`,[walletId]);
-
-return walletId;
+async function getSystemWalletId(db, currency){
+return getOrCreateSystemWallet(db, currency);
 }
 
-async function getSystemWalletId(db){
-return getOrCreateSystemWallet(db);
-}
-
-async function getSalonWalletId(db, salonId){
+async function getSalonWalletId(db, salonId, currency){
+const normalizedCurrency = requireCurrencyCode(currency, "WALLET_CURRENCY_REQUIRED");
 const wallet = await db.query(`
 SELECT w.id
 FROM totem_test.wallets w
 WHERE w.owner_type='salon'
 AND w.owner_id=$1
+AND w.currency=$2
 LIMIT 1
-`,[salonId]);
+`,[salonId, normalizedCurrency]);
 
 if(!wallet.rows.length){
 throw new Error("SALON_WALLET_NOT_FOUND");
@@ -1266,6 +1226,7 @@ throw new Error("SALON_WALLET_NOT_FOUND");
 
 return wallet.rows[0].id;
 }
+
 
 async function setBookingConfirmedIfNeeded(db, bookingId){
 const result = await db.query(`
@@ -1344,14 +1305,16 @@ r.use("/mobile", mobileRouter);
 const templatesRouter = buildTemplatesRouter(pool, internalReadRateLimit);
 r.use(templatesRouter);
 
-async function getBillingWalletId(db, ownerType, ownerId){
+async function getBillingWalletId(db, ownerType, ownerId, currency){
+const normalizedCurrency = requireCurrencyCode(currency, "BILLING_CURRENCY_REQUIRED");
 const wallet = await db.query(`
 SELECT id
 FROM totem_test.wallets
 WHERE owner_type=$1
 AND owner_id=$2
+AND currency=$3
 LIMIT 1
-`,[ownerType, ownerId]);
+`,[ownerType, ownerId, normalizedCurrency]);
 
 if(!wallet.rows.length){
 return null;
@@ -1421,7 +1384,6 @@ return due.rows;
 
 async function runBillingAutoCharge(db){
 const due = await getDueBillingSubscriptions(db);
-const systemWalletId = await getOrCreateSystemWallet(db);
 
 let processed = 0;
 let charged = 0;
@@ -1437,6 +1399,7 @@ processed++;
 const ownerType = String(billing.owner_type || "");
 const ownerId = Number(billing.owner_id);
 const amount = Number(billing.amount || 0);
+const currency = requireCurrencyCode(billing.currency, "BILLING_CURRENCY_REQUIRED");
 
 if(!Number.isFinite(amount) || amount <= 0){
 skipped_invalid_amount++;
@@ -1462,7 +1425,7 @@ error:"SUBSCRIPTION_NOT_DUE"
 continue;
 }
 
-const walletId = await getBillingWalletId(db, ownerType, ownerId);
+const walletId = await getBillingWalletId(db, ownerType, ownerId, currency);
 
 if(!walletId){
 skipped_no_wallet++;
@@ -1532,6 +1495,8 @@ reason:"ALREADY_CHARGED"
 continue;
 }
 
+const systemWalletId = await getOrCreateSystemWallet(db, currency);
+
 await db.query(`
 INSERT INTO totem_test.ledger_entries(
 wallet_id,
@@ -1590,7 +1555,8 @@ owner_type:ownerType,
 owner_id:ownerId,
 ok:true,
 charged:true,
-amount
+amount,
+currency
 });
 }
 
@@ -1827,7 +1793,7 @@ r.post("/auth/sessions/:sessionId/revoke", async (req,res)=>{
 r.post("/auth/start", async (req,res)=>{
   const db = await pool.connect();
   try{
-    const authTarget = resolveAuthTarget(req.body || {});
+    const authTarget = await resolveAuthTarget(db, req.body || {});
     const requestedPurpose = String(req.body?.purpose || "").trim().toLowerCase();
     const purpose =
       requestedPurpose === "password_reset"
@@ -1973,7 +1939,7 @@ r.post("/auth/start", async (req,res)=>{
 r.post("/auth/verify", async (req,res)=>{
   const db = await pool.connect();
   try{
-    const authTarget = resolveAuthTarget(req.body || {});
+    const authTarget = await resolveAuthTarget(db, req.body || {});
     const code = String(req.body?.code || "").trim();
     const requestedPurpose = String(req.body?.purpose || "").trim().toLowerCase();
     const requestedRole = normalizeRequestedAuthRole(req.body?.role || req.body?.owner_type);
@@ -2361,7 +2327,7 @@ r.post("/auth/verify", async (req,res)=>{
 r.post("/auth/password/reset/start", async (req,res)=>{
   const db = await pool.connect();
   try{
-    const authTarget = resolveAuthTarget(req.body || {});
+    const authTarget = await resolveAuthTarget(db, req.body || {});
     const requestedChannel = String(req.body?.channel || "").trim().toLowerCase();
     const channel = requestedChannel === "email" ? "email" : authTarget?.channel || "whatsapp";
     const requestedRole = resolveRequestedOwnerRole(req.body || {});
@@ -2447,7 +2413,7 @@ r.post("/auth/password/reset/start", async (req,res)=>{
 r.post("/auth/password/reset/finish", async (req,res)=>{
   const db = await pool.connect();
   try{
-    const authTarget = resolveAuthTarget(req.body || {});
+    const authTarget = await resolveAuthTarget(db, req.body || {});
     const code = String(req.body?.code || "").trim();
     const password = String(req.body?.password || "");
     const requestedRole = resolveRequestedOwnerRole(req.body || {});

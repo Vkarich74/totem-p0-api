@@ -1,4 +1,5 @@
 import { computePaymentShareBreakdown } from "../../money-core/paymentProjectionMath.js";
+import { resolveBusinessTimezone } from "../../market-context/BusinessContext.js";
 
 function roundProjectionMoney(value){
   const numeric = Number(value);
@@ -84,7 +85,10 @@ function buildPaymentProjectionResponse({
   const paymentCreatedAt = normalizeProjectionDate(payment.payment_created_at);
   const contractBasis = bookingCreatedAt ? "booking_created_at" : (paymentCreatedAt ? "payment_created_at" : null);
   const shares = computePaymentShareBreakdown({
-    payment,
+    payment: {
+      ...payment,
+      currency: payment.currency_code || payment.booking_currency_code || payment.currency
+    },
     contract
   });
 
@@ -157,6 +161,7 @@ async function resolvePaymentProjectionContract(pool, payment){
     return null;
   }
 
+  const timezone = await resolveBusinessTimezone(pool, { salonId: payment.salon_id });
   const contractResult = await pool.query(`
 SELECT
 c.id,
@@ -172,7 +177,7 @@ AND LOWER(COALESCE(c.terms_json->>'model', '')) IN ('percentage', 'hybrid')
 AND c.created_at <= $3::timestamptz
 AND (
   c.effective_from IS NULL
-  OR (c.effective_from AT TIME ZONE 'Asia/Bishkek') <= $3::timestamptz
+  OR (c.effective_from AT TIME ZONE $4) <= $3::timestamptz
 )
 AND (c.archived_at IS NULL OR c.archived_at > $3::timestamptz)
 ORDER BY COALESCE(c.effective_from, c.created_at) DESC, c.created_at DESC, c.id DESC
@@ -180,7 +185,8 @@ LIMIT 1
 `,[
     String(payment.salon_id),
     String(payment.master_id),
-    anchor
+    anchor,
+    timezone
   ]);
 
   return contractResult.rows[0] || null;
@@ -223,6 +229,8 @@ SELECT
 p.id AS payment_id,
 b.id AS booking_id,
 p.amount AS gross_amount,
+p.currency_code,
+b.currency_code AS booking_currency_code,
 p.provider AS payment_provider,
 p.status AS payment_status,
 p.method,

@@ -7,14 +7,15 @@ export default function buildOneTimeChargeRouter({
 }) {
   const r = Router();
 
-  async function getOwnerWalletId(db, ownerType, ownerId){
+  async function getOwnerWalletId(db, ownerType, ownerId, currency){
     const wallet = await db.query(`
 SELECT id
 FROM totem_test.wallets
 WHERE owner_type=$1
 AND owner_id=$2
+AND currency=$3
 LIMIT 1
-`,[ownerType, ownerId]);
+`,[ownerType, ownerId, currency]);
 
     if(!wallet.rows.length){
       throw new Error(ownerType === "salon" ? "SALON_WALLET_NOT_FOUND" : "MASTER_WALLET_NOT_FOUND");
@@ -56,7 +57,7 @@ LIMIT 1
       const ownerType = String(req.body?.owner_type || "").trim();
       const ownerId = Number(req.body?.owner_id);
       const amount = Number(req.body?.amount);
-      const currency = String(req.body?.currency || "").trim();
+      const currency = String(req.body?.currency || "").trim().toUpperCase();
       const reason = String(req.body?.reason || "").trim();
       const idempotencyKey = String(req.body?.idempotency_key || "").trim();
 
@@ -75,7 +76,7 @@ LIMIT 1
         return res.status(400).json({ ok:false, error:"INVALID_AMOUNT" });
       }
 
-      if(currency !== "KGS"){
+      if(!/^[A-Z]{3}$/.test(currency)){
         await db.query("ROLLBACK");
         return res.status(400).json({ ok:false, error:"INVALID_CURRENCY" });
       }
@@ -92,8 +93,8 @@ LIMIT 1
 
       await assertBillingNotBlocked(db, ownerType, ownerId);
 
-      const ownerWalletId = await getOwnerWalletId(db, ownerType, ownerId);
-      const systemWalletId = await getOrCreateSystemWallet(db);
+      const ownerWalletId = await getOwnerWalletId(db, ownerType, ownerId, currency);
+      const systemWalletId = await getOrCreateSystemWallet(db, currency);
 
       const existing = await db.query(`
 SELECT

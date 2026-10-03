@@ -1,5 +1,7 @@
 'use strict';
 
+const XPAY_CURRENCY = 'KGS';
+
 const XPAY_SUCCESS_STATUSES = new Set([
   'success',
   'succeeded',
@@ -112,7 +114,7 @@ function normalizeXpayEvent(input = {}) {
     payment_id: input.payment_id ?? null,
     booking_id: input.booking_id ?? null,
     amount: Number.isFinite(amount) && amount >= 0 ? amount : null,
-    currency: 'KGS',
+    currency: XPAY_CURRENCY,
     status_raw: normalizeText(rawStatus),
     status_normalized: statusNormalized,
     payload_sanitized: deepSanitizePayload(input.payload ?? input.body ?? input.raw_payload ?? input),
@@ -126,6 +128,7 @@ function normalizeXpayEvent(input = {}) {
 }
 
 export {
+  XPAY_CURRENCY,
   normalizeXpayStatus,
   normalizeXpayEvent,
 };

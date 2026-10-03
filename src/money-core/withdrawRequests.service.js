@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import { assertMoneyCoreWriteAllowed } from './config.js';
 import { createNotification } from '../services/notifications/notificationService.js';
 import { buildWithdrawRequestLockedNotificationTemplate } from '../services/notifications/notificationTemplates.js';
+import { requireCurrencyCode, resolveOwnerCurrencyCode } from '../market-context/BusinessContext.js';
 
 const ALLOWED_OWNER_TYPES = new Set(['salon', 'master', 'platform', 'system']);
 const ALLOWED_CREATION_MODES = new Set(['manual', 'scheduled', 'admin', 'system']);
@@ -106,8 +107,8 @@ async function insertMoneyAuditEvent(client, payload = {}) {
       $6,
       $7,
       $8,
-      'KGS',
-      $9::jsonb
+      $9,
+      $10::jsonb
     )
     RETURNING *
     `,
@@ -120,6 +121,7 @@ async function insertMoneyAuditEvent(client, payload = {}) {
       normalizeText(payload.source_type),
       normalizeInt(payload.source_id),
       normalizeNumber(payload.amount),
+      requireCurrencyCode(payload.currency, 'MONEY_AUDIT_CURRENCY_REQUIRED'),
       JSON.stringify(sanitizeJson(payload.data || {})),
     ]
   );
@@ -220,7 +222,7 @@ async function createWithdrawRequestAdminNotifications(client, request = {}, own
 
     const ownerLabel = buildWithdrawRequestOwnerLabel(owner);
     const amount = normalizeNumber(request.amount);
-    const currency = normalizeText(request.currency) || 'KGS';
+    const currency = requireCurrencyCode(request.currency, 'WITHDRAW_REQUEST_CURRENCY_INVALID');
     const status = normalizeText(request.status) || 'pending_validation';
     const createdNotifications = [];
 
@@ -484,9 +486,6 @@ function maskOwnerWithdrawPhone(value) {
   }
 
   const last4 = digits.slice(-4);
-  if (digits.startsWith('996')) {
-    return `+996•••${last4}`;
-  }
 
   if (text.startsWith('+')) {
     return `+•••${last4}`;
@@ -619,7 +618,7 @@ async function buildAdminWithdrawRequestsSummary(pool) {
   const summaryResult = await pool.query(
     `
     SELECT
-      COALESCE(MIN(currency), 'KGS') AS currency,
+      currency,
       COUNT(*)::bigint AS total_count,
       COALESCE(SUM(amount), 0)::numeric AS total_amount,
       COUNT(*) FILTER (WHERE status IN ('created', 'pending_validation'))::bigint AS new_count,
@@ -638,53 +637,61 @@ async function buildAdminWithdrawRequestsSummary(pool) {
           OR COALESCE(decision_reasons::text, '') <> ''
       )::bigint AS problem_count
     FROM public.withdraw_requests
+    GROUP BY currency
+    ORDER BY currency
     `,
   );
 
   const byStatusResult = await pool.query(
     `
-    SELECT
-      status,
-      COUNT(*)::bigint AS count,
-      COALESCE(SUM(amount), 0)::numeric AS total_amount
+    SELECT currency, status, COUNT(*)::bigint AS count,
+           COALESCE(SUM(amount), 0)::numeric AS total_amount
     FROM public.withdraw_requests
-    GROUP BY status
-    ORDER BY CASE status
-      WHEN 'created' THEN 0
-      WHEN 'pending_validation' THEN 1
-      WHEN 'requires_review' THEN 2
-      WHEN 'locked' THEN 3
-      WHEN 'queued_for_payout' THEN 4
-      WHEN 'bank_processing' THEN 5
-      WHEN 'completed' THEN 6
-      WHEN 'canceled' THEN 7
-      WHEN 'rejected' THEN 8
-      WHEN 'failed' THEN 9
-      ELSE 99
-    END,
-    status ASC
+    GROUP BY currency, status
+    ORDER BY currency, CASE status
+      WHEN 'created' THEN 0 WHEN 'pending_validation' THEN 1
+      WHEN 'requires_review' THEN 2 WHEN 'locked' THEN 3
+      WHEN 'queued_for_payout' THEN 4 WHEN 'bank_processing' THEN 5
+      WHEN 'completed' THEN 6 WHEN 'canceled' THEN 7
+      WHEN 'rejected' THEN 8 WHEN 'failed' THEN 9 ELSE 99 END, status ASC
     `,
   );
 
-  const summaryRow = summaryResult.rows[0] || {};
   const normalizeCountValue = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
+  const byCurrency = (summaryResult.rows || []).map((row) => ({
+    currency: requireCurrencyCode(row.currency, 'WITHDRAW_REQUEST_CURRENCY_INVALID'),
+    total_count: normalizeCountValue(row.total_count),
+    total_amount: normalizeNumber(row.total_amount) || 0,
+    new_count: normalizeCountValue(row.new_count),
+    review_count: normalizeCountValue(row.review_count),
+    processing_count: normalizeCountValue(row.processing_count),
+    completed_count: normalizeCountValue(row.completed_count),
+    rejected_count: normalizeCountValue(row.rejected_count),
+    failed_count: normalizeCountValue(row.failed_count),
+    large_amount_count: normalizeCountValue(row.large_amount_count),
+    problem_count: normalizeCountValue(row.problem_count),
+  }));
+
+  const zeroSummary = {
+    total_count: 0, total_amount: 0, currency: null,
+    new_count: 0, review_count: 0, processing_count: 0, completed_count: 0,
+    rejected_count: 0, failed_count: 0, large_amount_count: 0, problem_count: 0,
+  };
+  const summary = byCurrency.length === 1
+    ? { ...byCurrency[0] }
+    : {
+        ...zeroSummary,
+        total_count: byCurrency.reduce((sum, row) => sum + row.total_count, 0),
+        total_amount: null,
+        mixed_currency: byCurrency.length > 1,
+      };
 
   return {
-    summary: {
-      total_count: normalizeCountValue(summaryRow.total_count),
-      total_amount: normalizeNumber(summaryRow.total_amount) || 0,
-      currency: summaryRow.currency || 'KGS',
-      new_count: normalizeCountValue(summaryRow.new_count),
-      review_count: normalizeCountValue(summaryRow.review_count),
-      processing_count: normalizeCountValue(summaryRow.processing_count),
-      completed_count: normalizeCountValue(summaryRow.completed_count),
-      rejected_count: normalizeCountValue(summaryRow.rejected_count),
-      failed_count: normalizeCountValue(summaryRow.failed_count),
-      large_amount_count: normalizeCountValue(summaryRow.large_amount_count),
-      problem_count: normalizeCountValue(summaryRow.problem_count),
-    },
+    summary,
+    by_currency: byCurrency,
     by_status: (byStatusResult.rows || []).map((row) => ({
       ...row,
+      currency: requireCurrencyCode(row.currency, 'WITHDRAW_REQUEST_CURRENCY_INVALID'),
       count: normalizeCountValue(row.count),
       total_amount: normalizeNumber(row.total_amount) || 0,
     })),
@@ -798,10 +805,14 @@ async function getAdminWithdrawRequestDetail(pool, id) {
     FROM public.money_owner_balances
     WHERE owner_type = $1
       AND owner_id = $2
-      AND currency = COALESCE(NULLIF($3, ''), 'KGS')
+      AND currency = $3
     LIMIT 1
     `,
-    [request.owner_type, request.owner_id, request.currency || 'KGS'],
+    [
+      request.owner_type,
+      request.owner_id,
+      requireCurrencyCode(request.currency, 'WITHDRAW_REQUEST_CURRENCY_INVALID'),
+    ],
   );
   const balanceRow = balanceResult.rows[0] || {
     provider_hold: '0',
@@ -955,6 +966,11 @@ async function listWithdrawRequests(pool, ownerType, ownerId, filters = {}) {
     values.push(normalizeInt(filters.destination_id));
   }
 
+  if (filters.currency) {
+    where.push(`currency = $${index++}`);
+    values.push(requireCurrencyCode(filters.currency, 'WITHDRAW_REQUEST_CURRENCY_INVALID'));
+  }
+
   const { limit, offset } = safePagination(filters);
   values.push(limit);
   const limitIndex = index++;
@@ -1000,17 +1016,14 @@ async function createWithdrawRequest(pool, ownerType, ownerId, input = {}, actor
 
   const owner = validateOwner(ownerType, ownerId);
   const amount = normalizeNumber(input.amount);
-  const currency = normalizeText(input.currency) || 'KGS';
+  const currency = await resolveOwnerCurrencyCode(pool, {
+    ownerType: owner.owner_type,
+    ownerId: owner.owner_id,
+    requestedCurrency: input.currency,
+  });
   const creationMode = normalizeText(input.creation_mode) || 'manual';
   const idempotencyKey = normalizeText(input.idempotency_key);
   const destinationId = normalizeInt(input.destination_id);
-
-  if (currency !== 'KGS') {
-    const error = new Error('Invalid currency');
-    error.code = 'WITHDRAW_REQUEST_CURRENCY_INVALID';
-    error.statusCode = 400;
-    throw error;
-  }
 
   if (!amount || amount <= 0) {
     const error = new Error('amount must be greater than 0');
@@ -1085,10 +1098,10 @@ async function createWithdrawRequest(pool, ownerType, ownerId, input = {}, actor
       FROM public.money_owner_balances
       WHERE owner_type = $1
         AND owner_id = $2
-        AND currency = 'KGS'
+        AND currency = $3
       LIMIT 1
       `,
-      [owner.owner_type, owner.owner_id]
+      [owner.owner_type, owner.owner_id, currency]
     );
 
     const availableSnapshot = availableBalanceResult.rows[0] ? Number(availableBalanceResult.rows[0].available) : 0;
@@ -1137,22 +1150,22 @@ async function createWithdrawRequest(pool, ownerType, ownerId, input = {}, actor
         $1,
         $2,
         $3,
-        'KGS',
-        'pending_validation',
         $4,
+        'pending_validation',
+        $5,
         'auto_approve',
         'green',
         '[]'::jsonb,
-        $5,
         $6,
+        $7,
         0,
         NULL,
         NULL,
         NULL,
-        $7,
-        NULL,
         $8,
+        NULL,
         $9,
+        $10,
         now(),
         now(),
         NULL,
@@ -1169,6 +1182,7 @@ async function createWithdrawRequest(pool, ownerType, ownerId, input = {}, actor
         owner.owner_type,
         owner.owner_id,
         amount,
+        currency,
         creationMode,
         resolvedDestinationId,
         availableSnapshot,
@@ -1225,14 +1239,14 @@ async function createWithdrawRequest(pool, ownerType, ownerId, input = {}, actor
           $4,
           $5,
           $6,
-          'KGS',
-          'withdraw_request',
           $7,
+          'withdraw_request',
           $8,
           $9,
           $10,
           $11,
-          $12::jsonb,
+          $12,
+          $13::jsonb,
           now()
         )
         RETURNING *
@@ -1244,6 +1258,7 @@ async function createWithdrawRequest(pool, ownerType, ownerId, input = {}, actor
           entry.money_zone,
           entry.direction,
           entry.amount,
+          currency,
           request.id,
           entry.money_zone === 'available' ? 'withdraw lock available' : 'withdraw lock locked',
           null,
@@ -1262,10 +1277,10 @@ async function createWithdrawRequest(pool, ownerType, ownerId, input = {}, actor
       FROM public.money_ledger_entries
       WHERE owner_type = $1
         AND owner_id = $2
-        AND currency = 'KGS'
+        AND currency = $3
       ORDER BY id ASC
       `,
-      [owner.owner_type, owner.owner_id]
+      [owner.owner_type, owner.owner_id, currency]
     );
 
     const balance = buildBalanceFromLedgerRows(ledgerRowsResult.rows);
@@ -1296,7 +1311,7 @@ async function createWithdrawRequest(pool, ownerType, ownerId, input = {}, actor
         requires_review,
         updated_at
       ) VALUES (
-        $1, $2, 'KGS', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now()
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now()
       )
       ON CONFLICT (owner_type, owner_id, currency)
       DO UPDATE SET
@@ -1316,6 +1331,7 @@ async function createWithdrawRequest(pool, ownerType, ownerId, input = {}, actor
       [
         owner.owner_type,
         owner.owner_id,
+        currency,
         balance.provider_hold,
         balance.pending_settlement,
         balance.available,
@@ -1357,6 +1373,7 @@ async function createWithdrawRequest(pool, ownerType, ownerId, input = {}, actor
       source_type: 'withdraw_request',
       source_id: (updatedRequestResult.rows[0] || request).id,
       amount,
+      currency,
       data: {
         request: updatedRequestResult.rows[0] || request,
         available_snapshot: availableSnapshot,

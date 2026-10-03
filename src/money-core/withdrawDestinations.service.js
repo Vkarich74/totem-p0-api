@@ -1,6 +1,7 @@
 'use strict';
 
 import { assertMoneyCoreWriteAllowed } from './config.js';
+import { normalizePhoneForOwner } from '../market-context/BusinessContext.js';
 
 const ALLOWED_OWNER_TYPES = new Set(['salon', 'master', 'platform', 'system']);
 const ALLOWED_METHODS = new Set(['wallet', 'card', 'bank_account', 'manual_other']);
@@ -104,30 +105,6 @@ function sanitizeJson(value) {
   }
 
   return value;
-}
-
-function normalizeKgPhone(phone) {
-  const raw = String(phone ?? '').trim().replace(/[\s()-]/g, '');
-  if (!raw) {
-    return null;
-  }
-
-  if (/^\+996\d{9}$/.test(raw)) {
-    return raw;
-  }
-
-  if (/^996\d{9}$/.test(raw)) {
-    return `+${raw}`;
-  }
-
-  if (/^0\d{9}$/.test(raw)) {
-    return `+996${raw.slice(1)}`;
-  }
-
-  const error = new Error('Invalid KG phone');
-  error.code = 'INVALID_KG_PHONE';
-  error.statusCode = 400;
-  throw error;
 }
 
 function normalizeOwner(ownerType, ownerId) {
@@ -310,9 +287,6 @@ function validateDestinationInput(input = {}) {
       throw error;
     }
 
-    normalized.phone = normalizeKgPhone(normalized.phone);
-  } else if (normalized.phone) {
-    normalized.phone = normalizeKgPhone(normalized.phone);
   }
 
   return normalized;
@@ -326,6 +300,12 @@ async function createWithdrawDestination(pool, ownerType, ownerId, input = {}, a
     owner_type: owner.owner_type,
     owner_id: owner.owner_id,
   });
+  if (normalized.phone) {
+    normalized.phone = await normalizePhoneForOwner(pool, normalized.phone, {
+      ownerType: owner.owner_type,
+      ownerId: owner.owner_id,
+    });
+  }
 
   const result = await pool.query(
     `
@@ -425,7 +405,10 @@ async function updateWithdrawDestination(pool, id, input = {}, actor = {}) {
       throw error;
     }
 
-    next.phone = normalizeKgPhone(next.phone);
+    next.phone = await normalizePhoneForOwner(pool, next.phone, {
+      ownerType: current.owner_type,
+      ownerId: current.owner_id,
+    });
   }
 
   const result = await pool.query(

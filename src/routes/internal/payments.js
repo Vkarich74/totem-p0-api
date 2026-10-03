@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { requireCurrencyCode } from "../../market-context/BusinessContext.js";
 import { createNotification } from "../../services/notifications/notificationService.js";
 import { buildCashConfirmNotificationTemplate } from "../../services/notifications/notificationTemplates.js";
 import {
@@ -50,6 +51,7 @@ function normalizePaymentRow(row) {
     amount: row.amount,
     status: row.status,
     provider: row.provider,
+    currency_code: row.currency_code || null,
     created_at: row.created_at
   };
 }
@@ -73,7 +75,7 @@ function normalizeBookingNotificationContext(row) {
 async function findActivePaymentForBooking(db, bookingId) {
   return db.query(
     `
-SELECT id, booking_id, amount, status, provider, created_at
+SELECT id, booking_id, amount, currency_code, status, provider, created_at
 FROM payments
 WHERE booking_id=$1
 AND is_active=true
@@ -94,7 +96,8 @@ SELECT
  b.salon_id,
  b.master_id,
  b.client_id,
- b.status
+ b.status,
+ b.currency_code
 FROM bookings b
 WHERE b.id=$1
 ${lockClause}
@@ -116,7 +119,8 @@ SELECT
  b.master_id,
  m.slug AS master_slug,
  b.client_id,
- b.status
+ b.status,
+ b.currency_code
 FROM bookings b
 LEFT JOIN salons s ON s.id = b.salon_id
 LEFT JOIN masters m ON m.id = b.master_id
@@ -481,6 +485,7 @@ booking_id,
 provider,
 status,
 amount,
+currency_code,
 collector_owner_type,
 collector_owner_id,
 confirmed_by_user_id,
@@ -522,8 +527,9 @@ created_at
       };
     }
 
-    const salonWallet = await getSalonWalletId(db, bookingRow.salon_id);
-    const systemWalletId = await getSystemWalletId(db);
+    const currency = requireCurrencyCode(confirmedPayment.currency_code || bookingRow.currency_code, "PAYMENT_CURRENCY_REQUIRED");
+    const salonWallet = await getSalonWalletId(db, bookingRow.salon_id, currency);
+    const systemWalletId = await getSystemWalletId(db, currency);
 
     /* force exact payment ledger state */
     await db.query(
@@ -679,7 +685,8 @@ VALUES
 SELECT
 b.id,
 b.salon_id,
-b.status
+b.status,
+b.currency_code
 FROM bookings b
 WHERE b.id=$1
 FOR UPDATE
@@ -699,6 +706,8 @@ LIMIT 1
         await db.query("ROLLBACK");
         return res.status(400).json({ ok: false, error: "BOOKING_NOT_READY" });
       }
+
+      const currency = requireCurrencyCode(bookingRow.currency_code, "PAYMENT_CURRENCY_REQUIRED");
 
       const activePayment = await findActivePaymentForBooking(db, booking_id);
 
@@ -731,13 +740,14 @@ INSERT INTO payments(
 booking_id,
 provider,
 amount,
+currency_code,
 status,
 is_active
 )
-VALUES($1,'direct',$2,'pending',true)
-RETURNING id,booking_id,amount,status,provider,created_at
+VALUES($1,'direct',$2,$3,'pending',true)
+RETURNING id,booking_id,amount,currency_code,status,provider,created_at
 `,
-        [booking_id, amount]
+        [booking_id, amount, currency]
       );
 
       await db.query("COMMIT");
@@ -1215,7 +1225,8 @@ LIMIT 1
 SELECT
 b.id,
 b.salon_id,
-b.status
+b.status,
+b.currency_code
 FROM bookings b
 WHERE b.id=$1
 FOR UPDATE
@@ -1230,6 +1241,7 @@ LIMIT 1
       }
 
       const salonId = bookingCheck.rows[0].salon_id;
+      const currency = requireCurrencyCode(bookingCheck.rows[0].currency_code, "PAYMENT_CURRENCY_REQUIRED");
 
       const activePayment = await db.query(
         `
@@ -1259,18 +1271,19 @@ INSERT INTO payments(
 booking_id,
 provider,
 amount,
+currency_code,
 status,
 is_active
 )
-VALUES($1,'direct',$2,'confirmed',true)
-RETURNING id,booking_id,amount,status,provider,created_at
+VALUES($1,'direct',$2,$3,'confirmed',true)
+RETURNING id,booking_id,amount,currency_code,status,provider,created_at
 `,
-        [booking_id, amount]
+        [booking_id, amount, currency]
       );
 
       const paymentId = payment.rows[0].id;
-      const salonWallet = await getSalonWalletId(db, salonId);
-      const systemWalletId = await getSystemWalletId(db);
+      const salonWallet = await getSalonWalletId(db, salonId, currency);
+      const systemWalletId = await getSystemWalletId(db, currency);
 
       /* force exact payment ledger state */
       await db.query(

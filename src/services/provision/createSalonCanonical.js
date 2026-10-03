@@ -4,6 +4,10 @@ import {
   reserveSlug
 } from "./slugReservation.js";
 import {
+  ensureSalonMarketBinding,
+  normalizePhoneForMarket,
+} from "../../market-context/BusinessContext.js";
+import {
   buildCanonicalProvisionResponse,
   buildProvisionMeta,
   createOnboardingIdentityIfNeeded,
@@ -40,32 +44,7 @@ async function findSalonBySlug(db, slug){
   return result.rows[0] || null;
 }
 
-function normalizeProvisionPhone(value){
-  const raw = String(value || "").trim();
-  if(!raw){
-    return null;
-  }
 
-  const digits = raw.replace(/\D/g, "");
-
-  if(digits.startsWith("996") && digits.length === 12){
-    const local = digits.slice(3);
-    if(local[0] === "0"){
-      return null;
-    }
-    return `+996${local}`;
-  }
-
-  if(raw.startsWith("+996")){
-    const local = raw.slice(4).replace(/\D/g, "");
-    if(local.length !== 9 || local[0] === "0"){
-      return null;
-    }
-    return `+996${local}`;
-  }
-
-  return null;
-}
 
 async function authUsersHasColumn(db, columnName){
   const result = await db.query(
@@ -126,7 +105,7 @@ async function createProvisionSalonAuthUser(db, { input, salon }){
 
   if(hasPhone){
     columns.push("phone");
-    values.push(normalizeProvisionPhone(input.phone));
+    values.push(input.phone);
   }
 
   if(hasPasswordChangedAt){
@@ -266,6 +245,11 @@ export async function createSalonCanonical({ pool, payload }){
   try{
     await db.query("BEGIN");
 
+    if(input.phone){
+      const phoneResult = await normalizePhoneForMarket(db, input.phone, { marketCode: input.market_code || "" });
+      input.phone = phoneResult?.ok ? phoneResult.phone : null;
+    }
+
     const existingUser = await findExistingAuthUser(db, input.email, "salon_admin");
 
     if(existingUser){
@@ -280,6 +264,10 @@ export async function createSalonCanonical({ pool, payload }){
         throw err;
       }
 
+      await ensureSalonMarketBinding(db, {
+        salonId: existingSalon.id,
+        marketCode: input.market_code || ""
+      });
       const ownerLink = await upsertOwnerSalonLink(db, existingUser.id, existingSalon.id);
       const defaultSalon = await upsertUserDefaultSalon(db, existingUser.id, existingSalon.slug);
       const onboardingIdentity = await createOnboardingIdentityIfNeeded(db, {
@@ -359,6 +347,11 @@ export async function createSalonCanonical({ pool, payload }){
     );
 
     const salon = salonCreated.rows[0];
+
+    await ensureSalonMarketBinding(db, {
+      salonId: salon.id,
+      marketCode: input.market_code || ""
+    });
 
     const user = await createProvisionSalonAuthUser(db, {
       input,

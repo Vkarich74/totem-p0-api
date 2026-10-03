@@ -12,29 +12,7 @@ function normalizeSlugPart(value){
 }
 
 function normalizePhone(value){
-  const raw = String(value || "").trim();
-  if(!raw){
-    return null;
-  }
-
-  const digits = raw.replace(/\D/g, "");
-  if(digits.startsWith("996") && digits.length === 12){
-    const local = digits.slice(3);
-    if(local[0] === "0"){
-      return null;
-    }
-    return `+996${local}`;
-  }
-
-  if(raw.startsWith("+996")){
-    const local = raw.slice(4).replace(/\D/g, "");
-    if(local.length !== 9 || local[0] === "0"){
-      return null;
-    }
-    return `+996${local}`;
-  }
-
-  return null;
+  return normalizeText(value) || null;
 }
 
 export function normalizeSlug(value){
@@ -128,6 +106,7 @@ export function validateSalonProvisionInput(payload = {}){
     salon_name: salonName,
     salon_slug: normalizeSlug(payload.salon_slug || salonName),
     phone: normalizePhone(payload.phone),
+    market_code: normalizeText(payload.market_code).toUpperCase() || null,
     city: normalizeText(payload.city) || null,
     description: normalizeText(payload.description) || null,
     logo_url: normalizeText(payload.logo_url) || null,
@@ -167,6 +146,7 @@ export function validateMasterProvisionInput(payload = {}){
     name,
     master_slug: normalizeSlug(payload.master_slug || name),
     phone: normalizePhone(payload.phone),
+    market_code: normalizeText(payload.market_code).toUpperCase() || null,
     lead_id: normalizeText(payload.lead_id) || null,
     odoo_user_id: normalizeText(payload.odoo_user_id) || null,
     requested_role: requestedRole,
