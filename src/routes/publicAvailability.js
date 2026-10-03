@@ -4,7 +4,7 @@ import { buildSalonCalendarResponse } from "../services/salonCalendar.service.js
 function formatZoneParts(date, timeZone) {
   const formatter = new Intl.DateTimeFormat("en-CA", {
     timeZone,
-    hour12: false,
+    hourCycle: "h23",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
