@@ -527,35 +527,9 @@ created_at
       };
     }
 
-    const currency = requireCurrencyCode(confirmedPayment.currency_code || bookingRow.currency_code, "PAYMENT_CURRENCY_REQUIRED");
-    const salonWallet = await getSalonWalletId(db, bookingRow.salon_id, currency);
-    const systemWalletId = await getSystemWalletId(db, currency);
-
-    /* force exact payment ledger state */
-    await db.query(
-      `
-DELETE FROM totem_test.ledger_entries
-WHERE reference_type='payment'
-AND reference_id=$1
-`,
-      [String(confirmedPayment.id)]
-    );
-
-    await db.query(
-      `
-INSERT INTO totem_test.ledger_entries(
-wallet_id,
-direction,
-amount_cents,
-reference_type,
-reference_id,
-purpose
-)
-VALUES
-($1,'debit',$3,'payment',$4,'main'),
-($2,'credit',$3,'payment',$4,'main')
-`,
-      [systemWalletId, salonWallet, amountCents, String(confirmedPayment.id)]
+    requireCurrencyCode(
+      confirmedPayment.currency_code || bookingRow.currency_code,
+      "PAYMENT_CURRENCY_REQUIRED"
     );
 
     await setBookingConfirmedIfNeeded(db, bookingRow.id);
