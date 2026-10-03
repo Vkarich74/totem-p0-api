@@ -289,11 +289,15 @@ return email;
 }
 
 async function resolveAuthTarget(db, body = {}){
+const rawLogin = String(body?.login || "").trim();
+const rawPhone = body?.phone || (rawLogin && !rawLogin.includes("@") ? rawLogin : "");
 let phone = null;
-if(body?.phone){
-const result = await normalizePhoneForMarket(db, body.phone);
+
+if(rawPhone){
+const result = await normalizePhoneForMarket(db, rawPhone);
 phone = result?.ok ? result.phone : null;
 }
+
 if(phone){
 return {
 channel: "whatsapp",
@@ -302,7 +306,7 @@ value: phone
 };
 }
 
-const email = normalizeEmail(body?.email || body?.login);
+const email = normalizeEmail(body?.email || rawLogin);
 if(email){
 return {
 channel: "email",
