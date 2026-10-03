@@ -169,6 +169,14 @@ app.use(
 
 app.use("/auth", authRouter);
 
+/* Legacy billing auto-charge is quarantined before the optional internal auth layer. */
+app.post("/internal/billing/auto-charge/run", (req, res) => {
+  return res.status(410).json({
+    ok: false,
+    error: "LEGACY_BILLING_AUTO_CHARGE_DISABLED",
+  });
+});
+
 app.use(
   "/internal",
   resolveAuth,
