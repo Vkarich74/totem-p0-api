@@ -1,0 +1,134 @@
+{
+  "status": "PASS",
+  "mode": "APPLY",
+  "migration_sha256": "34a1b395f987b339f824931d8de963891396688a5e1fe309e0769cb72579a62b",
+  "production_db_write": true,
+  "pre": {
+    "identity": {
+      "database": "railway",
+      "db_user": "postgres",
+      "read_only": "on"
+    },
+    "constraintCount": 12,
+    "destCountryDefault": "'KG'::character varying",
+    "bindings": [],
+    "destinationProviderHash": "d871a3a2a7bbbb78db2e6f8049539fb5c673d69e1f1af5fdc5584aaf3401fa46",
+    "authUserCount": 49,
+    "businessCounts": {
+      "bookings": 48,
+      "payments": 23,
+      "payouts": 15,
+      "withdraw_requests": 1,
+      "contracts": 18
+    },
+    "market": [
+      {
+        "code": "KG",
+        "country_code": "KG",
+        "default_currency": "KGS",
+        "default_timezone": "Asia/Bishkek",
+        "active": true
+      }
+    ],
+    "tenants": [
+      {
+        "code": "KG",
+        "n": 27
+      }
+    ],
+    "refundFunctionSha256": "3dfca9c183c7b6bdebcc43c4952de0745be3c3dcca923494f4ca2ab1c769737e",
+    "totemTestWalletHash": "7fb1ef3f1466e70f3509a8f3717549973f332da1336f83636b21d4e906738514",
+    "totemTestLedgerHash": "63a4993045aab5b8f8acac2d500e8c65d1d79463ae200c2a75e34792e3f8b889",
+    "totemTestWalletCount": 6,
+    "totemTestLedgerCount": 100
+  },
+  "post": {
+    "identity": {
+      "database": "railway",
+      "db_user": "postgres",
+      "read_only": "on"
+    },
+    "constraintCount": 12,
+    "destCountryDefault": null,
+    "bindings": [
+      {
+        "market_code": "KG",
+        "provider_type": "payout",
+        "provider_code": "manual_bank_account_kg",
+        "enabled": true,
+        "priority": 100,
+        "profile_code": null,
+        "config_json": {
+          "source": "destination_providers",
+          "country_code": "KG"
+        }
+      },
+      {
+        "market_code": "KG",
+        "provider_type": "payout",
+        "provider_code": "manual_card_kg",
+        "enabled": true,
+        "priority": 100,
+        "profile_code": null,
+        "config_json": {
+          "source": "destination_providers",
+          "country_code": "KG"
+        }
+      },
+      {
+        "market_code": "KG",
+        "provider_type": "payout",
+        "provider_code": "manual_other_kg",
+        "enabled": true,
+        "priority": 100,
+        "profile_code": null,
+        "config_json": {
+          "source": "destination_providers",
+          "country_code": "KG"
+        }
+      },
+      {
+        "market_code": "KG",
+        "provider_type": "payout",
+        "provider_code": "manual_wallet_phone_kg",
+        "enabled": true,
+        "priority": 100,
+        "profile_code": null,
+        "config_json": {
+          "source": "destination_providers",
+          "country_code": "KG"
+        }
+      }
+    ],
+    "destinationProviderHash": "d871a3a2a7bbbb78db2e6f8049539fb5c673d69e1f1af5fdc5584aaf3401fa46",
+    "authUserCount": 49,
+    "businessCounts": {
+      "bookings": 48,
+      "payments": 23,
+      "payouts": 15,
+      "withdraw_requests": 1,
+      "contracts": 18
+    },
+    "market": [
+      {
+        "code": "KG",
+        "country_code": "KG",
+        "default_currency": "KGS",
+        "default_timezone": "Asia/Bishkek",
+        "active": true
+      }
+    ],
+    "tenants": [
+      {
+        "code": "KG",
+        "n": 27
+      }
+    ],
+    "refundFunctionSha256": "97f178fae18260c2550d4131d2cfa90f8ccf9b9f9414319d3c89c42477d28594",
+    "totemTestWalletHash": "7fb1ef3f1466e70f3509a8f3717549973f332da1336f83636b21d4e906738514",
+    "totemTestLedgerHash": "63a4993045aab5b8f8acac2d500e8c65d1d79463ae200c2a75e34792e3f8b889",
+    "totemTestWalletCount": 6,
+    "totemTestLedgerCount": 100
+  },
+  "error": null
+}
