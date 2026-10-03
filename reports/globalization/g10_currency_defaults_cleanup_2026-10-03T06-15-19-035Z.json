@@ -1,0 +1,184 @@
+{
+  "generated_at": "2026-10-03T06:15:19.034Z",
+  "status": "PRECHECK_PASS",
+  "apply_requested": false,
+  "production_db_write": 0,
+  "defaults_before": [
+    {
+      "table_name": "billing_subscriptions",
+      "column_default": "'KGS'::text"
+    },
+    {
+      "table_name": "contract_rent_obligations",
+      "column_default": "'KGS'::text"
+    },
+    {
+      "table_name": "contract_rent_payments",
+      "column_default": "'KGS'::text"
+    },
+    {
+      "table_name": "contract_salary_obligations",
+      "column_default": "'KGS'::text"
+    },
+    {
+      "table_name": "finance_events",
+      "column_default": "'KGS'::text"
+    },
+    {
+      "table_name": "money_audit_events",
+      "column_default": "'KGS'::character varying"
+    },
+    {
+      "table_name": "money_ledger_entries",
+      "column_default": "'KGS'::character varying"
+    },
+    {
+      "table_name": "money_owner_balances",
+      "column_default": "'KGS'::character varying"
+    },
+    {
+      "table_name": "money_owner_obligations",
+      "column_default": "'KGS'::text"
+    },
+    {
+      "table_name": "money_receipts",
+      "column_default": "'KGS'::character varying"
+    },
+    {
+      "table_name": "money_split_allocations",
+      "column_default": "'KGS'::character varying"
+    },
+    {
+      "table_name": "payment_collection_anchors",
+      "column_default": "'KGS'::text"
+    },
+    {
+      "table_name": "payout_executions",
+      "column_default": "'KGS'::character varying"
+    },
+    {
+      "table_name": "provider_events",
+      "column_default": "'KGS'::character varying"
+    },
+    {
+      "table_name": "provider_settlement_items",
+      "column_default": "'KGS'::character varying"
+    },
+    {
+      "table_name": "provider_settlements",
+      "column_default": "'KGS'::character varying"
+    },
+    {
+      "table_name": "withdraw_requests",
+      "column_default": "'KGS'::character varying"
+    }
+  ],
+  "defaults_after": [
+    {
+      "table_name": "billing_subscriptions",
+      "column_default": "'KGS'::text"
+    },
+    {
+      "table_name": "contract_rent_obligations",
+      "column_default": "'KGS'::text"
+    },
+    {
+      "table_name": "contract_rent_payments",
+      "column_default": "'KGS'::text"
+    },
+    {
+      "table_name": "contract_salary_obligations",
+      "column_default": "'KGS'::text"
+    },
+    {
+      "table_name": "finance_events",
+      "column_default": "'KGS'::text"
+    },
+    {
+      "table_name": "money_audit_events",
+      "column_default": "'KGS'::character varying"
+    },
+    {
+      "table_name": "money_ledger_entries",
+      "column_default": "'KGS'::character varying"
+    },
+    {
+      "table_name": "money_owner_balances",
+      "column_default": "'KGS'::character varying"
+    },
+    {
+      "table_name": "money_owner_obligations",
+      "column_default": "'KGS'::text"
+    },
+    {
+      "table_name": "money_receipts",
+      "column_default": "'KGS'::character varying"
+    },
+    {
+      "table_name": "money_split_allocations",
+      "column_default": "'KGS'::character varying"
+    },
+    {
+      "table_name": "payment_collection_anchors",
+      "column_default": "'KGS'::text"
+    },
+    {
+      "table_name": "payout_executions",
+      "column_default": "'KGS'::character varying"
+    },
+    {
+      "table_name": "provider_events",
+      "column_default": "'KGS'::character varying"
+    },
+    {
+      "table_name": "provider_settlement_items",
+      "column_default": "'KGS'::character varying"
+    },
+    {
+      "table_name": "provider_settlements",
+      "column_default": "'KGS'::character varying"
+    },
+    {
+      "table_name": "withdraw_requests",
+      "column_default": "'KGS'::character varying"
+    }
+  ],
+  "business_before": {
+    "bookings": 48,
+    "payments": 23,
+    "payouts": 15,
+    "withdraw_requests": 1
+  },
+  "business_after": {
+    "bookings": 48,
+    "payments": 23,
+    "payouts": 15,
+    "withdraw_requests": 1
+  },
+  "totem_test_wallets_before": {
+    "count": 6,
+    "hash": "c41b6c057e8b99b9d56422fc3bf6d44a"
+  },
+  "totem_test_wallets_after": {
+    "count": 6,
+    "hash": "c41b6c057e8b99b9d56422fc3bf6d44a"
+  },
+  "totem_test_ledger_before": {
+    "count": 100,
+    "hash": "86ce00f292321416427bc33968f54497"
+  },
+  "totem_test_ledger_after": {
+    "count": 100,
+    "hash": "86ce00f292321416427bc33968f54497"
+  },
+  "market_before": {
+    "kg_payout_bindings": 4,
+    "kz_market_count": 0,
+    "kz_country_status": "planned"
+  },
+  "market_after": {
+    "kg_payout_bindings": 4,
+    "kz_market_count": 0,
+    "kz_country_status": "planned"
+  }
+}
