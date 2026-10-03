@@ -31,6 +31,7 @@ billing:null
 const row = billing.rows[0];
 const status = row.subscription_status || "active";
 
+/* 🔴 НОРМАЛИЗАЦИЯ СОСТОЯНИЙ */
 let access_state = status;
 let can_write = true;
 let can_withdraw = true;
