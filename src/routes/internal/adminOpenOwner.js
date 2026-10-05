@@ -1,4 +1,5 @@
 import express from "express";
+import { mapOdooBridgeCrmForm } from "../../services/odooBridgeCrmForm.js";
 import { google } from "googleapis";
 import { createSalonCanonical } from "../../services/provision/createSalonCanonical.js";
 import { createMasterCanonical } from "../../services/provision/createMasterCanonical.js";
@@ -437,7 +438,7 @@ function normalizeOdooCoreFormIntakePayload(body = {}){
     phone,
     market_code: marketCode || null,
     city,
-    address: "",
+    address: normalizeText(body.address),
     description,
     specialization,
     work_mode: ownerType === "master" ? workMode : null,
@@ -455,6 +456,7 @@ function normalizeOdooCoreFormIntakePayload(body = {}){
       phone: phone || null,
       market_code: marketCode || null,
       city: city || null,
+      address: normalizeText(body.address) || null,
       slug: slugSource || null,
       salon_name: salonName || null,
       description,
@@ -572,6 +574,12 @@ function buildOdooCoreRequestStandardPayload(body = {}){
         code: "ODOO_MODEL_UNSUPPORTED",
       },
     };
+  }
+
+  if(teamId === 7){
+    const mapped = mapOdooBridgeCrmForm(body);
+    if(mapped.error) return mapped;
+    return normalizeOdooCoreFormIntakePayload(mapped.payload);
   }
 
   if(teamId !== 5 || sourceId !== 17 || stageId !== 54 || !hasRequiredTags){
