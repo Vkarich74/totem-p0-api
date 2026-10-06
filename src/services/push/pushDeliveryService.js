@@ -1,3 +1,4 @@
+import { resolveNotificationRecipientLocale } from "../notifications/recipientLocale.js";
 import webPush from "web-push";
 import { getWebPushPublicConfig } from "./webPushService.js";
 
@@ -55,13 +56,16 @@ function buildTargetKey(notification) {
   return `${targetType}:${targetId}`.slice(0, 255);
 }
 
-function buildPushPayload(notification) {
+function buildPushPayload(notification, locale) {
+  const language = /^en(?:-|$)/i.test(String(locale || "")) ? "en" : "ru";
+  const other = language === "en" ? "ru" : "en";
   const payloadJson = normalizePayloadJson(notification?.payload_json);
 
   return {
+    locale,
     notification_uid: normalizeText(notification?.notification_uid, 255),
-    title: normalizeText(notification?.title_ru, 255) || normalizeText(notification?.title_en, 255) || "Уведомление",
-    body: normalizeText(notification?.body_ru, 4000) || normalizeText(notification?.body_en, 4000) || "",
+    title: normalizeText(notification?.["title_" + language], 255) || normalizeText(notification?.["title_" + other], 255) || (language === "en" ? "Notification" : "Уведомление"),
+    body: normalizeText(notification?.["body_" + language], 4000) || normalizeText(notification?.["body_" + other], 4000) || "",
     action_type: normalizeText(notification?.action_type, 120),
     action_url: normalizeText(notification?.action_url, 1000),
     target_type: normalizeText(notification?.target_type, 64),
@@ -330,9 +334,9 @@ async function recordPushDeliveryAttempt(pool, notification, subscription, attem
     subscription,
     attemptCount === 1 ? "attempt" : `retry_${attemptCount}`,
   );
-  const payload = JSON.stringify(buildPushPayload(notification));
-
   try {
+    const { locale } = await resolveNotificationRecipientLocale(pool, notification);
+    const payload = JSON.stringify(buildPushPayload(notification, locale));
     await webPush.sendNotification(
       {
         endpoint: subscription.endpoint,

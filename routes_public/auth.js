@@ -1,3 +1,5 @@
+import { buildOtpEmail, buildEmailMime } from "../src/services/notifications/emailTemplates.js";
+import { resolveRecipientLocale } from "../src/services/notifications/recipientLocale.js";
 import express from "express";
 import crypto from "crypto";
 import { google } from "googleapis";
@@ -69,42 +71,12 @@ function assertGmailConfig() {
   }
 }
 
-async function sendOtpEmail({ to, code }) {
+async function sendOtpEmail({ to, code, locale }) {
   assertGmailConfig();
-
   const gmail = google.gmail({ version: "v1", auth: gmailClient });
-
-  const subject = "=?UTF-8?B?" + Buffer.from("Код входа TOTEM").toString("base64") + "?=";
-  const html = `
-    <div style="font-family:Arial,sans-serif;font-size:16px;color:#111827">
-      <h2>Код входа TOTEM</h2>
-      <p>Ваш код:</p>
-      <div style="font-size:32px;font-weight:700;letter-spacing:6px">${code}</div>
-      <p>Код действует ${OTP_TTL_MINUTES} минут.</p>
-    </div>
-  `;
-
-  const message = [
-    "MIME-Version: 1.0",
-    'Content-Type: text/html; charset="UTF-8"',
-    "Content-Transfer-Encoding: 7bit",
-    `From: Totem <${GMAIL_SENDER_EMAIL}>`,
-    `To: ${to}`,
-    `Subject: ${subject}`,
-    "",
-    html
-  ].join("\n");
-
-  const raw = Buffer.from(message)
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
-
-  await gmail.users.messages.send({
-    userId: "me",
-    requestBody: { raw }
-  });
+  const message = buildEmailMime({ to, from: `Totem <${GMAIL_SENDER_EMAIL}>`, ...buildOtpEmail({ code, ttlMinutes: OTP_TTL_MINUTES, locale }) });
+  const raw = Buffer.from(message).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  await gmail.users.messages.send({ userId: "me", requestBody: { raw } });
 }
 
 /**
@@ -195,7 +167,8 @@ router.post("/request", async (req, res) => {
       ]
     );
 
-    await sendOtpEmail({ to: target, code });
+    const { locale } = await resolveRecipientLocale(client, { userId: u.rows[0].id, requestedLocale: req.headers?.["x-totem-locale"] });
+    await sendOtpEmail({ to: target, code, locale });
 
     await client.query("COMMIT");
     return res.json({ ok: true });

@@ -1,3 +1,4 @@
+import { enrichSystemNotification } from "./notificationTemplates.js";
 import { dispatchNotificationPushDeliveries } from "../push/pushDeliveryService.js";
 
 export function normalizeText(value, maxLength = 255) {
@@ -113,6 +114,7 @@ export async function createNotification(pool, input = {}) {
     throw new Error("POOL_REQUIRED");
   }
 
+  input = enrichSystemNotification(input);
   const titleRu = normalizeText(input.title_ru, 255);
   const bodyRu = normalizeText(input.body_ru, 4000);
 

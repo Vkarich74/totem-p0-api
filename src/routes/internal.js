@@ -1,3 +1,5 @@
+import { buildOtpEmail, buildPasswordResetEmail, buildEmailMime } from "../services/notifications/emailTemplates.js";
+import { resolveRecipientLocale } from "../services/notifications/recipientLocale.js";
 import express from "express";
 import crypto from "crypto";
 import { google } from "googleapis";
@@ -34,6 +36,7 @@ import buildEntryRouter from "./internal/entry.js";
 import mobileRouter from "./internal/mobile.js";
 import buildTemplatesRouter from "./internal/templates.js";
 import buildMoneyCoreRouter from "./internal/money-core.js";
+import buildLocalePreferencesRouter from "./internal/localePreferences.js";
 
 export function createInternalRouter({ rlInternal } = {}){
 
@@ -61,6 +64,7 @@ adminProtectedContainer.use('/moderation', moderationRouter);
 adminProtectedContainer.use('/messages', messagesRouter);
 const adminOpenOwnerRouter = buildAdminOpenOwnerRouter(pool, internalReadRateLimit);
 adminProtectedContainer.use('/open-owner', adminOpenOwnerRouter);
+r.use(buildLocalePreferencesRouter(pool, internalReadRateLimit));
 const moneyCoreRouter = buildMoneyCoreRouter(pool);
 r.use(moneyCoreRouter);
 
@@ -97,76 +101,27 @@ function assertGmailConfig(){
   }
 }
 
-async function sendGmailHtmlEmail({ to, subjectText, htmlBody }){
+async function sendGmailHtmlEmail({ to, subjectText, htmlBody, textBody, locale }){
   assertGmailConfig();
-
   const gmail = google.gmail({ version: "v1", auth: gmailClient });
-  const subject = "=?UTF-8?B?" + Buffer.from(subjectText).toString("base64") + "?=";
-
-  const message = [
-    "MIME-Version: 1.0",
-    'Content-Type: text/html; charset="UTF-8"',
-    "Content-Transfer-Encoding: 7bit",
-    `From: Totem <${GMAIL_SENDER_EMAIL}>`,
-    `To: ${to}`,
-    `Subject: ${subject}`,
-    "",
-    htmlBody
-  ].join("\n");
-
-  const raw = Buffer.from(message)
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
-
-  await gmail.users.messages.send({
-    userId: "me",
-    requestBody: { raw }
-  });
+  const message = buildEmailMime({ to, from: `Totem <${GMAIL_SENDER_EMAIL}>`, subject: subjectText, html: htmlBody, text: textBody, locale });
+  const raw = Buffer.from(message).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  await gmail.users.messages.send({ userId: "me", requestBody: { raw } });
 }
 
-async function sendOtpEmail({to, code}){
-  const html = `
-    <div style="font-family:Arial,sans-serif;font-size:16px;color:#111827">
-      <h2>Код входа TOTEM</h2>
-      <p>Ваш код подтверждения:</p>
-      <div style="font-size:32px;font-weight:700;letter-spacing:6px">${code}</div>
-      <p>Код действует ${AUTH_OTP_TTL_MINUTES} минут.</p>
-    </div>
-  `;
-
-  await sendGmailHtmlEmail({
-    to,
-    subjectText: "Код входа TOTEM",
-    htmlBody: html
-  });
+async function sendOtpEmail({ to, code, locale }){
+  const template = buildOtpEmail({ code, ttlMinutes: AUTH_OTP_TTL_MINUTES, locale });
+  await sendGmailHtmlEmail({ to, subjectText: template.subject, htmlBody: template.html, textBody: template.text, locale });
 }
 
 function buildPasswordResetUrl({ role, slug, login }){
   return `https://app.totemv.com/#/auth/reset?role=${encodeURIComponent(role)}&slug=${encodeURIComponent(slug)}&login=${encodeURIComponent(login)}`;
 }
 
-async function sendPasswordResetEmail({ to, code, role, slug, login }){
+async function sendPasswordResetEmail({ to, code, role, slug, login, locale }){
   const resetUrl = buildPasswordResetUrl({ role, slug, login });
-  const html = `
-    <div style="font-family:Arial,sans-serif;font-size:16px;color:#111827">
-      <h2>Восстановление пароля TOTEM</h2>
-      <p>Кабинет: <strong>${role}</strong> / <strong>${slug}</strong></p>
-      <p>Ваш код подтверждения:</p>
-      <div style="font-size:32px;font-weight:700;letter-spacing:6px">${code}</div>
-      <p>Код действует ${AUTH_OTP_TTL_MINUTES} минут.</p>
-      <p>Ссылка для сброса пароля:</p>
-      <p><a href="${resetUrl}">${resetUrl}</a></p>
-      <p>После смены пароля войдите новым паролем.</p>
-    </div>
-  `;
-
-  await sendGmailHtmlEmail({
-    to,
-    subjectText: "Восстановление пароля TOTEM",
-    htmlBody: html
-  });
+  const template = buildPasswordResetEmail({ code, ttlMinutes: AUTH_OTP_TTL_MINUTES, role, slug, resetUrl, locale });
+  await sendGmailHtmlEmail({ to, subjectText: template.subject, htmlBody: template.html, textBody: template.text, locale });
 }
 
 const AUTH_SUPPORTED_ROLES = new Set(["master", "salon_admin"]);
@@ -709,7 +664,7 @@ return context;
 }
 
 
-async function issueAuthOtp(db, { target, purpose, channel, userId = null, emailContext = null }){
+async function issueAuthOtp(db, { target, purpose, channel, userId = null, emailContext = null, requestedLocale = null }){
 const hasUserId = Number.isInteger(Number(userId)) && Number(userId) > 0;
 
 const activeOtpRes = await db.query(hasUserId ? `
@@ -808,6 +763,7 @@ await db.query(`
 
 console.log("OTP_CODE", target, purpose, code);
 if(channel==="email"){
+  const { locale } = await resolveRecipientLocale(db, { userId, requestedLocale });
   Promise.resolve()
     .then(() => {
       if(purpose === "password_reset"){
@@ -816,11 +772,12 @@ if(channel==="email"){
           code,
           role: String(emailContext?.role || ""),
           slug: String(emailContext?.slug || ""),
+          locale,
           login: String(emailContext?.login || target)
         });
       }
 
-      return sendOtpEmail({to:target, code});
+      return sendOtpEmail({to:target, code, locale});
     })
     .catch((e) => {
       console.error("EMAIL_SEND_FAILED", e);
@@ -1894,6 +1851,7 @@ r.post("/auth/start", async (req,res)=>{
       }
 
       const otpResult = await issueAuthOtp(db, {
+      requestedLocale: req.headers?.["x-totem-locale"],
         target: authTarget.value,
         purpose,
         channel,
@@ -1914,6 +1872,7 @@ r.post("/auth/start", async (req,res)=>{
     }
 
     const otpResult = await issueAuthOtp(db, {
+      requestedLocale: req.headers?.["x-totem-locale"],
       target: authTarget.value,
       purpose,
       channel
@@ -2380,6 +2339,7 @@ r.post("/auth/password/reset/start", async (req,res)=>{
     });
 
     const otpResult = await issueAuthOtp(db, {
+      requestedLocale: req.headers?.["x-totem-locale"],
       target: authTarget.value,
       purpose:"password_reset",
       channel,

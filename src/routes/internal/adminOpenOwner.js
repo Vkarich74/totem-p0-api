@@ -1,3 +1,5 @@
+import { buildOwnerOpeningEmail, buildEmailMime } from "../../services/notifications/emailTemplates.js";
+import { resolveRecipientLocale } from "../../services/notifications/recipientLocale.js";
 import express from "express";
 import { mapOdooBridgeCrmForm } from "../../services/odooBridgeCrmForm.js";
 import { google } from "googleapis";
@@ -927,7 +929,7 @@ function assertGmailConfig(){
   }
 }
 
-function buildOwnerOpeningEmailPreview(request){
+function buildOwnerOpeningEmailPreview(request, locale){
   const links = request.links_json || {};
   const ownerType = normalizeOwnerType(request.owner_type);
   const ownerLabel = ownerType === "master" ? "мастера" : "салона";
@@ -938,55 +940,12 @@ function buildOwnerOpeningEmailPreview(request){
   const publicLink = publicUrl && publicUrl.startsWith("http") ? publicUrl : publicUrl ? `${publicBaseUrl}${publicUrl.startsWith("/") ? "" : "/"}${publicUrl}` : null;
   const cabinetLink = cabinetUrl && cabinetUrl.startsWith("http") ? cabinetUrl : cabinetUrl ? `${appBaseUrl}/${cabinetUrl}` : null;
 
-  const subject = `TOTEM: доступ ${ownerLabel} создан`;
-
-  const text = [
-    `Здравствуйте, ${request.name}.`,
-    "",
-    `Доступ ${ownerLabel} в TOTEM создан.`,
-    "",
-    cabinetLink ? `Кабинет: ${cabinetLink}` : null,
-    publicLink ? `Публичная страница: ${publicLink}` : null,
-    "",
-    "Как войти:",
-    "1. Откройте ссылку кабинета.",
-    "2. Введите email, на который пришло это письмо.",
-    "3. Получите код входа на email.",
-    "4. Введите код и откройте кабинет.",
-    "",
-    "Что заполнить в кабинете:",
-    ownerType === "master"
-      ? "- профиль мастера, услуги, расписание и описание"
-      : "- профиль салона, услуги, мастеров, расписание и описание",
-    "",
-    "Если код не пришёл, проверьте Спам/Промоакции или обратитесь в поддержку TOTEM.",
-    "",
-    "Поддержка: kantotemus@gmail.com"
-  ].filter((line) => line !== null).join("\n");
-
-  const html = `
-    <div style="font-family:Arial,sans-serif;font-size:16px;line-height:1.5;color:#111827">
-      <h2>TOTEM: доступ ${ownerLabel} создан</h2>
-      <p>Здравствуйте, ${request.name}.</p>
-      <p>Доступ ${ownerLabel} в TOTEM создан.</p>
-      ${cabinetLink ? `<p><strong>Кабинет:</strong> <a href="${cabinetLink}">${cabinetLink}</a></p>` : ""}
-      ${publicLink ? `<p><strong>Публичная страница:</strong> <a href="${publicLink}">${publicLink}</a></p>` : ""}
-      <h3>Как войти</h3>
-      <ol>
-        <li>Откройте ссылку кабинета.</li>
-        <li>Введите email, на который пришло это письмо.</li>
-        <li>Получите код входа на email.</li>
-        <li>Введите код и откройте кабинет.</li>
-      </ol>
-      <h3>Что заполнить в кабинете</h3>
-      <p>${ownerType === "master" ? "Профиль мастера, услуги, расписание и описание." : "Профиль салона, услуги, мастеров, расписание и описание."}</p>
-      <p>Если код не пришёл, проверьте Спам/Промоакции или обратитесь в поддержку TOTEM.</p>
-      <p>Поддержка: kantotemus@gmail.com</p>
-    </div>
-  `;
+  const { subject, text, html } = buildOwnerOpeningEmail({ name: request.name, ownerType, cabinetLink, publicLink, locale });
 
   return {
     to: request.email,
+    locale,
+    template_version: 2,
     subject,
     text,
     html,
@@ -1003,18 +962,7 @@ async function sendOwnerOpeningEmail(preview){
   assertGmailConfig();
 
   const gmail = google.gmail({ version: "v1", auth: gmailClient });
-  const subject = "=?UTF-8?B?" + Buffer.from(preview.subject).toString("base64") + "?=";
-
-  const message = [
-    "MIME-Version: 1.0",
-    'Content-Type: text/html; charset="UTF-8"',
-    "Content-Transfer-Encoding: 7bit",
-    `From: Totem <${GMAIL_SENDER_EMAIL}>`,
-    `To: ${preview.to}`,
-    `Subject: ${subject}`,
-    "",
-    preview.html,
-  ].join("\n");
+  const message = buildEmailMime({ to: preview.to, from: `Totem <${GMAIL_SENDER_EMAIL}>`, subject: preview.subject, html: preview.html, text: preview.text, locale: preview.locale });
 
   const raw = Buffer.from(message)
     .toString("base64")
@@ -2254,7 +2202,8 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
-      const preview = buildOwnerOpeningEmailPreview(request);
+      const { locale } = await resolveRecipientLocale(db, { userId: request.created_auth_user_id, ownerType: request.owner_type, ownerId: request.created_owner_id });
+      const preview = buildOwnerOpeningEmailPreview(request, locale);
 
       const updatedResult = await db.query(
         `
@@ -2347,9 +2296,12 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
-      preview = request.email_preview_json && Object.keys(request.email_preview_json || {}).length
-        ? request.email_preview_json
-        : buildOwnerOpeningEmailPreview(request);
+      if (request.email_preview_json && Object.keys(request.email_preview_json || {}).length) {
+        preview = request.email_preview_json;
+      } else {
+        const { locale } = await resolveRecipientLocale(prepareDb, { userId: request.created_auth_user_id, ownerType: request.owner_type, ownerId: request.created_owner_id });
+        preview = buildOwnerOpeningEmailPreview(request, locale);
+      }
 
       message = await createOwnerOpeningMessage(prepareDb, {
         request,

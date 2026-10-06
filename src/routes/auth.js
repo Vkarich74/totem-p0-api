@@ -1,3 +1,5 @@
+import { buildOtpEmail } from "../services/notifications/emailTemplates.js";
+import { resolveRecipientLocale } from "../services/notifications/recipientLocale.js";
 import express from "express";
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
@@ -52,26 +54,10 @@ function buildTransport(){
   });
 }
 
-async function sendOtpEmail({ to, code }){
+async function sendOtpEmail({ to, code, locale }){
   const transporter = buildTransport();
-
-  if(!transporter){
-    throw new Error("SMTP_NOT_CONFIGURED");
-  }
-
-  await transporter.sendMail({
-    from: String(process.env.SMTP_FROM || process.env.SMTP_USER || "").trim(),
-    to,
-    subject: "Код входа TOTEM",
-    html: `
-      <div style="font-family:Arial,sans-serif;font-size:16px;color:#111827">
-        <h2 style="margin:0 0 16px 0;">Код входа TOTEM</h2>
-        <p style="margin:0 0 12px 0;">Ваш код подтверждения:</p>
-        <div style="font-size:32px;font-weight:700;letter-spacing:6px;margin:0 0 16px 0;">${code}</div>
-        <p style="margin:0;color:#4b5563;">Код действует ${OTP_TTL_MINUTES} минут.</p>
-      </div>
-    `
-  });
+  if (!transporter) throw new Error("SMTP_NOT_CONFIGURED");
+  await transporter.sendMail({ from: String(process.env.SMTP_FROM || process.env.SMTP_USER || "").trim(), to, ...buildOtpEmail({ code, ttlMinutes: OTP_TTL_MINUTES, locale }), headers: { "Content-Language": locale } });
 }
 
 async function findUserByLogin(login){
@@ -183,7 +169,8 @@ router.post("/start", async (req, res) => {
       ]
     );
 
-    await sendOtpEmail({ to: target, code });
+    const { locale } = await resolveRecipientLocale(db, { userId: user.id, requestedLocale: req.headers?.["x-totem-locale"] });
+    await sendOtpEmail({ to: target, code, locale });
 
     return res.json({ ok:true });
   } catch (e) {

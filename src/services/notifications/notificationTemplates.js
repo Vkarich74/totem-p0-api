@@ -1,3 +1,11 @@
+const ENGLISH = {"Запись создана": "Booking created", "Ваша запись создана и ожидает подтверждения.": "Your booking has been created and is awaiting confirmation.", "Новая запись": "New booking", "К вам создана новая запись.": "You have a new booking.", "Новая запись в салон": "New salon booking", "В салоне создана новая запись.": "A new booking has been created at your salon.", "Запись подтверждена": "Booking confirmed", "Ваша запись подтверждена.": "Your booking has been confirmed.", "Запись подтверждена.": "The booking has been confirmed.", "Запись завершена": "Booking completed", "Ваша запись завершена. Спасибо за визит.": "Your booking is complete. Thank you for your visit.", "Запись отмечена как завершённая.": "The booking has been marked as completed.", "Запись в салоне завершена.": "The salon booking is complete.", "Запись отменена": "Booking cancelled", "Ваша запись была отменена.": "Your booking has been cancelled.", "Запись к вам была отменена.": "Your booking has been cancelled.", "Запись в салоне была отменена.": "The salon booking has been cancelled.", "Оплата наличными подтверждена": "Cash payment confirmed", "Оплата наличными подтверждена.": "The cash payment has been confirmed.", "Сообщение от администратора": "Message from the administrator", "Новое внутреннее сообщение": "New internal message", "Заявка на вывод создана": "Withdrawal request created", "Выплата создана": "Payout created", "Выплата отправлена в обработку": "Payout submitted for processing", "Выплата завершена": "Payout completed", "Выплата не прошла": "Payout failed"};
+const FINANCIAL_ENGLISH = {
+"Заявка на вывод создана": (context = {}) => `Your withdrawal request for ${context.amount} ${context.currency} has been created and the amount is locked in your balance.`,
+"Выплата создана": (context = {}) => `Your payout of ${context.amount} ${context.currency} has been created.`,
+"Выплата отправлена в обработку": (context = {}) => `Your payout of ${context.amount} ${context.currency} has been submitted for processing.`,
+"Выплата завершена": (context = {}) => `Your payout of ${context.amount} ${context.currency} is complete.`,
+"Выплата не прошла": (context = {}) => `Your payout of ${context.amount} ${context.currency} failed. Check the reason in the finance section.`
+};
 function normalizeText(value) {
   const text = String(value ?? "").trim();
   return text || null;
@@ -7,6 +15,8 @@ function buildTemplate(title_ru, body_ru, action_type) {
   return {
     title_ru,
     body_ru,
+    title_en: ENGLISH[title_ru],
+    body_en: typeof body_ru === "function" ? FINANCIAL_ENGLISH[title_ru] : ENGLISH[body_ru],
     action_type,
     priority: "normal",
   };
@@ -100,12 +110,15 @@ function resolveTemplate(template, context = {}) {
     return null;
   }
 
+  context = { ...context, amount: context.amount ?? "—", currency: context.currency ?? context.currency_code ?? "" };
   const bodyRu =
     typeof template.body_ru === "function" ? template.body_ru(context) : template.body_ru;
 
   return {
     title_ru: template.title_ru,
     body_ru: bodyRu,
+    title_en: template.title_en,
+    body_en: typeof template.body_en === "function" ? template.body_en(context) : template.body_en,
     action_type: template.action_type,
     priority: template.priority || "normal",
   };
@@ -158,13 +171,15 @@ export function buildCashConfirmNotificationTemplate(recipientType, context = {}
 export function buildAdminMessageNotificationTemplate(recipientType, context = {}) {
   void recipientType;
   void context;
-  return resolveTemplate(ADMIN_MESSAGE_TEMPLATE, context);
+  return { ...resolveTemplate(ADMIN_MESSAGE_TEMPLATE, context), notification_template_key: "admin_message" };
 }
 
 export function buildWithdrawRequestLockedNotificationTemplate(context = {}) {
   return resolveTemplate(
     {
       title_ru: WITHDRAW_REQUEST_LOCKED_TEMPLATE.title_ru,
+      title_en: WITHDRAW_REQUEST_LOCKED_TEMPLATE.title_en,
+      body_en: WITHDRAW_REQUEST_LOCKED_TEMPLATE.body_en,
       body_ru: WITHDRAW_REQUEST_LOCKED_TEMPLATE.body_ru,
       action_type: WITHDRAW_REQUEST_LOCKED_TEMPLATE.action_type,
       priority: WITHDRAW_REQUEST_LOCKED_TEMPLATE.priority,
@@ -180,4 +195,37 @@ export function buildPayoutExecutionNotificationTemplate(eventKey, context = {})
     payoutKey ? PAYOUT_EXECUTION_TEMPLATES[payoutKey] : null,
     context
   );
+}
+
+// Add translations only for exact known system copy; authored messages stay intact.
+export function enrichSystemNotification(input = {}) {
+  if (input.notification_template_key === "admin_message") {
+    const base = resolveTemplate(ADMIN_MESSAGE_TEMPLATE);
+    input = { ...input };
+    if (input.title_ru !== base.title_ru && input.title_en === base.title_en) input.title_en = null;
+    if (input.body_ru !== base.body_ru && input.body_en === base.body_en) input.body_en = null;
+  }
+  if (input.title_en && input.body_en) return input;
+  const payload = input.payload_json && typeof input.payload_json === "object" ? input.payload_json : {};
+  const context = { ...payload, currency: payload.currency ?? payload.currency_code ?? "" };
+  const type = input.target_type === "salon_admin" ? "salon" : input.target_type;
+  const candidates = [buildBookingCreatedNotificationTemplate(type), buildBookingConfirmedNotificationTemplate(type), buildBookingLifecycleNotificationTemplate("completed", type), buildBookingLifecycleNotificationTemplate("cancelled", type), buildCashConfirmNotificationTemplate(type), buildAdminMessageNotificationTemplate(type)].filter(Boolean);
+  const event = normalizeNotificationEventKey(payload.event_type);
+  if (event === "withdraw_request_locked" || event.startsWith("payout_execution_")) {
+    const builder = c => event === "withdraw_request_locked" ? buildWithdrawRequestLockedNotificationTemplate(c) : buildPayoutExecutionNotificationTemplate(event, c);
+    const current = builder(context);
+    for (const currency of [context.currency, "", "undefined"]) {
+      const legacy = builder({ ...context, currency });
+      if (current && legacy && input.title_ru === legacy.title_ru && input.body_ru === legacy.body_ru) {
+        return { ...input, body_ru: current.body_ru, title_en: input.title_en || current.title_en, body_en: input.body_en || current.body_en };
+      }
+    }
+  }
+  const match = candidates.find(template => template.title_ru === input.title_ru && template.body_ru === input.body_ru);
+  if (match) return { ...input, title_en: input.title_en || match.title_en, body_en: input.body_en || match.body_en };
+  if (event === "withdraw_request_admin_created" && input.title_ru === "Новая заявка на вывод") {
+    const owner = payload.owner_slug || (payload.owner_type === "salon" ? "Salon" : "Master") + " #" + (payload.owner_id ?? "—");
+    return { ...input, title_en: input.title_en || "New withdrawal request", body_en: input.body_en || `${owner} requested a withdrawal of ${context.amount ?? "—"} ${context.currency}.` };
+  }
+  return input;
 }
