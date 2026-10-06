@@ -1,6 +1,8 @@
+import KZ_COUNTRY_PACK from "./country-packs/KZ.js";
 import KG_COUNTRY_PACK from "./country-packs/KG.js";
 
 const PACKS = new Map([
+  [`${KZ_COUNTRY_PACK.code}@${KZ_COUNTRY_PACK.version}`, KZ_COUNTRY_PACK],
   [`${KG_COUNTRY_PACK.code}@${KG_COUNTRY_PACK.version}`, KG_COUNTRY_PACK],
 ]);
 
