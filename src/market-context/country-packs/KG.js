@@ -23,7 +23,7 @@ const KG_COUNTRY_PACK = Object.freeze({
       canonical = `+996${compact.slice(1)}`;
     }
 
-    if (!/^\+996[579][0-9]{8}$/.test(canonical)) {
+    if (!/^\+996(?:22[0-9]{7}|[579][0-9]{8})$/.test(canonical)) {
       return { ok: false, error: "INVALID_KG_MOBILE_PHONE" };
     }
 
