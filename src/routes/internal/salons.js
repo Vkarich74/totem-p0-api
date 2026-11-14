@@ -1525,7 +1525,8 @@ return res.status(403).json({ ok:false, error:"SALON_ACCESS_DENIED" });
 
 const response = await buildSalonCalendarResponse(pool, {
 salonRow,
-requestedDate: req.query.date ?? null
+requestedDate: req.query.date ?? null,
+locationCode: req.query.location_code ?? null
 });
 
 return res.json(response);
@@ -1534,6 +1535,11 @@ return res.json(response);
 
 if(err?.code === "BAD_CALENDAR_DATE" || err?.message === "BAD_CALENDAR_DATE"){
 return res.status(400).json({ ok:false, error:"BAD_CALENDAR_DATE" });
+}
+
+if (String(err?.code || "").startsWith("US_") &&
+    Number.isInteger(err?.statusCode)) {
+return res.status(err.statusCode).json({ ok:false, error:err.code });
 }
 
 console.error("SALON_CALENDAR_FETCH_ERROR", err);

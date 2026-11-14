@@ -1,5 +1,6 @@
 import { pool } from "../db.js";
 import { buildSalonCalendarResponse } from "../services/salonCalendar.service.js";
+import { buildUsAvailableSlots } from "../services/usSlots.service.js";
 
 function formatZoneParts(date, timeZone) {
   const formatter = new Intl.DateTimeFormat("en-CA", {
@@ -194,8 +195,23 @@ export async function publicMasterAvailability(req, res) {
 
     const calendar = await buildSalonCalendarResponse(pool, {
       salonRow: salonRes.rows[0],
-      requestedDate
+      requestedDate,
+      locationCode: req.query?.location_code ?? null
     });
+
+    if (calendar.market_code === "US") {
+      return res.json({
+        ok: true,
+        master_id: masterId,
+        service_id: serviceId,
+        date: requestedDate,
+        timezone: calendar.date.timezone,
+        location_code: calendar.location.location_code,
+        slots: buildUsAvailableSlots(calendar, {
+          masterId, durationMin, stepMin, nowMs: Date.now(),
+        }),
+      });
+    }
 
     const workingRow = (calendar.working_hours || []).find(
       (row) => Number(row.master_id) === masterId
@@ -310,6 +326,10 @@ export async function publicMasterAvailability(req, res) {
       return res.status(400).json({ ok: false, error: "INVALID_RANGE" });
     }
 
+    if (String(err?.code || "").startsWith("US_") &&
+        Number.isInteger(err?.statusCode)) {
+      return res.status(err.statusCode).json({ ok: false, error: err.code });
+    }
     console.error("AVAILABILITY_ERROR", err);
     return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
   }

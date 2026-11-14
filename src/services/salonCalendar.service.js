@@ -1,4 +1,5 @@
-import { resolveBusinessTimezone } from "../market-context/BusinessContext.js";
+import { resolveBusinessMarketContext } from "../market-context/BusinessContext.js";
+import { buildUsSalonCalendarResponse } from "./usCalendar.service.js";
 
 function normalizeText(value){
 return String(value || "").trim();
@@ -228,12 +229,18 @@ price: row.price === null || row.price === undefined ? null : Number(row.price)
 };
 }
 
-export async function buildSalonCalendarResponse(pool, { salonRow, requestedDate } = {}) {
+export async function buildSalonCalendarResponse(pool, { salonRow, requestedDate, locationCode = null } = {}) {
 if(!salonRow || !pool){
 throw new Error("SALON_CALENDAR_INVALID_INPUT");
 }
 
-const timeZone = await resolveBusinessTimezone(pool, { salonId: salonRow.id });
+const marketContext = await resolveBusinessMarketContext(pool, { salonId: salonRow.id });
+if (marketContext.market_code === "US") {
+  return buildUsSalonCalendarResponse(pool, {
+    salonRow, requestedDate, locationCode, marketContext,
+  });
+}
+const timeZone = marketContext.timezone;
 const currentToday = getLocalDateString(new Date(), timeZone);
 const requested = parseCalendarDateOrThrow(requestedDate) || currentToday;
 

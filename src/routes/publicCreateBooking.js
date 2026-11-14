@@ -3,6 +3,10 @@ import crypto from "crypto";
 import { createNotification } from "../services/notifications/notificationService.js";
 import { buildBookingCreatedNotificationTemplate } from "../services/notifications/notificationTemplates.js";
 import { getCountryPack } from "../market-context/index.js";
+import { resolveUsSalonLocation } from "../services/usLocation.service.js";
+import { buildUsSalonCalendarResponse } from "../services/usCalendar.service.js";
+import { buildUsAvailableSlots } from "../services/usSlots.service.js";
+import { normalizeUsBookingStart } from "../services/usTime.service.js";
 
 function buildClientCabinetUrl(clientId, token) {
   return `#/client/${clientId}/${token}`;
@@ -313,16 +317,49 @@ export async function publicCreateBooking(req, res) {
       return res.status(400).json({ ok: false, error: "MASTER_NOT_IN_SALON" });
     }
 
-    const normalizedStartAt = normalizePublicStartAt(
-      {
-        start_at,
-        date,
-        time
-      },
-      {
-        marketTimeZone: marketContext.timezone
+    let usLocation = null;
+    let normalizedStartAt = null;
+    if (marketContext.market_code === "US") {
+      // Serialize US bookings for each master, including other locations.
+      // KG/KZ never acquire this new advisory lock.
+      await client.query(
+        "SELECT pg_advisory_xact_lock($1::integer, $2::integer)",
+        [973103, Number(master_id)]
+      );
+      usLocation = await resolveUsSalonLocation(client, {
+        salonId,
+        locationCode: req.body?.location_code,
+        marketContext,
+      });
+      const selected = normalizeUsBookingStart(
+        { start_at, date, time }, usLocation.timezone
+      );
+      const calendar = await buildUsSalonCalendarResponse(client, {
+        salonRow: { id: salonId, slug: salonSlug, name: salonSlug },
+        requestedDate: selected.date,
+        locationCode: usLocation.location_code,
+        marketContext,
+      });
+      const offeredSlots = buildUsAvailableSlots(calendar, {
+        masterId: Number(master_id), durationMin, stepMin: 15, nowMs: Date.now(),
+      });
+      if (!offeredSlots.some(slot => slot.start_at === selected.startAt)) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ ok: false, error: "US_SLOT_UNAVAILABLE" });
       }
-    );
+      normalizedStartAt = selected.startAt;
+    } else {
+      normalizedStartAt = normalizePublicStartAt(
+        {
+          start_at,
+          date,
+          time
+        },
+        {
+          marketTimeZone: marketContext.timezone
+        }
+      );
+    }
 
     if (!normalizedStartAt) {
       await client.query("ROLLBACK");
@@ -459,6 +496,14 @@ export async function publicCreateBooking(req, res) {
     );
 
     const booking_id = bookingInsert.rows[0].id;
+    if (usLocation) {
+      // Booking and physical US location link commit atomically.
+      await client.query(
+        `INSERT INTO public.us_booking_location_links (booking_id, location_id)
+         VALUES ($1, $2)`,
+        [booking_id, usLocation.id]
+      );
+    }
 
     const cabinetToken = createClientCabinetToken();
 
@@ -555,7 +600,7 @@ export async function publicCreateBooking(req, res) {
       master_id: Number(master_id),
       client_id: Number(finalClientId),
       service_id: Number(servicePk),
-      start_at: new Date(start_at).toISOString(),
+      start_at: new Date(marketContext.market_code === "US" ? normalizedStartAt : start_at).toISOString(),
       end_at: new Date(end_at).toISOString(),
       price: Number(price),
       currency_code: bookingCurrency
@@ -660,6 +705,11 @@ export async function publicCreateBooking(req, res) {
     try {
       await client.query("ROLLBACK");
     } catch (rollbackErr) {}
+
+    if (String(err?.code || "").startsWith("US_") &&
+        Number.isInteger(err?.statusCode)) {
+      return res.status(err.statusCode).json({ ok: false, error: err.code });
+    }
 
     if (err.code === "23P01") {
       return res.status(409).json({ ok: false, error: "TIME_SLOT_CONFLICT" });
