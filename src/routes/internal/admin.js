@@ -2143,6 +2143,11 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
       });
     }
 
+    const actorUserId = Number(req.admin?.user_id);
+    if (!Number.isSafeInteger(actorUserId) || actorUserId <= 0) {
+      return res.status(403).json({ ok: false, error: "ADMIN_ACTOR_REQUIRED" });
+    }
+
     const db = await pool.connect();
 
     try {
@@ -2202,7 +2207,7 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
             entity_id: id,
             action,
             reason,
-            actor_user_id: req.auth?.user_id ?? null,
+            actor_user_id: actorUserId,
             before,
             after: entity,
           }),
@@ -2243,6 +2248,11 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
         ok: false,
         error: "ADMIN_ACTION_INVALID",
       });
+    }
+
+    const actorUserId = Number(req.admin?.user_id);
+    if (!Number.isSafeInteger(actorUserId) || actorUserId <= 0) {
+      return res.status(403).json({ ok: false, error: "ADMIN_ACTOR_REQUIRED" });
     }
 
     const db = await pool.connect();
@@ -2304,7 +2314,7 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
             entity_id: id,
             action,
             reason,
-            actor_user_id: req.auth?.user_id ?? null,
+            actor_user_id: actorUserId,
             before,
             after: entity,
           }),

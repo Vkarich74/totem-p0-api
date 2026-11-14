@@ -493,12 +493,17 @@ function sendWithdrawRequestStartProcessingError(res, err) {
 
   if (
     String(err.code || '').startsWith('MONEY_CORE_') ||
+    err.code === 'WITHDRAW_REQUESTS_V2_DISABLED' ||
     String(err.code || '').startsWith('WITHDRAW_REQUEST_') ||
     String(err.code || '').startsWith('PAYOUT_') ||
     err.code === 'PAYOUT_PROOF_NOT_ALLOWED_AT_START_PROCESSING' ||
     err.statusCode
   ) {
-    return safeJson(res, err.statusCode || 400, {
+    return safeJson(res, (
+      String(err.code || '').startsWith('MONEY_CORE_') ||
+      err.code === 'WITHDRAW_REQUESTS_V2_DISABLED' ||
+      err.code === 'PAYOUT_EXECUTIONS_DISABLED'
+    ) ? 403 : err.statusCode || 400, {
       ok: false,
       error: err.code || 'WITHDRAW_REQUEST_START_PROCESSING_FAILED',
       message: err.message,
@@ -514,8 +519,10 @@ function sendWithdrawRequestPayoutActionError(res, err) {
   }
 
   const code = String(err.code || '');
-  if (code.startsWith('WITHDRAW_REQUEST_') || code.startsWith('PAYOUT_') || code.startsWith('MONEY_CORE_')) {
-    return safeJson(res, err.statusCode || (code.startsWith('MONEY_CORE_') ? 403 : 400), {
+  if (code.startsWith('WITHDRAW_REQUEST_') || code.startsWith('PAYOUT_') ||
+      code.startsWith('MONEY_CORE_') || code === 'WITHDRAW_REQUESTS_V2_DISABLED') {
+    return safeJson(res, (code.startsWith('MONEY_CORE_') || code === 'PAYOUT_EXECUTIONS_DISABLED' ||
+      code === 'WITHDRAW_REQUESTS_V2_DISABLED') ? 403 : err.statusCode || 400, {
       ok: false,
       error: err.code || 'WITHDRAW_REQUEST_PAYOUT_ACTION_FAILED',
       message: err.message,
@@ -534,6 +541,7 @@ function sendWithdrawRequestPayoutActionError(res, err) {
 }
 
 async function processAdminWithdrawRequestAction(pool, requestId, action, body = {}, actor = {}) {
+  assertWithdrawRequestsEnabled();
   const normalizedAction = normalizeWithdrawRequestAdminActionText(action)?.toLowerCase();
   const normalizedRequestId = Number.parseInt(String(requestId || '').trim(), 10);
 
@@ -764,6 +772,37 @@ async function processAdminWithdrawRequestAction(pool, requestId, action, body =
   }
 }
 
+async function insertStartProcessingAuditOnce(pool, payload) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Serialize audit lookup/insert on this withdraw row; a replay is a no-op.
+    const locked = await client.query(
+      'SELECT id FROM public.withdraw_requests WHERE id = $1 FOR UPDATE',
+      [payload.source_id]
+    );
+    if (!locked.rows[0]) {
+      throw buildWithdrawRequestAdminActionError('WITHDRAW_REQUEST_NOT_FOUND', 'Withdraw request not found', 404);
+    }
+    const previous = await client.query(
+      'SELECT id FROM public.money_audit_events ' +
+      'WHERE source_type = $1 AND source_id = $2 AND event_type = $3 ORDER BY id ASC LIMIT 1',
+      ['withdraw_request', payload.source_id, 'withdraw_request_admin_start_processing']
+    );
+    if (previous.rows[0]) {
+      await client.query('COMMIT');
+      return null;
+    }
+    const event = await insertMoneyAuditEvent(client, payload);
+    await client.query('COMMIT');
+    return event;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
 async function processAdminWithdrawRequestStartProcessing(pool, requestId, body = {}, actor = {}) {
   const normalizedRequestId = Number.parseInt(String(requestId || '').trim(), 10);
   if (!Number.isFinite(normalizedRequestId) || normalizedRequestId <= 0) {
@@ -929,7 +968,7 @@ async function processAdminWithdrawRequestStartProcessing(pool, requestId, body 
     throw buildWithdrawRequestAdminActionError('WITHDRAW_REQUEST_NOT_FOUND', 'Withdraw request not found', 404);
   }
 
-  const auditEvent = await insertMoneyAuditEvent(pool, {
+  const auditEvent = await insertStartProcessingAuditOnce(pool, {
     event_type: 'withdraw_request_admin_start_processing',
     actor_type: 'admin',
     actor_id: adminUserId,
@@ -1128,7 +1167,16 @@ function buildMoneyCoreRouter(pool) {
       return null;
     }
 
-    if (String(err.code || '').startsWith('WITHDRAW_REQUEST_') || err.statusCode) {
+    const code = String(err.code || '');
+    if (code.startsWith('MONEY_CORE_') || code === 'WITHDRAW_REQUESTS_V2_DISABLED') {
+      return safeJson(res, 403, {
+        ok: false,
+        error: code,
+        message: err.message,
+      });
+    }
+
+    if (code.startsWith('WITHDRAW_REQUEST_') || err.statusCode) {
       return safeJson(res, err.statusCode || 400, {
         ok: false,
         error: err.code || 'WITHDRAW_REQUEST_ACTION_FAILED',
@@ -2945,6 +2993,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/admin/withdraw-requests/:id/start-processing', AdminRuntimeGuard, async (req, res, next) => {
     try {
+      assertWithdrawRequestsEnabled();
       assertPayoutExecutionsEnabled();
       const result = await processAdminWithdrawRequestStartProcessing(pool, req.params.id, req.body || {}, req.admin || {});
       return safeJson(res, 200, {
@@ -2966,6 +3015,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/admin/withdraw-requests/:id/complete', AdminRuntimeGuard, async (req, res, next) => {
     try {
+      assertWithdrawRequestsEnabled();
       assertPayoutExecutionsEnabled();
       const result = await processAdminWithdrawRequestComplete(pool, req.params.id, req.body || {}, req.admin || {});
       return safeJson(res, 200, {
@@ -2986,6 +3036,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/admin/withdraw-requests/:id/fail', AdminRuntimeGuard, async (req, res, next) => {
     try {
+      assertWithdrawRequestsEnabled();
       assertPayoutExecutionsEnabled();
       const result = await processAdminWithdrawRequestFail(pool, req.params.id, req.body || {}, req.admin || {});
       return safeJson(res, 200, {

@@ -771,6 +771,8 @@ async function getAdminWithdrawRequestDetail(pool, id) {
         `
         SELECT
           id AS destination_id,
+          owner_type,
+          owner_id,
           method,
           provider_code,
           wallet_provider,
@@ -895,7 +897,7 @@ async function getAdminWithdrawRequestDetail(pool, id) {
   const ownerMatches = owner.owner_type === 'salon' || owner.owner_type === 'master' ? Boolean(owner.owner_slug || owner.owner_name) : true;
   const destinationMatches = destination
     ? normalizeText(destination.owner_type) === normalizeText(request.owner_type) &&
-      Number(destination.owner_id || request.owner_id) === Number(request.owner_id)
+      Number(destination.owner_id) === Number(request.owner_id)
     : !request.destination_id;
 
   return {

@@ -292,7 +292,7 @@ async function loadWithdrawRequest(pool, withdrawRequestId) {
     SELECT *
     FROM public.withdraw_requests
     WHERE id = $1
-    LIMIT 1
+    FOR UPDATE
     `,
     [withdrawRequestId]
   );
@@ -582,29 +582,35 @@ async function createPayoutExecution(pool, input = {}, actor = {}) {
       throw error;
     }
 
-    if (!ALLOWED_WITHDRAW_STATUSES_FOR_CREATE.has(String(withdrawRequest.status || '').trim().toLowerCase())) {
-      const error = new Error('Withdraw request cannot create payout');
-      error.code = 'PAYOUT_WITHDRAW_REQUEST_STATUS_INVALID';
-      error.statusCode = 400;
-      throw error;
-    }
-
+    // FOR UPDATE on withdraw_requests serializes all payout creation for one id.
+    // Check existing payout FIRST: another request may submit while we wait.
     const existingResult = await client.query(
       `
       SELECT *
       FROM public.payout_executions
       WHERE withdraw_request_id = $1
       ORDER BY id ASC
-      LIMIT 1
+      LIMIT 2
       `,
       [withdrawRequestId]
     );
-
+    if (existingResult.rows.length > 1) {
+      const error = new Error('Multiple payouts for one withdraw request');
+      error.code = 'PAYOUT_DUPLICATE_WITHDRAW_REQUEST';
+      error.statusCode = 409;
+      throw error;
+    }
     if (existingResult.rows[0]) {
       await client.query('COMMIT');
       return existingResult.rows[0];
     }
 
+    if (!ALLOWED_WITHDRAW_STATUSES_FOR_CREATE.has(String(withdrawRequest.status || '').trim().toLowerCase())) {
+      const error = new Error('Withdraw request cannot create payout');
+      error.code = 'PAYOUT_WITHDRAW_REQUEST_STATUS_INVALID';
+      error.statusCode = 409;
+      throw error;
+    }
     const amount = normalizeNumber(withdrawRequest.locked_amount) || normalizeNumber(withdrawRequest.amount);
     const currency = requireCurrencyCode(withdrawRequest.currency, 'PAYOUT_CURRENCY_INVALID');
     if (!amount || amount <= 0) {
@@ -719,9 +725,16 @@ async function submitManualPayoutExecution(pool, id, input = {}, actor = {}) {
   try {
     await client.query('BEGIN');
 
-    const payout = await loadPayout(client, payoutId);
+    const payout = await loadPayoutForUpdate(client, payoutId);
     if (!payout) {
       return null;
+    }
+
+    // A second submit sees the committed status under row lock: no audit write.
+    const status = String(payout.status || '').trim().toLowerCase();
+    if (status === 'submitted' || status === 'processing') {
+      await client.query('COMMIT');
+      return payout;
     }
 
     const amount = normalizeNumber(payout.amount);

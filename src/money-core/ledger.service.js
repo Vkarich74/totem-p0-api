@@ -316,7 +316,9 @@ function buildBalanceFromZones(zoneRows = []) {
 }
 
 async function resolveDbClient(poolOrClient) {
-  if (poolOrClient && typeof poolOrClient.query === 'function' && typeof poolOrClient.connect !== 'function') {
+  // A pooled pg.Client has .connect AND .release: do not reconnect it.
+  if (poolOrClient && typeof poolOrClient.query === 'function' &&
+      (typeof poolOrClient.release === 'function' || typeof poolOrClient.connect !== 'function')) {
     return { client: poolOrClient, owned: false };
   }
 
