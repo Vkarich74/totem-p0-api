@@ -208,7 +208,7 @@ export async function publicMasterAvailability(req, res) {
         timezone: calendar.date.timezone,
         location_code: calendar.location.location_code,
         slots: buildUsAvailableSlots(calendar, {
-          masterId, durationMin, stepMin, nowMs: Date.now(),
+          masterId, durationMin, stepMin: 15, nowMs: Date.now(),
         }),
       });
     }
