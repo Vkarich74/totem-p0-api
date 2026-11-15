@@ -69,6 +69,10 @@ export function assertStagingProcessSafety(env = {}) {
   if (env.TOTEM_STAGE_STRICT !== "1") {
     throw new Error("STAGING_STRICT_FLAG_REQUIRED");
   }
+  // No schema migrations, seed records or live bookings are authorized yet.
+  if (env.TOTEM_STAGE_EMPTY_DB !== "1") {
+    throw new Error("STAGING_EMPTY_DB_WRITE_LOCK_REQUIRED");
+  }
   const database = required("DATABASE_URL", env.DATABASE_URL);
   let url;
   try { url = new URL(database); }

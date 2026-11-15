@@ -7,6 +7,7 @@ const legacy=["https://app.totemv.com","https://totem-platform.odoo.com"];
 const valid={
   NODE_ENV:"staging",
   TOTEM_STAGE_STRICT:"1",
+  TOTEM_STAGE_EMPTY_DB:"1",
   STAGING_ALLOWED_ORIGINS:"https://totem-us-staging-sdk.up.railway.app",
   DATABASE_URL:"postgresql://staging:unique@postgres.railway.internal:5432/railway",
   JWT_SECRET:"y".repeat(64),
@@ -27,6 +28,11 @@ check("legacy_test_mode_unmodified",()=>{
 check("staging_requires_flag",()=>{
   assert.throws(()=>assertStagingProcessSafety({...valid,TOTEM_STAGE_STRICT:"0"}),
     /STAGING_STRICT_FLAG_REQUIRED/);
+});
+check("staging_requires_empty_db_write_lock",()=>{
+  assert.throws(()=>assertStagingProcessSafety({
+    ...valid,TOTEM_STAGE_EMPTY_DB:"0",
+  }),/STAGING_EMPTY_DB_WRITE_LOCK_REQUIRED/);
 });
 check("staging_cors_only_staging",()=>{
   assert.deepEqual(resolveCorsAllowedOrigins(valid,legacy),

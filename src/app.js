@@ -9,6 +9,7 @@ import Redis from "ioredis";
 import {
   assertStagingProcessSafety,
   resolveCorsAllowedOrigins,
+  isStagingRuntime,
 } from "./staging/stagingSafety.js";
 
 import { pool } from "./db.js";
@@ -130,6 +131,22 @@ app.get("/build", (req, res) =>
   })
 );
 
+// DB write lock while Staging has no approved schema or test records.
+// All dynamic routes fail closed. The explicit /health and /version only
+// are available above this guard, so no signup, booking, wallet, user CRUD
+// or internal schema setup can run in a newly allocated empty Staging DB.
+if (isStagingRuntime(process.env) &&
+    process.env.TOTEM_STAGE_EMPTY_DB === "1") {
+  app.use((req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    return res.status(503).json({
+      ok: false,
+      error: "STAGING_EMPTY_DATABASE_LOCKED",
+      allowed_actions: ["health", "version"],
+    });
+  });
+}
+
 /* ================= RATE LIMIT ================= */
 
 function intEnv(name, fallback) {
@@ -241,11 +258,18 @@ if (AUTO_FINANCE_LOOP_ENABLED) {
 
 const PORT = process.env.PORT || 8080;
 
-initializeSlugReservationLayer(pool).then(() => {
-  console.log("SLUG_RESERVATION_READY");
-}).catch((error) => {
-  console.error("SLUG_RESERVATION_INIT_FAILED", error);
-});
+// initializeSlugReservationLayer issues CREATE TABLE IF NOT EXISTS.
+// Do not call it while the owner has prohibited populating Staging DB.
+if (!(isStagingRuntime(process.env) &&
+      process.env.TOTEM_STAGE_EMPTY_DB === "1")) {
+  initializeSlugReservationLayer(pool).then(() => {
+    console.log("SLUG_RESERVATION_READY");
+  }).catch((error) => {
+    console.error("SLUG_RESERVATION_INIT_FAILED", error);
+  });
+} else {
+  console.log("STAGING_EMPTY_DATABASE_LOCKED_NO_SCHEMA_WRITES");
+}
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log("Server running on port:", PORT);
