@@ -159,7 +159,22 @@ export function buildCabinetAbsoluteUrl(ownerType, slug, baseUrl = null){
   return `${resolvedBaseUrl}/${cabinetUrl}`;
 }
 
-export function buildAuthLoginUrl(ownerType = null, slug = null, baseUrl = null){
+export function buildAuthLoginUrl(ownerType = null, slug = null, baseUrl = null, marketCode = ""){
+  // US is a MarketContext variation inside the shared API/SDK, not a
+  // distinct service or a NODE_ENV staging switch.
+  if (normalizeText(marketCode).toUpperCase() === "US") {
+    const safeType = ownerType ? validateOwnerType(ownerType) : null;
+    const safeSlug = slug ? validateCanonicalSlug(slug) : null;
+    const query = new URLSearchParams();
+    if (safeType) query.set("role", safeType === "salon" ? "salon_admin" : "master");
+    if (safeSlug) query.set("slug", safeSlug);
+    const route = `#/auth/login${query.size ? "?" + query.toString() : ""}`;
+    const appOrigin = resolveCanonicalBookingAppBaseUrl();
+    return {
+      auth_login_url: route,
+      auth_login_absolute_url: `${appOrigin}/${route}`
+    };
+  }
   const resolvedBaseUrl = resolveCanonicalPublicBaseUrl(baseUrl);
   const safeType = ownerType ? validateOwnerType(ownerType) : null;
   const safeSlug = slug ? validateCanonicalSlug(slug) : null;
@@ -193,7 +208,7 @@ export function buildEntryContract(owner = {}, accessSnapshot = {}, baseUrl = nu
   const publicAbsoluteUrl = buildPublicAbsoluteUrl(ownerType, canonicalSlug, baseUrl);
   const cabinetUrl = buildCabinetUrl(ownerType, canonicalSlug);
   const cabinetAbsoluteUrl = buildCabinetAbsoluteUrl(ownerType, canonicalSlug, baseUrl);
-  const authUrls = buildAuthLoginUrl(ownerType, canonicalSlug, baseUrl);
+  const authUrls = buildAuthLoginUrl(ownerType, canonicalSlug, baseUrl, owner?.market_code);
 
   const entryAllowed = Boolean(accessSnapshot?.public_visible);
   const qrAllowed = Boolean(entryAllowed);

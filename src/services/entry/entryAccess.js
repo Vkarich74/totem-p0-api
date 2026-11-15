@@ -153,8 +153,16 @@ async function findSalonEntryCore(db, slug) {
        au.id AS auth_user_id,
        au.email AS owner_email,
        au.enabled AS auth_enabled,
-       oi.state AS onboarding_state
+       oi.state AS onboarding_state,
+       market_binding.market_code AS market_code
      FROM salons s
+     LEFT JOIN LATERAL (
+       SELECT mkt.code AS market_code
+       FROM public.tenant_market_settings tms
+       JOIN public.markets mkt ON mkt.id = tms.market_id
+       WHERE tms.salon_id = s.id
+       LIMIT 1
+     ) market_binding ON TRUE
      LEFT JOIN auth_users au
        ON (
          au.role = 'salon_admin'
@@ -192,12 +200,21 @@ async function findMasterEntryCore(db, slug) {
        au.email AS owner_email,
        au.enabled AS auth_enabled,
        oi.state AS onboarding_state,
+       market_binding.market_code AS market_code,
        CASE
          WHEN m.active = TRUE THEN 'active'
          WHEN m.active = FALSE THEN 'blocked'
          ELSE 'draft'
        END AS master_status
      FROM masters m
+     LEFT JOIN LATERAL (
+       SELECT CASE WHEN COUNT(DISTINCT mkt.code) = 1
+                   THEN MAX(mkt.code) ELSE NULL END AS market_code
+       FROM public.master_salon ms
+       JOIN public.tenant_market_settings tms ON tms.salon_id = ms.salon_id
+       JOIN public.markets mkt ON mkt.id = tms.market_id
+       WHERE ms.master_id = m.id AND ms.status = 'active'
+     ) market_binding ON TRUE
      LEFT JOIN auth_users au
        ON (
          au.role = 'master'
@@ -276,6 +293,7 @@ export async function resolveEntryOwner(db, ownerType, slug) {
       display_name: salon.salon_name || null,
       lifecycle_state: lifecycleState,
       billing_state: billingState,
+      market_code: salon.market_code || null,
       source: salon
     };
   }
@@ -296,6 +314,7 @@ export async function resolveEntryOwner(db, ownerType, slug) {
     display_name: master.master_name || null,
     lifecycle_state: lifecycleState,
     billing_state: billingState,
+    market_code: master.market_code || null,
     source: master
   };
 }
