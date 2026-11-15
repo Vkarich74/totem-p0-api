@@ -609,14 +609,19 @@ export function createPublicRouter(deps) {
         const clientRes = await db.query(
           `
           SELECT
-            id,
-            salon_id,
-            name,
-            phone,
-            email,
-            created_at
-          FROM clients
-          WHERE id = $1
+            c.id,
+            c.salon_id,
+            c.name,
+            c.phone,
+            c.email,
+            c.created_at,
+            cm.code AS market_code,
+            cm.default_currency AS currency_code
+          FROM public.clients c
+          LEFT JOIN public.tenant_market_settings ts
+            ON ts.salon_id = c.salon_id
+          LEFT JOIN public.markets cm ON cm.id = ts.market_id
+          WHERE c.id = $1
           LIMIT 1
           `,
           [clientId]
@@ -643,6 +648,11 @@ export function createPublicRouter(deps) {
             b.status,
             b.price_snapshot,
             b.created_at,
+            bm.code AS market_code,
+            COALESCE(NULLIF(b.currency_code, ''), bm.default_currency)
+              AS currency_code,
+            usl.timezone_name AS booking_timezone,
+            usl.location_code AS booking_location_code,
             pay.id AS payment_id,
             pay.provider AS payment_provider,
             pay.status AS payment_status,
@@ -652,6 +662,14 @@ export function createPublicRouter(deps) {
           LEFT JOIN salons salon ON salon.id = b.salon_id
           LEFT JOIN masters m ON m.id = b.master_id
           LEFT JOIN services s ON s.id = b.service_id
+          LEFT JOIN public.tenant_market_settings bts
+            ON bts.salon_id = b.salon_id
+          LEFT JOIN public.markets bm ON bm.id = bts.market_id
+          LEFT JOIN public.us_booking_location_links usbl
+            ON usbl.booking_id = b.id
+          LEFT JOIN public.us_salon_locations usl
+            ON usl.id = usbl.location_id
+           AND usl.salon_id = b.salon_id
           LEFT JOIN LATERAL (
             SELECT
               p.id,
