@@ -1,8 +1,13 @@
 // C:\Work\totem-p0-api\src\services\entry\qrService.js
 
-import { resolveCanonicalBookingAppBaseUrl } from './entryContract.js';
+import { resolveCanonicalBookingAppBaseUrl, resolveCanonicalPublicBaseUrl } from './entryContract.js';
+import { isStagingRuntime } from '../../staging/stagingSafety.js';
 
-const WEB_BASE = (process.env.WEB_BASE || 'https://totemv.com').replace(/\/+$/, '');
+const PRODUCTION_WEB_BASE = (process.env.WEB_BASE || 'https://totemv.com').replace(/\/+$/, '');
+
+function qrWebBase(){
+  return isStagingRuntime(process.env) ? resolveCanonicalPublicBaseUrl() : PRODUCTION_WEB_BASE;
+}
 
 function normalizeOwnerType(value) {
   const ownerType = String(value || '').trim().toLowerCase();
@@ -29,7 +34,7 @@ function normalizeSlug(value) {
 }
 
 function buildPublicUrl({ ownerType, canonicalSlug }) {
-  return `${WEB_BASE}/${ownerType}/${canonicalSlug}`;
+  return `${qrWebBase()}/${ownerType}/${canonicalSlug}`;
 }
 
 function normalizeTargetType(value) {
@@ -65,6 +70,16 @@ function normalizeBookingTargetUrl(url) {
 
   if (!normalizedUrl.includes('/#/booking?')) {
     throw new Error('QR_SERVICE_ERROR: booking qr target must point to booking');
+  }
+
+  if (isStagingRuntime(process.env)) {
+    let parsed;
+    try { parsed = new URL(normalizedUrl); }
+    catch { throw new Error('QR_SERVICE_ERROR: staging booking URL invalid'); }
+    if(parsed.origin !== appBase || parsed.pathname !== '/' ||
+        parsed.search || !parsed.hash.startsWith('#/booking?')){
+      throw new Error('QR_SERVICE_ERROR: staging booking target rejected');
+    }
   }
 
   if (forbiddenFragments.some((fragment) => normalizedUrl.includes(fragment))) {
@@ -163,6 +178,16 @@ export function assertQrTargetAllowed(url, targetType = 'public_page') {
       throw new Error('QR_SERVICE_ERROR: booking qr target must point to booking');
     }
 
+    if (isStagingRuntime(process.env)) {
+      let parsed;
+      try { parsed = new URL(normalizedUrl); }
+      catch { throw new Error('QR_SERVICE_ERROR: staging booking URL invalid'); }
+      if(parsed.origin !== appBase || parsed.pathname !== '/' ||
+          parsed.search || !parsed.hash.startsWith('#/booking?')){
+        throw new Error('QR_SERVICE_ERROR: staging booking target rejected');
+      }
+    }
+
     if (forbiddenFragments.some((fragment) => normalizedUrl.includes(fragment))) {
       throw new Error('QR_SERVICE_ERROR: forbidden booking qr target');
     }
@@ -174,7 +199,19 @@ export function assertQrTargetAllowed(url, targetType = 'public_page') {
     throw new Error('QR_SERVICE_ERROR: cabinet url is forbidden for qr');
   }
 
-  if (!normalizedUrl.startsWith(WEB_BASE)) {
+  const webBase = qrWebBase();
+  if (isStagingRuntime(process.env)) {
+    let parsed;
+    try { parsed = new URL(normalizedUrl); }
+    catch { throw new Error('QR_SERVICE_ERROR: staging public URL invalid'); }
+    if(parsed.origin !== webBase ||
+        !/^\/(?:salon|master)\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(parsed.pathname) ||
+        parsed.search || parsed.hash){
+      throw new Error('QR_SERVICE_ERROR: staging public target rejected');
+    }
+  }
+
+  if (!normalizedUrl.startsWith(webBase)) {
     throw new Error('QR_SERVICE_ERROR: qr target must use WEB_BASE');
   }
 

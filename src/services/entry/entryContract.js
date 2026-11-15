@@ -1,3 +1,5 @@
+import { isStagingRuntime, resolveCorsAllowedOrigins } from "../../staging/stagingSafety.js";
+
 function normalizeText(value){
   return String(value || "").trim();
 }
@@ -52,6 +54,44 @@ export function isForbiddenBookingAppBaseUrl(value){
   }
 }
 
+// Isolated Staging: no implicit Production origin and no ambiguous frontend origin.
+function resolveStagingEntryOrigin(kind, suppliedBaseUrl = null){
+  const allowed = resolveCorsAllowedOrigins(process.env, []);
+  const variableName = kind === "PUBLIC" ? "TOTEM_STAGE_PUBLIC_ORIGIN" : "TOTEM_STAGE_APP_ORIGIN";
+  const configured = normalizeBaseUrl(process.env[variableName] || "");
+  const origin = configured || (allowed.length === 1 ? allowed[0] : null);
+
+  if(!origin){
+    throw new Error("STAGING_" + kind + "_ORIGIN_REQUIRED");
+  }
+
+  let parsed;
+  try{ parsed = new URL(origin); }
+  catch(e){ throw new Error("STAGING_" + kind + "_ORIGIN_INVALID"); }
+  if(parsed.origin !== origin || parsed.pathname !== "/" ||
+      parsed.search || parsed.hash || !allowed.includes(origin)){
+    throw new Error("STAGING_" + kind + "_ORIGIN_REJECTED");
+  }
+
+  // A legacy base URL must not inject Production into a Staging response.
+  const legacyOrigins = {
+    WEB_BASE: process.env.WEB_BASE,
+    PUBLIC_WEB_BASE_URL: process.env.PUBLIC_WEB_BASE_URL,
+    APP_BASE_URL: process.env.APP_BASE_URL,
+    PUBLIC_APP_BASE_URL: process.env.PUBLIC_APP_BASE_URL
+  };
+  for(const [name,value] of Object.entries(legacyOrigins)){
+    if(normalizeText(value) && !allowed.includes(normalizeBaseUrl(value))){
+      throw new Error("STAGING_LEGACY_" + name + "_FORBIDDEN");
+    }
+  }
+
+  if(normalizeText(suppliedBaseUrl) && normalizeBaseUrl(suppliedBaseUrl) !== origin){
+    throw new Error("STAGING_" + kind + "_ORIGIN_MISMATCH");
+  }
+  return origin;
+}
+
 function normalizeSlugInput(slug){
   return normalizeText(slug).toLowerCase();
 }
@@ -87,6 +127,9 @@ export function validateCanonicalSlug(slug){
 }
 
 export function resolveCanonicalPublicBaseUrl(baseUrl = null){
+  if(isStagingRuntime(process.env)){
+    return resolveStagingEntryOrigin("PUBLIC", baseUrl);
+  }
   const explicitBaseUrl = normalizeBaseUrl(baseUrl);
   const envBaseUrl = normalizeBaseUrl(process.env.PUBLIC_WEB_BASE_URL || process.env.APP_BASE_URL || process.env.PUBLIC_APP_BASE_URL || "");
   const resolvedBaseUrl = explicitBaseUrl || envBaseUrl || "https://totemv.com";
@@ -95,6 +138,9 @@ export function resolveCanonicalPublicBaseUrl(baseUrl = null){
 }
 
 export function resolveCanonicalBookingAppBaseUrl(baseUrl = null){
+  if(isStagingRuntime(process.env)){
+    return resolveStagingEntryOrigin("APP", baseUrl);
+  }
   const candidates = [
     baseUrl,
     process.env.PUBLIC_APP_BASE_URL || "",

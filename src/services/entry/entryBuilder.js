@@ -1,6 +1,13 @@
 // C:\Work\totem-p0-api\src\services\entry\entryBuilder.js
 
-const WEB_BASE = (process.env.WEB_BASE || 'https://totemv.com').replace(/\/+$/, '');
+import { resolveCanonicalPublicBaseUrl } from "./entryContract.js";
+import { isStagingRuntime } from "../../staging/stagingSafety.js";
+
+const PRODUCTION_WEB_BASE = (process.env.WEB_BASE || 'https://totemv.com').replace(/\/+$/, '');
+
+function entryWebBase(){
+  return isStagingRuntime(process.env) ? resolveCanonicalPublicBaseUrl() : PRODUCTION_WEB_BASE;
+}
 
 function normalizeOwnerType(value) {
   const ownerType = String(value || '').trim().toLowerCase();
@@ -27,11 +34,11 @@ function normalizeSlug(value) {
 }
 
 function buildPublicUrl({ ownerType, canonicalSlug }) {
-  return `${WEB_BASE}/${ownerType}/${canonicalSlug}`;
+  return `${entryWebBase()}/${ownerType}/${canonicalSlug}`;
 }
 
 function buildCabinetUrl({ ownerType, canonicalSlug }) {
-  return `${WEB_BASE}/#/${ownerType}/${canonicalSlug}`;
+  return `${entryWebBase()}/#/${ownerType}/${canonicalSlug}`;
 }
 
 function buildAuthLoginUrl({ ownerType, canonicalSlug }) {
@@ -40,7 +47,7 @@ function buildAuthLoginUrl({ ownerType, canonicalSlug }) {
     slug: canonicalSlug
   });
 
-  return `${WEB_BASE}/auth/login?${params.toString()}`;
+  return `${entryWebBase()}/auth/login?${params.toString()}`;
 }
 
 /**

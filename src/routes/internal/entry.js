@@ -6,6 +6,8 @@ import { buildCabinetAuthSnapshot } from "../../services/entry/entryAuth.js";
 import { buildEntryValidationSnapshot } from "../../services/entry/entryValidation.js";
 import { buildEntryHandoffPackage } from "../../services/entry/entryHandoff.js";
 import { buildQrContract } from "../../services/entry/qrService.js"; // ✅ NEW
+import { resolveCanonicalPublicBaseUrl } from "../../services/entry/entryContract.js";
+import { isStagingRuntime } from "../../staging/stagingSafety.js";
 
 function normalizeQrTarget(value) {
   const target = String(value || "public").trim().toLowerCase();
@@ -22,6 +24,10 @@ function normalizeQrTarget(value) {
 }
 
 function readBaseUrl(req){
+  // API Host header is never a client-facing Staging origin.
+  if(isStagingRuntime(process.env)){
+    return resolveCanonicalPublicBaseUrl();
+  }
   const explicit = process.env.PUBLIC_WEB_BASE_URL || process.env.APP_BASE_URL || process.env.PUBLIC_APP_BASE_URL || "";
 
   if (explicit) {
