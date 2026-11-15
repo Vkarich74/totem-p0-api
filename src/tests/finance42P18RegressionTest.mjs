@@ -38,7 +38,7 @@ function assertAllParametersUsed(sql, values) {
   const referenced = new Set([...sql.matchAll(/\$(\d+)\b/g)].map((match) => Number(match[1])));
   assert.equal(referenced.size, values.length, "every bound value must be used by SQL");
   for (let index = 1; index <= values.length; index += 1) {
-    assert.ok(referenced.has(index), \`unused SQL parameter $\${index}\`);
+    assert.ok(referenced.has(index), `unused SQL parameter $${index}`);
   }
 }
 
@@ -63,7 +63,7 @@ class FakeDb {
       this.statement = { sql, values };
       return { rowCount: 0, rows: [] };
     }
-    throw new Error(\`UNEXPECTED_SQL: \${normalized.slice(0, 150)}\`);
+    throw new Error(`UNEXPECTED_SQL: ${normalized.slice(0, 150)}`);
   }
 }
 
@@ -86,7 +86,7 @@ async function anchors(label, options, expected, expectedTimezoneParameter) {
   if (expectedTimezoneParameter === null) {
     assert.doesNotMatch(db.statement.sql, /AT TIME ZONE/, label);
   } else {
-    assert.ok(db.statement.sql.includes(\`AT TIME ZONE $\${expectedTimezoneParameter}::text\`), label);
+    assert.ok(db.statement.sql.includes(`AT TIME ZONE $${expectedTimezoneParameter}::text`), label);
   }
   assertions += 1;
   console.log("42P18_PASS", label);
