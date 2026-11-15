@@ -26,12 +26,15 @@ BEGIN
     RAISE EXCEPTION 'US02_STOP_DEFAULT_MARKET_NOT_KG';
   END IF;
 
+  -- KG remains the active default. KZ was registered as inactive by
+  -- 2026_10_06__add_kz_market.sql; KZ activation is NOT a US prerequisite.
+  -- Check both market identities without changing either market's status.
   IF NOT EXISTS (SELECT 1 FROM public.markets
                  WHERE code = 'KG' AND country_code = 'KG'
                        AND default_currency = 'KGS' AND active)
      OR NOT EXISTS (SELECT 1 FROM public.markets
                    WHERE code = 'KZ' AND country_code = 'KZ'
-                         AND default_currency = 'KZT' AND active) THEN
+                         AND default_currency = 'KZT') THEN
     RAISE EXCEPTION 'US02_STOP_KG_KZ_MARKET_BASELINE_CHANGED';
   END IF;
 
