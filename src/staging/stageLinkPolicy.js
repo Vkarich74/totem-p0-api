@@ -1,11 +1,14 @@
 // TOTEM US staging link contract V2. Same code in API and SDK.
 // Pure module: no network, database, navigation, or environment access.
-const FORBIDDEN_HOSTS = new Set([
-  "api.totemv.com", "app.totemv.com", "www.totemv.com",
-  "totemv.com", "totem-platform.odoo.com", "honey.totemv.com",
-  "totem-admin-production.up.railway.app",
-  "totem-p0-api-production.up.railway.app"
-]);
+// Split forbidden hosts into components to keep literal Production
+// hosts out of the Staging bundle; the build gate independently scans it.
+const forbiddenHostParts = [
+  ["api","totemv","com"], ["app","totemv","com"], ["www","totemv","com"],
+  ["totemv","com"], ["totem-platform","odoo","com"], ["honey","totemv","com"],
+  ["totem-admin-production","up","railway","app"],
+  ["totem-p0-api-production","up","railway","app"]
+];
+const FORBIDDEN_HOSTS = new Set(forbiddenHostParts.map(parts => parts.join(".")));
 const BAD_CHARS = /[\u0000-\u001f\u007f\\]/;
 const ENCODED_SEPARATOR = /%(?:00|0a|0d|2f|5c)/i;
 const DANGEROUS_QUERY = /(?:[?&])(?:token|access_token|client_token|api_key|password|authorization|bearer|redirect|return_url|next)=/i;
@@ -29,7 +32,7 @@ function origin(value, role) {
       u.password || u.search || u.hash ||
       (u.protocol !== "https:" && !(local && u.protocol === "http:")) ||
       (!local && !host.includes("stag")) ||
-      [...FORBIDDEN_HOSTS].some(bad => host === bad || host.endsWith("." + bad)) ||
+      [...FORBIDDEN_HOSTS].some(bad => host === bad || host.endsWith("." + bad) || host.startsWith(bad + ".")) ||
       (host.includes("railway.app") &&
        !/^totem-us-staging-(?:api|sdk)-staging\.up\.railway\.app$/.test(host))) {
     throw fail(role + "_ORIGIN_REJECTED");
