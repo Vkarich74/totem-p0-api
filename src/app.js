@@ -6,6 +6,10 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
 import Redis from "ioredis";
+import {
+  assertStagingProcessSafety,
+  resolveCorsAllowedOrigins,
+} from "./staging/stagingSafety.js";
 
 import { pool } from "./db.js";
 
@@ -17,6 +21,10 @@ import { createPublicRouter } from "./routes/public.js";
 import authRouter from "./routes/auth.js";
 import { createInternalRouter } from "./routes/internal.js";
 import { initializeSlugReservationLayer } from "./services/provision/slugReservation.js";
+
+// Strict staging boot gate: no Production DB, CORS, money or connector secrets.
+// Outside NODE_ENV=staging this does nothing; KG/KZ Production is unaffected.
+assertStagingProcessSafety(process.env);
 
 /* ================= REDIS ================= */
 
@@ -54,14 +62,14 @@ app.locals.redis = redis;
 
 /* ================= CORS ================= */
 
-const allowedOrigins = [
+const allowedOrigins = resolveCorsAllowedOrigins(process.env, [
   "https://totem-platform.odoo.com",
   "https://www.totemv.com",
   "https://totemv.com",
   "https://app.totemv.com",
   "https://totem-admin-production.up.railway.app",
   "http://localhost:5173",
-];
+]);
 
 app.use(
   cors({
