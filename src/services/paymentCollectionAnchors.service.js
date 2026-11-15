@@ -953,8 +953,8 @@ currency = null
 const ownerContext = await resolveOwnerMarketContext(pool, { ownerType: scopeType, ownerId: scopeId });
 const timezone = ownerContext.timezone;
 const resolvedCurrency = requireCurrencyCode(currency || ownerContext.currency_code, "COLLECTION_ANCHOR_CURRENCY_REQUIRED");
-const queryValues = [scopeId, timezone, resolvedCurrency];
-const queryClauses = [`a.currency = $3`];
+const queryValues = [scopeId, resolvedCurrency];
+const queryClauses = [`a.currency = $2`];
 
 if(scopeType === "salon"){
 queryClauses.push(`a.salon_id = $1`);
@@ -975,14 +975,22 @@ queryClauses.push(`a.anchor_status = ANY($${queryValues.length}::text[])`);
 const fromDate = parseCollectionAnchorsDate(from, "COLLECTION_ANCHORS_FROM_DATE_INVALID");
 const toDate = parseCollectionAnchorsDate(to, "COLLECTION_ANCHORS_TO_DATE_INVALID");
 
+// Bind timezone only when a date filter needs it. An unused $2 caused
+// PostgreSQL 42P18 on default unfiltered finance requests.
+let timezoneParameter = null;
+if(fromDate || toDate){
+queryValues.push(timezone);
+timezoneParameter = queryValues.length;
+}
+
 if(fromDate){
 queryValues.push(fromDate);
-queryClauses.push(`(a.created_at AT TIME ZONE $2)::date >= $${queryValues.length}::date`);
+queryClauses.push(`(a.created_at AT TIME ZONE $${timezoneParameter}::text)::date >= $${queryValues.length}::date`);
 }
 
 if(toDate){
 queryValues.push(toDate);
-queryClauses.push(`(a.created_at AT TIME ZONE $2)::date <= $${queryValues.length}::date`);
+queryClauses.push(`(a.created_at AT TIME ZONE $${timezoneParameter}::text)::date <= $${queryValues.length}::date`);
 }
 
 const parsedMasterIdFilter = masterFilterRow && masterFilterRow.id !== undefined && masterFilterRow.id !== null ? safeInt(masterFilterRow.id) : null;

@@ -2212,7 +2212,9 @@ from = monthRange.from;
 to = monthRange.to;
 }
 
-const values = [masterRow.id, timezone, currency];
+// Currency is used in the response, not the SQL: an unused $3 caused
+// PostgreSQL 42P18 when reading the lost-profit report.
+const values = [masterRow.id, timezone];
 const clauses = ["b.master_id = $1", "LOWER(COALESCE(b.status, '')) IN ('cancelled','canceled','отмена')"];
 
 if(from){
