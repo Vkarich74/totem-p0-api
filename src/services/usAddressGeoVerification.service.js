@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import { resolve as resolvePath } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export const US_GEO_VERSION = "2026d";
 export const US_GEO_SOURCE_SHA256 =
@@ -44,8 +45,9 @@ function bbox(ring) {
 }
 let cached = null;
 export function loadPinnedUsTimezonePolygons() {
-  const location = process.env.US_GEO_POLYGON_PATH;
-  if (!location?.trim()) throw new Error("US_GEO_DATASET_PATH_MISSING");
+  // Pinned US ODbL dataset bundled with the shared TOTEM API.
+  const location = process.env.US_GEO_POLYGON_PATH?.trim() ||
+    fileURLToPath(new URL("../geo/US_2026d_29zones.geojson.gz", import.meta.url));
   const fullPath = resolvePath(location);
   if (cached?.path === fullPath) return cached;
   const compressed = readFileSync(fullPath);

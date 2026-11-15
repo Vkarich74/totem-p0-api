@@ -1,5 +1,5 @@
-// TOTEM US-05 — owner-only US location draft management.
-// Isolated US market only. Does not activate locations, providers or payments.
+// TOTEM US-07 — owner-only drafts and verified US branch activation.
+// No demo tenants, unverified activation or payment enablement.
 // Registered in salons router which supplies existing authorization & billing guards.
 import express from "express";
 import { verifyUsLocationAddress } from "../../services/usAddressGeoVerification.service.js";
@@ -126,6 +126,7 @@ function locationDto(row) {
     timezone_name: row.timezone_name,
     is_primary: row.is_primary === true,
     enabled: row.enabled === true,
+    activation_allowed: row.activation_allowed === true,
     geo_status: row.geo_status || "NEEDS_REVIEW",
     geo_reasons: row.geo_reasons || ["US_GEO_NOT_CHECKED"],
     geo_checked_at: row.geo_checked_at || null,
@@ -169,6 +170,22 @@ export function buildUsOwnerLocationsRouter(pool, {
         pool.query(`SELECT l.location_code,l.state_code,l.city_name,
                            l.street_line1,l.street_line2,l.postal_code,
                            l.timezone_name,l.is_primary,l.enabled,
+                           CASE WHEN NOT l.enabled
+                                     AND g.status='VERIFIED_GEOMETRY'
+                                     AND g.expires_at>now() AND g.checked_at<=now()
+                                     AND cardinality(g.reasons)=0
+                                     AND g.source_version='2026d'
+                                     AND g.dataset_sha256='2da5f1e980e70f53c781e1416e8e47bee03b98160353951c886a9901f525550a'
+                                     AND g.census_benchmark='Public_AR_Current'
+                                     AND g.census_state_code=l.state_code
+                                     AND g.census_zip5=left(l.postal_code,5)
+                                     AND g.resolved_timezone=l.timezone_name
+                                     AND g.boundary_distance_m>=250
+                                     AND g.address_fingerprint_sha256 =
+                                       public.us_geo_location_fingerprint(
+                                         l.state_code,l.city_name,l.street_line1,
+                                         l.street_line2,l.postal_code,l.timezone_name)
+                                THEN true ELSE false END AS activation_allowed,
                            CASE WHEN g.status='VERIFIED_GEOMETRY'
                                          AND g.expires_at > now()
                                 THEN 'VERIFIED_GEOMETRY' ELSE 'NEEDS_REVIEW'
@@ -192,7 +209,7 @@ export function buildUsOwnerLocationsRouter(pool, {
         ok: true, market_code: "US", currency_code: "USD", market_active: marketActive,
         locations: list.rows.map(locationDto),
         states: catalog.states, timezones: catalog.timezones,
-        activation_allowed: false,
+        activation_allowed: marketActive && list.rows.some(row=>row.activation_allowed===true),
       });
     } catch (error) { return httpError(error, res); }
   });
@@ -314,7 +331,7 @@ export function buildUsOwnerLocationsRouter(pool, {
           geo_checked_at:geo.checked_at,geo_expires_at:geo.expires_at,
           geo_source_version:geo.source_version,
         }),
-        activation_allowed:false,
+        activation_allowed:initial.marketActive && geo.status==="VERIFIED_GEOMETRY",
       });
     } catch (error) {
       if (db) try { await db.query("ROLLBACK"); } catch {}
@@ -325,5 +342,40 @@ export function buildUsOwnerLocationsRouter(pool, {
   router.post("/salons/:slug/us-locations", (req,res)=>saveLocation(req,res,false));
   router.put("/salons/:slug/us-locations/:location_code",
              (req,res)=>saveLocation(req,res,true));
+
+  // SQL independently enforces fresh Census/IANA evidence and exact address hash.
+  router.post("/salons/:slug/us-locations/:location_code/activate", async(req,res)=>{
+    let db;
+    try {
+      if(req.body && (typeof req.body!=="object" || Array.isArray(req.body) ||
+                       Object.keys(req.body).length)) {
+        throw problem("US_LOCATION_ACTIVATION_BODY_NOT_ALLOWED",400);
+      }
+      const code=String(req.params.location_code||"").trim();
+      if(!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(code))throw problem("US_LOCATION_CODE_INVALID");
+      db=await pool.connect();
+      await db.query("BEGIN");
+      const {salonId,marketActive}=await ownerContext(db,req,{...guards,write:true});
+      if(!marketActive)throw problem("US_MARKET_NOT_ACTIVE",409);
+      await db.query("SELECT id FROM public.salons WHERE id=$1 FOR UPDATE",[salonId]);
+      const locked=await db.query(
+        "SELECT id,enabled FROM public.us_salon_locations WHERE salon_id=$1 AND location_code=$2 FOR UPDATE",
+        [salonId,code]
+      );
+      if(locked.rows.length!==1)throw problem("US_LOCATION_NOT_FOUND",404);
+      if(!locked.rows[0].enabled){
+        const result=await db.query(
+          "UPDATE public.us_salon_locations SET enabled=true,updated_at=now() WHERE id=$1 AND salon_id=$2 AND enabled=false RETURNING id",
+          [locked.rows[0].id,salonId]
+        );
+        if(result.rows.length!==1)throw problem("US_LOCATION_ACTIVATION_CONFLICT",409);
+      }
+      await db.query("COMMIT");
+      return res.json({ok:true,location_code:code,enabled:true});
+    } catch(error){
+      if(db)try{await db.query("ROLLBACK")}catch{}
+      return httpError(error,res);
+    } finally {db?.release()}
+  });
   return router;
 }
