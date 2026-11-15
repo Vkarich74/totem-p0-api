@@ -74,6 +74,15 @@ async function ownerContext(db, req, {
   if (!salon.rows.length) throw problem("US_SALON_NOT_FOUND", 404);
   const salonId = Number(salon.rows[0].id);
   if (!hasSalonOwnership(req, salonId)) throw problem("US_OWNER_FORBIDDEN", 403);
+  // US06-SEC-001: identity.salons may contain an INDIRECT salon through a
+  // shared master: owner_salon(KG) -> master_salon(US). Never authorize
+  // owner writes/reads using a cross-salon inferred identity alone.
+  // Require direct active owner-salon relation even for GET.
+  const directOwner = await db.query(
+    "SELECT 1 FROM public.owner_salon WHERE owner_id=$1 AND salon_id=$2 AND status='active' LIMIT 1",
+    [String(req.auth.user_id), salonId]
+  );
+  if (directOwner.rows.length !== 1) throw problem("US_OWNER_FORBIDDEN", 403);
   if (write) await ensureSalonWriteAllowed(db, salonId);
   return { salonId, marketActive: salon.rows[0].market_active === true };
 }
