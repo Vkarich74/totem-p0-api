@@ -5,6 +5,7 @@ import { resolveHistoricalCurrencyCode, resolveMarketContext } from "../market-c
 
 import { publicCreateBooking } from "./publicCreateBooking.js";
 import { publicMasterAvailability } from "./publicAvailability.js";
+import { publicUsLocationCatalog } from "./publicUsLocationCatalog.js";
 import { publicLifecycle } from "./publicLifecycle.js";
 import mobileRouter from "./publicMobile.js";
 
@@ -273,11 +274,18 @@ export function createPublicRouter(deps) {
 
         const { rows } = await pool.query(
           `
-          SELECT id, slug, name
-          FROM salons
-          WHERE slug = $1
-            AND COALESCE(enabled, true) = true
-            AND COALESCE(status, 'active') = 'active'
+          SELECT s.id, s.slug, s.name, market.code AS market_code
+          FROM salons s
+          LEFT JOIN LATERAL (
+            SELECT m.code
+            FROM public.tenant_market_settings t
+            JOIN public.markets m ON m.id = t.market_id
+            WHERE t.salon_id = s.id
+            LIMIT 1
+          ) market ON true
+          WHERE s.slug = $1
+            AND COALESCE(s.enabled, true) = true
+            AND COALESCE(s.status, 'active') = 'active'
           LIMIT 1
           `,
           [slug]
@@ -300,6 +308,14 @@ export function createPublicRouter(deps) {
 
   r.get("/salon/:slug", handleSalonProfile);
   r.get("/salons/:slug", handleSalonProfile);
+
+  // US-only branch and full nationwide state catalog; KG/KZ paths unchanged.
+  r.get(
+    "/salons/:slug/us-locations",
+    resolveTenant,
+    buildPublicAccessGuard("availability"),
+    publicUsLocationCatalog
+  );
 
   /**
    * SALON METRICS
