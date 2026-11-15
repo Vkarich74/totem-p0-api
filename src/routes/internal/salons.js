@@ -21,6 +21,7 @@ import {
 } from "../../services/paymentCollectionAnchors.service.js";
 import { releaseCalendarSlotForBooking } from "../../services/calendarSlots.service.js";
 import { buildSalonCalendarResponse } from "../../services/salonCalendar.service.js";
+import { buildUsOwnerLocationsRouter } from "./usOwnerLocations.js";
 import { requireCurrencyCode, resolveBusinessMarketContext, resolveOwnerMarketContext } from "../../market-context/BusinessContext.js";
 
 export default function buildSalonsRouter(pool, internalReadRateLimit){
@@ -3855,6 +3856,11 @@ error:"SALON_WITHDRAWS_FETCH_FAILED"
 
 });
 
+// US-05: isolated US draft locations; protects ownership and billing writes.
+r.use(buildUsOwnerLocationsRouter(pool, {
+  hasSalonOwnership,
+  ensureSalonWriteAllowed,
+}));
 return r;
 
 }
