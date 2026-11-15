@@ -206,6 +206,25 @@ export function buildCabinetAbsoluteUrl(ownerType, slug, baseUrl = null){
 }
 
 export function buildAuthLoginUrl(ownerType = null, slug = null, baseUrl = null){
+  // Only the isolated Staging runtime uses the SDK HashRouter contract.
+  // Ignore a public-site baseUrl: authentication belongs to the app origin.
+  if(isStagingRuntime(process.env)){
+    const safeType = ownerType ? validateOwnerType(ownerType) : null;
+    const safeSlug = slug ? validateCanonicalSlug(slug) : null;
+    const query = new URLSearchParams();
+    if(safeType){
+      query.set("role", safeType === "salon" ? "salon_admin" : "master");
+    }
+    if(safeSlug){
+      query.set("slug", safeSlug);
+    }
+    const route = `#/auth/login${query.size ? "?" + query.toString() : ""}`;
+    const appOrigin = resolveCanonicalBookingAppBaseUrl();
+    return {
+      auth_login_url: route,
+      auth_login_absolute_url: `${appOrigin}/${route}`
+    };
+  }
   const resolvedBaseUrl = resolveCanonicalPublicBaseUrl(baseUrl);
   const safeType = ownerType ? validateOwnerType(ownerType) : null;
   const safeSlug = slug ? validateCanonicalSlug(slug) : null;
