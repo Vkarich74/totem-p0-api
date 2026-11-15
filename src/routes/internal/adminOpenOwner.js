@@ -1,4 +1,5 @@
 import { buildOwnerOpeningEmail, buildEmailMime } from "../../services/notifications/emailTemplates.js";
+import { buildRuntimeOwnerOpeningLinks } from "../../staging/stageLinkProducers.js";
 import { resolveRecipientLocale } from "../../services/notifications/recipientLocale.js";
 import express from "express";
 import { mapOdooBridgeCrmForm } from "../../services/odooBridgeCrmForm.js";
@@ -935,10 +936,10 @@ function buildOwnerOpeningEmailPreview(request, locale){
   const ownerLabel = ownerType === "master" ? "мастера" : "салона";
   const publicUrl = links.public_url || (ownerType && request.slug_final ? (ownerType === "salon" ? `/salon?slug=${encodeURIComponent(request.slug_final)}` : `/${ownerType}/${encodeURIComponent(request.slug_final)}`) : null);
   const cabinetUrl = links.cabinet_url || (ownerType && request.slug_final ? `#/${ownerType}/${request.slug_final}` : null);
-  const appBaseUrl = "https://app.totemv.com";
-  const publicBaseUrl = "https://totemv.com";
-  const publicLink = publicUrl && publicUrl.startsWith("http") ? publicUrl : publicUrl ? `${publicBaseUrl}${publicUrl.startsWith("/") ? "" : "/"}${publicUrl}` : null;
-  const cabinetLink = cabinetUrl && cabinetUrl.startsWith("http") ? cabinetUrl : cabinetUrl ? `${appBaseUrl}/${cabinetUrl}` : null;
+  const { publicLink, cabinetLink } = buildRuntimeOwnerOpeningLinks(publicUrl, cabinetUrl);
+
+
+
 
   const { subject, text, html } = buildOwnerOpeningEmail({ name: request.name, ownerType, cabinetLink, publicLink, locale });
 

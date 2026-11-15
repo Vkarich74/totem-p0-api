@@ -1,4 +1,5 @@
 import { TEMPLATE_OWNER_TYPES } from "../../contracts/templates/templateConstants.js";
+import { assertRuntimeTemplateBookingUrl } from "../../staging/stageLinkProducers.js";
 import { TEMPLATE_ERROR_CODES } from "../../contracts/templates/templateErrorCodes.js";
 
 function normalizeString(value){
@@ -59,6 +60,11 @@ function validateSalonDraft(draft){
   if (!aboutOk) pushHardError(errors, "about", "sections.about_paragraphs", "ABOUT_REQUIRED", "At least one active about paragraph is required.");
   if (!bookingLabel) pushHardError(errors, "cta", "booking_label", "CTA_BOOKING_LABEL_MISSING", "Booking button label is required.");
   if (!bookingUrl) pushHardError(errors, "cta", "booking_url", "CTA_BOOKING_URL_MISSING", "Booking URL is required.");
+  if(bookingUrl) {
+    try { assertRuntimeTemplateBookingUrl(bookingUrl); }
+    catch { pushHardError(errors,"cta","booking_url","CTA_BOOKING_URL_STAGING_REJECTED",
+      "Booking URL must point to an approved Staging route."); }
+  }
 
   if (!normalizeString(draft?.trust?.rating_value)) pushWarning(warnings, "trust", "rating_value", "TRUST_EMPTY", "Trust rating is empty.");
   if (!Array.isArray(draft?.sections?.reviews) || draft.sections.reviews.length === 0) pushWarning(warnings, "reviews", "sections.reviews", "REVIEWS_EMPTY", "Reviews are empty.");
@@ -127,6 +133,11 @@ function validateMasterDraft(draft){
   if (!aboutOk) pushHardError(errors, "about", "sections.about_paragraphs", "ABOUT_REQUIRED", "At least one active about paragraph is required.");
   if (!bookingLabel) pushHardError(errors, "cta", "booking_label", "CTA_BOOKING_LABEL_MISSING", "Booking button label is required.");
   if (!bookingUrl) pushHardError(errors, "cta", "booking_url", "CTA_BOOKING_URL_MISSING", "Booking URL is required.");
+  if(bookingUrl) {
+    try { assertRuntimeTemplateBookingUrl(bookingUrl); }
+    catch { pushHardError(errors,"cta","booking_url","CTA_BOOKING_URL_STAGING_REJECTED",
+      "Booking URL must point to an approved Staging route."); }
+  }
 
   if (!Array.isArray(draft?.sections?.reviews) || draft.sections.reviews.length === 0) pushWarning(warnings, "reviews", "sections.reviews", "REVIEWS_EMPTY", "Reviews are empty.");
   if (!Array.isArray(draft?.sections?.portfolio) || draft.sections.portfolio.length === 0) pushWarning(warnings, "images", "sections.portfolio", "PORTFOLIO_EMPTY", "Portfolio is empty.");

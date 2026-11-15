@@ -1,4 +1,5 @@
 import { buildOtpEmail, buildPasswordResetEmail, buildEmailMime } from "../services/notifications/emailTemplates.js";
+import { buildRuntimePasswordResetUrl } from "../staging/stageLinkProducers.js";
 import { resolveRecipientLocale } from "../services/notifications/recipientLocale.js";
 import express from "express";
 import crypto from "crypto";
@@ -115,7 +116,7 @@ async function sendOtpEmail({ to, code, locale }){
 }
 
 function buildPasswordResetUrl({ role, slug, login }){
-  return `https://app.totemv.com/#/auth/reset?role=${encodeURIComponent(role)}&slug=${encodeURIComponent(slug)}&login=${encodeURIComponent(login)}`;
+  return buildRuntimePasswordResetUrl({role,slug,login});
 }
 
 async function sendPasswordResetEmail({ to, code, role, slug, login, locale }){

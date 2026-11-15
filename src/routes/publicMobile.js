@@ -1,4 +1,5 @@
 import express from "express";
+import { buildRuntimeReferralUrl } from "../staging/stageLinkProducers.js";
 import { pool } from "../db.js";
 import {
   revokeAnonymousMobilePushSubscription,
@@ -1032,7 +1033,7 @@ router.get("/referral", async (req, res) => {
         referral_code: referralCode,
         country_code: referral.country_code || null,
         channel: referral.channel || "mobile",
-        share_url: `https://app.totemv.com/#/mobile?ref=${encodeURIComponent(referralCode)}`,
+        share_url: buildRuntimeReferralUrl(referralCode),
       },
     });
   } catch (err) {

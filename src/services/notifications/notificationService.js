@@ -1,4 +1,5 @@
 import { enrichSystemNotification } from "./notificationTemplates.js";
+import { assertRuntimeNotificationAction } from "../../staging/stageLinkProducers.js";
 import { dispatchNotificationPushDeliveries } from "../push/pushDeliveryService.js";
 
 export function normalizeText(value, maxLength = 255) {
@@ -141,6 +142,7 @@ export async function createNotification(pool, input = {}) {
   const bodyEn = normalizeText(input.body_en, 4000);
   const actionType = normalizeText(input.action_type, 120);
   const actionUrl = normalizeText(input.action_url, 1000);
+  assertRuntimeNotificationAction(actionUrl); // deny before DB write
   const payloadJson = normalizeJson(input.payload_json);
   const status = normalizeStatus(input.status);
   const scheduledAt = normalizeTimestamp(input.scheduled_at);
