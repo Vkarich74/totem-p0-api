@@ -2,6 +2,7 @@
 // Isolated US market only. Does not activate locations, providers or payments.
 // Registered in salons router which supplies existing authorization & billing guards.
 import express from "express";
+import { verifyUsLocationAddress } from "../../services/usAddressGeoVerification.service.js";
 
 const FIELDS = new Set([
   "location_code", "state_code", "city_name", "street_line1",
@@ -125,6 +126,11 @@ function locationDto(row) {
     timezone_name: row.timezone_name,
     is_primary: row.is_primary === true,
     enabled: row.enabled === true,
+    geo_status: row.geo_status || "NEEDS_REVIEW",
+    geo_reasons: row.geo_reasons || ["US_GEO_NOT_CHECKED"],
+    geo_checked_at: row.geo_checked_at || null,
+    geo_expires_at: row.geo_expires_at || null,
+    geo_source_version: row.geo_source_version || null,
   };
 }
 
@@ -160,10 +166,26 @@ export function buildUsOwnerLocationsRouter(pool, {
       const { salonId, marketActive } = await ownerContext(pool, req, guards);
       const [catalog, list] = await Promise.all([
         catalogs(pool),
-        pool.query(`SELECT location_code,state_code,city_name,street_line1,
-                           street_line2,postal_code,timezone_name,is_primary,enabled
-                      FROM public.us_salon_locations
-                     WHERE salon_id=$1 ORDER BY is_primary DESC,location_code`,
+        pool.query(`SELECT l.location_code,l.state_code,l.city_name,
+                           l.street_line1,l.street_line2,l.postal_code,
+                           l.timezone_name,l.is_primary,l.enabled,
+                           CASE WHEN g.status='VERIFIED_GEOMETRY'
+                                         AND g.expires_at > now()
+                                THEN 'VERIFIED_GEOMETRY' ELSE 'NEEDS_REVIEW'
+                           END AS geo_status,
+                           CASE WHEN g.location_id IS NULL
+                                THEN ARRAY['US_GEO_NOT_CHECKED']::text[]
+                                WHEN g.expires_at <= now()
+                                THEN ARRAY['US_GEO_EVIDENCE_EXPIRED']::text[]
+                                ELSE g.reasons END AS geo_reasons,
+                           g.checked_at AS geo_checked_at,
+                           g.expires_at AS geo_expires_at,
+                           g.source_version AS geo_source_version
+                      FROM public.us_salon_locations l
+                      LEFT JOIN public.us_location_geo_verifications g
+                        ON g.location_id=l.id
+                     WHERE l.salon_id=$1
+                     ORDER BY l.is_primary DESC,l.location_code`,
                    [salonId]),
       ]);
       return res.json({
@@ -176,13 +198,24 @@ export function buildUsOwnerLocationsRouter(pool, {
   });
 
   async function saveLocation(req, res, isUpdate) {
-    const db = await pool.connect();
+    let db;
     try {
       const draft = normalizeDraft(req.body, { update: isUpdate });
+      // Check the real owner/billing BEFORE sending an address to Census.
+      // No database transaction is held across external HTTPS IO.
+      const initial = await ownerContext(pool, req, {
+        ...guards, write: true,
+      });
+      await checkCatalogKeys(pool, draft);
+      const geo = await verifyUsLocationAddress(draft);
+      db = await pool.connect();
       await db.query("BEGIN");
       const { salonId } = await ownerContext(db, req, {
         ...guards, write: true,
       });
+      if (salonId !== initial.salonId) {
+        throw problem("US_OWNER_MARKET_CHANGED", 409);
+      }
       await db.query("SELECT id FROM public.salons WHERE id=$1 FOR UPDATE", [salonId]);
       await checkCatalogKeys(db, draft);
       if (isUpdate) {
@@ -223,7 +256,7 @@ export function buildUsOwnerLocationsRouter(pool, {
                   street_line2=$5,postal_code=$6,timezone_name=$7,
                   is_primary=$8,updated_at=now()
             WHERE salon_id=$1 AND location_code=$9 AND enabled=false
-            RETURNING location_code,state_code,city_name,street_line1,
+            RETURNING id,location_code,state_code,city_name,street_line1,
                       street_line2,postal_code,timezone_name,is_primary,enabled`,
           [...args, req.params.location_code]
         );
@@ -233,21 +266,60 @@ export function buildUsOwnerLocationsRouter(pool, {
              (salon_id,location_code,state_code,city_name,street_line1,
               street_line2,postal_code,timezone_name,is_primary,enabled)
            VALUES ($1,$9,$2,$3,$4,$5,$6,$7,$8,false)
-           RETURNING location_code,state_code,city_name,street_line1,
+           RETURNING id,location_code,state_code,city_name,street_line1,
                      street_line2,postal_code,timezone_name,is_primary,enabled`,
           [...args, draft.location_code]
         );
       }
       if (saved.rows.length !== 1) throw problem("US_LOCATION_SAVE_FAILED",409);
+      const row = saved.rows[0];
+      // Every PUT replaces the previous evidence within this SQL transaction.
+      await db.query(
+        `INSERT INTO public.us_location_geo_verifications
+          (location_id,status,reasons,address_fingerprint_sha256,
+           source_version,dataset_sha256,census_benchmark,
+           census_matched_address,census_state_code,census_zip5,
+           resolved_timezone,latitude,longitude,boundary_distance_m,
+           checked_at,expires_at,updated_at)
+         VALUES
+          ($1,$2,$3::text[],$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
+           $14,$15::timestamptz,$16::timestamptz,now())
+         ON CONFLICT(location_id) DO UPDATE
+           SET status=EXCLUDED.status,reasons=EXCLUDED.reasons,
+               address_fingerprint_sha256=EXCLUDED.address_fingerprint_sha256,
+               source_version=EXCLUDED.source_version,
+               dataset_sha256=EXCLUDED.dataset_sha256,
+               census_benchmark=EXCLUDED.census_benchmark,
+               census_matched_address=EXCLUDED.census_matched_address,
+               census_state_code=EXCLUDED.census_state_code,
+               census_zip5=EXCLUDED.census_zip5,
+               resolved_timezone=EXCLUDED.resolved_timezone,
+               latitude=EXCLUDED.latitude,longitude=EXCLUDED.longitude,
+               boundary_distance_m=EXCLUDED.boundary_distance_m,
+               checked_at=EXCLUDED.checked_at,expires_at=EXCLUDED.expires_at,
+               updated_at=now()`,
+        [
+          row.id,geo.status,geo.reasons,geo.address_fingerprint_sha256,
+          geo.source_version,geo.dataset_sha256,geo.census_benchmark,
+          geo.census_matched_address,geo.census_state_code,geo.census_zip5,
+          geo.resolved_timezone,geo.latitude,geo.longitude,
+          geo.boundary_distance_m,geo.checked_at,geo.expires_at,
+        ]
+      );
       await db.query("COMMIT");
       return res.status(isUpdate ? 200 : 201).json({
-        ok:true, location:locationDto(saved.rows[0]),
+        ok:true,
+        location:locationDto({
+          ...row,geo_status:geo.status,geo_reasons:geo.reasons,
+          geo_checked_at:geo.checked_at,geo_expires_at:geo.expires_at,
+          geo_source_version:geo.source_version,
+        }),
         activation_allowed:false,
       });
     } catch (error) {
-      try { await db.query("ROLLBACK"); } catch {}
+      if (db) try { await db.query("ROLLBACK"); } catch {}
       return httpError(error,res);
-    } finally { db.release(); }
+    } finally { db?.release(); }
   }
 
   router.post("/salons/:slug/us-locations", (req,res)=>saveLocation(req,res,false));
