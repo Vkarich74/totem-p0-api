@@ -6,7 +6,7 @@ import { google } from "googleapis";
 import { createSalonCanonical } from "../../services/provision/createSalonCanonical.js";
 import { createMasterCanonical } from "../../services/provision/createMasterCanonical.js";
 import { bindMasterToSalonCanonical } from "../../services/provision/bindMasterToSalonCanonical.js";
-import { normalizePhoneForMarket } from "../../market-context/BusinessContext.js";
+import { normalizeContactPhoneForBusiness } from "../../services/contactPhone.js";
 
 const GMAIL_CLIENT_ID = process.env.GMAIL_CLIENT_ID || "";
 const GMAIL_CLIENT_SECRET = process.env.GMAIL_CLIENT_SECRET || "";
@@ -243,7 +243,7 @@ async function checkSalonSlug(pool, salonSlug){
   };
 }
 
-async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
+export async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
   const checks = [];
   const errors = [];
   const allowMissingPhone = Boolean(options?.allowMissingPhone);
@@ -256,10 +256,11 @@ async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
   const email = normalizeEmail(body.email);
   const phoneRaw = normalizeText(body.phone || body.phone_raw || body.phone_normalized);
   const marketCode = normalizeText(body.market_code).toUpperCase();
-  const phoneResult = phoneRaw
-    ? await normalizePhoneForMarket(pool, phoneRaw, { marketCode })
-    : { ok: true, phone: null };
-  const phoneNormalized = phoneResult?.ok ? phoneResult.phone : "";
+  const phoneResult = await normalizeContactPhoneForBusiness(pool, phoneRaw, {
+    marketCode,
+    required: !allowMissingPhone,
+  });
+  const phoneNormalized = phoneResult.ok ? phoneResult.phone : null;
   const city = normalizeText(body.city);
   const workMode = normalizeText(body.work_mode || (ownerType === "master" ? "independent" : ""));
   const salonSlug = normalizeSlug(body.salon_slug);
@@ -336,12 +337,12 @@ async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
     }
   }
 
-  addCheck(checks, "phone_valid", allowMissingPhone ? (phoneRaw ? Boolean(phoneNormalized) : true) : Boolean(phoneNormalized), {
+  addCheck(checks, "phone_valid", phoneResult.ok && (allowMissingPhone || Boolean(phoneNormalized)), {
     phone_raw: phoneRaw || null,
     phone_normalized: phoneNormalized || null,
   });
-  if(!allowMissingPhone && !phoneNormalized){
-    errors.push("INVALID_KG_MOBILE_PHONE");
+  if(!phoneResult.ok){
+    errors.push(phoneResult.error);
   }
 
   addCheck(checks, "city_present", allowMissingCity ? true : Boolean(city), {
@@ -1243,10 +1244,11 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       const email = normalizeEmail(body.email);
       const phoneRaw = normalizeText(body.phone || body.phone_raw || body.phone_normalized);
       const marketCode = normalizeText(body.market_code).toUpperCase();
-      const phoneResult = phoneRaw
-        ? await normalizePhoneForMarket(pool, phoneRaw, { marketCode })
-        : { ok: true, phone: null };
-      const phoneNormalized = phoneResult?.ok ? phoneResult.phone : "";
+      const phoneResult = await normalizeContactPhoneForBusiness(pool, phoneRaw, {
+        marketCode,
+        required: true,
+      });
+      const phoneNormalized = phoneResult.ok ? phoneResult.phone : null;
       const city = normalizeText(body.city);
       const workMode = normalizeText(body.work_mode || (ownerType === "master" ? "independent" : ""));
       const salonSlug = normalizeSlug(body.salon_slug);
@@ -1323,12 +1325,12 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         }
       }
 
-      addCheck(checks, "phone_valid", Boolean(phoneNormalized), {
+      addCheck(checks, "phone_valid", phoneResult.ok && Boolean(phoneNormalized), {
         phone_raw: phoneRaw || null,
         phone_normalized: phoneNormalized || null,
       });
-      if(!phoneNormalized){
-        errors.push("INVALID_KG_MOBILE_PHONE");
+      if(!phoneResult.ok){
+        errors.push(phoneResult.error);
       }
 
       addCheck(checks, "city_present", Boolean(city), {
@@ -1426,6 +1428,22 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
 
     const odooRequestId = normalizeText(intake.odoo_request_id);
     const odooLeadId = normalizeText(intake.odoo_lead_id);
+
+    // Even an idempotent intake retry must never accept an invalid filled phone.
+    const providedPhone = normalizeText(intake.phone);
+    if(providedPhone){
+      const contact = await normalizeContactPhoneForBusiness(pool, providedPhone, {
+        marketCode: normalizeText(intake.market_code).toUpperCase(),
+        required: false,
+      });
+      if(!contact.ok){
+        const precheck = await buildOpenOwnerPrecheck(pool, intake, {
+          allowMissingPhone: true,
+          allowMissingCity: true,
+        });
+        return res.status(400).json({ ok: false, error: "PRECHECK_FAILED", precheck });
+      }
+    }
 
     const duplicateResult = await pool.query(
       `

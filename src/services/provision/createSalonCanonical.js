@@ -5,8 +5,8 @@ import {
 } from "./slugReservation.js";
 import {
   ensureSalonMarketBinding,
-  normalizePhoneForMarket,
 } from "../../market-context/BusinessContext.js";
+import { normalizeContactPhoneForBusiness } from "../contactPhone.js";
 import {
   buildCanonicalProvisionResponse,
   buildProvisionMeta,
@@ -68,6 +68,12 @@ async function createProvisionSalonAuthUser(db, { input, salon }){
   const hasPasswordHash = await authUsersHasColumn(db, "password_hash");
   const hasMustSetPassword = await authUsersHasColumn(db, "must_set_password");
   const hasPhone = await authUsersHasColumn(db, "phone");
+  if(input.phone && !hasPhone){
+    const error = new Error("PROVISION_CONTACT_PHONE_COLUMN_MISSING");
+    error.code = "PROVISION_CONTACT_PHONE_COLUMN_MISSING";
+    throw error;
+  }
+
   const hasPasswordChangedAt = await authUsersHasColumn(db, "password_changed_at");
 
   const columns = ["email", "role", "enabled"];
@@ -245,10 +251,16 @@ export async function createSalonCanonical({ pool, payload }){
   try{
     await db.query("BEGIN");
 
-    if(input.phone){
-      const phoneResult = await normalizePhoneForMarket(db, input.phone, { marketCode: input.market_code || "" });
-      input.phone = phoneResult?.ok ? phoneResult.phone : null;
+    const phoneResult = await normalizeContactPhoneForBusiness(db, input.phone, {
+      marketCode: input.market_code || "",
+      required: false,
+    });
+    if(!phoneResult.ok){
+      const error = new Error(phoneResult.error);
+      error.code = phoneResult.error;
+      throw error;
     }
+    input.phone = phoneResult.phone;
 
     const existingUser = await findExistingAuthUser(db, input.email, "salon_admin");
 

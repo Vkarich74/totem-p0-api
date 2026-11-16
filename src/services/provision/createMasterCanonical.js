@@ -4,7 +4,7 @@ import {
   checkSlugAvailability,
   reserveSlug
 } from "./slugReservation.js";
-import { normalizePhoneForMarket } from "../../market-context/BusinessContext.js";
+import { normalizeContactPhoneForBusiness } from "../contactPhone.js";
 import {
   buildCanonicalProvisionResponse,
   buildProvisionMeta,
@@ -79,6 +79,12 @@ async function createProvisionMasterAuthUser(db, { input, masterSlug }){
   const hasMustSetPassword = await authUsersHasColumn(db, "must_set_password");
   const hasPasswordChangedAt = await authUsersHasColumn(db, "password_changed_at");
   const hasPhone = await authUsersHasColumn(db, "phone");
+  if(input.phone && !hasPhone){
+    const error = new Error("PROVISION_CONTACT_PHONE_COLUMN_MISSING");
+    error.code = "PROVISION_CONTACT_PHONE_COLUMN_MISSING";
+    throw error;
+  }
+
 
   const columns = [];
   const valueSql = [];
@@ -228,10 +234,16 @@ export async function createMasterCanonical({ pool, payload }){
   try{
     await db.query("BEGIN");
 
-    if(input.phone){
-      const phoneResult = await normalizePhoneForMarket(db, input.phone, { marketCode: input.market_code || "" });
-      input.phone = phoneResult?.ok ? phoneResult.phone : null;
+    const phoneResult = await normalizeContactPhoneForBusiness(db, input.phone, {
+      marketCode: input.market_code || "",
+      required: false,
+    });
+    if(!phoneResult.ok){
+      const error = new Error(phoneResult.error);
+      error.code = phoneResult.error;
+      throw error;
     }
+    input.phone = phoneResult.phone;
 
     const existingUser = await findExistingAuthUser(db, input.email, "master");
 

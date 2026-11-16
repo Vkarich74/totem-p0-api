@@ -403,6 +403,9 @@ export function resolveProvisionError(err){
   }
 
   const badRequestCodes = new Set([
+    "PHONE_REQUIRED",
+    "PHONE_INVALID_FORMAT",
+    "PHONE_COUNTRY_CODE_REQUIRED",
     "EMAIL_REQUIRED",
     "SALON_NAME_REQUIRED",
     "MASTER_NAME_REQUIRED",
