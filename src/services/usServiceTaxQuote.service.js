@@ -242,6 +242,30 @@ export async function readUsBookingServiceTaxQuote(pool, options = {}) {
     const quote = await existingQuote(db,input.booking);
     const collector = await selectedCollector(db,booking,false);
     const verified = matchingCollector(quote,collector,booking.market_id);
+    // A salon owner may select their independent master as collector, but
+    // TAX-02 correctly forbids them reading the master's private settings.
+    // Provide the exact expected tax revision and a nonbinding preview
+    // here, scoped to this booking's independently verified collector.
+    let preview = null;
+    let expectedTaxRevision = null;
+    if (collector && !quote) {
+      const price = await snapshotBasePrice(db,booking,false);
+      if (price) {
+        const setting = await currentTaxSetting(
+          db,booking.market_id,collector,false
+        );
+        preview = {
+          ...calculateUsServiceTaxCents(price.amount_minor,setting.rate_bps),
+          tax_setting_revision:setting.revision,
+          collector_revision:Number(collector.revision),
+          payment_purpose:"beauty_service",
+          preview_only:true,
+        };
+        expectedTaxRevision=setting.revision;
+      }
+    } else if (verified) {
+      expectedTaxRevision=Number(quote.tax_setting_revision);
+    }
     return {
       status: 200,
       body: {
@@ -253,6 +277,8 @@ export async function readUsBookingServiceTaxQuote(pool, options = {}) {
           owner_id:Number(collector.collector_owner_id),
           revision:Number(collector.revision),
         } : null,
+        preview,
+        expected_tax_setting_revision:expectedTaxRevision,
         quote_matches_current_collector:verified,
         payment_ready:false,
       },
