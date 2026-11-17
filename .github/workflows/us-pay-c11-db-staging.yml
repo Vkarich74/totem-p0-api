@@ -1,4 +1,4 @@
-name: US-PAY-C11 Backend PostgreSQL 17 isolated staging
+name: US-PAY-C11 final Backend SDK PostgreSQL17 isolated staging
 
 on:
   push:
@@ -9,7 +9,11 @@ on:
       - tests/sql/us_pay_c11_stage_fixture.sql
       - tests/sql/us_pay_c11_stage_acceptance.sql
       - tests/sql/us_pay_c11_api_seed.sql
+      - tests/sql/us_pay_c11_final_token_fixture.sql
       - tests/usPayC11Api.integration.test.js
+      - tests/usPayC11FinalStage.server.js
+      - tests/usPayC11FinalStage.browser.test.js
+      - src/services/clientCabinetTokenAccess.js
       - src/services/usPayC11ReadModel.js
       - src/services/usPayC11ReadModel.test.js
       - src/services/usPayC11ReadService.js
@@ -23,13 +27,27 @@ permissions:
   contents: read
 
 jobs:
-  isolated-postgresql:
+  cross-repository-staging:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Backend C11 feature branch
+        uses: actions/checkout@v4
 
-      - name: Start disposable PostgreSQL 17 (localhost, synthetic data)
+      - name: Checkout frozen SDK C11 feature commit
+        uses: actions/checkout@v4
+        with:
+          repository: Vkarich74/totem-sdk
+          ref: 015fc8b9b17c03213d709b0486eace184c6d0adf
+          path: sdk
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Start disposable PostgreSQL 17 (synthetic database only)
         shell: bash
         run: |
           set -euo pipefail
@@ -48,55 +66,100 @@ jobs:
           docker logs us-pay-c11-pg17
           exit 1
 
-      - name: Install synthetic baseline (no production dump)
+      - name: Install synthetic schema and US-only sidecars
         run: |
           set -euo pipefail
-          docker exec -i us-pay-c11-pg17 psql -X -U uspayc11 -d us_pay_c11_staging \
-            -v ON_ERROR_STOP=1 < tests/sql/us_pay_c11_stage_fixture.sql
+          for file in \
+            tests/sql/us_pay_c11_stage_fixture.sql \
+            migrations/2026_11_17__us_pay_c11_price_collector_sidecars.sql \
+            tests/sql/us_pay_c11_stage_acceptance.sql \
+            tests/sql/us_pay_c11_api_seed.sql \
+            tests/sql/us_pay_c11_final_token_fixture.sql; do
+            docker exec -i us-pay-c11-pg17 psql -X -U uspayc11 -d us_pay_c11_staging \
+              -v ON_ERROR_STOP=1 < "$file" > /tmp/us-pay-c11-sql-output.txt
+            tail -n 4 /tmp/us-pay-c11-sql-output.txt
+          done
+          echo 'US_PAY_C11_STAGING_SQL_PASS'
 
-      - name: Install additive US cents and owner recipient sidecars
+      - name: Install Backend and SDK dependencies
         run: |
           set -euo pipefail
-          docker exec -i us-pay-c11-pg17 psql -X -U uspayc11 -d us_pay_c11_staging \
-            -v ON_ERROR_STOP=1 < migrations/2026_11_17__us_pay_c11_price_collector_sidecars.sql
+          npm ci --ignore-scripts --no-audit --no-fund
+          cd sdk
+          npm ci --ignore-scripts --no-audit --no-fund
 
-      - name: Assert USD cents, immutable snapshot, recipient, KG/KZ isolation
-        run: |
-          set -euo pipefail
-          docker exec -i us-pay-c11-pg17 psql -X -U uspayc11 -d us_pay_c11_staging \
-            -v ON_ERROR_STOP=1 < tests/sql/us_pay_c11_stage_acceptance.sql
-
-      - name: Seed separate synthetic API read test records
-        run: |
-          set -euo pipefail
-          docker exec -i us-pay-c11-pg17 psql -X -U uspayc11 -d us_pay_c11_staging \
-            -v ON_ERROR_STOP=1 < tests/sql/us_pay_c11_api_seed.sql
-
-      - name: Install locked Node dependencies without native build scripts
-        run: npm ci --ignore-scripts --no-audit --no-fund
-
-      - name: Syntax check and Backend integration acceptance
+      - name: Verify existing Backend contract and SQL integration tests
         env:
           US_PAY_C11_TEST_DATABASE_URL: postgres://uspayc11:local_ci_fake_secret@127.0.0.1:55432/us_pay_c11_staging
         run: |
           set -euo pipefail
           node --check src/routes/public.js
-          node --check src/routes/publicUsPayC11.js
-          node --check src/services/usPayC11ReadService.js
           node --test \
             src/services/usPayC11ReadModel.test.js \
             src/services/usPayC11ReadService.test.js \
             tests/usPayC11Api.integration.test.js
-          echo 'US_PAY_C11_API_STAGE_PASS'
+          echo 'US_PAY_C11_BACKEND_REGRESSION_PASS'
 
-      - name: Verify sidecar count, transaction rollback and isolation
+      - name: Build actual US SDK with isolated local Backend URL
+        env:
+          VITE_API_BASE: http://127.0.0.1:4123
+        run: |
+          set -euo pipefail
+          cd sdk
+          npm run build
+          test -f dist/index.html
+          node --test src/client/usPayC11Model.test.js
+          echo 'US_PAY_C11_SDK_STAGING_BUILD_PASS'
+
+      - name: Install only Chromium for interactive browser acceptance
+        run: |
+          set -euo pipefail
+          cd sdk
+          npx playwright install --with-deps chromium
+
+      - name: Start real C11 Backend router and SDK preview (loopback)
+        env:
+          US_PAY_C11_TEST_DATABASE_URL: postgres://uspayc11:local_ci_fake_secret@127.0.0.1:55432/us_pay_c11_staging
+        run: |
+          set -euo pipefail
+          node tests/usPayC11FinalStage.server.js > /tmp/us-pay-c11-api.log 2>&1 &
+          echo "$!" > /tmp/us-pay-c11-api.pid
+          (cd sdk && npm run preview -- --host 127.0.0.1 --port 4173 --strictPort) \
+            > /tmp/us-pay-c11-sdk.log 2>&1 &
+          echo "$!" > /tmp/us-pay-c11-sdk.pid
+          for attempt in $(seq 1 45); do
+            if curl -fsS http://127.0.0.1:4123/stage/health >/dev/null 2>&1 &&
+               curl -fsS http://127.0.0.1:4173/ >/dev/null 2>&1; then
+              echo 'US_PAY_C11_STAGING_SERVERS_READY'
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/us-pay-c11-api.log /tmp/us-pay-c11-sdk.log
+          exit 1
+
+      - name: One combined Chromium Backend SDK PostgreSQL acceptance
+        env:
+          US_PAY_C11_TEST_DATABASE_URL: postgres://uspayc11:local_ci_fake_secret@127.0.0.1:55432/us_pay_c11_staging
+        run: |
+          set -euo pipefail
+          node --test tests/usPayC11FinalStage.browser.test.js
+          echo 'US_PAY_C11_FINAL_E2E_PASS'
+
+      - name: Assert three US sidecars and no Stripe checkout enablement
         run: |
           set -euo pipefail
           COUNT=$(docker exec us-pay-c11-pg17 psql -X -U uspayc11 -d us_pay_c11_staging \
-            -v ON_ERROR_STOP=1 -tAc "SELECT COUNT(*) FROM pg_catalog.pg_tables WHERE schemaname='public' AND tablename IN ('us_service_price_amounts','us_booking_price_snapshots','us_booking_payment_collectors')")
+            -tAc "SELECT COUNT(*) FROM pg_catalog.pg_tables WHERE schemaname='public' AND tablename IN ('us_service_price_amounts','us_booking_price_snapshots','us_booking_payment_collectors')")
           test "$COUNT" = 3
-          echo 'US_PAY_C11_DB_STAGE_PASS'
+          ! grep -E '(PaymentIntent|checkout\.sessions|/payments/create)' \
+            sdk/src/client/usPayC11Client.js sdk/src/client/usPayC11Model.js
+          echo 'US_PAY_C11_NO_PAYMENT_WRITES_PASS'
 
-      - name: Destroy disposable staging database
+      - name: Shut down stage and destroy disposable PostgreSQL 17
         if: always()
-        run: docker rm -f us-pay-c11-pg17 >/dev/null 2>&1 || true
+        run: |
+          if [ -f /tmp/us-pay-c11-api.pid ]; then kill "$(cat /tmp/us-pay-c11-api.pid)" 2>/dev/null || true; fi
+          if [ -f /tmp/us-pay-c11-sdk.pid ]; then kill "$(cat /tmp/us-pay-c11-sdk.pid)" 2>/dev/null || true; fi
+          docker rm -f us-pay-c11-pg17 >/dev/null 2>&1 || true
+          echo 'US_PAY_C11_STAGING_DESTROYED'
