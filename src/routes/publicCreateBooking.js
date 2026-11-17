@@ -7,6 +7,10 @@ import { resolveUsSalonLocation } from "../services/usLocation.service.js";
 import { buildUsSalonCalendarResponse } from "../services/usCalendar.service.js";
 import { buildUsAvailableSlots } from "../services/usSlots.service.js";
 import { normalizeUsBookingStart } from "../services/usTime.service.js";
+import {
+  resolveUsBookingServicePrice,
+  createUsBookingPriceSnapshot,
+} from "../services/usServicePrice.service.js";
 
 function buildClientCabinetUrl(clientId, token) {
   return `#/client/${clientId}/${token}`;
@@ -317,6 +321,19 @@ export async function publicCreateBooking(req, res) {
       return res.status(400).json({ ok: false, error: "MASTER_NOT_IN_SALON" });
     }
 
+    // USD cents are read only from the authoritative US price sidecar.
+    // Missing configuration fails before any client, slot or booking write.
+    // The SELECT holds SHARE locks until this booking transaction COMMITs.
+    const usServicePrice = marketContext.market_code === "US"
+      ? await resolveUsBookingServicePrice(client, {
+          marketId: marketContext.market_id,
+          salonId,
+          masterId: master_id,
+          servicePk,
+          serviceLinkId: serviceLink.id,
+        })
+      : null;
+
     let usLocation = null;
     let normalizedStartAt = null;
     if (marketContext.market_code === "US") {
@@ -503,6 +520,12 @@ export async function publicCreateBooking(req, res) {
          VALUES ($1, $2)`,
         [booking_id, usLocation.id]
       );
+      // Keep the authoritative immutable USD cents snapshot in the
+      // SAME transaction as the booking and location; fail closed on mismatch.
+      await createUsBookingPriceSnapshot(client, {
+        bookingId: booking_id,
+        price: usServicePrice,
+      });
     }
 
     const cabinetToken = createClientCabinetToken();
@@ -660,10 +683,19 @@ export async function publicCreateBooking(req, res) {
       console.error("BOOKING_CREATED_NOTIFICATION_ERROR", error);
     }
 
+    const usServicePriceResponse = usServicePrice ? {
+      amount_minor: usServicePrice.amount_minor,
+      currency_code: "USD",
+      service_price_version: usServicePrice.price_version,
+      source: "us_booking_price_snapshots",
+      amount_type: "service_base_only",
+    } : null;
+
     const responseBody = {
       ok: true,
       booking_id,
       status: "reserved",
+      ...(usServicePriceResponse ? { us_service_price: usServicePriceResponse } : {}),
       client: {
         id: finalClientId,
         name: finalClientName,
@@ -678,6 +710,7 @@ export async function publicCreateBooking(req, res) {
       ok: true,
       booking_id,
       status: "reserved",
+      ...(usServicePriceResponse ? { us_service_price: usServicePriceResponse } : {}),
       client: {
         id: finalClientId,
         name: finalClientName,
