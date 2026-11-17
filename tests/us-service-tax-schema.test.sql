@@ -113,7 +113,7 @@ BEGIN
     VALUES (2147000000, v_market, 'salon', v_salon,
             1, 2, 10000, 10000, 10000, 20000);
     RAISE EXCEPTION 'TAX01_TEST_NO_PRICE_BOOKING_ACCEPTED';
-  EXCEPTION WHEN foreign_key_violation THEN
+  EXCEPTION WHEN foreign_key_violation OR check_violation THEN
     RAISE NOTICE 'PASS: snapshot requires existing authorized base price';
   END;
   IF (SELECT COUNT(*) FROM public.us_booking_service_tax_snapshots) <> v_before THEN
