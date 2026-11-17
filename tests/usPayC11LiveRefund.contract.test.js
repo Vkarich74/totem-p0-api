@@ -187,7 +187,7 @@ async function quote(bookingId,actor="owner"){
 }
 async function signedEvent(id,type){
   const e={
-    id:"evt_REFUND_SYNTHETIC_"+id.slice(-8),
+    id:"evt_REFUND_SYNTHETIC_"+type.replace(/[^a-zA-Z0-9]/g,"_").slice(-10)+"_"+id.slice(-8),
     object:"event",livemode:true,account:seller,
     created:Math.floor(Date.now()/1000),
     type,data:{object:{object:"refund",id}},
@@ -267,4 +267,20 @@ test("independent full USD refund requires one owner consent and signed event",a
   assert.equal((await send(512,
     "00000000-0000-4000-8000-000000000514",1,1205)).status,409);
   assert.equal(liveRefundPosts,2);
+
+  // Stripe can report a late bank rejection even after initial SUCCESS.
+  // The owner audit must not keep a false completed refund balance.
+  refundResponses.re_SYNTHETIC_FULL_REFUND_512.status="failed";
+  const reversal=await signedEvent(
+    "re_SYNTHETIC_FULL_REFUND_512","refund.failed");
+  assert.equal(reversal.status,200);
+  assert.equal(reversal.body.result,"observed");
+  const afterFailure=await pool.query(
+    "SELECT state FROM public.us_c11_live_refund_requests WHERE request_id=$1",
+    [idFull]
+  );
+  assert.equal(afterFailure.rows[0].state,"failed");
+  const restored=await quote(512);
+  assert.equal(restored.status,200);
+  assert.equal(restored.body.remaining_minor,"1205");
 });
