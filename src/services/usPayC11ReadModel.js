@@ -71,6 +71,8 @@ export function buildUsPayC11ReadModel({ booking, priceSnapshot, collector, paym
     currency_code: "USD",
     source: "us_booking_price_snapshots",
   } : null;
+  const merchantReady = paymentValid && payment.merchant_binding_verified === true &&
+    (payment.mode === "TEST" || payment.mode === "LIVE");
   return {
     booking_id: bookingId,
     market_code: "US",
@@ -82,7 +84,7 @@ export function buildUsPayC11ReadModel({ booking, priceSnapshot, collector, paym
       provider: paymentValid ? "stripe" : null,
     },
     collector: recipient,
-    payment_ready: Boolean(amount && recipient && validAppointmentStatus &&
+    payment_ready: Boolean(amount && recipient && merchantReady && validAppointmentStatus &&
       (appointmentStatus === "reserved" || appointmentStatus === "confirmed") &&
       (resolvedPayment === "unpaid" || resolvedPayment === "awaiting_payment")),
   };
