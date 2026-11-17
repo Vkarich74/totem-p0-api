@@ -211,6 +211,9 @@ export async function startLiveSellerOnboarding(pool,{
     if(binding.verification_status==="revoked") {
       return reject(409,"US_CONNECT_SELLER_REVOKED");
     }
+    if(binding.verification_status==="verified") {
+      return reject(409,"US_CONNECT_SELLER_ALREADY_VERIFIED");
+    }
     if(!binding.stripe_account_id &&
        Date.now()-new Date(binding.created_at).getTime() > 20*60*60*1000) {
       // Stripe idempotency keys may expire after 24 hours. No risk
