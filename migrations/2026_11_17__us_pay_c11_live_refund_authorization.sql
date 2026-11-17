@@ -67,8 +67,24 @@ BEGIN
   END IF;
   IF OLD.state IN ('succeeded','failed','canceled') AND
      NEW.state IS DISTINCT FROM OLD.state THEN
-    RAISE EXCEPTION 'US_C11_REFUND_TERMINAL_STATE_IMMUTABLE'
-      USING ERRCODE='23514';
+    -- Stripe may issue a late refund failure AFTER success. The reversal
+    -- is permitted only after the signed, current Stripe refund ledger
+    -- records the same ID as FAILED in this very database transaction.
+    IF NOT (
+      OLD.state='succeeded' AND NEW.state='failed'
+      AND EXISTS (
+        SELECT 1
+          FROM public.us_c11_live_refunds rf
+         WHERE rf.stripe_refund_id=OLD.stripe_refund_id
+           AND rf.stripe_account_id=OLD.stripe_account_id
+           AND rf.stripe_payment_intent_id=OLD.stripe_payment_intent_id
+           AND rf.booking_id=OLD.booking_id
+           AND rf.status='failed'
+      )
+    ) THEN
+      RAISE EXCEPTION 'US_C11_REFUND_TERMINAL_STATE_IMMUTABLE'
+        USING ERRCODE='23514';
+    END IF;
   END IF;
   NEW.updated_at:=now();
   RETURN NEW;
