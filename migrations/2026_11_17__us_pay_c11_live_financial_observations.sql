@@ -126,4 +126,34 @@ CREATE TRIGGER us_c11_dispute_owner_guard
  BEFORE UPDATE ON public.us_c11_live_disputes
  FOR EACH ROW EXECUTE FUNCTION public.us_c11_financial_owner_guard();
 
+CREATE FUNCTION public.us_c11_live_payout_identity_guard()
+RETURNS trigger LANGUAGE plpgsql AS $guard$
+BEGIN
+  IF (NEW.stripe_payout_id,NEW.seller_binding_id,NEW.stripe_account_id,
+      NEW.amount_minor,NEW.currency_code,NEW.automatic,NEW.recorded_at)
+     IS DISTINCT FROM
+     (OLD.stripe_payout_id,OLD.seller_binding_id,OLD.stripe_account_id,
+      OLD.amount_minor,OLD.currency_code,OLD.automatic,OLD.recorded_at) THEN
+    RAISE EXCEPTION 'US_C11_PAYOUT_OWNER_OR_AMOUNT_IMMUTABLE'
+      USING ERRCODE='23514';
+  END IF;
+  NEW.refreshed_at:=now();
+  RETURN NEW;
+END
+$guard$;
+CREATE TRIGGER us_c11_live_payout_identity_guard
+ BEFORE UPDATE ON public.us_c11_live_payouts
+ FOR EACH ROW EXECUTE FUNCTION public.us_c11_live_payout_identity_guard();
+
+CREATE FUNCTION public.us_c11_live_payout_item_immutable()
+RETURNS trigger LANGUAGE plpgsql AS $guard$
+BEGIN
+  RAISE EXCEPTION 'US_C11_PAYOUT_BALANCE_AUDIT_IMMUTABLE'
+    USING ERRCODE='23514';
+END
+$guard$;
+CREATE TRIGGER us_c11_live_payout_balance_items_immutable
+ BEFORE UPDATE OR DELETE ON public.us_c11_live_payout_balance_items
+ FOR EACH ROW EXECUTE FUNCTION public.us_c11_live_payout_item_immutable();
+
 COMMIT;
