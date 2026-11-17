@@ -238,6 +238,33 @@ async function observeRefund(db,context,o){
   if(BigInt(agg.rows[0].refunded)>BigInt(booking.amount_minor)) {
     throw Error("US_C11_REFUND_SUM_EXCEEDS_CAPTURE");
   }
+
+  // Link the signed Stripe refund to the ORIGINAL authorized owner request.
+  // An unrecognized external Stripe refund is still observable, but it
+  // must NEVER pretend that a specific TOTEM owner approved it.
+  const authorized=await db.query(
+    `SELECT request_id,amount_minor,stripe_payment_intent_id,
+            stripe_account_id,state
+       FROM public.us_c11_live_refund_requests
+      WHERE stripe_refund_id=$1 LIMIT 1 FOR UPDATE`,
+    [o.id]
+  );
+  if(authorized.rows.length) {
+    const request=authorized.rows[0];
+    if(String(request.amount_minor)!==String(amount) ||
+       request.stripe_account_id!==context.event.account ||
+       request.stripe_payment_intent_id!==pi) {
+      throw Error("US_C11_SIGNED_REFUND_AUTHORIZATION_MISMATCH");
+    }
+    if(["succeeded","failed","canceled"].includes(o.status) &&
+       ["reserved","submitted","requires_review"].includes(request.state)) {
+      await db.query(
+        `UPDATE public.us_c11_live_refund_requests
+            SET state=$2 WHERE request_id=$1`,
+        [request.request_id,o.status]
+      );
+    }
+  }
   return "observed";
 }
 
