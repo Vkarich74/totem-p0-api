@@ -164,6 +164,30 @@ test("no LIVE charge for invalid client token or other client booking",async()=>
   assert.equal((await pay(510,"synthetic-invalid-token-55")).status,403);
   assert.equal((await pay(510,clientToken,56)).status,403);
   assert.equal((await pay(502,clientToken,55)).status,404);
+  // A previously verified Stripe seller must not receive a new payment
+  // after salon ownership, salon status or assigned master is revoked.
+  try {
+    await pool.query(
+      "UPDATE public.owner_salon SET status='revoked' WHERE owner_id='900' AND salon_id=100"
+    );
+    assert.equal((await pay()).status,409);
+  } finally {
+    await pool.query(
+      "UPDATE public.owner_salon SET status='active' WHERE owner_id='900' AND salon_id=100"
+    );
+  }
+  try {
+    await pool.query("UPDATE public.salons SET enabled=false WHERE id=100");
+    assert.equal((await pay()).status,409);
+  } finally {
+    await pool.query("UPDATE public.salons SET enabled=true WHERE id=100");
+  }
+  try {
+    await pool.query("UPDATE public.masters SET active=false WHERE id=200");
+    assert.equal((await pay()).status,409);
+  } finally {
+    await pool.query("UPDATE public.masters SET active=true WHERE id=200");
+  }
   assert.equal(apiCalls.length,before);
   assert.equal(paymentCreates,0);
 });
