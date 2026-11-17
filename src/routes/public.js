@@ -8,6 +8,7 @@ import { publicMasterAvailability } from "./publicAvailability.js";
 import { publicUsLocationCatalog } from "./publicUsLocationCatalog.js";
 import { publicLifecycle } from "./publicLifecycle.js";
 import mobileRouter from "./publicMobile.js";
+import { buildPublicUsPayC11Router } from "./publicUsPayC11.js";
 
 // ✅ AUTH ROUTER FROM LIVE PUBLIC LAYER
 import authRouter from "../../routes_public/auth.js";
@@ -123,6 +124,8 @@ export function createPublicRouter(deps) {
    */
   r.use("/auth", authRouter);
   r.use("/mobile", mobileRouter);
+  // Separate US-only client read contract; access token is verified before DB read.
+  r.use(buildPublicUsPayC11Router({ pool, verifyClientCabinetAccess }));
 
   /**
    * RESOLVED MARKET CONTEXT
