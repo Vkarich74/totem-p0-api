@@ -1,5 +1,7 @@
 import express from "express";
-import crypto from "crypto";
+import {
+  hashClientCabinetToken, verifyClientCabinetAccess,
+} from "../services/clientCabinetTokenAccess.js";
 import { pool } from "../db.js";
 import { resolveHistoricalCurrencyCode, resolveMarketContext } from "../market-context/index.js";
 
@@ -28,10 +30,6 @@ import {
   revokeClientPushSubscription,
   saveClientPushSubscription,
 } from "../services/push/webPushService.js";
-
-function hashClientCabinetToken(token) {
-  return crypto.createHash("sha256").update(String(token || "")).digest("hex");
-}
 
 function buildClientPersonalLink(clientId, token) {
   return `#/client/${clientId}/${token}`;
@@ -70,44 +68,6 @@ function getClientPaymentLabelRu(provider, status, hasPayment) {
   }
 
   return "Оплата не выбрана";
-}
-
-async function verifyClientCabinetAccess(db, clientId, token) {
-  if (!Number.isInteger(clientId) || clientId <= 0) {
-    return { ok: false, status: 400, error: "INVALID_CLIENT_ID" };
-  }
-
-  const safeToken = String(token || "").trim();
-  if (!safeToken) {
-    return { ok: false, status: 400, error: "CLIENT_TOKEN_REQUIRED" };
-  }
-
-  const tokenHash = hashClientCabinetToken(safeToken);
-
-  const tokenRes = await db.query(
-    `
-    SELECT
-      id,
-      client_id,
-      booking_id,
-      token_last4,
-      purpose,
-      created_at
-    FROM client_access_tokens
-    WHERE client_id = $1
-      AND token_hash = $2
-      AND purpose = 'cabinet'
-      AND revoked_at IS NULL
-    LIMIT 1
-    `,
-    [clientId, tokenHash]
-  );
-
-  if (!tokenRes.rows.length) {
-    return { ok: false, status: 403, error: "INVALID_CLIENT_TOKEN" };
-  }
-
-  return { ok: true, token: tokenRes.rows[0] };
 }
 
 /**
