@@ -1,14 +1,26 @@
-// US-PAY-C11 LIVE direct-charge payment webhooks.
-// Dedicated connected-account Stripe signature, raw bytes before express.json.
-// A signed event is NEVER enough if it fails account/amount/booking anchoring.
-// Does not enable a customer charge: it only reconciles Stripe-origin events.
-import { acceptSignedUsC11LivePaymentEvent } from
+/**
+ * TOTEM USA C11: ONE Stripe Connect LIVE financial event endpoint.
+ * RAW body must be mounted before express.json(); every handler verifies
+ * the original signed bytes with the same registered Stripe whsec.
+ *
+ * PaymentIntent reconciliation may upgrade payment state to paid.
+ * Refunds, disputes and payouts are REST-verified financial observations,
+ * no refund/payout/transfer initiated by webhook or browser.
+ * Both routes separately OFF by default; neither runs if secrets missing.
+ */
+import {acceptSignedUsC11LivePaymentEvent} from
   "../services/usPayC11LivePaymentWebhook.service.js";
+import {acceptUsC11SignedLiveFinancialEvent} from
+  "../services/usPayC11LiveFinancialEvents.service.js";
 
+const EVENT_PREFIX=/^(?:refund\.|charge\.dispute\.|payout\.)/;
 export function buildUsC11LivePaymentWebhook({
   pool,
   enabled=process.env.US_PAY_C11_LIVE_PAYMENT_WEBHOOK_ENABLED==="true",
+  financeEnabled=process.env.US_PAY_C11_LIVE_FINANCE_EVENTS_ENABLED==="true",
   webhookSecret=process.env.US_PAY_C11_LIVE_PAYMENT_WEBHOOK_SECRET||"",
+  secretKey=process.env.US_PAY_C11_LIVE_STRIPE_SECRET_KEY||"",
+  fetchImpl=globalThis.fetch,
 }={}) {
   if(!pool||typeof pool.connect!=="function") {
     throw new Error("US_C11_LIVE_PAYMENT_DB_REQUIRED");
@@ -26,19 +38,44 @@ export function buildUsC11LivePaymentWebhook({
         ok:false,error:"US_C11_LIVE_RAW_PAYMENT_BODY_REQUIRED",
       });
     }
+
+    let financial=false;
     try {
-      const result=await acceptSignedUsC11LivePaymentEvent({
+      // Routing inspection ONLY. Untrusted JSON is NOT applied; downstream
+      // individual service verifies raw HMAC before touching finance tables.
+      if(req.body.length>131072||req.body.length<2){
+        return res.status(413).json({ok:false,error:"US_C11_LIVE_EVENT_TOO_LARGE"});
+      }
+      financial=EVENT_PREFIX.test(
+        String(JSON.parse(req.body.toString("utf8"))?.type||"")
+      );
+    }catch{
+      return res.status(400).json({ok:false,error:"US_C11_LIVE_EVENT_INVALID_JSON"});
+    }
+
+    if(financial&&!financeEnabled){
+      return res.status(503).json({
+        ok:false,error:"US_C11_LIVE_FINANCIAL_OBSERVATION_DISABLED",
+      });
+    }
+    try {
+      const args={
         pool,rawBody:req.body,
         stripeSignature:req.get("Stripe-Signature"),
         webhookSecret,
-      });
+      };
+      const result=financial ?
+        await acceptUsC11SignedLiveFinancialEvent({
+          ...args,secretKey,fetchImpl,
+        }):
+        await acceptSignedUsC11LivePaymentEvent(args);
       return res.status(result.status).json(result.body);
     }catch(error){
-      // No Stripe event bodies, PII, secrets, URLs or client tokens in logs.
-      console.error("US_C11_LIVE_PAYMENT_WEBHOOK_FAILED",
+      // Never log Stripe response, webhook payload, keys or customer data.
+      console.error("US_C11_LIVE_STRIPE_WEBHOOK_FAILED",
         String(error?.code||"INTERNAL"));
       return res.status(503).json({
-        ok:false,error:"US_C11_LIVE_PAYMENT_WEBHOOK_UNAVAILABLE",
+        ok:false,error:"US_C11_LIVE_WEBHOOK_UNAVAILABLE",
       });
     }
   };
