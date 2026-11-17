@@ -156,6 +156,42 @@ function signedTestPaymentFromRow(row, allowTestStripeMode) {
   };
 }
 
+function signedLivePaymentFromRow(row) {
+  // A real paid status comes only from signed Stripe LIVE event evidence.
+  // The payment remains paid even if the seller later loses KYC capability.
+  if (!sameId(row.us_live_attempt_booking_id,row.id) ||
+      !sameId(row.us_live_attempt_market_id,row.market_id) ||
+      !sameId(row.us_live_attempt_binding_id,row.us_live_binding_id) ||
+      row.us_live_attempt_owner_type!==row.collector_owner_type ||
+      !sameId(row.us_live_attempt_owner_id,row.collector_owner_id) ||
+      !sameId(row.us_live_attempt_revision,row.collector_revision) ||
+      row.us_live_attempt_account_id!==row.us_live_binding_account_id ||
+      row.us_live_attempt_currency!=="USD" ||
+      String(row.us_live_attempt_amount_minor)!==String(row.us_amount_minor) ||
+      row.us_live_event_id!==row.us_live_attempt_last_event_id ||
+      row.us_live_event_account_id!==row.us_live_attempt_account_id ||
+      row.us_live_event_pi_id!==row.us_live_attempt_pi_id ||
+      row.us_live_event_mode!=="LIVE" ||
+      row.us_live_event_signature!==true ||
+      row.us_live_event_result!=="accepted" ||
+      String(row.us_live_event_created)!==String(row.us_live_attempt_event_created)) {
+    return null;
+  }
+  const mapping={
+    succeeded:["payment_intent.succeeded","paid"],
+    processing:["payment_intent.processing","awaiting_payment"],
+    requires_payment_method:["payment_intent.payment_failed","requires_review"],
+    canceled:["payment_intent.canceled","requires_review"],
+  };
+  const checked=mapping[row.us_live_attempt_status];
+  if(!checked||checked[0]!==row.us_live_event_type)return null;
+  return {
+    booking_id:row.id,market_code:"US",currency_code:"USD",
+    service_payment_status:checked[1],verified_projection:true,
+    merchant_binding_verified:true,mode:"LIVE",
+  };
+}
+
 /**
  * Must be called inside a read-only transaction AFTER the existing
  * verifyClientCabinetAccess check has accepted a non-revoked client token.
@@ -195,6 +231,7 @@ export async function readUsPayC11Booking(
         upc.selected_by_user_id AS collector_selected_by_user_id,
         upc.verification_status AS collector_verification_status,
         upc.verified_at AS collector_verified_at,
+        upc.revision AS collector_revision,
         sb.id AS us_binding_id, sb.market_id AS us_binding_market_id,
         sb.owner_type AS us_binding_owner_type,
         sb.owner_id AS us_binding_owner_id,
@@ -209,6 +246,7 @@ export async function readUsPayC11Booking(
         sb.verified_at AS us_binding_verified_at,
         sb.last_checked_at AS us_binding_last_checked_at,
         ls.id AS us_live_binding_id,
+        ls.stripe_account_id AS us_live_binding_account_id,
         ls.market_id AS us_live_binding_market_id,
         ls.owner_type AS us_live_binding_owner_type,
         ls.owner_id AS us_live_binding_owner_id,
@@ -240,7 +278,28 @@ export async function readUsPayC11Booking(
         ev.event_type AS us_event_type,
         ev.event_created AS us_event_created,
         ev.signature_verified AS us_event_signature_verified,
-        ev.processing_result AS us_event_result
+        ev.processing_result AS us_event_result,
+        lp.booking_id AS us_live_attempt_booking_id,
+        lp.market_id AS us_live_attempt_market_id,
+        lp.seller_binding_id AS us_live_attempt_binding_id,
+        lp.collector_owner_type AS us_live_attempt_owner_type,
+        lp.collector_owner_id AS us_live_attempt_owner_id,
+        lp.collector_revision AS us_live_attempt_revision,
+        lp.stripe_account_id AS us_live_attempt_account_id,
+        lp.amount_minor::text AS us_live_attempt_amount_minor,
+        lp.currency_code AS us_live_attempt_currency,
+        lp.stripe_payment_intent_id AS us_live_attempt_pi_id,
+        lp.status AS us_live_attempt_status,
+        lp.stripe_event_created AS us_live_attempt_event_created,
+        lp.last_event_id AS us_live_attempt_last_event_id,
+        lr.stripe_event_id AS us_live_event_id,
+        lr.stripe_account_id AS us_live_event_account_id,
+        lr.stripe_payment_intent_id AS us_live_event_pi_id,
+        lr.stripe_mode AS us_live_event_mode,
+        lr.event_type AS us_live_event_type,
+        lr.event_created AS us_live_event_created,
+        lr.signature_verified AS us_live_event_signature,
+        lr.result AS us_live_event_result
       FROM public.bookings b
       JOIN public.tenant_market_settings tms ON tms.salon_id = b.salon_id
       JOIN public.markets m ON m.id = tms.market_id
@@ -265,6 +324,10 @@ export async function readUsPayC11Booking(
         ON pa.booking_id = b.id AND pa.merchant_binding_id = sb.id
       LEFT JOIN public.us_stripe_event_ledger ev
         ON ev.stripe_event_id = pa.last_event_id
+      LEFT JOIN public.us_stripe_live_payment_intents lp
+        ON lp.booking_id = b.id AND lp.market_id = m.id
+      LEFT JOIN public.us_stripe_live_payment_receipts lr
+        ON lr.stripe_event_id = lp.last_event_id
       WHERE b.id = $1 AND b.client_id = $2
       LIMIT 1`,
     [booking, client]
@@ -285,8 +348,11 @@ export async function readUsPayC11Booking(
   const verifiedCollector = selectedCollectorFromRow(row, allowTestStripeMode);
   // A paid projection must never survive loss/corruption of its booking snapshot
   // or a revoked/unverified owner recipient.
-  const verifiedPayment = price && verifiedCollector
-    ? signedTestPaymentFromRow(row, allowTestStripeMode) : null;
+  const verifiedPayment = price
+    ? (signedLivePaymentFromRow(row) ||
+       (verifiedCollector
+         ? signedTestPaymentFromRow(row, allowTestStripeMode) : null))
+    : null;
   const projection = buildUsPayC11ReadModel({
     booking: row,
     priceSnapshot: price,
