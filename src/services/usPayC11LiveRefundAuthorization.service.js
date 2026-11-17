@@ -133,7 +133,7 @@ async function remainingRefundable(db,bookingId,totalMinor) {
   );
   const x=q.rows[0];
   const remain=totalMinor-BigInt(x.already_refunded)-BigInt(x.outstanding);
-  return {remain,disputed:x.disputed===true};
+  return {remain,outstanding:BigInt(x.outstanding),disputed:x.disputed===true};
 }
 
 async function reserveOwnerConsent(pool,{
@@ -200,6 +200,7 @@ async function reserveOwnerConsent(pool,{
       db,bookingId,BigInt(b.amount_minor)
     );
     if(tally.disputed)return deny(409,"US_C11_REFUND_DISPUTE_MANUAL_REVIEW");
+    if(tally.outstanding>0n)return deny(409,"US_C11_REFUND_PREVIOUS_OUTCOME_PENDING");
     if(tally.remain<=0n)return deny(409,"US_C11_REFUND_NOTHING_REMAINING");
     if(tally.remain!==BigInt(expectedRemainingMinor)){
       return deny(409,"US_C11_REFUND_REMAINING_AMOUNT_STALE");
