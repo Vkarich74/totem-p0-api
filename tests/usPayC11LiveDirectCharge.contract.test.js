@@ -200,7 +200,7 @@ test("only Stripe-signed exact US seller amount and booking can mark paid",async
   const foreign=makeEvent({reservation:token,account:"acct_FOREIGNMERCHANT99"});
   assert.equal((await postEvent(foreign)).status,200);
   assert.equal((await status()).status,"requires_payment_method");
-  const wrongAmount=makeEvent({reservation:token,amount:500});
+  const wrongAmount=makeEvent({reservation:token,amount:500,received:500});
   assert.equal((await postEvent(wrongAmount)).status,200);
   assert.equal((await status()).status,"requires_payment_method");
   const valid=makeEvent({reservation:token});
