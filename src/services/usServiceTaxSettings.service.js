@@ -21,7 +21,7 @@ function fail(status, code) {
   return { status, body: { ok: false, error: code } };
 }
 
-function actorFor(auth, identity, ownerType) {
+export function actorFor(auth, identity, ownerType) {
   const expectedRole = ownerType === "salon" ? "salon_admin" : "master";
   const userId = positiveAuthId(auth?.user_id);
   if (!userId || auth?.role !== expectedRole ||
@@ -75,7 +75,7 @@ function success(ownerType, ownerSlug, ownerId, row, marketId) {
   };
 }
 
-async function checkSession(db, actor, write) {
+export async function checkSession(db, actor, write) {
   const row = await db.query(
     `SELECT 1 FROM public.auth_sessions s
        JOIN public.auth_users u ON u.id=s.user_id
@@ -89,7 +89,7 @@ async function checkSession(db, actor, write) {
   return row.rows.length === 1;
 }
 
-async function ownerContext(db, ownerType, ownerSlug, userId, write) {
+export async function ownerContext(db, ownerType, ownerSlug, userId, write) {
   // SQL checks direct canonical ownership, never inferred master_salon
   // identity memberships. A master may also work at KG salons but this
   // setting can be used only inside an explicitly US/ USD booking.
@@ -122,7 +122,7 @@ async function ownerContext(db, ownerType, ownerSlug, userId, write) {
   return response.rows[0] || null;
 }
 
-async function transact(pool, write, action) {
+export async function transact(pool, write, action) {
   const client = await pool.connect();
   let opened = false;
   try {
