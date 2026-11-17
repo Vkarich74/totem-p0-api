@@ -39,6 +39,7 @@ import buildMoneyCoreRouter from "./internal/money-core.js";
 import buildLocalePreferencesRouter from "./internal/localePreferences.js";
 import { buildUsPayC11OwnerRouter } from "./internalUsPayC11Owner.js";
 import { buildUsServiceTaxSettingsRouter } from "./internalUsServiceTaxSettings.js";
+import { buildUsServicePricesRouter } from "./internalUsServicePrices.js";
 import { buildUsPayC11LiveSellerRouter } from "./internalUsPayC11LiveSeller.js";
 import { buildUsPayC11LiveRefundRouter } from "./internalUsPayC11LiveRefund.js";
 
@@ -73,6 +74,8 @@ r.use(buildLocalePreferencesRouter(pool, internalReadRateLimit));
 r.use(buildUsPayC11OwnerRouter(pool));
 // US-only service-tax settings: no booking/payment mutation.
 r.use(buildUsServiceTaxSettingsRouter(pool));
+// US-only explicit USD-cents prices; never infer from legacy KGS price.
+r.use(buildUsServicePricesRouter(pool));
 // Seller onboarding self-consent only; safe OFF by default.
 r.use(buildUsPayC11LiveSellerRouter(pool));
 // Actual LIVE refund creation is financially sensitive: separate flag OFF.
