@@ -48,8 +48,13 @@ export function allocateUsServiceTaxRefunds(basisInput,refunds=[]){
   if(!Array.isArray(refunds))throw invalid("US_TAX07_REFUNDS_INVALID");
   let aggregate=0n,previousTax=0n;
   const ids=new Set();
+  const timeOf=value=>{
+    const t=new Date(value).getTime();
+    if(!Number.isFinite(t))throw invalid("US_TAX07_REFUND_TIMESTAMP_INVALID");
+    return t;
+  };
   const sorted=[...refunds].sort((a,b)=>{
-    const time=String(a.recorded_at||"").localeCompare(String(b.recorded_at||""));
+    const time=timeOf(a.recorded_at)-timeOf(b.recorded_at);
     return time || String(a.stripe_refund_id).localeCompare(String(b.stripe_refund_id));
   });
   const items=sorted.map(refund=>{
