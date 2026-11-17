@@ -197,7 +197,7 @@ test("only Stripe-signed exact US seller amount and booking can mark paid",async
   const token=String((await status()).reservation_token);
   const bad=makeEvent({reservation:token});
   assert.equal((await postEvent(bad,"whsec_WRONG_SECRET_WILL_FAIL")).status,400);
-  const foreign=makeEvent({reservation:token,account:"acct_FOREIGNMERCHANT_99"});
+  const foreign=makeEvent({reservation:token,account:"acct_FOREIGNMERCHANT99"});
   assert.equal((await postEvent(foreign)).status,200);
   assert.equal((await status()).status,"requires_payment_method");
   const wrongAmount=makeEvent({reservation:token,amount:500});
