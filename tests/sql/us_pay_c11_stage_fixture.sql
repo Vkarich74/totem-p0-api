@@ -28,6 +28,7 @@ CREATE TABLE public.bookings (
  salon_id integer NOT NULL REFERENCES public.salons(id),
  master_id integer NOT NULL REFERENCES public.masters(id),
  service_id integer NOT NULL,
+ client_id integer NOT NULL,
  currency_code text,
  status text NOT NULL
 );
@@ -45,9 +46,9 @@ INSERT INTO public.salon_master_services VALUES
  (302,100,200,402,'USD',true),
  (303,102,202,403,'KZT',true);
 INSERT INTO public.bookings VALUES
- (500,100,200,400,'USD','reserved'),
- (501,100,200,400,'USD','confirmed'),
- (502,101,201,401,'KGS','reserved'),
- (503,102,202,403,'KZT','reserved'),
- (504,100,200,402,'USD','reserved');
+ (500,100,200,400,55,'USD','reserved'),
+ (501,100,200,400,55,'USD','confirmed'),
+ (502,101,201,401,56,'KGS','reserved'),
+ (503,102,202,403,57,'KZT','reserved'),
+ (504,100,200,402,55,'USD','reserved');
 COMMIT;
