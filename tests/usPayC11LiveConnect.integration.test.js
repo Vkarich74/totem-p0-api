@@ -128,6 +128,26 @@ test("LIVE seller consent is mandatory; wrong role/tenant and KG/KZ denied BEFOR
     const r=await api({...args,method:"POST",op:"/start",body:{consent:true}});
     assert.ok([403,404].includes(r.status),JSON.stringify(args)+":"+r.status);
   }
+  // Production has owner_salon.status, salons.enabled/status and masters.active.
+  // Disabled business identities must be denied BEFORE any live Stripe request.
+  try {
+    await pool.query("UPDATE public.owner_salon SET status='revoked' WHERE owner_id='900' AND salon_id=100");
+    assert.equal((await api({method:"POST",op:"/start",body:{consent:true}})).status,404);
+  } finally {
+    await pool.query("UPDATE public.owner_salon SET status='active' WHERE owner_id='900' AND salon_id=100");
+  }
+  try {
+    await pool.query("UPDATE public.salons SET enabled=false WHERE id=100");
+    assert.equal((await api({method:"POST",op:"/start",body:{consent:true}})).status,404);
+  } finally {
+    await pool.query("UPDATE public.salons SET enabled=true WHERE id=100");
+  }
+  try {
+    await pool.query("UPDATE public.masters SET active=false WHERE id=200");
+    assert.equal((await api({actor:"master",who:"master",id:200,method:"POST",op:"/start",body:{consent:true}})).status,404);
+  } finally {
+    await pool.query("UPDATE public.masters SET active=true WHERE id=200");
+  }
   assert.equal(calls.length,0); // unauthorized requests never reach LIVE Stripe
   assert.equal(calls.filter(c=>c.path==="/v1/accounts").length,0);
 });
