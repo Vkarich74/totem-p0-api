@@ -68,7 +68,7 @@ const stripeFetch=async(address,opts)=>{
     assert.ok((pi===pi510&&cents==="205"&&requestId===idPartial)||
       (pi===pi512&&cents==="1205"&&requestId===idFull));
     const response={
-      id,object:"refund",livemode:true,payment_intent:pi,
+      id,object:"refund",payment_intent:pi,
       amount:Number(cents),currency:"usd",status:"succeeded",
       metadata:{totem_us_c11_refund_request:requestId},
     };
