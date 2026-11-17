@@ -41,6 +41,7 @@ import { buildUsPayC11OwnerRouter } from "./internalUsPayC11Owner.js";
 import { buildUsServiceTaxSettingsRouter } from "./internalUsServiceTaxSettings.js";
 import { buildUsServicePricesRouter } from "./internalUsServicePrices.js";
 import { buildUsServiceTaxQuoteRouter } from "./internalUsServiceTaxQuote.js";
+import { buildUsServiceTaxReportRouter } from "./internalUsServiceTaxReport.js";
 import { buildUsPayC11LiveSellerRouter } from "./internalUsPayC11LiveSeller.js";
 import { buildUsPayC11LiveRefundRouter } from "./internalUsPayC11LiveRefund.js";
 
@@ -79,6 +80,8 @@ r.use(buildUsServiceTaxSettingsRouter(pool));
 r.use(buildUsServicePricesRouter(pool));
 // Tax-inclusive immutable quote: verified booking collector only; Stripe still OFF.
 r.use(buildUsServiceTaxQuoteRouter(pool));
+// TAX-07: signed US service-tax and partial-refund reconciliation, read only.
+r.use(buildUsServiceTaxReportRouter(pool));
 // Seller onboarding self-consent only; safe OFF by default.
 r.use(buildUsPayC11LiveSellerRouter(pool));
 // Actual LIVE refund creation is financially sensitive: separate flag OFF.
