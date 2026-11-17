@@ -29,7 +29,13 @@ export function buildPublicUsPayC11Router({ pool, verifyClientCabinetAccess }) {
         return res.status(access.status).json({ ok: false, error: access.error });
       }
 
-      const result = await readUsPayC11Booking(db, { clientId, bookingId });
+      const result = await readUsPayC11Booking(db, {
+        clientId, bookingId,
+        // Test-mode merchant projections disabled in Production by default.
+        allowTestStripeMode:
+          process.env.US_PAY_C11_STRIPE_TEST_MODE === "true" &&
+          process.env.NODE_ENV !== "production",
+      });
       return res.status(result.status).json(result.body);
     } catch (error) {
       console.error("US_PAY_C11_READ_ERROR", String(error?.code || "UNKNOWN"));
