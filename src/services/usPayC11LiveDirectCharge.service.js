@@ -59,6 +59,19 @@ async function verifiedUsdBooking(db,clientId,bookingId) {
   const r=await db.query(
     `SELECT
        b.id,b.salon_id,b.master_id,b.service_id,b.status,b.currency_code,
+       salon.enabled AS salon_enabled,salon.status AS salon_status,
+       master.active AS master_active,
+       CASE WHEN sb.owner_type='salon' THEN EXISTS(
+         SELECT 1 FROM public.owner_salon own
+          WHERE own.salon_id=b.salon_id
+            AND own.owner_id=sb.created_by_user_id::text
+            AND own.status='active'
+       ) WHEN sb.owner_type='master' THEN
+         (master.user_id=sb.created_by_user_id AND EXISTS(
+           SELECT 1 FROM public.master_salon ms
+            WHERE ms.salon_id=b.salon_id AND ms.master_id=b.master_id
+              AND ms.status='active'
+         )) ELSE false END AS current_seller_owner_authorized,
        m.id AS market_id,m.code AS market_code,m.default_currency,m.active AS market_active,
        snap.amount_minor::text AS amount_minor,snap.currency_code AS price_currency,
        snap.market_id AS price_market,snap.service_price_version,
@@ -77,6 +90,8 @@ async function verifiedUsdBooking(db,clientId,bookingId) {
        sb.charges_enabled,sb.payouts_enabled,sb.details_submitted,
        sb.card_payments_status,sb.transfers_status
      FROM public.bookings b
+     JOIN public.salons salon ON salon.id=b.salon_id
+     JOIN public.masters master ON master.id=b.master_id
      JOIN public.tenant_market_settings tm ON tm.salon_id=b.salon_id
      JOIN public.markets m ON m.id=tm.market_id
      JOIN public.us_booking_price_snapshots snap ON snap.booking_id=b.id
@@ -96,6 +111,9 @@ async function verifiedUsdBooking(db,clientId,bookingId) {
 
 function eligible(row) {
   if(!row || row.market_code!=="US" ||
+     row.salon_enabled!==true || row.salon_status!=="active" ||
+     row.master_active!==true ||
+     row.current_seller_owner_authorized!==true ||
      row.market_active!==true || row.default_currency!=="USD" ||
      row.currency_code!=="USD" || row.price_currency!=="USD" ||
      row.service_link_currency!=="USD" ||
