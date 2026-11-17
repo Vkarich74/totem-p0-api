@@ -10,6 +10,7 @@ import Redis from "ioredis";
 import { pool } from "./db.js";
 import { buildUsStripeTestWebhookHandler } from "./routes/usStripeTestWebhook.js";
 import { buildUsPayC11LiveConnectWebhook } from "./routes/usPayC11LiveConnectWebhook.js";
+import { buildUsPayC11LiveExistingOAuthCallback } from "./routes/usPayC11LiveExistingOAuth.js";
 
 import { resolveTenant } from "./middleware/resolveTenant.js";
 import { resolveAuth } from "./middleware/resolveAuth.js";
@@ -102,6 +103,13 @@ app.post(
 
 app.use(express.json());
 app.use(cookieParser());
+
+// Stripe Connect OAuth redirect receives only a one-time code and CSRF state.
+// Server-side account binding is authenticated by the stored session.
+app.get(
+  "/stripe/connect/us-pay-c11/live/oauth/callback",
+  buildUsPayC11LiveExistingOAuthCallback({ pool })
+);
 
 /* ================= OBSERVABILITY ================= */
 
