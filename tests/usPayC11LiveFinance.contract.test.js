@@ -203,6 +203,18 @@ test("automatic payout aggregates verified net balance only; NEVER booking payou
     ["po_SYNTHETIC_US_1"]
   );
   assert.equal(items.rows[0].n,2);
+  await assert.rejects(
+    pool.query(
+      "UPDATE public.us_c11_live_payouts SET amount_minor=amount_minor+1 WHERE stripe_payout_id=$1",
+      [payout.id]
+    ),e=>e.code==="23514"
+  );
+  await assert.rejects(
+    pool.query(
+      "DELETE FROM public.us_c11_live_payout_balance_items WHERE stripe_payout_id=$1",
+      [payout.id]
+    ),e=>e.code==="23514"
+  );
   const piStatus=await pool.query(
     "SELECT status FROM public.us_stripe_live_payment_intents WHERE booking_id=510"
   );
