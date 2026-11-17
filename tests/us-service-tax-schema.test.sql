@@ -49,7 +49,9 @@ BEGIN
   END;
 
   -- Local temporary fixture only; this entire transaction is rolled back.
-  UPDATE public.tenant_market_settings SET market_id = v_market
+  UPDATE public.tenant_market_settings
+     SET market_id = v_market, city_id = NULL,
+         locale_override = NULL, currency_override = NULL
    WHERE salon_id = v_salon;
 
   INSERT INTO public.us_owner_service_tax_settings
