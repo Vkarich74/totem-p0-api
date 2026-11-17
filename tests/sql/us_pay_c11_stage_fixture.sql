@@ -2,10 +2,11 @@
 -- This is intentionally NOT the full production schema or production data.
 BEGIN;
 CREATE TABLE public.salons (
- id integer PRIMARY KEY, name text NOT NULL
+ id integer PRIMARY KEY, name text NOT NULL,
+ enabled boolean NOT NULL DEFAULT true, status text NOT NULL DEFAULT 'active'
 );
 CREATE TABLE public.masters (
- id integer PRIMARY KEY, name text NOT NULL
+ id integer PRIMARY KEY, name text NOT NULL, active boolean NOT NULL DEFAULT true
 );
 CREATE TABLE public.markets (
  id bigint PRIMARY KEY, code text NOT NULL UNIQUE,
@@ -34,9 +35,9 @@ CREATE TABLE public.bookings (
 );
 INSERT INTO public.markets VALUES
  (1,'KG',true,'KGS'),(2,'KZ',true,'KZT'),(3,'US',true,'USD');
-INSERT INTO public.salons VALUES
+INSERT INTO public.salons(id,name) VALUES
  (100,'SYNTHETIC_US_A'),(101,'SYNTHETIC_KG'),(102,'SYNTHETIC_KZ');
-INSERT INTO public.masters VALUES
+INSERT INTO public.masters(id,name) VALUES
  (200,'SYNTHETIC_MASTER_US'),(201,'SYNTHETIC_MASTER_KG'),(202,'SYNTHETIC_MASTER_KZ');
 INSERT INTO public.tenant_market_settings VALUES
  (100,3),(101,1),(102,2);
