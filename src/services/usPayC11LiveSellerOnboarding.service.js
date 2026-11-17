@@ -40,6 +40,8 @@ function payload(binding, ownerType, ownerId) {
     contract_version: "US-PAY-C11-live-connect-v1",
     market_code: "US", stripe_mode: "LIVE",
     account_type: "standard",
+    connection_method: binding?.stripe_account_id
+      ? (binding?.connection_method || "new_standard") : "none",
     owner_type: ownerType, owner_id: ownerId,
     onboarding_started: Boolean(binding?.stripe_account_id),
     verification_status: binding?.verification_status || "not_started",
@@ -127,6 +129,7 @@ async function getBinding(db,ownerType,ownerId,lock=false) {
   const r=await db.query(
     `SELECT id,market_id,owner_type,owner_id,created_by_user_id,
             provisioning_token,stripe_account_id,verification_status,
+            connection_method,
             charges_enabled,payouts_enabled,details_submitted,
             card_payments_status,transfers_status,created_at,last_checked_at
        FROM public.us_stripe_live_seller_bindings
@@ -222,6 +225,21 @@ export async function startLiveSellerOnboarding(pool,{
     if(binding.verification_status==="verified") {
       return reject(409,"US_CONNECT_SELLER_ALREADY_VERIFIED");
     }
+    if(binding.connection_method==="oauth_existing") {
+      return reject(409,"US_CONNECT_EXISTING_ACCOUNT_ALREADY_LINKED");
+    }
+    if(!binding.stripe_account_id) {
+      const pendingOAuth=await db.query(
+        `SELECT 1 FROM public.us_stripe_live_oauth_attempts
+          WHERE binding_id=$1 AND result='pending'
+            AND consumed_at IS NULL AND expires_at>now()
+          LIMIT 1`,
+        [binding.id]
+      );
+      if(pendingOAuth.rows.length) {
+        return reject(409,"US_CONNECT_EXISTING_OAUTH_IN_PROGRESS");
+      }
+    }
     if(!binding.stripe_account_id &&
        Date.now()-new Date(binding.created_at).getTime() > 20*60*60*1000) {
       // Stripe idempotency keys may expire after 24 hours. No risk
@@ -292,8 +310,8 @@ export async function startLiveSellerOnboarding(pool,{
   return {
     status:200,
     body:{
-      ...payload({stripe_account_id:accountId,verification_status:"onboarding"},
-        ownerType,id),
+      ...payload({stripe_account_id:accountId,verification_status:"onboarding",
+        connection_method:"new_standard"},ownerType,id),
       onboarding_url:link.url,
       onboarding_expires_at:link.expires_at,
       // This URL is sensitive and one-time. It MUST NOT be sent in emails,
@@ -351,7 +369,7 @@ export async function refreshLiveSellerVerification(pool,{
               last_checked_at=now()
         WHERE id=$1 AND stripe_account_id=$8
         RETURNING id,verification_status,charges_enabled,
-                  payouts_enabled,details_submitted`,
+                  payouts_enabled,details_submitted,connection_method`,
       [
         binding.id,ready.state,
         ready.charges_enabled===true,ready.payouts_enabled===true,
