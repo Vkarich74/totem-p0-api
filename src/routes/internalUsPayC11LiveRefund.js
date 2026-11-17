@@ -4,8 +4,10 @@
 // Never accepts Stripe Account ID, booking recipient or payment ID as body.
 import express from "express";
 import {requireAuth} from "../middleware/requireAuth.js";
-import {authorizeUsC11LiveRefund} from
-  "../services/usPayC11LiveRefundAuthorization.service.js";
+import {
+  authorizeUsC11LiveRefund,
+  quoteUsC11LiveRefund,
+} from "../services/usPayC11LiveRefundAuthorization.service.js";
 
 export function buildUsPayC11LiveRefundRouter(pool,{
   enabled=process.env.US_PAY_C11_LIVE_REFUNDS_ENABLED==="true",
@@ -25,6 +27,23 @@ export function buildUsPayC11LiveRefundRouter(pool,{
     }
     return next();
   });
+  router.get(
+    "/us-pay-c11/live-connect/:ownerType/:ownerId/bookings/:bookingId/refund/quote",
+    async(req,res)=>{
+      try {
+        const answer=await quoteUsC11LiveRefund(pool,{
+          auth:req.auth,ownerType:req.params.ownerType,
+          ownerId:req.params.ownerId,bookingId:req.params.bookingId,
+        });
+        return res.status(answer.status).json(answer.body);
+      }catch(error){
+        console.error("US_C11_REFUND_QUOTE_FAILED",String(error?.code||"INTERNAL"));
+        return res.status(503).json({
+          ok:false,error:"US_C11_REFUND_QUOTE_SERVICE_UNAVAILABLE",
+        });
+      }
+    }
+  );
   router.post(
     "/us-pay-c11/live-connect/:ownerType/:ownerId/bookings/:bookingId/refund",
     async(req,res)=>{
