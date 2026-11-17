@@ -102,6 +102,7 @@ async function ownerScope(db, actor, ownerType, ownerId) {
          JOIN public.tenant_market_settings tms ON tms.salon_id=s.id
          JOIN public.markets m ON m.id=tms.market_id
         WHERE s.id=$1 AND os.owner_id::text=$2
+          AND os.status='active' AND s.enabled IS TRUE AND s.status='active'
           AND m.code='US' AND m.active IS TRUE
           AND m.default_currency='USD'
         LIMIT 1`,
@@ -114,7 +115,7 @@ async function ownerScope(db, actor, ownerType, ownerId) {
          JOIN public.master_salon ms ON ms.master_id=mas.id
          JOIN public.tenant_market_settings tms ON tms.salon_id=ms.salon_id
          JOIN public.markets m ON m.id=tms.market_id
-        WHERE mas.id=$1 AND mas.user_id=$2
+        WHERE mas.id=$1 AND mas.user_id=$2 AND mas.active IS TRUE
           AND ms.status='active' AND m.code='US'
           AND m.active IS TRUE AND m.default_currency='USD'
         ORDER BY m.id
