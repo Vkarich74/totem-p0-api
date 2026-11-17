@@ -241,13 +241,21 @@ test("TAX-03 US/USD canonical service price to immutable booking snapshot",async
         servicePk:item.service_pk,serviceLinkId:item.link_id,
       });
       assert.equal(current.amount_minor,"10006");
-      await assert.rejects(
-        client.query(
-          "UPDATE public.us_booking_price_snapshots SET amount_minor=$2 WHERE booking_id=$1",
-          [item.booking_id,10006]
-        ),
-        {code:"23514"}
-      );
+      await client.query("SAVEPOINT tax03_immutable_negative");
+      try {
+        await assert.rejects(
+          client.query(
+            "UPDATE public.us_booking_price_snapshots SET amount_minor=$2 WHERE booking_id=$1",
+            [item.booking_id,10006]
+          ),
+          {code:"23514"}
+        );
+      } finally {
+        // A PostgreSQL error aborts the savepoint's subtransaction.
+        // Keep the outer rollback-only fixture alive for later assertions.
+        await client.query("ROLLBACK TO SAVEPOINT tax03_immutable_negative");
+        await client.query("RELEASE SAVEPOINT tax03_immutable_negative");
+      }
     });
 
     await t.test("legacy currency and wrong service link cannot forge snapshot",async()=>{
