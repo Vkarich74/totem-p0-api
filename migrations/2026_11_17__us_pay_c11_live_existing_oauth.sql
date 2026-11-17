@@ -9,7 +9,8 @@ CREATE TABLE public.us_stripe_live_oauth_attempts (
     REFERENCES public.us_stripe_live_seller_bindings(id) ON DELETE RESTRICT,
   actor_user_id integer NOT NULL
     REFERENCES public.auth_users(id) ON DELETE RESTRICT,
-  session_id uuid NOT NULL
+  -- Actual TOTEM production schema: public.auth_sessions.id is TEXT.
+  session_id text NOT NULL
     REFERENCES public.auth_sessions(id) ON DELETE RESTRICT,
   owner_type text NOT NULL CHECK (owner_type IN ('salon','master')),
   owner_id integer NOT NULL CHECK (owner_id>0),
