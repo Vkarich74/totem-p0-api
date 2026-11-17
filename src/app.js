@@ -8,6 +8,7 @@ import crypto from "crypto";
 import Redis from "ioredis";
 
 import { pool } from "./db.js";
+import { buildUsStripeTestWebhookHandler } from "./routes/usStripeTestWebhook.js";
 
 import { resolveTenant } from "./middleware/resolveTenant.js";
 import { resolveAuth } from "./middleware/resolveAuth.js";
@@ -73,6 +74,19 @@ app.use(
       return callback(error);
     },
     credentials: true,
+  })
+);
+
+// US-PAY-C11: raw Stripe TEST webhook must precede JSON middleware.
+// The endpoint is intentionally disabled in Production by default.
+app.post(
+  "/stripe/test/us-pay-c11/webhook",
+  express.raw({ type: "application/json", limit: "128kb" }),
+  buildUsStripeTestWebhookHandler({
+    pool,
+    webhookSecret: process.env.US_PAY_C11_TEST_STRIPE_WEBHOOK_SECRET || "",
+    enabled: process.env.US_PAY_C11_TEST_WEBHOOK_ENABLED === "true" &&
+      process.env.NODE_ENV !== "production",
   })
 );
 
