@@ -428,7 +428,7 @@ export async function authorizeUsC11LiveRefund(pool,{
  * Seller/price are read from immutable trusted signed US booking data.
  */
 export async function quoteUsC11LiveRefund(pool,{
-  auth,ownerType,ownerId,bookingId,
+  auth,ownerType,ownerId,bookingId,proposedRefundMinor,
 }={}){
   const bid=pos(bookingId),oid=pos(ownerId);
   if(!bid||!oid||!["salon","master"].includes(ownerType)){
@@ -447,12 +447,28 @@ export async function quoteUsC11LiveRefund(pool,{
     const tally=await remainingRefundable(db,bid,total);
     const canRefund=tally.remain>0n&&
       tally.outstanding===0n&&!tally.disputed;
-    const estimate=canRefund ? previewUsServiceTaxRefund({
+    const taxBasis={
       service_base_minor:b.service_base_minor,
       service_tax_minor:b.service_tax_minor,
       charge_total_minor:b.charge_total_minor,
       rate_bps:b.tax_rate_bps,
-    },tally.refunded.toString(),tally.remain.toString()) : null;
+    };
+    const estimate=canRefund ? previewUsServiceTaxRefund(
+      taxBasis,tally.refunded.toString(),tally.remain.toString()
+    ) : null;
+    const hasRequested=proposedRefundMinor!==undefined;
+    let requestedEstimate=null;
+    if(hasRequested){
+      if(amount(proposedRefundMinor)===null){
+        return deny(400,"US_C11_REFUND_PREVIEW_AMOUNT_INVALID");
+      }
+      if(!canRefund || BigInt(String(proposedRefundMinor))>tally.remain){
+        return deny(409,"US_C11_REFUND_PREVIEW_NOT_REFUNDABLE");
+      }
+      requestedEstimate=previewUsServiceTaxRefund(
+        taxBasis,tally.refunded.toString(),String(proposedRefundMinor)
+      );
+    }
     return {status:200,body:{
       ok:true,contract_version:"US-PAY-C11-refund-quote-v1",
       market_code:"US",currency_code:"USD",booking_id:bid,
@@ -468,6 +484,7 @@ export async function quoteUsC11LiveRefund(pool,{
       dispute_block:tally.disputed,
       refundable:canRefund,
       full_remaining_refund_estimate:estimate,
+      requested_refund_estimate:requestedEstimate,
       refund_confirmed:false,
       payment_ready:false,
     }};
