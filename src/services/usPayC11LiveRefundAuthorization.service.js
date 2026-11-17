@@ -264,7 +264,7 @@ async function sendStripeRefund({
   if(!response.ok)throw Error("US_C11_REFUND_STRIPE_REQUEST_FAILED");
   const r=await response.json();
   if(r?.object!=="refund"||!REFUND.test(String(r.id||""))||
-     r.livemode!==true||r.payment_intent!==paymentIntent||
+     r.livemode===false||r.payment_intent!==paymentIntent||
      String(r.amount)!==String(amountMinor)||
      r.currency!=="usd"||!REFUND_STATES.has(r.status) ||
      r.metadata?.totem_us_c11_refund_request!==requestId){
