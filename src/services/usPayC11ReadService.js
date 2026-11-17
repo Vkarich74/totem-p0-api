@@ -237,11 +237,17 @@ export async function readUsPayC11Booking(
     return { status: 409, body: { ok: false, error: "US_BOOKING_CURRENCY_MISMATCH" } };
   }
 
+  const price = priceSnapshotFromRow(row);
+  const verifiedCollector = selectedCollectorFromRow(row, allowTestStripeMode);
+  // A paid projection must never survive loss/corruption of its booking snapshot
+  // or a revoked/unverified owner recipient.
+  const verifiedPayment = price && verifiedCollector
+    ? signedTestPaymentFromRow(row, allowTestStripeMode) : null;
   const projection = buildUsPayC11ReadModel({
     booking: row,
-    priceSnapshot: priceSnapshotFromRow(row),
-    collector: selectedCollectorFromRow(row, allowTestStripeMode),
-    payment: signedTestPaymentFromRow(row, allowTestStripeMode),
+    priceSnapshot: price,
+    collector: verifiedCollector,
+    payment: verifiedPayment,
   });
 
   const unavailable = [];
