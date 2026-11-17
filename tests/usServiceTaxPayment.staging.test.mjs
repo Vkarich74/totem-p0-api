@@ -359,6 +359,32 @@ test("TAX-05 signed Stripe LIVE contract on isolated DB: gross = base + tax",asy
         ownerType:"master",ownerId:item.master_id,
       });
       assert.equal(stolen.status,404,"owner cannot access independent master report");
+      const masterIdentity=await client.query(
+        `SELECT m.user_id FROM public.masters m
+           JOIN public.auth_users u ON u.id=m.user_id
+           WHERE m.id=$1 AND u.role='master' AND u.enabled IS TRUE`,
+        [item.master_id]
+      );
+      assert.equal(masterIdentity.rows.length,1);
+      const masterSession=randomUUID();
+      await client.query(
+        `INSERT INTO auth_sessions(id,user_id,expires_at,last_seen_at)
+         VALUES($1,$2,now()+interval '1 day',now())`,
+        [masterSession,masterIdentity.rows[0].user_id]
+      );
+      const masterReport=await readUsServiceTaxReport(pool,{
+        auth:{
+          source:"session",role:"master",
+          user_id:masterIdentity.rows[0].user_id,
+          session_id:masterSession,
+        },
+        ownerType:"master",ownerId:item.master_id,
+      });
+      assert.equal(masterReport.status,200,JSON.stringify(masterReport));
+      assert.equal(masterReport.body.owner_type,"master");
+      assert.equal(masterReport.body.booking_count,0,
+        "independent master must not inherit salon tax or payment report");
+      assert.equal(masterReport.body.totals.captured_gross_minor,"0");
     });
 
     const refunds={
