@@ -257,7 +257,8 @@ async function observeRefund(db,context,o){
       throw Error("US_C11_SIGNED_REFUND_AUTHORIZATION_MISMATCH");
     }
     if(["succeeded","failed","canceled"].includes(o.status) &&
-       ["reserved","submitted","requires_review"].includes(request.state)) {
+       (["reserved","submitted","requires_review"].includes(request.state) ||
+        (request.state==="succeeded"&&o.status==="failed"))) {
       await db.query(
         `UPDATE public.us_c11_live_refund_requests
             SET state=$2 WHERE request_id=$1`,
