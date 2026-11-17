@@ -21,6 +21,10 @@ on:
       - src/routes/usStripeTestWebhook.js
       - src/app.js
       - migrations/2026_11_17__us_pay_c11_live_seller_onboarding.sql
+      - migrations/2026_11_17__us_pay_c11_live_existing_oauth.sql
+      - src/services/usPayC11LiveExistingOAuth.service.js
+      - src/routes/usPayC11LiveExistingOAuth.js
+      - tests/usPayC11ExistingOAuth.integration.test.js
       - migrations/2026_11_17__us_pay_c11_live_connect_webhook_receipts.sql
       - src/services/usPayC11LiveConnectWebhook.service.js
       - src/routes/usPayC11LiveConnectWebhook.js
@@ -61,7 +65,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Vkarich74/totem-sdk
-          ref: 320e2a9fbaf803d9416bb6bc877f56f20f2ebdc0
+          ref: 957dcd88131441eb8f357f9e390ffc85657a1177
           path: sdk
           persist-credentials: false
 
@@ -104,6 +108,7 @@ jobs:
             tests/sql/us_pay_c11_stripe_test_stage_seed.sql \
             migrations/2026_11_17__us_pay_c11_live_seller_onboarding.sql \
             migrations/2026_11_17__us_pay_c11_live_connect_webhook_receipts.sql \
+            migrations/2026_11_17__us_pay_c11_live_existing_oauth.sql \
             tests/sql/us_pay_c11_live_connect_fixture.sql; do
             docker exec -i us-pay-c11-pg17 psql -X -U uspayc11 -d us_pay_c11_staging \
               -v ON_ERROR_STOP=1 < "$file" > /tmp/us-pay-c11-sql-output.txt
@@ -134,6 +139,8 @@ jobs:
           node --check src/services/usPayC11LiveSellerOnboarding.service.js
           node --check src/routes/internalUsPayC11LiveSeller.js
           node --check src/routes/usPayC11LiveConnectWebhook.js
+          node --check src/routes/usPayC11LiveExistingOAuth.js
+          node --check src/services/usPayC11LiveExistingOAuth.service.js
           node --check src/services/usPayC11LiveConnectWebhook.service.js
           node --check src/routes/internal.js
           node --check src/routes/internalUsPayC11Owner.js
@@ -210,6 +217,17 @@ jobs:
           test -z "${US_PAY_C11_LIVE_STRIPE_SECRET_KEY:-}"
           node --test tests/usPayC11LiveConnect.integration.test.js
           echo 'US_PAY_C11_LIVE_SELLER_ONBOARDING_CONTRACT_PASS'
+
+      - name: Existing Standard seller OAuth (local signed owner, no live Stripe calls)
+        env:
+          US_PAY_C11_TEST_DATABASE_URL: postgres://uspayc11:local_ci_fake_secret@127.0.0.1:55432/us_pay_c11_staging
+          US_PAY_C11_LIVE_OAUTH_TEST: synthetic-only
+        run: |
+          set -euo pipefail
+          test -z "${US_PAY_C11_LIVE_OAUTH_CLIENT_ID:-}"
+          test -z "${US_PAY_C11_LIVE_STRIPE_SECRET_KEY:-}"
+          node --test tests/usPayC11ExistingOAuth.integration.test.js
+          echo 'US_PAY_C11_EXISTING_SELLER_OAUTH_CONTRACT_PASS'
 
       - name: Assert three US sidecars and no Stripe checkout enablement
         run: |
