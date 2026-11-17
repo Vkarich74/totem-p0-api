@@ -118,12 +118,18 @@ test("TAX-03 US/USD canonical service price to immutable booking snapshot",async
         WHERE salon_id=$1`,
       [item.salon_id,market.id]
     );
-    await t.test("US service link must explicitly declare USD",async()=>{
+    await t.test("explicit non-USD service currency is never converted",async()=>{
       const denied=await readUsOwnerServicePrice(pool,salonOpts);
       assert.equal(denied.status,404);
+      const bad=await saveUsOwnerServicePrice(pool,{
+        ...salonOpts,body:{amount_minor:10005,expected_version:0},
+      });
+      assert.equal(bad.status,404);
     });
+    // Existing US service-creation endpoints omit currency_code on INSERT.
+    // Emulate that exact NULL contract in the restored database transaction.
     await client.query(
-      "UPDATE public.salon_master_services SET currency_code='USD' WHERE id=$1",
+      "UPDATE public.salon_master_services SET currency_code=NULL WHERE id=$1",
       [item.link_id]
     );
 
@@ -151,6 +157,11 @@ test("TAX-03 US/USD canonical service price to immutable booking snapshot",async
       assert.equal(saved.body.amount_minor,"10005");
       assert.equal(saved.body.price_version,1);
       assert.equal(saved.body.configured,true);
+      const link=await client.query(
+        "SELECT currency_code FROM public.salon_master_services WHERE id=$1",
+        [item.link_id]
+      );
+      assert.equal(link.rows[0].currency_code,"USD");
       assert.notEqual(Number(item.legacy_price)*100,10005);
       const price=await readUsOwnerServicePrice(pool,salonOpts);
       assert.equal(price.body.amount_minor,"10005");
