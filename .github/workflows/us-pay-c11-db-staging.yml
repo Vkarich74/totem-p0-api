@@ -1,0 +1,70 @@
+name: US-PAY-C11-DB PostgreSQL 17 isolated staging
+
+on:
+  push:
+    branches:
+      - feature/us-pay-c11-read-contract
+    paths:
+      - migrations/2026_11_17__us_pay_c11_price_collector_sidecars.sql
+      - tests/sql/us_pay_c11_stage_fixture.sql
+      - tests/sql/us_pay_c11_stage_acceptance.sql
+      - .github/workflows/us-pay-c11-db-staging.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-postgresql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start disposable PostgreSQL 17 with synthetic-only data
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -d --name us-pay-c11-pg17 \
+            -e POSTGRES_DB=us_pay_c11_staging \
+            -e POSTGRES_USER=uspayc11 \
+            -e POSTGRES_PASSWORD=local_ci_fake_secret \
+            postgres:17
+          for attempt in $(seq 1 30); do
+            if docker exec us-pay-c11-pg17 pg_isready -U uspayc11 -d us_pay_c11_staging >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs us-pay-c11-pg17
+          exit 1
+
+      - name: Install synthetic baseline (no production dump or secrets)
+        run: |
+          set -euo pipefail
+          docker exec -i us-pay-c11-pg17 psql -X -U uspayc11 -d us_pay_c11_staging \
+            -v ON_ERROR_STOP=1 < tests/sql/us_pay_c11_stage_fixture.sql
+
+      - name: Install additive US cents and collector sidecars
+        run: |
+          set -euo pipefail
+          docker exec -i us-pay-c11-pg17 psql -X -U uspayc11 -d us_pay_c11_staging \
+            -v ON_ERROR_STOP=1 < migrations/2026_11_17__us_pay_c11_price_collector_sidecars.sql
+
+      - name: Assert USD cents, immutable snapshot, collector, KG/KZ isolation
+        run: |
+          set -euo pipefail
+          docker exec -i us-pay-c11-pg17 psql -X -U uspayc11 -d us_pay_c11_staging \
+            -v ON_ERROR_STOP=1 < tests/sql/us_pay_c11_stage_acceptance.sql
+
+      - name: Verify three isolated tables remain after rolled-back tests
+        run: |
+          set -euo pipefail
+          COUNT=$(docker exec us-pay-c11-pg17 psql -X -U uspayc11 -d us_pay_c11_staging \
+            -v ON_ERROR_STOP=1 -tAc "SELECT COUNT(*) FROM pg_tables WHERE schemaname='public' AND tablename IN ('us_service_price_amounts','us_booking_price_snapshots','us_booking_payment_collectors')")
+          test "$COUNT" = 3
+          echo 'US_PAY_C11_DB_STAGE_PASS: PostgreSQL 17, three sidecars, synthetic data, no legacy writes'
+
+      - name: Destroy disposable staging database
+        if: always()
+        run: docker rm -f us-pay-c11-pg17 >/dev/null 2>&1 || true
