@@ -20,6 +20,7 @@ CREATE TABLE public.auth_sessions (
 CREATE TABLE public.owner_salon (
   owner_id text NOT NULL,
   salon_id integer NOT NULL REFERENCES public.salons(id),
+  status text NOT NULL DEFAULT 'active',
   PRIMARY KEY (owner_id, salon_id)
 );
 
@@ -46,7 +47,7 @@ INSERT INTO public.auth_sessions VALUES
  ('00000000-0000-4000-8000-000000000905',900,now()-interval '1 hour',now()-interval '1 day',NULL),
  ('00000000-0000-4000-8000-000000000906',900,now()+interval '1 day',now(),now());
 
-INSERT INTO public.owner_salon VALUES
+INSERT INTO public.owner_salon(owner_id,salon_id) VALUES
  ('900',100),
  ('902',101),
  ('904',100);
@@ -73,7 +74,7 @@ INSERT INTO public.us_booking_price_snapshots (
  (508,3,300,1205,2);
 
 -- US service for master 203 exists but no active master_salon relation.
-INSERT INTO public.masters VALUES (203,'SYNTHETIC_MASTER_INACTIVE');
+INSERT INTO public.masters(id,name) VALUES (203,'SYNTHETIC_MASTER_INACTIVE');
 INSERT INTO public.salon_master_services
  (id,salon_id,master_id,service_pk,currency_code,active)
 VALUES (304,100,203,404,'USD',TRUE);
