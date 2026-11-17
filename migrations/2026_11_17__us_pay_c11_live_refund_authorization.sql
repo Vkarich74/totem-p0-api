@@ -26,6 +26,7 @@ CREATE TABLE public.us_c11_live_refund_requests (
   state text NOT NULL DEFAULT 'reserved' CHECK (
     state IN ('reserved','submitted','requires_review','succeeded','failed','canceled')),
   created_at timestamptz NOT NULL DEFAULT now(),
+  last_attempt_at timestamptz,
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT us_c11_refund_request_state_guard CHECK (
     (state='reserved' AND stripe_refund_id IS NULL)
