@@ -36,7 +36,29 @@ function priceSnapshotFromRow(row) {
   };
 }
 
-function selectedCollectorFromRow(row) {
+function testedMerchantBindingFromRow(row, allowTestStripeMode) {
+  if (!allowTestStripeMode || row.us_binding_id == null ||
+      row.us_binding_status !== "verified" ||
+      row.us_binding_mode !== "TEST" ||
+      row.us_binding_country !== "US" ||
+      row.us_binding_card_payments !== "active" ||
+      row.us_binding_charges_enabled !== true ||
+      row.us_binding_payouts_enabled !== true ||
+      row.us_binding_details_submitted !== true ||
+      row.us_binding_verified_at == null ||
+      row.us_binding_owner_type !== row.collector_owner_type ||
+      !sameId(row.us_binding_owner_id, row.collector_owner_id) ||
+      !sameId(row.us_binding_market_id, row.market_id)) {
+    return false;
+  }
+
+  const checked = new Date(row.us_binding_last_checked_at).getTime();
+  const age = Date.now() - checked;
+  return Number.isFinite(checked) && age >= 0 && age < 86400000;
+}
+
+function selectedCollectorFromRow(row, allowTestStripeMode) {
+  if (!testedMerchantBindingFromRow(row, allowTestStripeMode)) return null;
   if (!sameId(row.collector_booking_id, row.id) ||
       !sameId(row.collector_market_id, row.market_id) ||
       row.collector_verification_status !== "verified" ||
@@ -68,13 +90,56 @@ function selectedCollectorFromRow(row) {
   };
 }
 
+function signedTestPaymentFromRow(row, allowTestStripeMode) {
+  if (!testedMerchantBindingFromRow(row, allowTestStripeMode) ||
+      !sameId(row.us_attempt_booking_id, row.id) ||
+      !sameId(row.us_attempt_market_id, row.market_id) ||
+      !sameId(row.us_attempt_binding_id, row.us_binding_id) ||
+      row.us_attempt_account_id !== row.us_binding_account_id ||
+      row.us_attempt_mode !== "TEST" ||
+      row.us_attempt_currency !== "USD" ||
+      String(row.us_attempt_amount_minor) !== String(row.us_amount_minor) ||
+      row.us_event_id !== row.us_attempt_last_event_id ||
+      row.us_event_account_id !== row.us_binding_account_id ||
+      row.us_event_payment_intent_id !== row.us_attempt_payment_intent_id ||
+      row.us_event_mode !== "TEST" ||
+      row.us_event_signature_verified !== true ||
+      row.us_event_result !== "accepted" ||
+      String(row.us_event_created) !== String(row.us_attempt_event_created)) {
+    return null;
+  }
+  const expectedType = {
+    paid: "payment_intent.succeeded",
+    awaiting_payment: "payment_intent.processing",
+    requires_review: null,
+  };
+  const status = row.us_attempt_payment_status;
+  if (!Object.hasOwn(expectedType, status)) return null;
+  if (status === "paid" && row.us_event_type !== expectedType.paid) return null;
+  if (status === "awaiting_payment" &&
+      row.us_event_type !== expectedType.awaiting_payment) return null;
+  if (status === "requires_review" &&
+      !["payment_intent.payment_failed","payment_intent.canceled"].includes(row.us_event_type)) return null;
+  return {
+    booking_id: row.id,
+    market_code: "US",
+    currency_code: "USD",
+    service_payment_status: status,
+    verified_projection: true,
+    merchant_binding_verified: true,
+    mode: "TEST",
+  };
+}
+
 /**
  * Must be called inside a read-only transaction AFTER the existing
  * verifyClientCabinetAccess check has accepted a non-revoked client token.
  * One parameterized SELECT with US sidecar LEFT JOINs; no KG/KZ writes.
  * Missing sidecar tables: route returns 503, never a fabricated price.
  */
-export async function readUsPayC11Booking(db, { clientId, bookingId } = {}) {
+export async function readUsPayC11Booking(
+  db, { clientId, bookingId, allowTestStripeMode = false } = {}
+) {
   const client = validId(clientId);
   const booking = validId(bookingId);
   if (!client || !booking) {
@@ -104,7 +169,39 @@ export async function readUsPayC11Booking(db, { clientId, bookingId } = {}) {
         upc.selection_source AS collector_selection_source,
         upc.selected_by_user_id AS collector_selected_by_user_id,
         upc.verification_status AS collector_verification_status,
-        upc.verified_at AS collector_verified_at
+        upc.verified_at AS collector_verified_at,
+        sb.id AS us_binding_id, sb.market_id AS us_binding_market_id,
+        sb.owner_type AS us_binding_owner_type,
+        sb.owner_id AS us_binding_owner_id,
+        sb.stripe_mode AS us_binding_mode,
+        sb.stripe_connected_account_id AS us_binding_account_id,
+        sb.verification_status AS us_binding_status,
+        sb.card_payments_status AS us_binding_card_payments,
+        sb.charges_enabled AS us_binding_charges_enabled,
+        sb.payouts_enabled AS us_binding_payouts_enabled,
+        sb.details_submitted AS us_binding_details_submitted,
+        sb.country AS us_binding_country,
+        sb.verified_at AS us_binding_verified_at,
+        sb.last_checked_at AS us_binding_last_checked_at,
+        pa.booking_id AS us_attempt_booking_id,
+        pa.market_id AS us_attempt_market_id,
+        pa.merchant_binding_id AS us_attempt_binding_id,
+        pa.stripe_connected_account_id AS us_attempt_account_id,
+        pa.stripe_mode AS us_attempt_mode,
+        pa.currency_code AS us_attempt_currency,
+        pa.amount_minor::text AS us_attempt_amount_minor,
+        pa.stripe_payment_intent_id AS us_attempt_payment_intent_id,
+        pa.payment_status AS us_attempt_payment_status,
+        pa.status_event_created AS us_attempt_event_created,
+        pa.last_event_id AS us_attempt_last_event_id,
+        ev.stripe_event_id AS us_event_id,
+        ev.stripe_connected_account_id AS us_event_account_id,
+        ev.stripe_payment_intent_id AS us_event_payment_intent_id,
+        ev.stripe_mode AS us_event_mode,
+        ev.event_type AS us_event_type,
+        ev.event_created AS us_event_created,
+        ev.signature_verified AS us_event_signature_verified,
+        ev.processing_result AS us_event_result
       FROM public.bookings b
       JOIN public.tenant_market_settings tms ON tms.salon_id = b.salon_id
       JOIN public.markets m ON m.id = tms.market_id
@@ -115,6 +212,15 @@ export async function readUsPayC11Booking(db, { clientId, bookingId } = {}) {
         ON sms.id = ups.salon_master_service_id
       LEFT JOIN public.us_booking_payment_collectors upc
         ON upc.booking_id = b.id
+      LEFT JOIN public.us_stripe_merchant_bindings sb
+        ON sb.market_id = upc.market_id
+       AND sb.owner_type = upc.collector_owner_type
+       AND sb.owner_id = upc.collector_owner_id
+       AND sb.stripe_mode = 'TEST'
+      LEFT JOIN public.us_stripe_payment_attempts pa
+        ON pa.booking_id = b.id AND pa.merchant_binding_id = sb.id
+      LEFT JOIN public.us_stripe_event_ledger ev
+        ON ev.stripe_event_id = pa.last_event_id
       WHERE b.id = $1 AND b.client_id = $2
       LIMIT 1`,
     [booking, client]
@@ -134,14 +240,16 @@ export async function readUsPayC11Booking(db, { clientId, bookingId } = {}) {
   const projection = buildUsPayC11ReadModel({
     booking: row,
     priceSnapshot: priceSnapshotFromRow(row),
-    collector: selectedCollectorFromRow(row),
-    payment: null, // No verified Stripe ledger/read projection at this stage.
+    collector: selectedCollectorFromRow(row, allowTestStripeMode),
+    payment: signedTestPaymentFromRow(row, allowTestStripeMode),
   });
 
   const unavailable = [];
   if (!projection.price) unavailable.push("US_PRICE_SNAPSHOT_UNAVAILABLE");
   if (!projection.collector) unavailable.push("US_VERIFIED_COLLECTOR_UNAVAILABLE");
-  unavailable.push("US_STRIPE_PAYMENT_PROJECTION_UNAVAILABLE");
+  if (projection.payment.provider !== "stripe") {
+    unavailable.push("US_STRIPE_PAYMENT_PROJECTION_UNAVAILABLE");
+  }
 
   return {
     status: 200,
