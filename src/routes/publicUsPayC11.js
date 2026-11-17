@@ -2,6 +2,7 @@
 // Never expose Stripe account IDs, payment redirects or bank details.
 import express from "express";
 import { readUsPayC11Booking } from "../services/usPayC11ReadService.js";
+import { prepareUsC11LiveDirectCharge } from "../services/usPayC11LiveDirectCharge.service.js";
 
 export function buildPublicUsPayC11Router({ pool, verifyClientCabinetAccess }) {
   if (!pool || typeof pool.connect !== "function" ||
@@ -54,6 +55,43 @@ export function buildPublicUsPayC11Router({ pool, verifyClientCabinetAccess }) {
       }
     }
   });
+
+  // LIVE direct charge initiation is OFF until actual US seller onboarding,
+  // production schema validation, backup and dedicated Stripe signing secret.
+  // An authenticated client cabinet token is mandatory even when flag enabled.
+  router.post("/clients/:clientId/:token/us-pay-c11/:bookingId/intent",
+    async(req,res)=>{
+      res.set("Cache-Control","no-store");
+      res.set("Referrer-Policy","no-referrer");
+      if(process.env.US_PAY_C11_LIVE_PAYMENTS_ENABLED!=="true") {
+        return res.status(404).json({
+          ok:false,error:"US_C11_LIVE_PAYMENTS_NOT_ENABLED",
+        });
+      }
+      if(!req.body || typeof req.body!=="object" ||
+         Array.isArray(req.body) || Object.keys(req.body).length>0) {
+        return res.status(400).json({
+          ok:false,error:"US_C11_LIVE_PAYMENT_BODY_FORBIDDEN",
+        });
+      }
+      try {
+        const answer=await prepareUsC11LiveDirectCharge(pool,{
+          clientId:req.params.clientId,clientToken:req.params.token,
+          bookingId:req.params.bookingId,
+          secretKey:process.env.US_PAY_C11_LIVE_STRIPE_SECRET_KEY||"",
+          stripePublishableKey:process.env.US_PAY_C11_LIVE_STRIPE_PUBLISHABLE_KEY||"",
+        });
+        return res.status(answer.status).json(answer.body);
+      }catch(error){
+        // No client tokens, card data, Stripe responses or account details.
+        console.error("US_C11_LIVE_PAYMENT_PREPARE_FAILED",
+          String(error?.code||"INTERNAL"));
+        return res.status(503).json({
+          ok:false,error:"US_C11_LIVE_PAYMENT_SERVICE_UNAVAILABLE",
+        });
+      }
+    }
+  );
 
   return router;
 }
