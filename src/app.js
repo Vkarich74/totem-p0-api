@@ -10,6 +10,7 @@ import Redis from "ioredis";
 import { pool } from "./db.js";
 import { buildUsStripeTestWebhookHandler } from "./routes/usStripeTestWebhook.js";
 import { buildUsPayC11LiveConnectWebhook } from "./routes/usPayC11LiveConnectWebhook.js";
+import { buildUsC11LivePaymentWebhook } from "./routes/usPayC11LivePaymentWebhook.js";
 import { buildUsPayC11LiveExistingOAuthCallback } from "./routes/usPayC11LiveExistingOAuth.js";
 
 import { resolveTenant } from "./middleware/resolveTenant.js";
@@ -99,6 +100,14 @@ app.post(
   "/stripe/connect/us-pay-c11/live/account-events",
   express.raw({ type: "application/json", limit: "128kb" }),
   buildUsPayC11LiveConnectWebhook({ pool })
+);
+
+// Independent connected-account direct-charge PaymentIntent signature
+// receiver. OFF by default; same existing PostgreSQL, no Cloudflare relay.
+app.post(
+  "/stripe/connect/us-pay-c11/live/payment-events",
+  express.raw({type:"application/json",limit:"128kb"}),
+  buildUsC11LivePaymentWebhook({pool})
 );
 
 app.use(express.json());
