@@ -188,7 +188,15 @@ export async function startLiveSellerOnboarding(pool,{
   if(typeof secretKey!=="string" || !secretKey.startsWith("sk_live_")) {
     return reject(503,"US_CONNECT_LIVE_CREDENTIAL_NOT_CONFIGURED");
   }
-  // This preflight protects against confusing platform accounts.
+  // Reject non-owners in PostgreSQL before spending any Stripe API quota.
+  const eligibility=await withTx(pool,async db=>{
+    const scope=await ownerScope(db,actor,ownerType,id);
+    if(!scope) return reject(404,"US_CONNECT_US_OWNER_NOT_FOUND");
+    return {status:200,body:{ok:true}};
+  },true);
+  if(eligibility.status!==200) return eligibility;
+
+  // Independently pin the configured LIVE key to TOTEM USA Connect.
   await verifyUsConnectPlatform({secretKey,fetchImpl});
 
   const reservation=await withTx(pool,async db=>{
