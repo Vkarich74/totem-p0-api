@@ -8,6 +8,9 @@ import pg from "pg";
 import { prepareUsC11LiveDirectCharge } from "../src/services/usPayC11LiveDirectCharge.service.js";
 import { acceptSignedUsC11LivePaymentEvent } from "../src/services/usPayC11LivePaymentWebhook.service.js";
 import { readUsPayC11Booking } from "../src/services/usPayC11ReadService.js";
+import { readUsServiceTaxReport } from "../src/services/usServiceTaxReport.service.js";
+import { quoteUsC11LiveRefund,authorizeUsC11LiveRefund } from "../src/services/usPayC11LiveRefundAuthorization.service.js";
+import { acceptUsC11SignedLiveFinancialEvent } from "../src/services/usPayC11LiveFinancialEvents.service.js";
 import { createUsBookingServiceTaxQuote } from "../src/services/usServiceTaxQuote.service.js";
 import { TOTEM_US_CONNECT_PLATFORM } from "../src/services/usPayC11LiveStripeApi.js";
 
@@ -326,6 +329,189 @@ test("TAX-05 signed Stripe LIVE contract on isolated DB: gross = base + tax",asy
       "SELECT count(*)::int AS n FROM us_stripe_live_payment_receipts"
     );
     assert.equal(check.rows[0].n,2,"mismatch + accepted receipts, duplicate ignored");
+
+    await t.test("TAX-07 authenticated owner sees signed USD base/tax/gross, never unverified",async()=>{
+      const response=await readUsServiceTaxReport(pool,{
+        auth:actor,ownerType:"salon",ownerId:item.salon_id,
+      });
+      assert.equal(response.status,200,JSON.stringify(response));
+      assert.equal(response.body.contract_version,"US-SERVICE-TAX-report-v1");
+      assert.equal(response.body.booking_count,1);
+      assert.equal(response.body.items[0].reconciliation_status,"captured");
+      assert.equal(response.body.items[0].signed_payment_captured,true);
+      assert.equal(response.body.items[0].quote.service_base_minor,"10005");
+      assert.equal(response.body.items[0].quote.service_tax_minor,"725");
+      assert.equal(response.body.items[0].quote.charge_total_minor,"10730");
+      assert.equal(response.body.totals.captured_gross_minor,"10730");
+      assert.equal(response.body.totals.captured_service_tax_minor,"725");
+      assert.equal(response.body.totals.refunded_gross_minor,"0");
+      assert.equal(response.body.tax_filing_ready,false);
+      assert.equal(response.body.tax_remittance_claim,false);
+      const stolen=await readUsServiceTaxReport(pool,{
+        auth:{...actor,role:"master"},
+        ownerType:"master",ownerId:item.master_id,
+      });
+      assert.equal(stolen.status,404,"owner cannot access independent master report");
+    });
+
+    const refunds={
+      "re_TAX07PARTIAL0001":{amount:2500,status:"succeeded"},
+      "re_TAX07FULLREST02":{amount:8230,status:"pending"},
+    };
+    const refundTransport=async(url,opts={})=>{
+      if(url==="https://api.stripe.com/v1/refunds" &&
+         opts.method==="POST"){
+        const data=new URLSearchParams(opts.body);
+        assert.equal(opts.headers["Stripe-Account"],ACCOUNT);
+        assert.equal(data.get("payment_intent"),PI);
+        assert.equal(data.get("amount"),"8230");
+        assert.equal(data.get("reason"),"requested_by_customer");
+        return new Response(JSON.stringify({
+          object:"refund",id:"re_TAX07FULLREST02",livemode:true,
+          status:"pending",currency:"usd",amount:8230,
+          payment_intent:PI,
+          metadata:{totem_us_c11_refund_request:data.get("metadata[totem_us_c11_refund_request]")},
+        }),{status:200,headers:{"Content-Type":"application/json"}});
+      }
+      const match=url.match(/^https:\/\/api\.stripe\.com\/v1\/refunds\/(re_[A-Za-z0-9_]+)$/);
+      if(match){
+        const ref=refunds[match[1]];
+        if(!ref)throw Error("TAX07_UNEXPECTED_REFUND_ID");
+        assert.equal(opts.headers["Stripe-Account"],ACCOUNT);
+        return new Response(JSON.stringify({
+          object:"refund",id:match[1],livemode:true,
+          amount:ref.amount,status:ref.status,
+          currency:"usd",payment_intent:PI,balance_transaction:null,
+        }),{status:200,headers:{"Content-Type":"application/json"}});
+      }
+      return fake.fetchImpl(url,opts);
+    };
+    const refundEvent=(stripeEventId,refundId,created)=>({
+      object:"event",id:stripeEventId,livemode:true,account:ACCOUNT,
+      type:"refund.updated",created,
+      data:{object:{object:"refund",id:refundId}},
+    });
+    const eventTime=Math.floor(Date.now()/1000);
+    const observe=async(eventId,refundId,timestamp)=>{
+      const signed=sign(refundEvent(eventId,refundId,timestamp));
+      return acceptUsC11SignedLiveFinancialEvent({
+        pool,...signed,webhookSecret:SECRET,secretKey,
+        fetchImpl:refundTransport,
+      });
+    };
+
+    await t.test("TAX-07 full refund quote is server-derived before any refund",async()=>{
+      const quote=await quoteUsC11LiveRefund(pool,{
+        auth:actor,ownerType:"salon",ownerId:item.salon_id,
+        bookingId:item.booking_id,
+      });
+      assert.equal(quote.status,200,JSON.stringify(quote));
+      assert.equal(quote.body.service_base_minor,"10005");
+      assert.equal(quote.body.service_tax_minor,"725");
+      assert.equal(quote.body.remaining_minor,"10730");
+      assert.equal(quote.body.full_remaining_refund_estimate.refundable_service_tax_minor,"725");
+      assert.equal(quote.body.full_remaining_refund_estimate.refundable_service_base_minor,"10005");
+    });
+
+    await t.test("TAX-07 signed external partial refund $25.00 allocates $1.69 tax",async()=>{
+      const out=await observe("evt_TAX07PARTIAL001",
+        "re_TAX07PARTIAL0001",eventTime);
+      assert.equal(out.status,200,JSON.stringify(out));
+      assert.equal(out.body.result,"observed");
+      const dup=await observe("evt_TAX07PARTIAL001",
+        "re_TAX07PARTIAL0001",eventTime);
+      assert.equal(dup.body.result,"duplicate");
+      const report=await readUsServiceTaxReport(pool,{
+        auth:actor,ownerType:"salon",ownerId:item.salon_id,
+      });
+      assert.equal(report.status,200,JSON.stringify(report));
+      assert.equal(report.body.totals.refunded_gross_minor,"2500");
+      assert.equal(report.body.totals.refunded_service_tax_minor,"169");
+      assert.equal(report.body.totals.refunded_service_base_minor,"2331");
+      assert.equal(report.body.totals.net_service_tax_minor,"556");
+      assert.equal(report.body.items[0].reconciliation_status,"refunded_partial");
+      assert.equal(report.body.items[0].refunded.refunds[0].authorized_by_owner,false);
+    });
+
+    await t.test("TAX-07 authorized owner remaining refund is 8230 with 556 tax",async()=>{
+      const quote=await quoteUsC11LiveRefund(pool,{
+        auth:actor,ownerType:"salon",ownerId:item.salon_id,
+        bookingId:item.booking_id,
+      });
+      assert.equal(quote.status,200,JSON.stringify(quote));
+      assert.equal(quote.body.remaining_minor,"8230");
+      assert.equal(quote.body.already_refunded_minor,"2500");
+      assert.equal(quote.body.full_remaining_refund_estimate.refundable_service_tax_minor,"556");
+      assert.equal(quote.body.full_remaining_refund_estimate.refundable_service_base_minor,"7674");
+      const id=randomUUID();
+      const sent=await authorizeUsC11LiveRefund(pool,{
+        auth:actor,ownerType:"salon",ownerId:item.salon_id,
+        bookingId:item.booking_id,secretKey,fetchImpl:refundTransport,
+        body:{
+          request_id:id,amount_minor:"8230",expected_remaining_minor:"8230",
+          reason:"requested_by_customer",consent:true,
+        },
+      });
+      assert.equal(sent.status,200,JSON.stringify(sent));
+      assert.equal(sent.body.refund_confirmed,false);
+      assert.equal(sent.body.stripe_refund_id,"re_TAX07FULLREST02");
+      assert.equal(sent.body.state,"submitted");
+      const pending=await readUsServiceTaxReport(pool,{
+        auth:actor,ownerType:"salon",ownerId:item.salon_id,
+      });
+      assert.equal(pending.body.totals.refunded_gross_minor,"2500");
+      assert.equal(pending.body.totals.outstanding_refund_requests_minor,"8230");
+    });
+
+    await t.test("TAX-07 signed final refund settles full 725 tax once",async()=>{
+      refunds.re_TAX07FULLREST02.status="succeeded";
+      const paid=await observe("evt_TAX07FINAL0001",
+        "re_TAX07FULLREST02",eventTime+1);
+      assert.equal(paid.status,200,JSON.stringify(paid));
+      assert.equal(paid.body.result,"observed");
+      const report=await readUsServiceTaxReport(pool,{
+        auth:actor,ownerType:"salon",ownerId:item.salon_id,
+      });
+      assert.equal(report.status,200,JSON.stringify(report));
+      assert.equal(report.body.items[0].reconciliation_status,"refunded_full");
+      assert.equal(report.body.totals.refunded_gross_minor,"10730");
+      assert.equal(report.body.totals.refunded_service_tax_minor,"725");
+      assert.equal(report.body.totals.refunded_service_base_minor,"10005");
+      assert.equal(report.body.totals.net_gross_minor,"0");
+      assert.equal(report.body.totals.net_service_tax_minor,"0");
+      assert.equal(report.body.totals.outstanding_refund_requests_minor,"0");
+      assert.equal(report.body.items[0].refunded.refunds.length,2);
+      assert.equal(report.body.items[0].refunded.refunds[1].authorized_by_owner,true);
+      const quote=await quoteUsC11LiveRefund(pool,{
+        auth:actor,ownerType:"salon",ownerId:item.salon_id,
+        bookingId:item.booking_id,
+      });
+      assert.equal(quote.body.refundable,false);
+      assert.equal(quote.body.full_remaining_refund_estimate,null);
+    });
+
+    await t.test("TAX-07 signed late refund failure reverses only affected share",async()=>{
+      refunds.re_TAX07FULLREST02.status="failed";
+      const reversed=await observe("evt_TAX07FAIL00001",
+        "re_TAX07FULLREST02",eventTime+2);
+      assert.equal(reversed.status,200,JSON.stringify(reversed));
+      assert.equal(reversed.body.result,"observed");
+      const report=await readUsServiceTaxReport(pool,{
+        auth:actor,ownerType:"salon",ownerId:item.salon_id,
+      });
+      assert.equal(report.status,200,JSON.stringify(report));
+      assert.equal(report.body.items[0].reconciliation_status,"refunded_partial");
+      assert.equal(report.body.totals.refunded_gross_minor,"2500");
+      assert.equal(report.body.totals.refunded_service_tax_minor,"169");
+      assert.equal(report.body.totals.net_gross_minor,"8230");
+      assert.equal(report.body.totals.net_service_tax_minor,"556");
+      const request=await client.query(
+        `SELECT state FROM us_c11_live_refund_requests
+          WHERE stripe_refund_id='re_TAX07FULLREST02'`
+      );
+      assert.equal(request.rows[0].state,"failed");
+    });
+
   }finally{
     if(opened)await client.query("ROLLBACK");
     const check=await client.query(
