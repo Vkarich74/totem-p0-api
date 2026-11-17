@@ -122,7 +122,7 @@ SELECT public.us_pay_c11_expect_rejected(
 
 -- No writes or triggers in historic payments, payouts, wallet.
 SELECT public.us_pay_c11_assert(
- (SELECT count(*) FROM public.pg_tables
+ (SELECT count(*) FROM pg_catalog.pg_tables
    WHERE schemaname='public' AND tablename LIKE 'us_%')=3,
  'THREE_US_SIDECAR_TABLES_ONLY');
 SELECT public.us_pay_c11_assert(
