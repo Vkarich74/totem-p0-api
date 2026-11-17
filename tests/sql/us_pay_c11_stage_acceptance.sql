@@ -46,7 +46,7 @@ SELECT public.us_pay_c11_expect_rejected(
    SET amount_minor=0 WHERE salon_master_service_id=300$$, 'ZERO_CENTS');
 SELECT public.us_pay_c11_expect_rejected(
  $$UPDATE public.us_service_price_amounts
-   SET amount_minor=10.5 WHERE salon_master_service_id=300$$, 'FRACTIONAL_CENTS');
+   SET amount_minor='10.5' WHERE salon_master_service_id=300$$, 'FRACTIONAL_CENTS');
 SELECT public.us_pay_c11_expect_rejected(
  $$UPDATE public.us_service_price_amounts
    SET currency_code='KGS' WHERE salon_master_service_id=300$$, 'CURRENCY_KGS');
