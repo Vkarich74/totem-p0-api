@@ -279,19 +279,19 @@ export async function readUsPayC11Booking(
         ev.event_created AS us_event_created,
         ev.signature_verified AS us_event_signature_verified,
         ev.processing_result AS us_event_result,
-        lp.booking_id AS us_live_attempt_booking_id,
-        lp.market_id AS us_live_attempt_market_id,
-        lp.seller_binding_id AS us_live_attempt_binding_id,
-        lp.collector_owner_type AS us_live_attempt_owner_type,
-        lp.collector_owner_id AS us_live_attempt_owner_id,
-        lp.collector_revision AS us_live_attempt_revision,
-        lp.stripe_account_id AS us_live_attempt_account_id,
-        lp.amount_minor::text AS us_live_attempt_amount_minor,
-        lp.currency_code AS us_live_attempt_currency,
-        lp.stripe_payment_intent_id AS us_live_attempt_pi_id,
-        lp.status AS us_live_attempt_status,
-        lp.stripe_event_created AS us_live_attempt_event_created,
-        lp.last_event_id AS us_live_attempt_last_event_id,
+        livepi.booking_id AS us_live_attempt_booking_id,
+        livepi.market_id AS us_live_attempt_market_id,
+        livepi.seller_binding_id AS us_live_attempt_binding_id,
+        livepi.collector_owner_type AS us_live_attempt_owner_type,
+        livepi.collector_owner_id AS us_live_attempt_owner_id,
+        livepi.collector_revision AS us_live_attempt_revision,
+        livepi.stripe_account_id AS us_live_attempt_account_id,
+        livepi.amount_minor::text AS us_live_attempt_amount_minor,
+        livepi.currency_code AS us_live_attempt_currency,
+        livepi.stripe_payment_intent_id AS us_live_attempt_pi_id,
+        livepi.status AS us_live_attempt_status,
+        livepi.stripe_event_created AS us_live_attempt_event_created,
+        livepi.last_event_id AS us_live_attempt_last_event_id,
         lr.stripe_event_id AS us_live_event_id,
         lr.stripe_account_id AS us_live_event_account_id,
         lr.stripe_payment_intent_id AS us_live_event_pi_id,
@@ -324,10 +324,10 @@ export async function readUsPayC11Booking(
         ON pa.booking_id = b.id AND pa.merchant_binding_id = sb.id
       LEFT JOIN public.us_stripe_event_ledger ev
         ON ev.stripe_event_id = pa.last_event_id
-      LEFT JOIN public.us_stripe_live_payment_intents lp
-        ON lp.booking_id = b.id AND lp.market_id = m.id
+      LEFT JOIN public.us_stripe_live_payment_intents livepi
+        ON livepi.booking_id = b.id AND livepi.market_id = m.id
       LEFT JOIN public.us_stripe_live_payment_receipts lr
-        ON lr.stripe_event_id = lp.last_event_id
+        ON lr.stripe_event_id = livepi.last_event_id
       WHERE b.id = $1 AND b.client_id = $2
       LIMIT 1`,
     [booking, client]
