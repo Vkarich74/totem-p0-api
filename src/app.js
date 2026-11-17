@@ -9,6 +9,7 @@ import Redis from "ioredis";
 
 import { pool } from "./db.js";
 import { buildUsStripeTestWebhookHandler } from "./routes/usStripeTestWebhook.js";
+import { buildUsPayC11LiveConnectWebhook } from "./routes/usPayC11LiveConnectWebhook.js";
 
 import { resolveTenant } from "./middleware/resolveTenant.js";
 import { resolveAuth } from "./middleware/resolveAuth.js";
@@ -88,6 +89,15 @@ app.post(
     enabled: process.env.US_PAY_C11_TEST_WEBHOOK_ENABLED === "true" &&
       process.env.NODE_ENV !== "production",
   })
+);
+
+// LIVE Connect account-state notifications only (NO payment events).
+// Disabled until live seller onboarding is approved and an actual Stripe
+// Connect webhook endpoint is configured. Raw body MUST precede JSON.
+app.post(
+  "/stripe/connect/us-pay-c11/live/account-events",
+  express.raw({ type: "application/json", limit: "128kb" }),
+  buildUsPayC11LiveConnectWebhook({ pool })
 );
 
 app.use(express.json());
