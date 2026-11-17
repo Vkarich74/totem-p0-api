@@ -57,8 +57,28 @@ function testedMerchantBindingFromRow(row, allowTestStripeMode) {
   return Number.isFinite(checked) && age >= 0 && age < 86400000;
 }
 
+function liveSellerBindingFromRow(row) {
+  if (!row.us_live_binding_id ||
+      row.us_live_binding_status !== "verified" ||
+      row.us_live_binding_mode !== "LIVE" ||
+      row.us_live_binding_type !== "standard" ||
+      row.us_live_binding_card_payments !== "active" ||
+      row.us_live_binding_transfers !== "active" ||
+      row.us_live_binding_charges !== true ||
+      row.us_live_binding_payouts !== true ||
+      row.us_live_binding_details !== true ||
+      row.us_live_binding_verified_at == null ||
+      row.us_live_binding_owner_type !== row.collector_owner_type ||
+      !sameId(row.us_live_binding_owner_id, row.collector_owner_id) ||
+      !sameId(row.us_live_binding_market_id, row.market_id)) return false;
+  const checked = new Date(row.us_live_binding_last_checked_at).getTime();
+  const age = Date.now() - checked;
+  return Number.isFinite(checked) && age >= 0 && age < 3600000;
+}
+
 function selectedCollectorFromRow(row, allowTestStripeMode) {
-  if (!testedMerchantBindingFromRow(row, allowTestStripeMode)) return null;
+  if (!liveSellerBindingFromRow(row) &&
+      !testedMerchantBindingFromRow(row, allowTestStripeMode)) return null;
   if (!sameId(row.collector_booking_id, row.id) ||
       !sameId(row.collector_market_id, row.market_id) ||
       row.collector_verification_status !== "verified" ||
@@ -183,6 +203,20 @@ export async function readUsPayC11Booking(
         sb.country AS us_binding_country,
         sb.verified_at AS us_binding_verified_at,
         sb.last_checked_at AS us_binding_last_checked_at,
+        ls.id AS us_live_binding_id,
+        ls.market_id AS us_live_binding_market_id,
+        ls.owner_type AS us_live_binding_owner_type,
+        ls.owner_id AS us_live_binding_owner_id,
+        ls.stripe_mode AS us_live_binding_mode,
+        ls.account_type AS us_live_binding_type,
+        ls.verification_status AS us_live_binding_status,
+        ls.charges_enabled AS us_live_binding_charges,
+        ls.payouts_enabled AS us_live_binding_payouts,
+        ls.details_submitted AS us_live_binding_details,
+        ls.card_payments_status AS us_live_binding_card_payments,
+        ls.transfers_status AS us_live_binding_transfers,
+        ls.verified_at AS us_live_binding_verified_at,
+        ls.last_checked_at AS us_live_binding_last_checked_at,
         pa.booking_id AS us_attempt_booking_id,
         pa.market_id AS us_attempt_market_id,
         pa.merchant_binding_id AS us_attempt_binding_id,
@@ -217,6 +251,11 @@ export async function readUsPayC11Booking(
        AND sb.owner_type = upc.collector_owner_type
        AND sb.owner_id = upc.collector_owner_id
        AND sb.stripe_mode = 'TEST'
+      LEFT JOIN public.us_stripe_live_seller_bindings ls
+        ON ls.market_id = upc.market_id
+       AND ls.owner_type = upc.collector_owner_type
+       AND ls.owner_id = upc.collector_owner_id
+       AND ls.stripe_mode = 'LIVE'
       LEFT JOIN public.us_stripe_payment_attempts pa
         ON pa.booking_id = b.id AND pa.merchant_binding_id = sb.id
       LEFT JOIN public.us_stripe_event_ledger ev
