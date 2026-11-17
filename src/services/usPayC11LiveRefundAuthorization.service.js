@@ -12,6 +12,9 @@
 import {verifyUsLiveSellerOwnerScope} from
   "./usPayC11LiveSellerOnboarding.service.js";
 import {verifyUsConnectPlatform} from "./usPayC11LiveStripeApi.js";
+import {
+  verifiedUsServiceTaxBasis,previewUsServiceTaxRefund,
+} from "./usServiceTaxLedger.math.js";
 
 const POSITIVE=/^[1-9]\d*$/;
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
@@ -75,9 +78,27 @@ async function bookedUsDirectCharge(db,bookingId) {
             m.default_currency AS market_currency,
             receipt.event_type AS last_event_type,
             receipt.signature_verified AS signed,
-            receipt.result AS last_receipt_result
+            receipt.result AS last_receipt_result,
+            pay.collector_owner_type AS pay_owner_type,
+            pay.collector_owner_id AS pay_owner_id,
+            pay.collector_revision AS pay_collector_revision,
+            tq.market_id AS tax_market_id,
+            tq.payment_purpose AS tax_purpose,
+            tq.collector_owner_type AS tax_owner_type,
+            tq.collector_owner_id AS tax_owner_id,
+            tq.collector_revision AS tax_collector_revision,
+            tq.currency_code AS tax_currency,
+            tq.rate_bps AS tax_rate_bps,
+            tq.service_base_minor::text AS service_base_minor,
+            tq.service_tax_minor::text AS service_tax_minor,
+            tq.charge_total_minor::text AS charge_total_minor,
+            bp.amount_minor::text AS original_service_base_minor
        FROM public.us_stripe_live_payment_intents pay
        JOIN public.bookings b ON b.id=pay.booking_id
+       JOIN public.us_booking_service_tax_snapshots tq
+         ON tq.booking_id=pay.booking_id AND tq.market_id=pay.market_id
+       JOIN public.us_booking_price_snapshots bp
+         ON bp.booking_id=pay.booking_id AND bp.market_id=pay.market_id
        JOIN public.markets m ON m.id=pay.market_id
        JOIN public.us_stripe_live_seller_bindings seller
          ON seller.id=pay.seller_binding_id
@@ -107,7 +128,30 @@ function authorizedCharge(row,ownerType,ownerId,marketId){
     ACCOUNT.test(String(row.stripe_account_id||"")) &&
     row.stripe_account_id===row.binding_stripe_account &&
     /^pi_[A-Za-z0-9_]{8,}$/.test(String(row.stripe_payment_intent_id||"")) &&
-    amount(row.amount_minor)!==null;
+    amount(row.amount_minor)!==null &&
+    row.tax_purpose==="beauty_service" &&
+    row.tax_currency==="USD" &&
+    String(row.tax_market_id)===String(marketId) &&
+    row.tax_owner_type===ownerType &&
+    String(row.tax_owner_id)===String(ownerId) &&
+    String(row.tax_collector_revision)===String(row.pay_collector_revision) &&
+    row.pay_owner_type===ownerType &&
+    String(row.pay_owner_id)===String(ownerId) &&
+    String(row.service_base_minor)===String(row.original_service_base_minor) &&
+    String(row.charge_total_minor)===String(row.amount_minor) &&
+    isValidTaxBasis(row);
+}
+
+function isValidTaxBasis(row){
+  try{
+    verifiedUsServiceTaxBasis({
+      service_base_minor:row.service_base_minor,
+      service_tax_minor:row.service_tax_minor,
+      charge_total_minor:row.charge_total_minor,
+      rate_bps:row.tax_rate_bps,
+    });
+    return true;
+  }catch{return false;}
 }
 
 async function remainingRefundable(db,bookingId,totalMinor) {
@@ -133,7 +177,10 @@ async function remainingRefundable(db,bookingId,totalMinor) {
   );
   const x=q.rows[0];
   const remain=totalMinor-BigInt(x.already_refunded)-BigInt(x.outstanding);
-  return {remain,outstanding:BigInt(x.outstanding),disputed:x.disputed===true};
+  return {
+    remain,refunded:BigInt(x.already_refunded),
+    outstanding:BigInt(x.outstanding),disputed:x.disputed===true,
+  };
 }
 
 async function reserveOwnerConsent(pool,{
@@ -398,15 +445,29 @@ export async function quoteUsC11LiveRefund(pool,{
     }
     const total=BigInt(b.amount_minor);
     const tally=await remainingRefundable(db,bid,total);
+    const canRefund=tally.remain>0n&&
+      tally.outstanding===0n&&!tally.disputed;
+    const estimate=canRefund ? previewUsServiceTaxRefund({
+      service_base_minor:b.service_base_minor,
+      service_tax_minor:b.service_tax_minor,
+      charge_total_minor:b.charge_total_minor,
+      rate_bps:b.tax_rate_bps,
+    },tally.refunded.toString(),tally.remain.toString()) : null;
     return {status:200,body:{
       ok:true,contract_version:"US-PAY-C11-refund-quote-v1",
       market_code:"US",currency_code:"USD",booking_id:bid,
       owner_type:ownerType,owner_id:oid,
       paid_amount_minor:total.toString(),
+      service_base_minor:b.service_base_minor,
+      service_tax_minor:b.service_tax_minor,
+      rate_bps:b.tax_rate_bps,
+      tax_snapshot_source:"us_booking_service_tax_snapshots",
+      already_refunded_minor:tally.refunded.toString(),
       remaining_minor:tally.remain>0n?tally.remain.toString():"0",
       outstanding_request:tally.outstanding>0n,
       dispute_block:tally.disputed,
-      refundable:tally.remain>0n&&tally.outstanding===0n&&!tally.disputed,
+      refundable:canRefund,
+      full_remaining_refund_estimate:estimate,
       refund_confirmed:false,
       payment_ready:false,
     }};
