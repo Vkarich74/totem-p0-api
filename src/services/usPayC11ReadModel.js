@@ -86,6 +86,6 @@ export function buildUsPayC11ReadModel({ booking, priceSnapshot, collector, paym
     collector: recipient,
     payment_ready: Boolean(amount && recipient && merchantReady && validAppointmentStatus &&
       (appointmentStatus === "reserved" || appointmentStatus === "confirmed") &&
-      (resolvedPayment === "unpaid" || resolvedPayment === "awaiting_payment")),
+      resolvedPayment === "unpaid"),
   };
 }
