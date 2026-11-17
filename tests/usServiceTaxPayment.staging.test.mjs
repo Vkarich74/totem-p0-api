@@ -23,12 +23,19 @@ const client=new pg.Client({
   password:process.env.PGPASSWORD,connectionTimeoutMillis:5000,
 });
 const pool={
+  // The LIVE financial observer's account lookup is outside its own tx.
+  async query(sql,args){return client.query(sql,args);},
   async connect(){
     return {
       async query(sql,args){
         // Keep ALL service-level commits nested in an outer ROLLBACK.
-        if(["BEGIN","BEGIN READ ONLY","COMMIT","ROLLBACK"].includes(sql))
-          return {rows:[],rowCount:0};
+        // READ ONLY/REPEATABLE READ is part of the real service contract;
+        // the outer test transaction already encloses these operations.
+        if([
+          "BEGIN","BEGIN READ ONLY",
+          "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
+          "COMMIT","ROLLBACK",
+        ].includes(sql)) return {rows:[],rowCount:0};
         return client.query(sql,args);
       },
       release(){},
