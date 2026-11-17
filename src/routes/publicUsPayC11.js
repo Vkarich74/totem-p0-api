@@ -36,12 +36,15 @@ export function buildPublicUsPayC11Router({ pool, verifyClientCabinetAccess }) {
       return res.status(503).json({ ok: false, error: "US_PAY_C11_READ_UNAVAILABLE" });
     } finally {
       if (db) {
+        let releaseError = null;
         if (transactionStarted) {
-          try { await db.query("ROLLBACK"); } catch (_) {
+          try { await db.query("ROLLBACK"); } catch (error) {
+            releaseError = error;
             console.error("US_PAY_C11_ROLLBACK_FAILED");
           }
         }
-        db.release();
+        // A failed rollback means this connection must not re-enter the pool.
+        db.release(releaseError || undefined);
       }
     }
   });
