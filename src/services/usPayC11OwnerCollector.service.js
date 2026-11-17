@@ -77,15 +77,19 @@ async function currentCollector(db, bookingId, lock) {
   return selection.rows[0] || null;
 }
 
-async function hasSnapshot(db, bookingId, marketId) {
+async function ownerSnapshotPrice(db, bookingId, marketId) {
   const price = await db.query(
-    `SELECT 1
+    `SELECT amount_minor::text AS amount_minor
        FROM public.us_booking_price_snapshots
-      WHERE booking_id = $1 AND market_id = $2
+      WHERE booking_id = $1 AND market_id = $2 AND currency_code = 'USD'
       LIMIT 1`,
     [bookingId, marketId]
   );
-  return price.rows.length === 1;
+  return price.rows[0] ? {
+    amount_minor: price.rows[0].amount_minor,
+    currency_code: "USD",
+    source: "us_booking_price_snapshots",
+  } : null;
 }
 
 async function isMasterActiveAtBookingSalon(db, booking) {
@@ -154,6 +158,7 @@ export async function readUsC11OwnerCollector(pool, { bookingId, auth } = {}) {
         booking_id: booking,
         market_code: "US",
         collector: publicCollector(current),
+        price: await ownerSnapshotPrice(db, booking, scope.market_id),
         payment_ready: false,
       },
     };
@@ -207,7 +212,8 @@ export async function chooseUsC11OwnerCollector(pool, {
       });
     }
 
-    if (!await hasSnapshot(db, booking, scope.market_id)) {
+    const price = await ownerSnapshotPrice(db, booking, scope.market_id);
+    if (!price) {
       return result(409, "US_COLLECTOR_PRICE_SNAPSHOT_REQUIRED");
     }
     if (body.collector_owner_type === "master" &&
@@ -278,6 +284,7 @@ export async function chooseUsC11OwnerCollector(pool, {
         booking_id: booking,
         market_code: "US",
         collector: publicCollector(newRow),
+        price,
         selection_event_id: String(audit.rows[0].id),
         payment_ready: false,
         verification_pending: true,
