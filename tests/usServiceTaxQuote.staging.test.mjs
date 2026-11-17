@@ -201,6 +201,11 @@ test("TAX-04: verified collector tax rate to immutable service quote",async t=>{
     await t.test("salon: verified recipient, implicit 0 tax, frozen quote",async()=>{
       const verified=await verifyCollector(a.booking_id);
       assert.equal(verified,2);
+      const preview=await readUsBookingServiceTaxQuote(pool,{bookingId:a.booking_id,auth});
+      assert.equal(preview.body.expected_tax_setting_revision,0);
+      assert.equal(preview.body.preview.preview_only,true);
+      assert.equal(preview.body.preview.rate_bps,0);
+      assert.equal(preview.body.preview.charge_total_minor,"10005");
       const stale=await createUsBookingServiceTaxQuote(pool,post(a.booking_id,auth,1,0));
       assert.equal(stale.status,409);
       assert.equal(stale.body.error,"US_TAX_QUOTE_COLLECTOR_REVISION_CONFLICT");
@@ -221,6 +226,8 @@ test("TAX-04: verified collector tax rate to immutable service quote",async t=>{
       assert.equal(result.status,200);
       assert.equal(result.body.quote_exists,true);
       assert.equal(result.body.quote_matches_current_collector,true);
+      assert.equal(result.body.preview,null);
+      assert.equal(result.body.expected_tax_setting_revision,0);
     });
 
     await t.test("salon 7.25% applies only to a later, separate booking",async()=>{
@@ -233,6 +240,10 @@ test("TAX-04: verified collector tax rate to immutable service quote",async t=>{
       );
       assert.equal(Number(tax.rows[0].revision),1);
       await verifyCollector(b.booking_id);
+      const preview=await readUsBookingServiceTaxQuote(pool,{bookingId:b.booking_id,auth});
+      assert.equal(preview.body.expected_tax_setting_revision,1);
+      assert.equal(preview.body.preview.service_tax_minor,"725");
+      assert.equal(preview.body.preview.charge_total_minor,"10730");
       const stale=await createUsBookingServiceTaxQuote(pool,post(b.booking_id,auth,2,0));
       assert.equal(stale.status,409);
       assert.equal(stale.body.error,"US_TAX_QUOTE_TAX_REVISION_CONFLICT");
@@ -254,6 +265,13 @@ test("TAX-04: verified collector tax rate to immutable service quote",async t=>{
         [c.master_id,market.id,c.master_user_id]
       );
       await verifyCollector(c.booking_id);
+      // The salon owner CANNOT read the master's TAX-02 settings directly,
+      // but can see a buyer-facing tax preview for this confirmed collector.
+      const preview=await readUsBookingServiceTaxQuote(pool,{bookingId:c.booking_id,auth});
+      assert.equal(preview.body.expected_tax_setting_revision,1);
+      assert.equal(preview.body.current_verified_collector.owner_type,"master");
+      assert.equal(preview.body.preview.service_tax_minor,"250");
+      assert.equal(preview.body.preview.charge_total_minor,"10255");
       const quote=await createUsBookingServiceTaxQuote(pool,post(c.booking_id,auth,2,1));
       assert.equal(quote.status,201);
       assert.equal(quote.body.quote.collector_owner_type,"master");
