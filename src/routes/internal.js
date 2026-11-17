@@ -37,6 +37,7 @@ import mobileRouter from "./internal/mobile.js";
 import buildTemplatesRouter from "./internal/templates.js";
 import buildMoneyCoreRouter from "./internal/money-core.js";
 import buildLocalePreferencesRouter from "./internal/localePreferences.js";
+import { buildUsPayC11OwnerRouter } from "./internalUsPayC11Owner.js";
 
 export function createInternalRouter({ rlInternal } = {}){
 
@@ -65,6 +66,8 @@ adminProtectedContainer.use('/messages', messagesRouter);
 const adminOpenOwnerRouter = buildAdminOpenOwnerRouter(pool, internalReadRateLimit);
 adminProtectedContainer.use('/open-owner', adminOpenOwnerRouter);
 r.use(buildLocalePreferencesRouter(pool, internalReadRateLimit));
+// Owner-authenticated US-only recipient choice; read model remains separate.
+r.use(buildUsPayC11OwnerRouter(pool));
 const moneyCoreRouter = buildMoneyCoreRouter(pool);
 r.use(moneyCoreRouter);
 
