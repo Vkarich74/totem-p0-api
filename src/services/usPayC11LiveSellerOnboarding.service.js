@@ -399,3 +399,21 @@ export async function refreshLiveSellerVerification(pool,{
     return {status:200,body:payload(updated.rows[0],ownerType,id)};
   });
 }
+
+/**
+ * Share the session-backed direct-ownership check with LIVE OAuth.
+ * Caller must hold a DB connection/transaction. Browser IDs, indirect
+ * master relations or JWT data alone never prove merchant ownership.
+ */
+export async function verifyUsLiveSellerOwnerScope(db,{
+  auth,ownerType,ownerId,
+}={}) {
+  const {id,actor,valid}=validRequest(ownerType,ownerId,auth);
+  if (!valid) return null;
+  const scope=await ownerScope(db,actor,ownerType,id);
+  if (!scope) return null;
+  return {
+    ownerType,ownerId:id,userId:actor.userId,sessionId:actor.sessionId,
+    marketId:scope.market_id,slug:scope.slug,
+  };
+}
