@@ -15,6 +15,8 @@ CREATE TABLE public.us_stripe_live_seller_bindings (
     CHECK (owner_consent_version = 'US-C11-connect-v1'),
   stripe_mode text NOT NULL DEFAULT 'LIVE' CHECK (stripe_mode = 'LIVE'),
   account_type text NOT NULL DEFAULT 'standard' CHECK (account_type = 'standard'),
+  connection_method text NOT NULL DEFAULT 'new_standard'
+    CHECK (connection_method IN ('new_standard','oauth_existing')),
   provisioning_token uuid NOT NULL UNIQUE,
   stripe_account_id text UNIQUE
     CHECK (stripe_account_id IS NULL OR stripe_account_id ~ '^acct_[a-zA-Z0-9]{8,}$'),
@@ -81,6 +83,13 @@ BEGIN
       OR (OLD.stripe_account_id IS NOT NULL
           AND NEW.stripe_account_id IS DISTINCT FROM OLD.stripe_account_id) THEN
       RAISE EXCEPTION 'US_C11_LIVE_SELLER_IDENTITY_IMMUTABLE' USING ERRCODE='23514';
+    END IF;
+    -- Once bound to a real Stripe account, its creation/authorization
+    -- method cannot be switched to disguise a different authorization.
+    IF OLD.stripe_account_id IS NOT NULL AND
+       NEW.connection_method IS DISTINCT FROM OLD.connection_method THEN
+      RAISE EXCEPTION 'US_C11_LIVE_CONNECTION_METHOD_IMMUTABLE'
+        USING ERRCODE='23514';
     END IF;
     IF OLD.verification_status='revoked' AND NEW.verification_status<>'revoked' THEN
       RAISE EXCEPTION 'US_C11_LIVE_SELLER_REVOKED' USING ERRCODE='23514';
