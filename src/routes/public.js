@@ -509,6 +509,10 @@ export function createPublicRouter(deps) {
           JOIN master_salon ms ON ms.master_id = m.id
           JOIN salons s ON s.id = ms.salon_id
           WHERE s.slug = $1
+            AND COALESCE(s.enabled, true) = true
+            AND COALESCE(s.status, 'active') = 'active'
+            AND ms.status = 'active'
+            AND m.active = true
           ORDER BY m.name ASC
           `,
           [slug]
