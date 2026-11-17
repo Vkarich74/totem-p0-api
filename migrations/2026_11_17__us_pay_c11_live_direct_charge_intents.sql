@@ -20,7 +20,7 @@ CREATE TABLE public.us_stripe_live_payment_intents (
     CHECK (stripe_payment_intent_id IS NULL OR
            stripe_payment_intent_id ~ '^pi_[A-Za-z0-9_]{8,}$'),
   status text NOT NULL DEFAULT 'creating'
-    CHECK (status IN ('creating','requires_payment_method','requires_action',
+    CHECK (status IN ('creating','requires_payment_method','requires_confirmation','requires_action',
       'processing','succeeded','canceled','failed','requires_review',
       'refunded','disputed')),
   stripe_event_created bigint,
