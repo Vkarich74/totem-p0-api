@@ -488,7 +488,9 @@ test("TAX-05 signed Stripe LIVE contract on isolated DB: gross = base + tax",asy
       assert.equal(report.body.totals.net_service_tax_minor,"0");
       assert.equal(report.body.totals.outstanding_refund_requests_minor,"0");
       assert.equal(report.body.items[0].refunded.refunds.length,2);
-      assert.equal(report.body.items[0].refunded.refunds[1].authorized_by_owner,true);
+      assert.equal(report.body.items[0].refunded.refunds.find(
+        r=>r.stripe_refund_id==="re_TAX07FULLREST02"
+      )?.authorized_by_owner,true);
       const quote=await quoteUsC11LiveRefund(pool,{
         auth:actor,ownerType:"salon",ownerId:item.salon_id,
         bookingId:item.booking_id,
