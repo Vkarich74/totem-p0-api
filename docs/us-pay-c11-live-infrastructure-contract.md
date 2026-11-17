@@ -53,6 +53,7 @@ Deploy only after a current **read-only** production SQL schema audit and restor
 | `US_PAY_C11_LIVE_PAYMENTS_ENABLED` | `false` until real connected US seller and full settlement acceptance |
 | `US_PAY_C11_LIVE_PAYMENT_WEBHOOK_SECRET` | Actual signed `whsec_*` of dedicated connected-account payment webhook |
 | `US_PAY_C11_LIVE_PAYMENT_WEBHOOK_ENABLED` | `false` until exact signed payment event endpoint is deployed |
+| `US_PAY_C11_LIVE_FINANCE_EVENTS_ENABLED` | `false`; independently gates LIVE refund/dispute/payout observation, using the SAME signed payment webhook and server Stripe secret. No transfers or refunds are initiated |
 | `VITE_US_PAY_C11_LIVE_PAYMENTS_ENABLED` | `false` in SDK until Backend payment and compliance release approved |
 
 Do not activate a flag without its paired secret, schema and real endpoint. No keys or owner personal data in CI logs.
@@ -66,7 +67,9 @@ Do not activate a flag without its paired secret, schema and real endpoint. No k
 - New seller onboarding: `POST /internal/us-pay-c11/live-connect/:ownerType/:ownerId/start` (session + express consent).
 - LIVE Connect signed merchant lifecycle: `POST https://api.totemv.com/stripe/connect/us-pay-c11/live/account-events`, strict RAW HMAC. Listen to **connected account** `account.updated` (and application deauthorization when event account mapping is confirmed). Do **not** register before running Backend supports and the correct whsec is stored; the existing TEST webhook is not interchangeable.
 - Authenticated client creates a direct charge via `POST /public/clients/:clientId/:token/us-pay-c11/:bookingId/intent` only if both the seller's account and US price/recipient were independently verified. Its immutable reservation is paid only by the connected merchant and is idempotent across retries. The API returns `client_secret` only to that verified client, never changes a booking to paid.
-- Signed LIVE payment events (connected-account scope): `POST https://api.totemv.com/stripe/connect/us-pay-c11/live/payment-events`, separate `whsec_*`. Accept only exact `payment_intent.succeeded`, `processing`, `payment_failed`, `canceled` for the immutable USD amount, seller, booking ID and reservation. Live settlement is recorded only by a verified raw Stripe signature in an append-only PostgreSQL receipt.
+- Signed LIVE payment events (connected-account scope): `POST https://api.totemv.com/stripe/connect/us-pay-c11/live/payment-events`, a dedicated `whsec_*`. Accept `payment_intent.succeeded`, `processing`, `payment_failed`, `canceled` for the immutable USD amount, seller, booking ID and reservation. Live settlement is recorded only by a verified raw Stripe signature in an append-only PostgreSQL receipt.
+- SAME endpoint, separate OFF gate: signed `refund.created/updated/failed`, `charge.dispute.*` and `payout.created/updated/paid/failed/canceled/reconciliation_completed` events. Financial objects MUST be re-read from the real Stripe Connect account via REST before any snapshot is stored. Multiple successful partial refunds are summed by refund ID; active disputes override the user-facing payment state; payout objects are connected-account level only.
+- Automatic payout reconciliation: enumerate all balance transactions using Stripe `GET /v1/balance_transactions?payout=po_*` with pagination, compare their sum(net) with Stripe payout amount, store immutable per-item balance ledger only when verified. Manual payouts remain `manual_unattributed`. Stripe payout `paid` is an expected bank availability signal, NOT an individual appointment payout confirmation, and no new bank transfer is created by TOTEM.
 - SDK real Stripe.js `PaymentElement` uses TOTEM USA publishable key with `stripeAccount` set to the verified payee, and bank-auth return at `/#/client-payment-return` with no cabinet token. Both SDK and Backend flags remain OFF.
 - Stripe LIVE Dashboard Connect/OAuth settings must include the callback URI exactly. The live client ID must be obtained from the actual TOTEM USA Connect settings, not guessed.
 
@@ -81,6 +84,7 @@ Do not activate a flag without its paired secret, schema and real endpoint. No k
 5. `migrations/2026_11_17__us_pay_c11_live_connect_webhook_receipts.sql`
 6. `migrations/2026_11_17__us_pay_c11_live_existing_oauth.sql`
 7. `migrations/2026_11_17__us_pay_c11_live_direct_charge_intents.sql` — price/merchant frozen, collector changes locked, signed LIVE payment receipts.
+8. `migrations/2026_11_17__us_pay_c11_live_financial_observations.sql` — separate refund, dispute, payout, payout balance-item and immutable signed event ledgers. No public API writes.
 
 Never apply synthetic `tests/sql/*` to Production; never overwrite existing payment/finance tables.
 
@@ -96,6 +100,8 @@ Never apply synthetic `tests/sql/*` to Production; never overwrite existing paym
 - A persistent publicly reachable API + PostgreSQL release with correctly mounted LIVE routes and webhook, plus owner-approved deployment.
 - Actual connected-account and signed webhook acceptance **only with the FIRST REAL, CONSENTING US SALON/MASTER**, as expressly deferred by project owner.
 - **Direct LIVE PaymentIntent creation, immutable reservation, signed success/processing/failure/canceled webhook and SDK Stripe Payment Element are now implemented in code** and protected behind OFF-by-default flags. This does **not** activate payments or prove a real merchant authorization.
-- **Still incomplete:** actual LIVE seller onboarding, production migration, real Stripe keys/registered webhook, business-approved refund processing, chargeback/dispute accounting, payout reconciliation and one authorized full-cycle LIVE merchant acceptance. No real financial operations have been performed.
+- **Now implemented but not deployed:** connected-account signed/refreshed refund+partial refund/dispute+automated payout observation with US-only immutable finance ledgers; full client refund and dispute statuses; no external LIVE Stripe calls in CI.
+- **Still incomplete:** business-authorized REFUND INITIATION endpoint, refund approval/audit policy, dispute evidence submission/alert handling, manual payout statement matching, actual LIVE seller onboarding, production migration, secure Stripe LIVE keys/registered webhook, and one authorized full-cycle LIVE merchant acceptance. No real financial operations have been performed.
+- Production snapshot / backup: verified existing `production_pre_us_20261114.dump` is a readable pg_restore archive (1,013,104 bytes, 1,396 TOC entries, 360 table entries, SHA-256 `8670A280BC3471757E34E9602A7D12F06C9E7C185AABA1DED36F972AC6A573D1`). **It is dated 14 November** and is NOT a current complete backup; do not deploy from it. Connected Railway OAuth provides only variable names, not plaintext database credentials. Do not present this archive as proof of a current restorable backup.
 
 **Hard stop:** no real seller present; never fabricate a merchant. Stripe account creation, KYC, LIVE charges and payouts are not to be triggered merely to claim a PASS.
