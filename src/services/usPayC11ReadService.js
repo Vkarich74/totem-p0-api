@@ -77,8 +77,13 @@ function liveSellerBindingFromRow(row) {
 }
 
 function selectedCollectorFromRow(row, allowTestStripeMode) {
-  if (!liveSellerBindingFromRow(row) &&
-      !testedMerchantBindingFromRow(row, allowTestStripeMode)) return null;
+  // A real LIVE seller binding always takes precedence over synthetic TEST.
+  // A restricted LIVE seller must NEVER be re-promoted via old TEST fixtures.
+  if (row.us_live_binding_id) {
+    if (!liveSellerBindingFromRow(row)) return null;
+  } else if (!testedMerchantBindingFromRow(row, allowTestStripeMode)) {
+    return null;
+  }
   if (!sameId(row.collector_booking_id, row.id) ||
       !sameId(row.collector_market_id, row.market_id) ||
       row.collector_verification_status !== "verified" ||
@@ -111,7 +116,7 @@ function selectedCollectorFromRow(row, allowTestStripeMode) {
 }
 
 function signedTestPaymentFromRow(row, allowTestStripeMode) {
-  if (!testedMerchantBindingFromRow(row, allowTestStripeMode) ||
+  if (row.us_live_binding_id || !testedMerchantBindingFromRow(row, allowTestStripeMode) ||
       !sameId(row.us_attempt_booking_id, row.id) ||
       !sameId(row.us_attempt_market_id, row.market_id) ||
       !sameId(row.us_attempt_binding_id, row.us_binding_id) ||
