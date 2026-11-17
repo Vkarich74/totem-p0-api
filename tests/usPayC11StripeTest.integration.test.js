@@ -11,6 +11,7 @@ import {
   checkStripeTestSellerSnapshot, verifyStripeTestConnectedAccount,
 } from "../src/services/usStripeTestVerification.js";
 import { verifyStripeRawSignature } from "../src/services/usStripeTestWebhook.service.js";
+import { reverifyUsStripeTestBinding } from "../src/services/usStripeTestBinding.service.js";
 
 const uri = process.env.US_PAY_C11_TEST_DATABASE_URL || "";
 if (!/^postgres:\/\/[^@]+@127\.0\.0\.1:55432\/us_pay_c11_staging$/.test(uri) ||
@@ -119,6 +120,29 @@ test("GET-only connected account verifier refuses live keys/accounts and missing
   });
   assert.match(url,/^https:\/\/api\.stripe\.com\/v1\/accounts\/acct_/);
   assert.equal(result.verified,true);
+
+  // The same verifier updates existing server-held binding IDs using a
+  // strictly read-only Stripe GET. No account ID accepted from a client.
+  const selected=await pool.query(
+    "SELECT id,owner_type,owner_id,stripe_connected_account_id FROM public.us_stripe_merchant_bindings ORDER BY id"
+  );
+  assert.equal(selected.rows.length,2);
+  for(const binding of selected.rows) {
+    const snapshot={...verified,id:binding.stripe_connected_account_id};
+    const checked=await reverifyUsStripeTestBinding(pool,{
+      bindingId:binding.id,
+      secretKey:"sk_test_synthetic_not_real",
+      fetchImpl:async ()=>({ok:true,json:async()=>snapshot}),
+    });
+    assert.equal(checked.verified,true);
+    assert.equal(checked.stripe_mode,"TEST");
+    assert.equal(checked.owner_type,binding.owner_type);
+    assert.equal(checked.owner_id,Number(binding.owner_id));
+    assert.equal(Object.hasOwn(checked,"stripe_connected_account_id"),false);
+  }
+  await assert.rejects(reverifyUsStripeTestBinding(pool,{
+    bindingId:selected.rows[0].id,secretKey:"sk_live_forbidden",
+  }),/LIVE_KEY_FORBIDDEN/);
 });
 
 test("raw signature: exactly signed bytes, old/future timestamp and wrong secret fail",()=>{
