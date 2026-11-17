@@ -185,9 +185,20 @@ function signedLivePaymentFromRow(row) {
   };
   const checked=mapping[row.us_live_attempt_status];
   if(!checked||checked[0]!==row.us_live_event_type)return null;
+
+  let observedStatus=checked[1];
+  if(checked[1]==="paid") {
+    const cents=BigInt(String(row.us_amount_minor));
+    const refunded=/^\d+$/.test(String(row.us_live_succeeded_refund_minor)) ?
+      BigInt(String(row.us_live_succeeded_refund_minor)) : -1n;
+    if(refunded<0n || refunded>cents)return null; // corrupted ledger fail-closed
+    if(row.us_live_dispute_active===true) observedStatus="disputed";
+    else if(refunded===cents) observedStatus="refunded";
+    else if(refunded>0n) observedStatus="partially_refunded";
+  }
   return {
     booking_id:row.id,market_code:"US",currency_code:"USD",
-    service_payment_status:checked[1],verified_projection:true,
+    service_payment_status:observedStatus,verified_projection:true,
     merchant_binding_verified:true,mode:"LIVE",
   };
 }
@@ -299,7 +310,9 @@ export async function readUsPayC11Booking(
         lr.event_type AS us_live_event_type,
         lr.event_created AS us_live_event_created,
         lr.signature_verified AS us_live_event_signature,
-        lr.result AS us_live_event_result
+        lr.result AS us_live_event_result,
+        COALESCE(refund_totals.succeeded_minor,'0') AS us_live_succeeded_refund_minor,
+        COALESCE(dispute_totals.dispute_active,false) AS us_live_dispute_active
       FROM public.bookings b
       JOIN public.tenant_market_settings tms ON tms.salon_id = b.salon_id
       JOIN public.markets m ON m.id = tms.market_id
@@ -328,6 +341,19 @@ export async function readUsPayC11Booking(
         ON livepi.booking_id = b.id AND livepi.market_id = m.id
       LEFT JOIN public.us_stripe_live_payment_receipts lr
         ON lr.stripe_event_id = livepi.last_event_id
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(SUM(amount_minor) FILTER (WHERE status='succeeded'),0)::text AS succeeded_minor
+          FROM public.us_c11_live_refunds rf
+         WHERE rf.booking_id=b.id
+      ) refund_totals ON true
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(bool_or(status IN (
+          'needs_response','under_review','lost','warning_needs_response',
+          'warning_under_review'
+        )),false) AS dispute_active
+          FROM public.us_c11_live_disputes dp
+         WHERE dp.booking_id=b.id
+      ) dispute_totals ON true
       WHERE b.id = $1 AND b.client_id = $2
       LIMIT 1`,
     [booking, client]
