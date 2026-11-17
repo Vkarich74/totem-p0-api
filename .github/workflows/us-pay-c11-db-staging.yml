@@ -16,6 +16,7 @@ on:
       - tests/sql/us_pay_c11_stripe_test_stage_seed.sql
       - tests/usPayC11StripeTest.integration.test.js
       - src/services/usStripeTestVerification.js
+      - src/services/usStripeTestBinding.service.js
       - src/services/usStripeTestWebhook.service.js
       - src/routes/usStripeTestWebhook.js
       - src/app.js
@@ -116,6 +117,7 @@ jobs:
           node --check src/routes/usStripeTestWebhook.js
           node --check src/services/usStripeTestWebhook.service.js
           node --check src/services/usStripeTestVerification.js
+          node --check src/services/usStripeTestBinding.service.js
           node --check src/routes/internal.js
           node --check src/routes/internalUsPayC11Owner.js
           node --check src/services/usPayC11OwnerCollector.service.js
