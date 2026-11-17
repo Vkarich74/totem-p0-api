@@ -128,7 +128,7 @@ test("LIVE seller consent is mandatory; wrong role/tenant and KG/KZ denied BEFOR
     const r=await api({...args,method:"POST",op:"/start",body:{consent:true}});
     assert.ok([403,404].includes(r.status),JSON.stringify(args)+":"+r.status);
   }
-  assert.equal(calls.length,7); // denied valid-consent requests invoke platform-only read
+  assert.equal(calls.length,0); // unauthorized requests never reach LIVE Stripe
   assert.equal(calls.filter(c=>c.path==="/v1/accounts").length,0);
 });
 
