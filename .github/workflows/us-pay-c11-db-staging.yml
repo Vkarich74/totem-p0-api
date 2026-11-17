@@ -12,6 +12,13 @@ on:
       - tests/sql/us_pay_c11_final_token_fixture.sql
       - migrations/2026_11_17__us_pay_c11_collector_selection_audit.sql
       - tests/sql/us_pay_c11_owner_auth_fixture.sql
+      - migrations/2026_11_17__us_pay_c11_stripe_test_event_sidecars.sql
+      - tests/sql/us_pay_c11_stripe_test_stage_seed.sql
+      - tests/usPayC11StripeTest.integration.test.js
+      - src/services/usStripeTestVerification.js
+      - src/services/usStripeTestWebhook.service.js
+      - src/routes/usStripeTestWebhook.js
+      - src/app.js
       - tests/usPayC11Owner.integration.test.js
       - src/services/usPayC11OwnerCollector.service.js
       - src/routes/internalUsPayC11Owner.js
@@ -82,7 +89,9 @@ jobs:
             tests/sql/us_pay_c11_api_seed.sql \
             tests/sql/us_pay_c11_final_token_fixture.sql \
             migrations/2026_11_17__us_pay_c11_collector_selection_audit.sql \
-            tests/sql/us_pay_c11_owner_auth_fixture.sql; do
+            tests/sql/us_pay_c11_owner_auth_fixture.sql \
+            migrations/2026_11_17__us_pay_c11_stripe_test_event_sidecars.sql \
+            tests/sql/us_pay_c11_stripe_test_stage_seed.sql; do
             docker exec -i us-pay-c11-pg17 psql -X -U uspayc11 -d us_pay_c11_staging \
               -v ON_ERROR_STOP=1 < "$file" > /tmp/us-pay-c11-sql-output.txt
             tail -n 4 /tmp/us-pay-c11-sql-output.txt
@@ -99,9 +108,14 @@ jobs:
       - name: Verify existing Backend contract and SQL integration tests
         env:
           US_PAY_C11_TEST_DATABASE_URL: postgres://uspayc11:local_ci_fake_secret@127.0.0.1:55432/us_pay_c11_staging
+          US_PAY_C11_STRIPE_TEST_MODE: 'true'
         run: |
           set -euo pipefail
           node --check src/routes/public.js
+          node --check src/app.js
+          node --check src/routes/usStripeTestWebhook.js
+          node --check src/services/usStripeTestWebhook.service.js
+          node --check src/services/usStripeTestVerification.js
           node --check src/routes/internal.js
           node --check src/routes/internalUsPayC11Owner.js
           node --check src/services/usPayC11OwnerCollector.service.js
@@ -132,6 +146,7 @@ jobs:
       - name: Start real C11 Backend router and SDK preview (loopback)
         env:
           US_PAY_C11_TEST_DATABASE_URL: postgres://uspayc11:local_ci_fake_secret@127.0.0.1:55432/us_pay_c11_staging
+          US_PAY_C11_STRIPE_TEST_MODE: 'true'
         run: |
           set -euo pipefail
           node tests/usPayC11FinalStage.server.js > /tmp/us-pay-c11-api.log 2>&1 &
@@ -157,6 +172,15 @@ jobs:
           set -euo pipefail
           node --test tests/usPayC11FinalStage.browser.test.js
           echo 'US_PAY_C11_FINAL_E2E_PASS'
+
+      - name: Verify signed Stripe TEST webhook against US-only PostgreSQL17
+        env:
+          US_PAY_C11_TEST_DATABASE_URL: postgres://uspayc11:local_ci_fake_secret@127.0.0.1:55432/us_pay_c11_staging
+          US_PAY_C11_STRIPE_TEST_MODE: 'true'
+        run: |
+          set -euo pipefail
+          node --test tests/usPayC11StripeTest.integration.test.js
+          echo 'US_PAY_C11_STRIPE_TEST_SIGNATURE_BINDING_PASS'
 
       - name: Assert three US sidecars and no Stripe checkout enablement
         run: |
