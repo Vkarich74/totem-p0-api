@@ -10,6 +10,12 @@ on:
       - tests/sql/us_pay_c11_stage_acceptance.sql
       - tests/sql/us_pay_c11_api_seed.sql
       - tests/sql/us_pay_c11_final_token_fixture.sql
+      - migrations/2026_11_17__us_pay_c11_collector_selection_audit.sql
+      - tests/sql/us_pay_c11_owner_auth_fixture.sql
+      - tests/usPayC11Owner.integration.test.js
+      - src/services/usPayC11OwnerCollector.service.js
+      - src/routes/internalUsPayC11Owner.js
+      - src/routes/internal.js
       - tests/usPayC11Api.integration.test.js
       - tests/usPayC11FinalStage.server.js
       - tests/usPayC11FinalStage.browser.test.js
@@ -74,7 +80,9 @@ jobs:
             migrations/2026_11_17__us_pay_c11_price_collector_sidecars.sql \
             tests/sql/us_pay_c11_stage_acceptance.sql \
             tests/sql/us_pay_c11_api_seed.sql \
-            tests/sql/us_pay_c11_final_token_fixture.sql; do
+            tests/sql/us_pay_c11_final_token_fixture.sql \
+            migrations/2026_11_17__us_pay_c11_collector_selection_audit.sql \
+            tests/sql/us_pay_c11_owner_auth_fixture.sql; do
             docker exec -i us-pay-c11-pg17 psql -X -U uspayc11 -d us_pay_c11_staging \
               -v ON_ERROR_STOP=1 < "$file" > /tmp/us-pay-c11-sql-output.txt
             tail -n 4 /tmp/us-pay-c11-sql-output.txt
@@ -94,10 +102,14 @@ jobs:
         run: |
           set -euo pipefail
           node --check src/routes/public.js
+          node --check src/routes/internal.js
+          node --check src/routes/internalUsPayC11Owner.js
+          node --check src/services/usPayC11OwnerCollector.service.js
           node --test \
             src/services/usPayC11ReadModel.test.js \
             src/services/usPayC11ReadService.test.js \
-            tests/usPayC11Api.integration.test.js
+            tests/usPayC11Api.integration.test.js \
+            tests/usPayC11Owner.integration.test.js
           echo 'US_PAY_C11_BACKEND_REGRESSION_PASS'
 
       - name: Build actual US SDK with isolated local Backend URL
