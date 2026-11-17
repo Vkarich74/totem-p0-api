@@ -269,6 +269,22 @@ test("TAX-03 US/USD canonical service price to immutable booking snapshot",async
       }
     });
 
+    await t.test("master PUT updates only its authorized link, old snapshot stays fixed",async()=>{
+      const changed=await saveUsOwnerServicePrice(pool,{
+        ...masterOpts,body:{amount_minor:10007,expected_version:2},
+      });
+      assert.equal(changed.status,200);
+      assert.equal(changed.body.price_version,3);
+      const now=await readUsOwnerServicePrice(pool,masterOpts);
+      assert.equal(now.body.amount_minor,"10007");
+      const old=await client.query(
+        "SELECT amount_minor::text AS amount_minor,service_price_version FROM public.us_booking_price_snapshots WHERE booking_id=$1",
+        [item.booking_id]
+      );
+      assert.equal(old.rows[0].amount_minor,"10005");
+      assert.equal(Number(old.rows[0].service_price_version),1);
+    });
+
     await t.test("legacy currency and wrong service link cannot forge snapshot",async()=>{
       const other=await client.query(
         "SELECT id FROM public.salon_master_services WHERE id<>$1 ORDER BY id LIMIT 1",
@@ -296,17 +312,17 @@ test("TAX-03 US/USD canonical service price to immutable booking snapshot",async
       const first=await fetch(endpoint);
       assert.equal(first.status,200);
       assert.equal(first.headers.get("cache-control"),"no-store");
-      assert.equal((await first.json()).amount_minor,"10006");
+      assert.equal((await first.json()).amount_minor,"10007");
       const saved=await fetch(endpoint,{
         method:"PUT",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({amount_minor:10101,expected_version:2}),
+        body:JSON.stringify({amount_minor:10101,expected_version:3}),
       });
       assert.equal(saved.status,200);
       assert.equal(saved.headers.get("cache-control"),"no-store");
-      assert.equal((await saved.json()).price_version,3);
+      assert.equal((await saved.json()).price_version,4);
       const wrong=await fetch(endpoint,{
         method:"PUT",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({amount_minor:1.5,expected_version:3}),
+        body:JSON.stringify({amount_minor:1.5,expected_version:4}),
       });
       assert.equal(wrong.status,400);
     });
