@@ -25,6 +25,13 @@ on:
       - src/services/usPayC11LiveExistingOAuth.service.js
       - src/routes/usPayC11LiveExistingOAuth.js
       - tests/usPayC11ExistingOAuth.integration.test.js
+      - migrations/2026_11_17__us_pay_c11_live_direct_charge_intents.sql
+      - src/services/usPayC11LiveDirectCharge.stripe.js
+      - src/services/usPayC11LiveDirectCharge.service.js
+      - src/services/usPayC11LivePaymentWebhook.service.js
+      - src/routes/usPayC11LivePaymentWebhook.js
+      - tests/usPayC11LiveDirectCharge.contract.test.js
+
       - migrations/2026_11_17__us_pay_c11_live_connect_webhook_receipts.sql
       - src/services/usPayC11LiveConnectWebhook.service.js
       - src/routes/usPayC11LiveConnectWebhook.js
@@ -109,6 +116,7 @@ jobs:
             migrations/2026_11_17__us_pay_c11_live_seller_onboarding.sql \
             migrations/2026_11_17__us_pay_c11_live_connect_webhook_receipts.sql \
             migrations/2026_11_17__us_pay_c11_live_existing_oauth.sql \
+            migrations/2026_11_17__us_pay_c11_live_direct_charge_intents.sql \
             tests/sql/us_pay_c11_live_connect_fixture.sql; do
             docker exec -i us-pay-c11-pg17 psql -X -U uspayc11 -d us_pay_c11_staging \
               -v ON_ERROR_STOP=1 < "$file" > /tmp/us-pay-c11-sql-output.txt
@@ -142,6 +150,10 @@ jobs:
           node --check src/routes/usPayC11LiveExistingOAuth.js
           node --check src/services/usPayC11LiveExistingOAuth.service.js
           node --check src/services/usPayC11LiveConnectWebhook.service.js
+          node --check src/services/usPayC11LiveDirectCharge.stripe.js
+          node --check src/services/usPayC11LiveDirectCharge.service.js
+          node --check src/services/usPayC11LivePaymentWebhook.service.js
+          node --check src/routes/usPayC11LivePaymentWebhook.js
           node --check src/routes/internal.js
           node --check src/routes/internalUsPayC11Owner.js
           node --check src/services/usPayC11OwnerCollector.service.js
@@ -228,6 +240,17 @@ jobs:
           test -z "${US_PAY_C11_LIVE_STRIPE_SECRET_KEY:-}"
           node --test tests/usPayC11ExistingOAuth.integration.test.js
           echo 'US_PAY_C11_EXISTING_SELLER_OAUTH_CONTRACT_PASS'
+
+      - name: LIVE direct-charge reservation + signed webhook regression (Stripe transport injected)
+        env:
+          US_PAY_C11_TEST_DATABASE_URL: postgres://uspayc11:local_ci_fake_secret@127.0.0.1:55432/us_pay_c11_staging
+          US_PAY_C11_LIVE_CHARGE_TEST: isolated-stub-only
+        run: |
+          set -euo pipefail
+          test -z "${US_PAY_C11_LIVE_STRIPE_SECRET_KEY:-}"
+          test -z "${US_PAY_C11_LIVE_PAYMENTS_ENABLED:-}"
+          node --test tests/usPayC11LiveDirectCharge.contract.test.js
+          echo 'US_PAY_C11_LIVE_DIRECT_CHARGE_CONTRACT_PASS'
 
       - name: Assert three US sidecars and no Stripe checkout enablement
         run: |
