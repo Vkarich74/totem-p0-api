@@ -58,7 +58,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Vkarich74/totem-sdk
-          ref: 009bfec3d5a1ff136c41b9e150fbcb6185fc12d4
+          ref: 320e2a9fbaf803d9416bb6bc877f56f20f2ebdc0
           path: sdk
           persist-credentials: false
 
