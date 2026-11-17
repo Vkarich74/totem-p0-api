@@ -244,6 +244,7 @@ test("TAX-05 signed Stripe LIVE contract on isolated DB: gross = base + tax",asy
 
     const fake=mockStripe();
     let bookingResponse;
+    let verifiedReservation;
     await t.test("Stripe mock receives exact immutable gross; no real network",async()=>{
       bookingResponse=await prepareUsC11LiveDirectCharge(pool,{
         clientId:item.client_id,clientToken:token,bookingId:item.booking_id,
@@ -255,16 +256,18 @@ test("TAX-05 signed Stripe LIVE contract on isolated DB: gross = base + tax",asy
       assert.equal(bookingResponse.body.payment_ready,false);
       assert.equal(fake.calls.filter(x=>x.url.endsWith("/payment_intents")).length,1);
       const saved=await client.query(
-        "SELECT amount_minor::text AS amount_minor,stripe_payment_intent_id,status FROM us_stripe_live_payment_intents WHERE booking_id=$1",
+        "SELECT amount_minor::text AS amount_minor,stripe_payment_intent_id,status,reservation_token::text AS reservation_token FROM us_stripe_live_payment_intents WHERE booking_id=$1",
         [item.booking_id]
       );
       assert.equal(saved.rows[0].amount_minor,cents);
       assert.equal(saved.rows[0].stripe_payment_intent_id,PI);
       assert.equal(saved.rows[0].status,"requires_payment_method");
+      verifiedReservation=saved.rows[0].reservation_token;
+      assert.match(verifiedReservation,/^[0-9a-f-]{36}$/);
     });
 
     await t.test("signed webhook with valid signature but old base amount is REJECTED",async()=>{
-      const payload=sign(event(item.booking_id,bookingResponse.body.reservation_token,10005,"evt_TAX05MISMATCH001"));
+      const payload=sign(event(item.booking_id,verifiedReservation,10005,"evt_TAX05MISMATCH001"));
       const out=await acceptSignedUsC11LivePaymentEvent({
         pool,...payload,webhookSecret:SECRET,
       });
@@ -278,7 +281,7 @@ test("TAX-05 signed Stripe LIVE contract on isolated DB: gross = base + tax",asy
     });
 
     await t.test("tampered webhook signature rejected before database mutation",async()=>{
-      const payload=sign(event(item.booking_id,bookingResponse.body.reservation_token,10730,"evt_TAX05FORGED0001"));
+      const payload=sign(event(item.booking_id,verifiedReservation,10730,"evt_TAX05FORGED0001"));
       const result=await acceptSignedUsC11LivePaymentEvent({
         pool,...payload,stripeSignature:"t=123,v1="+"0".repeat(64),webhookSecret:SECRET,
       });
@@ -286,7 +289,7 @@ test("TAX-05 signed Stripe LIVE contract on isolated DB: gross = base + tax",asy
     });
 
     await t.test("signed webhook exact gross settles once and is idempotent",async()=>{
-      const payload=sign(event(item.booking_id,bookingResponse.body.reservation_token,10730,"evt_TAX05SUCCESS001"));
+      const payload=sign(event(item.booking_id,verifiedReservation,10730,"evt_TAX05SUCCESS001"));
       const out=await acceptSignedUsC11LivePaymentEvent({
         pool,...payload,webhookSecret:SECRET,
       });
