@@ -9,7 +9,8 @@ CREATE TABLE public.auth_users (
 );
 
 CREATE TABLE public.auth_sessions (
-  id uuid PRIMARY KEY,
+  -- Match current production schema: session identifiers are TEXT, not UUID.
+  id text PRIMARY KEY,
   user_id integer NOT NULL REFERENCES public.auth_users(id),
   expires_at timestamptz NOT NULL,
   last_seen_at timestamptz,
