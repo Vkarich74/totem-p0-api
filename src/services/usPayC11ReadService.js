@@ -36,6 +36,35 @@ function priceSnapshotFromRow(row) {
   };
 }
 
+// Freeze the original service price separately from the tax-inclusive gross.
+// Do not trust a tax row if its owner, revision, market or arithmetic drift.
+function validatedTaxQuoteFromRow(row,price) {
+  if(!price ||
+     !sameId(row.us_tax_booking_id,row.id) ||
+     !sameId(row.us_tax_market_id,row.market_id) ||
+     row.us_tax_purpose!=="beauty_service" ||
+     row.us_tax_currency!=="USD" ||
+     row.us_tax_owner_type!==row.collector_owner_type ||
+     !sameId(row.us_tax_owner_id,row.collector_owner_id) ||
+     !sameId(row.us_tax_collector_revision,row.collector_revision) ||
+     String(row.us_tax_base_minor)!==String(price.amount_minor) ||
+     !Number.isInteger(row.us_tax_rate_bps) ||
+     row.us_tax_rate_bps<0 || row.us_tax_rate_bps>10000 ||
+     !/^\d+$/.test(String(row.us_tax_minor??"")) ||
+     !/^[1-9]\d*$/.test(String(row.us_tax_total_minor??""))) return null;
+  const base=BigInt(price.amount_minor);
+  const tax=BigInt(row.us_tax_minor);
+  const total=BigInt(row.us_tax_total_minor);
+  if(total>99999999n || base<1n || base>99999999n ||
+     tax!==(base*BigInt(row.us_tax_rate_bps)+5000n)/10000n ||
+     total!==base+tax) return null;
+  return {
+    rate_bps:row.us_tax_rate_bps,
+    service_tax_minor:tax.toString(),
+    charge_total_minor:total.toString(),
+  };
+}
+
 function testedMerchantBindingFromRow(row, allowTestStripeMode) {
   if (!allowTestStripeMode || row.us_binding_id == null ||
       row.us_binding_status !== "verified" ||
@@ -167,7 +196,7 @@ function signedLivePaymentFromRow(row) {
       !sameId(row.us_live_attempt_revision,row.collector_revision) ||
       row.us_live_attempt_account_id!==row.us_live_binding_account_id ||
       row.us_live_attempt_currency!=="USD" ||
-      String(row.us_live_attempt_amount_minor)!==String(row.us_amount_minor) ||
+      String(row.us_live_attempt_amount_minor)!==String(row.us_tax_total_minor) ||
       row.us_live_event_id!==row.us_live_attempt_last_event_id ||
       row.us_live_event_account_id!==row.us_live_attempt_account_id ||
       row.us_live_event_pi_id!==row.us_live_attempt_pi_id ||
@@ -188,7 +217,7 @@ function signedLivePaymentFromRow(row) {
 
   let observedStatus=checked[1];
   if(checked[1]==="paid") {
-    const cents=BigInt(String(row.us_amount_minor));
+    const cents=BigInt(String(row.us_tax_total_minor));
     const refunded=/^\d+$/.test(String(row.us_live_succeeded_refund_minor)) ?
       BigInt(String(row.us_live_succeeded_refund_minor)) : -1n;
     if(refunded<0n || refunded>cents)return null; // corrupted ledger fail-closed
@@ -230,6 +259,17 @@ export async function readUsPayC11Booking(
         ups.amount_minor::text AS us_amount_minor,
         ups.currency_code AS us_price_currency,
         ups.service_price_version AS us_price_version,
+        tq.booking_id AS us_tax_booking_id,
+        tq.market_id AS us_tax_market_id,
+        tq.payment_purpose AS us_tax_purpose,
+        tq.collector_owner_type AS us_tax_owner_type,
+        tq.collector_owner_id AS us_tax_owner_id,
+        tq.collector_revision AS us_tax_collector_revision,
+        tq.currency_code AS us_tax_currency,
+        tq.service_base_minor::text AS us_tax_base_minor,
+        tq.rate_bps AS us_tax_rate_bps,
+        tq.service_tax_minor::text AS us_tax_minor,
+        tq.charge_total_minor::text AS us_tax_total_minor,
         sms.id AS price_service_link_id,
         sms.salon_id AS price_link_salon_id,
         sms.master_id AS price_link_master_id,
@@ -319,6 +359,8 @@ export async function readUsPayC11Booking(
       LEFT JOIN public.salons salon ON salon.id = b.salon_id
       LEFT JOIN public.masters master ON master.id = b.master_id
       LEFT JOIN public.us_booking_price_snapshots ups ON ups.booking_id = b.id
+      LEFT JOIN public.us_booking_service_tax_snapshots tq
+        ON tq.booking_id=b.id AND tq.market_id=m.id
       LEFT JOIN public.salon_master_services sms
         ON sms.id = ups.salon_master_service_id
       LEFT JOIN public.us_booking_payment_collectors upc
@@ -371,11 +413,12 @@ export async function readUsPayC11Booking(
   }
 
   const price = priceSnapshotFromRow(row);
+  const tax = validatedTaxQuoteFromRow(row,price);
   const verifiedCollector = selectedCollectorFromRow(row, allowTestStripeMode);
   // A paid projection must never survive loss/corruption of its booking snapshot
   // or a revoked/unverified owner recipient.
   const verifiedPayment = price
-    ? (signedLivePaymentFromRow(row) ||
+    ? ((tax ? signedLivePaymentFromRow(row) : null) ||
        (verifiedCollector
          ? signedTestPaymentFromRow(row, allowTestStripeMode) : null))
     : null;
@@ -388,6 +431,7 @@ export async function readUsPayC11Booking(
 
   const unavailable = [];
   if (!projection.price) unavailable.push("US_PRICE_SNAPSHOT_UNAVAILABLE");
+  if (!tax) unavailable.push("US_TAX_QUOTE_UNAVAILABLE");
   if (!projection.collector) unavailable.push("US_VERIFIED_COLLECTOR_UNAVAILABLE");
   if (projection.payment.provider !== "stripe") {
     unavailable.push("US_STRIPE_PAYMENT_PROJECTION_UNAVAILABLE");
@@ -399,6 +443,16 @@ export async function readUsPayC11Booking(
       ok: true,
       contract_version: "US-PAY-C11-read-v1",
       ...projection,
+      ...(tax ? {
+        service_tax: {
+          rate_bps:tax.rate_bps,
+          amount_minor:tax.service_tax_minor,
+          currency_code:"USD",
+          source:"us_booking_service_tax_snapshots",
+        },
+        charge_total_minor:tax.charge_total_minor,
+        total_source:"us_booking_service_tax_snapshots",
+      } : {}),
       payment_ready: false,
       unavailable_reason: unavailable.join(","),
     },
