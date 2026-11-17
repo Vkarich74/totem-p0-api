@@ -450,6 +450,19 @@ test("TAX-05 signed Stripe LIVE contract on isolated DB: gross = base + tax",asy
       assert.equal(quote.body.already_refunded_minor,"2500");
       assert.equal(quote.body.full_remaining_refund_estimate.refundable_service_tax_minor,"556");
       assert.equal(quote.body.full_remaining_refund_estimate.refundable_service_base_minor,"7674");
+      const partial=await quoteUsC11LiveRefund(pool,{
+        auth:actor,ownerType:"salon",ownerId:item.salon_id,
+        bookingId:item.booking_id,proposedRefundMinor:"500",
+      });
+      assert.equal(partial.status,200,JSON.stringify(partial));
+      assert.equal(partial.body.requested_refund_estimate.requested_gross_minor,"500");
+      const split=partial.body.requested_refund_estimate;
+      assert.equal(BigInt(split.refundable_service_base_minor)+
+                   BigInt(split.refundable_service_tax_minor),500n);
+      assert.equal((await quoteUsC11LiveRefund(pool,{
+        auth:actor,ownerType:"salon",ownerId:item.salon_id,
+        bookingId:item.booking_id,proposedRefundMinor:"8231",
+      })).status,409);
       const id=randomUUID();
       const sent=await authorizeUsC11LiveRefund(pool,{
         auth:actor,ownerType:"salon",ownerId:item.salon_id,
