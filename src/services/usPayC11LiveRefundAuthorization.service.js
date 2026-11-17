@@ -374,3 +374,41 @@ export async function authorizeUsC11LiveRefund(pool,{
   });
   return saved;
 }
+
+
+/**
+ * Owner-only refund quote. No refund starts here.
+ * Seller/price are read from immutable trusted signed US booking data.
+ */
+export async function quoteUsC11LiveRefund(pool,{
+  auth,ownerType,ownerId,bookingId,
+}={}){
+  const bid=pos(bookingId),oid=pos(ownerId);
+  if(!bid||!oid||!["salon","master"].includes(ownerType)){
+    return deny(400,"US_C11_REFUND_ID_INVALID");
+  }
+  return withTx(pool,async db=>{
+    const owner=await verifyUsLiveSellerOwnerScope(db,{
+      auth,ownerType,ownerId:oid,
+    });
+    if(!owner)return deny(404,"US_C11_REFUND_OWNER_NOT_AUTHORIZED");
+    const b=await bookedUsDirectCharge(db,bid);
+    if(!authorizedCharge(b,ownerType,oid,owner.marketId)){
+      return deny(409,"US_C11_REFUND_VERIFIED_PAYMENT_REQUIRED");
+    }
+    const total=BigInt(b.amount_minor);
+    const tally=await remainingRefundable(db,bid,total);
+    return {status:200,body:{
+      ok:true,contract_version:"US-PAY-C11-refund-quote-v1",
+      market_code:"US",currency_code:"USD",booking_id:bid,
+      owner_type:ownerType,owner_id:oid,
+      paid_amount_minor:total.toString(),
+      remaining_minor:tally.remain>0n?tally.remain.toString():"0",
+      outstanding_request:tally.outstanding>0n,
+      dispute_block:tally.disputed,
+      refundable:tally.remain>0n&&tally.outstanding===0n&&!tally.disputed,
+      refund_confirmed:false,
+      payment_ready:false,
+    }};
+  });
+}
