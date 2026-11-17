@@ -79,14 +79,17 @@ async function ownerServiceLink(db, ownerType, linkId, ownerId, marketId, write)
        JOIN public.tenant_market_settings tm ON tm.salon_id=sms.salon_id
        JOIN public.markets market ON market.id=tm.market_id
       WHERE sms.id=$1 AND tm.market_id=$2
-        AND sms.currency_code='USD' AND sms.active IS TRUE
+        AND (sms.currency_code='USD' OR sms.currency_code IS NULL)
+        AND sms.active IS TRUE
         AND s.enabled IS TRUE AND s.status='active'
         AND master.active IS TRUE
         AND market.code='US' AND market.country_code='US'
         AND market.active IS TRUE AND market.default_currency='USD'
         AND (($3='salon' AND sms.salon_id=$4) OR
              ($3='master' AND sms.master_id=$4))
-      LIMIT 1${write ? " FOR SHARE OF sms,s,master,ms,tm,market" : ""}`,
+      LIMIT 1${write
+        ? " FOR UPDATE OF sms FOR SHARE OF s,master,ms,tm,market"
+        : ""}`,
     [linkId, marketId, ownerType, ownerId]
   );
   return query.rows.length === 1;
@@ -142,6 +145,15 @@ export async function saveUsOwnerServicePrice(pool, options = {}) {
     if (!scope || !await ownerServiceLink(
       db, ownerType, request.serviceLinkId, scope.owner_id, scope.market_id, true
     )) return errorReply(404, "US_PRICE_SERVICE_NOT_FOUND");
+    // Legacy US service-creation routes leave currency_code NULL.
+    // Only AFTER direct US owner authorization, mark that US-only link USD.
+    // Never change an explicit non-USD currency or derive cents from price.
+    await db.query(
+      `UPDATE public.salon_master_services
+          SET currency_code='USD'
+        WHERE id=$1 AND currency_code IS NULL`,
+      [request.serviceLinkId]
+    );
     const previous = await currentPrice(
       db, request.serviceLinkId, scope.market_id, true
     );
