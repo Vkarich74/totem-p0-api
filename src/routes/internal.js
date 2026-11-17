@@ -38,6 +38,10 @@ import buildTemplatesRouter from "./internal/templates.js";
 import buildMoneyCoreRouter from "./internal/money-core.js";
 import buildLocalePreferencesRouter from "./internal/localePreferences.js";
 import { buildUsPayC11OwnerRouter } from "./internalUsPayC11Owner.js";
+import { buildUsServiceTaxSettingsRouter } from "./internalUsServiceTaxSettings.js";
+import { buildUsServicePricesRouter } from "./internalUsServicePrices.js";
+import { buildUsServiceTaxQuoteRouter } from "./internalUsServiceTaxQuote.js";
+import { buildUsServiceTaxReportRouter } from "./internalUsServiceTaxReport.js";
 import { buildUsPayC11LiveSellerRouter } from "./internalUsPayC11LiveSeller.js";
 import { buildUsPayC11LiveRefundRouter } from "./internalUsPayC11LiveRefund.js";
 
@@ -70,6 +74,14 @@ adminProtectedContainer.use('/open-owner', adminOpenOwnerRouter);
 r.use(buildLocalePreferencesRouter(pool, internalReadRateLimit));
 // Owner-authenticated US-only recipient choice; read model remains separate.
 r.use(buildUsPayC11OwnerRouter(pool));
+// US-only service-tax settings: no booking/payment mutation.
+r.use(buildUsServiceTaxSettingsRouter(pool));
+// US-only explicit USD-cents prices; never infer from legacy KGS price.
+r.use(buildUsServicePricesRouter(pool));
+// Tax-inclusive immutable quote: verified booking collector only; Stripe still OFF.
+r.use(buildUsServiceTaxQuoteRouter(pool));
+// TAX-07: signed US service-tax and partial-refund reconciliation, read only.
+r.use(buildUsServiceTaxReportRouter(pool));
 // Seller onboarding self-consent only; safe OFF by default.
 r.use(buildUsPayC11LiveSellerRouter(pool));
 // Actual LIVE refund creation is financially sensitive: separate flag OFF.

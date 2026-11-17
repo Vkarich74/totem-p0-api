@@ -106,7 +106,44 @@ export async function acceptSignedUsC11LivePaymentEvent({
       [bookingId]
     );
     const attempt=fetched.rows[0]||null;
-    const matches=attempt &&
+    // Signed Stripe events are not sufficient on their own: a valid event
+    // may refer to an outdated base-only amount. Revalidate the frozen
+    // tax-inclusive quote and collector identity inside this transaction.
+    const quoteQuery=await db.query(
+      `SELECT tq.market_id,tq.payment_purpose,
+              tq.collector_owner_type,tq.collector_owner_id,
+              tq.collector_revision,tq.currency_code,
+              tq.service_base_minor::text AS base_minor,
+              tq.service_tax_minor::text AS tax_minor,
+              tq.charge_total_minor::text AS total_minor,
+              bp.amount_minor::text AS authoritative_base,
+              col.collector_owner_type AS live_owner_type,
+              col.collector_owner_id AS live_owner_id,
+              col.revision AS live_revision
+         FROM public.us_booking_service_tax_snapshots tq
+         JOIN public.us_booking_price_snapshots bp
+           ON bp.booking_id=tq.booking_id AND bp.market_id=tq.market_id
+         JOIN public.us_booking_payment_collectors col
+           ON col.booking_id=tq.booking_id AND col.market_id=tq.market_id
+        WHERE tq.booking_id=$1
+        LIMIT 1 FOR SHARE OF tq,bp,col`,
+      [bookingId]
+    );
+    const quote=quoteQuery.rows[0]||null;
+    const quoteMatches=quote && attempt &&
+      quote.payment_purpose==="beauty_service" &&
+      quote.currency_code==="USD" &&
+      String(quote.market_id)===String(attempt.market_id) &&
+      String(quote.base_minor)===String(quote.authoritative_base) &&
+      String(quote.total_minor)===String(attempt.amount_minor) &&
+      String(quote.total_minor)===String(pi.amount) &&
+      quote.collector_owner_type===attempt.collector_owner_type &&
+      String(quote.collector_owner_id)===String(attempt.collector_owner_id) &&
+      String(quote.collector_revision)===String(attempt.collector_revision) &&
+      quote.live_owner_type===quote.collector_owner_type &&
+      String(quote.live_owner_id)===String(quote.collector_owner_id) &&
+      String(quote.live_revision)===String(quote.collector_revision);
+    const matches=quoteMatches &&
       String(attempt.reservation_token)===pi.metadata.totem_us_reservation &&
       attempt.stripe_account_id===e.account &&
       String(attempt.amount_minor)===String(pi.amount) &&

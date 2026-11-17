@@ -73,8 +73,17 @@ async function verifiedUsdBooking(db,clientId,bookingId) {
               AND ms.status='active'
          )) ELSE false END AS current_seller_owner_authorized,
        m.id AS market_id,m.code AS market_code,m.default_currency,m.active AS market_active,
-       snap.amount_minor::text AS amount_minor,snap.currency_code AS price_currency,
+       snap.amount_minor::text AS service_base_minor,
+       snap.currency_code AS price_currency,
        snap.market_id AS price_market,snap.service_price_version,
+       tq.booking_id AS tax_booking_id,tq.market_id AS tax_market,
+       tq.currency_code AS tax_currency,tq.payment_purpose AS tax_purpose,
+       tq.collector_owner_type AS tax_owner_type,
+       tq.collector_owner_id AS tax_owner_id,
+       tq.collector_revision AS tax_collector_revision,
+       tq.service_base_minor::text AS tax_service_base_minor,
+       tq.service_tax_minor::text AS tax_minor,
+       tq.charge_total_minor::text AS amount_minor,
        sms.id AS service_link_id,sms.salon_id AS service_link_salon,
        sms.master_id AS service_link_master,sms.service_pk AS service_link_service,
        sms.currency_code AS service_link_currency,
@@ -95,6 +104,8 @@ async function verifiedUsdBooking(db,clientId,bookingId) {
      JOIN public.tenant_market_settings tm ON tm.salon_id=b.salon_id
      JOIN public.markets m ON m.id=tm.market_id
      JOIN public.us_booking_price_snapshots snap ON snap.booking_id=b.id
+     JOIN public.us_booking_service_tax_snapshots tq
+       ON tq.booking_id=b.id AND tq.market_id=snap.market_id
      JOIN public.salon_master_services sms
        ON sms.id=snap.salon_master_service_id
      JOIN public.us_booking_payment_collectors col ON col.booking_id=b.id
@@ -119,6 +130,15 @@ function eligible(row) {
      row.service_link_currency!=="USD" ||
      !["reserved","confirmed"].includes(row.status) ||
      String(row.market_id)!==String(row.price_market) ||
+     String(row.market_id)!==String(row.tax_market) ||
+     String(row.tax_booking_id)!==String(row.id) ||
+     row.tax_currency!=="USD" || row.tax_purpose!=="beauty_service" ||
+     !/^[1-9]\d*$/.test(String(row.service_base_minor||"")) ||
+     String(row.tax_service_base_minor)!==String(row.service_base_minor) ||
+     !/^\d+$/.test(String(row.tax_minor||"")) ||
+     String(row.tax_owner_type)!==String(row.collector_owner_type) ||
+     String(row.tax_owner_id)!==String(row.collector_owner_id) ||
+     String(row.tax_collector_revision)!==String(row.collector_revision) ||
      String(row.market_id)!==String(row.collector_market) ||
      String(row.market_id)!==String(row.seller_market) ||
      String(row.salon_id)!==String(row.service_link_salon) ||
@@ -147,7 +167,10 @@ function eligible(row) {
   const age=Date.now()-new Date(row.seller_last_checked).getTime();
   if(!Number.isFinite(age)||age<0||age>3600000)return false;
   const cents=BigInt(row.amount_minor);
-  return cents>=50n&&cents<=99999999n;
+  const base=BigInt(row.service_base_minor);
+  const tax=BigInt(row.tax_minor);
+  return cents>=50n&&cents<=99999999n&&
+    base>0n&&base<=cents&&tax===cents-base;
 }
 
 function sameReservation(attempt,booking) {
@@ -168,6 +191,9 @@ function reservationResponse(row,attempt) {
       bookingId:Number(row.id),marketId:String(row.market_id),
       sellerBindingId:String(row.seller_binding_id),
       stripeAccountId:row.stripe_account_id,amountMinor:row.amount_minor,
+      serviceBaseMinor:row.service_base_minor,
+      serviceTaxMinor:row.tax_minor,
+      amountSource:"us_booking_service_tax_snapshots",
       reservationToken:String(attempt.reservation_token),
       intentId:attempt.stripe_payment_intent_id||null,
       previousStatus:attempt.status,
@@ -298,6 +324,7 @@ export async function prepareUsC11LiveDirectCharge(pool,{
       ok:true,contract_version:"US-PAY-C11-live-direct-v1",
       market_code:"US",currency_code:"USD",stripe_mode:"LIVE",
       booking_id:booked,amount_minor:amountMinor,
+      amount_source:"us_booking_service_tax_snapshots",
       ...credentials,
     },
   };

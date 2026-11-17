@@ -34,6 +34,7 @@ export function buildUsPayC11LiveRefundRouter(pool,{
         const answer=await quoteUsC11LiveRefund(pool,{
           auth:req.auth,ownerType:req.params.ownerType,
           ownerId:req.params.ownerId,bookingId:req.params.bookingId,
+          proposedRefundMinor:req.query.amount_minor,
         });
         return res.status(answer.status).json(answer.body);
       }catch(error){
