@@ -46,7 +46,7 @@ CREATE TABLE public.us_c11_live_disputes (
   status text NOT NULL CHECK (status IN (
     'needs_response','under_review','won','lost',
     'warning_needs_response','warning_under_review','warning_closed',
-    'prevented','warning_closed','warning_needs_response'
+    'prevented'
   )),
   last_event_created bigint NOT NULL CHECK (last_event_created > 0),
   last_event_id text NOT NULL REFERENCES public.us_c11_live_financial_receipts(stripe_event_id),
@@ -88,6 +88,7 @@ CREATE TABLE public.us_c11_live_payout_balance_items (
   stripe_fee_minor bigint NOT NULL CHECK (stripe_fee_minor >= 0),
   currency_code text NOT NULL DEFAULT 'USD' CHECK (currency_code='USD'),
   reporting_category text NOT NULL,
+  stripe_source_id text,
   PRIMARY KEY (stripe_payout_id,stripe_balance_transaction_id)
 );
 
