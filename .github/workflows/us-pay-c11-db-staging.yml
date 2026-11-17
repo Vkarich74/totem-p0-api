@@ -34,6 +34,10 @@ on:
       - migrations/2026_11_17__us_pay_c11_live_financial_observations.sql
       - src/services/usPayC11LiveFinancialEvents.service.js
       - tests/usPayC11LiveFinance.contract.test.js
+      - migrations/2026_11_17__us_pay_c11_live_refund_authorization.sql
+      - src/services/usPayC11LiveRefundAuthorization.service.js
+      - src/routes/internalUsPayC11LiveRefund.js
+      - tests/usPayC11LiveRefund.contract.test.js
 
       - migrations/2026_11_17__us_pay_c11_live_connect_webhook_receipts.sql
       - src/services/usPayC11LiveConnectWebhook.service.js
@@ -121,6 +125,7 @@ jobs:
             migrations/2026_11_17__us_pay_c11_live_existing_oauth.sql \
             migrations/2026_11_17__us_pay_c11_live_direct_charge_intents.sql \
             migrations/2026_11_17__us_pay_c11_live_financial_observations.sql \
+            migrations/2026_11_17__us_pay_c11_live_refund_authorization.sql \
             tests/sql/us_pay_c11_live_connect_fixture.sql; do
             docker exec -i us-pay-c11-pg17 psql -X -U uspayc11 -d us_pay_c11_staging \
               -v ON_ERROR_STOP=1 < "$file" > /tmp/us-pay-c11-sql-output.txt
@@ -158,6 +163,8 @@ jobs:
           node --check src/services/usPayC11LiveDirectCharge.service.js
           node --check src/services/usPayC11LivePaymentWebhook.service.js
           node --check src/services/usPayC11LiveFinancialEvents.service.js
+          node --check src/services/usPayC11LiveRefundAuthorization.service.js
+          node --check src/routes/internalUsPayC11LiveRefund.js
           node --check src/routes/usPayC11LivePaymentWebhook.js
           node --check src/routes/internal.js
           node --check src/routes/internalUsPayC11Owner.js
@@ -256,6 +263,17 @@ jobs:
           test -z "${US_PAY_C11_LIVE_PAYMENTS_ENABLED:-}"
           node --test tests/usPayC11LiveDirectCharge.contract.test.js
           echo 'US_PAY_C11_LIVE_DIRECT_CHARGE_CONTRACT_PASS'
+
+      - name: LIVE owner-authorized full and partial refunds (mock Stripe only)
+        env:
+          US_PAY_C11_TEST_DATABASE_URL: postgres://uspayc11:local_ci_fake_secret@127.0.0.1:55432/us_pay_c11_staging
+          US_PAY_C11_REFUND_TEST: synthetic-stub-only
+        run: |
+          set -euo pipefail
+          test -z "${US_PAY_C11_LIVE_STRIPE_SECRET_KEY:-}"
+          test -z "${US_PAY_C11_LIVE_REFUNDS_ENABLED:-}"
+          node --test tests/usPayC11LiveRefund.contract.test.js
+          echo 'US_PAY_C11_LIVE_REFUND_AUTHORIZATION_PASS'
 
       - name: LIVE signed refund/dispute/payout observations (no money movement)
         env:
