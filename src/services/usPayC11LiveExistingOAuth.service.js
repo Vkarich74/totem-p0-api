@@ -352,7 +352,7 @@ export async function finishExistingUsStripeOAuth(pool,{
       }
       const resultRow=await db.query(
         `UPDATE public.us_stripe_live_seller_bindings
-            SET stripe_account_id=$2,
+            SET stripe_account_id=$2,connection_method='oauth_existing',
                 verification_status=$3,charges_enabled=$4,
                 payouts_enabled=$5,details_submitted=$6,
                 card_payments_status=$7,transfers_status=$8,
