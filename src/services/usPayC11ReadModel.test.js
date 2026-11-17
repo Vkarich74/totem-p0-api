@@ -5,7 +5,7 @@ import { validateUsdMinorAmount, buildUsPayC11ReadModel } from "./usPayC11ReadMo
 const booking = { id: 71, market_code: "US", currency_code: "USD", status: "reserved" };
 const priceSnapshot = { booking_id: 71, market_code: "US", currency: "USD", amount_minor: "1050", immutable_verified: true };
 const collector = { booking_id: 71, market_code: "US", currency_code: "USD", owner_type: "salon", owner_id: 32, display_name: "Sample Salon", verified: true };
-const payment = { booking_id: 71, market_code: "US", currency_code: "USD", service_payment_status: "unpaid", verified_projection: true };
+const payment = { booking_id: 71, market_code: "US", currency_code: "USD", service_payment_status: "unpaid", verified_projection: true, merchant_binding_verified: true, mode: "TEST" };
 const project = overrides => buildUsPayC11ReadModel({ booking, priceSnapshot, collector, payment, ...overrides });
 
 test("strict positive integer minor units: cents intact", () => {
@@ -49,4 +49,9 @@ test("KG/KZ never projected as US", () => {
 test("unverified paid assertions never trusted", () => {
   const x = project({payment:{...payment,service_payment_status:"paid",verified_projection:false}});
   assert.equal(x.payment.service_payment_status,"requires_review");
+});
+
+test("unverified seller merchant binding prevents checkout", () => {
+  assert.equal(project({payment:{...payment,merchant_binding_verified:false}}).payment_ready,false);
+  assert.equal(project({payment:{...payment,mode:"UNKNOWN"}}).payment_ready,false);
 });
