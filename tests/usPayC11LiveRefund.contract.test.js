@@ -178,6 +178,13 @@ async function send(bookingId,requestId,cents,remaining,opts={}){
   });
   return {status:res.status,body:await res.json()};
 }
+async function quote(bookingId,actor="owner"){
+  const r=await fetch(
+    origin+`/internal/us-pay-c11/live-connect/salon/100/bookings/${bookingId}/refund/quote`,{
+      method:"GET",headers:{"X-C11-Refund-Actor":actor},
+    });
+  return {status:r.status,body:await r.json()};
+}
 async function signedEvent(id,type){
   const e={
     id:"evt_REFUND_SYNTHETIC_"+id.slice(-8),
@@ -200,6 +207,11 @@ async function signedEvent(id,type){
 
 test("owner consent, active identity and exact remaining amount are required",async()=>{
   const before=liveRefundPosts;
+  const displayed=await quote(510);
+  assert.equal(displayed.status,200);
+  assert.equal(displayed.body.refundable,true);
+  assert.equal(displayed.body.remaining_minor,"1205");
+  assert.equal((await quote(510,"other")).status,404);
   assert.equal((await send(510,idPartial,205,1205,{actor:"other"})).status,404);
   assert.equal((await send(510,idPartial,205,1205,{actor:"none"})).status,401);
   assert.equal((await send(510,idPartial,205,1205,{consent:false})).status,400);
