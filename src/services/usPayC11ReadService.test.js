@@ -21,6 +21,13 @@ const row = Object.freeze({
   collector_selected_by_user_id: 900,
   collector_verification_status: "verified",
   collector_verified_at: new Date("2026-11-17T00:00:00Z"),
+  us_binding_id: "1", us_binding_market_id: "3",
+  us_binding_owner_type: "salon", us_binding_owner_id: 100,
+  us_binding_mode: "TEST", us_binding_account_id: "acct_1UcJSo8O8H3cMbfR",
+  us_binding_status: "verified", us_binding_card_payments: "active",
+  us_binding_charges_enabled: true, us_binding_payouts_enabled: true,
+  us_binding_details_submitted: true, us_binding_country: "US",
+  us_binding_verified_at: new Date(), us_binding_last_checked_at: new Date(),
 });
 
 function mock(resultRow) {
@@ -36,12 +43,12 @@ function mock(resultRow) {
 
 const read = async (patch = {}) => {
   const { db } = mock({ ...row, ...patch });
-  return (await readUsPayC11Booking(db, { clientId: 55, bookingId: 500 })).body;
+  return (await readUsPayC11Booking(db, { clientId: 55, bookingId: 500, allowTestStripeMode: true })).body;
 };
 
 test("authoritative USD cents / booking state / salon recipient", async () => {
   const { db, queries } = mock(row);
-  const result = await readUsPayC11Booking(db, { clientId: 55, bookingId: 500 });
+  const result = await readUsPayC11Booking(db, { clientId: 55, bookingId: 500, allowTestStripeMode: true });
   assert.equal(result.status, 200);
   assert.equal(result.body.booking_id, 500);
   assert.equal(result.body.booking_status, "reserved");
@@ -65,6 +72,7 @@ test("authoritative USD cents / booking state / salon recipient", async () => {
 test("master recipient is derived from booking owner, not client value", async () => {
   const result = await read({
     collector_owner_type: "master", collector_owner_id: 200,
+    us_binding_owner_type: "master", us_binding_owner_id: 200,
   });
   assert.deepEqual(result.collector, {
     owner_type: "master", display_name: "SYNTHETIC_MASTER_US", verified: true,
@@ -116,6 +124,11 @@ test("recipient remains hidden until verified and attached to actual booking", a
     { collector_selected_by_user_id: null },
     { collector_owner_id: 999 },
     { collector_owner_type: "master", collector_owner_id: 100 },
+    { us_binding_status: "pending" },
+    { us_binding_charges_enabled: false },
+    { us_binding_last_checked_at: new Date("2020-01-01T00:00:00Z") },
+    { us_binding_mode: "LIVE" },
+    { us_binding_owner_id: 999 },
     { salon_name: "" },
   ];
   for (const change of changes) {
@@ -134,27 +147,27 @@ test("invalid client or booking id rejected before querying", async () => {
     {clientId:-1,bookingId:500},
     {clientId:55,bookingId:0},
     {clientId:55,bookingId:1.5},
-  ]) assert.equal((await readUsPayC11Booking(db,args)).status,400);
+  ]) assert.equal((await readUsPayC11Booking(db,{...args,allowTestStripeMode:true})).status,400);
   assert.equal(queries.length,0);
 });
 
 test("missing client-owned booking returns 404 without recipient data", async () => {
   const { db } = mock(null);
-  assert.deepEqual(await readUsPayC11Booking(db,{clientId:55,bookingId:500}),
+  assert.deepEqual(await readUsPayC11Booking(db,{clientId:55,bookingId:500,allowTestStripeMode:true}),
     {status:404,body:{ok:false,error:"US_BOOKING_NOT_FOUND"}});
 });
 
 test("KG/KZ bookings never appear in US endpoint", async () => {
   for (const market_code of ["KG", "KZ"]) {
     const { db } = mock({...row,market_code});
-    assert.equal((await readUsPayC11Booking(db,{clientId:55,bookingId:500})).status,404);
+    assert.equal((await readUsPayC11Booking(db,{clientId:55,bookingId:500,allowTestStripeMode:true})).status,404);
   }
 });
 
 test("any USD mismatch blocks US response", async () => {
   for (const change of [{currency_code:"KGS"},{market_currency:"KGS"}]) {
     const { db }=mock({...row,...change});
-    const result=await readUsPayC11Booking(db,{clientId:55,bookingId:500});
+    const result=await readUsPayC11Booking(db,{clientId:55,bookingId:500,allowTestStripeMode:true});
     assert.equal(result.status,409);
     assert.equal(result.body.error,"US_BOOKING_CURRENCY_MISMATCH");
   }
