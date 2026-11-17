@@ -3,7 +3,7 @@
 // Never populate from client request, mutable service catalog, Stripe redirect,
 // or legacy KG/KZ payment rows.
 const BOOKING_STATUSES = new Set(["reserved","confirmed","completed","canceled","cancelled"]);
-const PAYMENT_STATUSES = new Set(["unpaid","awaiting_payment","paid","refunded","disputed","requires_review"]);
+const PAYMENT_STATUSES = new Set(["unpaid","awaiting_payment","paid","partially_refunded","refunded","disputed","requires_review"]);
 const OWNER_TYPES = new Set(["salon","master"]);
 const MAX_SAFE_CENTS = BigInt(Number.MAX_SAFE_INTEGER);
 
