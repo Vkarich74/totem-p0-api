@@ -1,0 +1,56 @@
+name: Release candidate — canonical owner profiles (Backend)
+on:
+  push:
+    branches:
+      - release/cabinet-profiles-20261119
+    paths:
+      - src/services/ownerCabinetProfile.service.js
+      - src/routes/internal/salons.js
+      - src/routes/internal/masters.js
+      - src/tests/ownerCabinetProfiles.test.mjs
+      - .github/workflows/cabinet-profiles-release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-owner-profiles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      NODE_ENV: test
+      DATABASE_URL: ""
+      ODOO_URL: ""
+      RAILWAY_TOKEN: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install immutable dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Syntax check complete Backend files
+        run: |
+          set -euo pipefail
+          node --check src/services/ownerCabinetProfile.service.js
+          node --check src/routes/internal/salons.js
+          node --check src/routes/internal/masters.js
+          node --check src/tests/ownerCabinetProfiles.test.mjs
+      - name: Verify canonical GET and PATCH using in-memory existing-owner fixtures
+        run: |
+          set -euo pipefail
+          node --test src/tests/ownerCabinetProfiles.test.mjs
+      - name: Guarantee one canonical owner profile router, no sidecars
+        run: |
+          set -euo pipefail
+          test ! -e src/routes/internalOwnerCabinetProfiles.js
+          ! grep -q 'cabinet-profile/:ownerType' src/routes/internal.js
+          grep -Fq 'r.patch("/salons/:slug"' src/routes/internal/salons.js
+          grep -Fq 'r.patch("/masters/:slug"' src/routes/internal/masters.js
+          ! grep -E 'export async function (readOwnerCabinetProfile|saveOwnerCabinetProfile)' src/services/ownerCabinetProfile.service.js
+      - name: Confirm no database connection or deployment
+        run: |
+          test -z "${DATABASE_URL:-}"
+          echo 'RELEASE_CANDIDATE_BACKEND_TESTED; NO_SALON_CREATION; NO_DB_WRITES; NO_DEPLOY'
