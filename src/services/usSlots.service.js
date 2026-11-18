@@ -1,7 +1,8 @@
 // US-03: conservative, location-scoped available slots.
 // DST gaps/folds never become bookable; durations use real elapsed UTC minutes.
 import {
-  getUsLocalDate, getUsWallParts, resolveUsLocalToUtc,
+  getUsLocalDate, getUsWallParts, getUsLocalInstantCandidates,
+  resolveUsLocalToUtc,
 } from "./usTime.service.js";
 
 function parseUsMinutes(value) {
@@ -73,8 +74,16 @@ function buildUsAvailableSlots(calendar, {
     if (getUsLocalDate(end, timezone) !== date) continue;
     const endParts = getUsWallParts(end, timezone);
     const endWall = endParts.hour * 60 + endParts.minute;
-    if (endWall > endWork) continue;
+    if (endWall > endWork || endWall <= minute) continue;
     if (endParts.second !== 0) continue;
+    // A unique start is insufficient when a booking ENDS in the repeated
+    // autumn 01:00 hour. Reject that slot as well; the same US engine
+    // is used for public GET and transactional POST revalidation.
+    const ending = getUsLocalInstantCandidates(
+      date,asClock(endWall),timezone
+    );
+    if (ending.length !== 1 ||
+        ending[0] !== new Date(end).toISOString()) continue;
     if (breakStart !== null &&
         intersects(minute, endWall, breakStart, breakEnd)) continue;
     if (busy.some(pair => intersects(start, end, pair[0], pair[1]))) continue;
