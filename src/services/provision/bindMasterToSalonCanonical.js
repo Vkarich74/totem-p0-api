@@ -376,6 +376,23 @@ export async function bindMasterToSalonCanonical({ pool, payload, dbClient = nul
         error.status = 409;
         throw error;
       }
+      // An existing active KG/KZ (or unresolved) relationship must never be
+      // repurposed as a US owner identity by cross-market binding.
+      const conflict = await db.query(
+        `SELECT ms.id FROM public.master_salon ms
+           LEFT JOIN public.tenant_market_settings t ON t.salon_id=ms.salon_id
+           LEFT JOIN public.markets m ON m.id=t.market_id
+          WHERE ms.master_id=$1 AND ms.status='active'
+            AND ms.salon_id<>$2 AND m.code IS DISTINCT FROM 'US'
+          LIMIT 1`,
+        [master.id, salon.id]
+      );
+      if (conflict.rows.length) {
+        const error = new Error("US_MASTER_CROSS_MARKET_RELATION");
+        error.code = "US_MASTER_CROSS_MARKET_RELATION";
+        error.status = 409;
+        throw error;
+      }
     }
 
     const relationState = await upsertMasterSalonRelation(db, salon.id, master.id, input.bind_mode);
