@@ -24,6 +24,10 @@ import {
   canonicalOwnerProfile, ownerProfileRevision,
   validateOwnerProfilePatch, ownerProfilePayload
 } from "../../services/ownerCabinetProfile.service.js";
+import {
+  usHoursProblem, validateUsHoursWriteBody,
+  readUsMasterWeeklyHours, replaceUsMasterWeeklyHours,
+} from "../../services/usMasterWorkingHours.service.js";
 
 export default function buildMastersRouter(pool, internalReadRateLimit){
 
@@ -858,6 +862,202 @@ r.get("/masters/:slug", internalReadRateLimit, async (req,res)=>{
   }catch(err){
     console.error("MASTER_FETCH_ERROR",err);
     return res.status(500).json({ok:false,error:"MASTER_FETCH_FAILED"});
+  }
+});
+
+
+/* US master weekly hours. SAME master router, existing US-03 table.
+   Never run or reinterpret legacy KG/KZ master_working_hours here. */
+const US_MASTER_LOCATION_ROWS = `
+  SELECT l.id AS location_id, l.salon_id, s.slug AS salon_slug,
+         s.name AS salon_name, l.location_code, l.city_name, l.state_code,
+         l.timezone_name, l.is_primary
+    FROM public.master_salon ms
+    JOIN public.salons s ON s.id=ms.salon_id
+    JOIN public.us_salon_locations l ON l.salon_id=s.id
+    JOIN public.tenant_market_settings t ON t.salon_id=s.id
+    JOIN public.markets mk ON mk.id=t.market_id
+    JOIN public.us_timezones z ON z.name=l.timezone_name
+   WHERE ms.master_id=$1 AND ms.status='active'
+     AND s.status='active' AND s.enabled=true
+     AND l.enabled=true AND mk.code='US' AND mk.active=true
+     AND mk.country_code='US' AND mk.default_currency='USD'
+     AND mk.country_pack_code='US' AND mk.country_pack_version='1'
+`;
+
+function usHoursHttpError(res,err){
+  const known=Number.isInteger(err?.statusCode) && err?.code?.startsWith("US_");
+  if (known) return res.status(err.statusCode).json({ok:false,error:err.code});
+  if(err?.code==="BILLING_BLOCKED")
+    return res.status(403).json({ok:false,error:"BILLING_BLOCKED"});
+  if(["23503","23505","23514","40001","40P01"].includes(err?.code))
+    return res.status(409).json({ok:false,error:"US_HOURS_DB_CONFLICT"});
+  console.error("MASTER_US_WORKING_HOURS_FAILED",String(err?.code||"UNKNOWN"));
+  return res.status(503).json({ok:false,error:"US_HOURS_STORAGE_UNAVAILABLE"});
+}
+
+function parseUsHoursScope(query={},requireScope=false){
+  const keys=Object.keys(query||{});
+  if(keys.some(k=>!["salon_slug","location_code"].includes(k))) {
+    throw usHoursProblem("US_HOURS_SCOPE_INVALID");
+  }
+  const salonSlug=query.salon_slug;
+  const code=query.location_code;
+  if(!requireScope && keys.length===0)return null;
+  if(keys.length!==2 || typeof salonSlug!=="string" ||
+     typeof code!=="string" ||
+     !/^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$/.test(salonSlug) ||
+     !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(code)){
+    throw usHoursProblem("US_HOURS_SCOPE_INVALID");
+  }
+  return {salon_slug:salonSlug,location_code:code};
+}
+
+async function checkedUsMasterHoursActor(db,req){
+  if(req.auth?.source!=="session" || req.auth?.role!=="master" ||
+     !Number.isSafeInteger(Number(req.auth.user_id)) ||
+     Number(req.auth.user_id)<1) {
+    throw usHoursProblem("US_HOURS_MASTER_SESSION_REQUIRED",403);
+  }
+  const master=await db.query(
+    "SELECT id,user_id,active FROM public.masters WHERE slug=$1 LIMIT 1",
+    [req.params.slug]
+  );
+  const row=master.rows[0];
+  if(!row)throw usHoursProblem("US_HOURS_MASTER_NOT_FOUND",404);
+  if(row.active!==true ||
+     String(row.user_id)!==String(req.auth.user_id) ||
+     !hasMasterOwnership(req,row.id)){
+    throw usHoursProblem("US_HOURS_MASTER_FORBIDDEN",403);
+  }
+  const validAuth=await db.query(
+    "SELECT 1 FROM public.auth_users WHERE id=$1 AND enabled=true AND role='master' LIMIT 1",
+    [row.user_id]
+  );
+  if(validAuth.rows.length!==1){
+    throw usHoursProblem("US_HOURS_MASTER_SESSION_INVALID",403);
+  }
+  return {master_id:Number(row.id),master_slug:String(req.params.slug)};
+}
+
+function validateUsLocationHoursRow(row){
+  if (!row || !Number.isSafeInteger(Number(row.location_id)) ||
+      Number(row.location_id)<1 ||
+      !row.timezone_name || row.timezone_name==="UTC" ||
+      row.timezone_name==="Etc/UTC") {
+    throw usHoursProblem("US_HOURS_LOCATION_TIMEZONE_INVALID",409);
+  }
+  try{
+    new Intl.DateTimeFormat("en-US",{timeZone:row.timezone_name})
+      .format(new Date("2026-07-15T12:00:00Z"));
+  }catch{
+    throw usHoursProblem("US_HOURS_LOCATION_TIMEZONE_INVALID",409);
+  }
+  return {
+    location_id:Number(row.location_id),salon_id:Number(row.salon_id),
+    salon_slug:String(row.salon_slug),salon_name:String(row.salon_name||""),
+    location_code:String(row.location_code),city_name:String(row.city_name||""),
+    state_code:String(row.state_code||""),
+    timezone:String(row.timezone_name),is_primary:row.is_primary===true,
+  };
+}
+
+async function listUsMasterHoursLocations(db,masterId){
+  const found=await db.query(
+    US_MASTER_LOCATION_ROWS+
+    " ORDER BY s.slug,l.is_primary DESC,l.location_code LIMIT 101",
+    [masterId]
+  );
+  if(found.rows.length>100)
+    throw usHoursProblem("US_HOURS_TOO_MANY_LOCATIONS",409);
+  return found.rows.map(validateUsLocationHoursRow);
+}
+
+async function selectLockedUsHoursLocation(db,masterId,scope){
+  const result=await db.query(
+    US_MASTER_LOCATION_ROWS+
+    " AND s.slug=$2 AND l.location_code=$3 LIMIT 1"+
+    " FOR UPDATE OF l FOR SHARE OF ms,s",
+    [masterId,scope.salon_slug,scope.location_code]
+  );
+  if(result.rows.length!==1){
+    throw usHoursProblem("US_HOURS_LOCATION_RELATION_NOT_FOUND",404);
+  }
+  return validateUsLocationHoursRow(result.rows[0]);
+}
+
+function usMasterHoursPayload(actor,location,stored,saved=false){
+  return {
+    ok:true,market_code:"US",owner_type:"master",
+    owner_slug:actor.master_slug,master_id:actor.master_id,
+    location,revision:stored.revision,hours:stored.hours,week:stored.week,
+    saved,weekday_mapping:{
+      0:"sunday",1:"monday",2:"tuesday",3:"wednesday",
+      4:"thursday",5:"friday",6:"saturday",
+    },
+  };
+}
+
+// Without explicit scope, the endpoint returns ONLY the actual US locations
+// of the authenticated existing master. No synthetic salon or schedule.
+r.get("/masters/:slug/us-working-hours",internalReadRateLimit,async(req,res)=>{
+  res.set("Cache-Control","no-store");
+  try{
+    const scope=parseUsHoursScope(req.query,false);
+    const actor=await checkedUsMasterHoursActor(pool,req);
+    if(!scope){
+      const locations=await listUsMasterHoursLocations(pool,actor.master_id);
+      return res.json({
+        ok:true,market_code:"US",owner_type:"master",
+        owner_slug:actor.master_slug,locations,
+      });
+    }
+    const locations=await listUsMasterHoursLocations(pool,actor.master_id);
+    const location=locations.find(item=>
+      item.salon_slug===scope.salon_slug &&
+      item.location_code===scope.location_code);
+    if(!location){
+      return res.status(404).json({
+        ok:false,error:"US_HOURS_LOCATION_RELATION_NOT_FOUND",
+      });
+    }
+    const stored=await readUsMasterWeeklyHours(
+      pool,location.location_id,actor.master_id);
+    return res.json(usMasterHoursPayload(actor,location,stored));
+  }catch(err){
+    return usHoursHttpError(res,err);
+  }
+});
+
+r.put("/masters/:slug/us-working-hours",async(req,res)=>{
+  res.set("Cache-Control","no-store");
+  let client=null,started=false;
+  try{
+    const scope=parseUsHoursScope(req.query,true);
+    const desired=validateUsHoursWriteBody(req.body);
+    client=await pool.connect();
+    await client.query("BEGIN");
+    started=true;
+    await client.query("SET LOCAL statement_timeout = '5000ms'");
+    await client.query("SET LOCAL lock_timeout = '2000ms'");
+    const actor=await checkedUsMasterHoursActor(client,req);
+    await ensureMasterWriteAllowed(client,actor.master_id);
+    const location=await selectLockedUsHoursLocation(
+      client,actor.master_id,scope);
+    const saved=await replaceUsMasterWeeklyHours(client,{
+      locationId:location.location_id,masterId:actor.master_id,
+      revision:desired.revision,hours:desired.hours,
+    });
+    await client.query("COMMIT");
+    started=false;
+    return res.json(usMasterHoursPayload(actor,location,saved,true));
+  }catch(err){
+    if(client && started){
+      try{await client.query("ROLLBACK");}catch(_ignored){}
+    }
+    return usHoursHttpError(res,err);
+  }finally{
+    client?.release();
   }
 });
 
