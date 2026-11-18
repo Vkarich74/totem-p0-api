@@ -20,6 +20,10 @@ import {
 getCollectionAnchors
 } from "../../services/paymentCollectionAnchors.service.js";
 import { normalizePhoneForMarket, requireCurrencyCode, resolveBusinessMarketContext, resolveOwnerMarketContext } from "../../market-context/BusinessContext.js";
+import {
+  canonicalOwnerProfile, ownerProfileRevision,
+  validateOwnerProfilePatch, ownerProfilePayload
+} from "../../services/ownerCabinetProfile.service.js";
 
 export default function buildMastersRouter(pool, internalReadRateLimit){
 
@@ -807,70 +811,121 @@ db.release();
 
 
 /*
-GET MASTER BY SLUG
+GET MASTER BY SLUG — canonical read; existing API consumers retained.
 */
 r.get("/masters/:slug", internalReadRateLimit, async (req,res)=>{
-
-const { slug } = req.params;
-
-try{
-
-const master = await pool.query(`
-SELECT
-m.id,
-m.name,
-m.slug,
-m.user_id
-FROM masters m
-WHERE m.slug=$1
-`,[slug]);
-
-if(!master.rows.length){
-return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
-}
-
-if(!hasMasterOwnership(req, master.rows[0].id)){
-return res.status(403).json({ok:false,error:"FORBIDDEN"});
-}
-
-const billing_access = await getMasterBillingAccess(pool, master.rows[0].id);
-
-const masterSalon = await pool.query(`
-SELECT
-ms.salon_id,
-s.slug AS salon_slug
-FROM master_salon ms
-JOIN salons s ON s.id=ms.salon_id
-WHERE ms.master_id=$1
-AND ms.status='active'
-ORDER BY ms.activated_at DESC NULLS LAST, ms.id DESC
-LIMIT 1
-`,[master.rows[0].id]);
-
-const salonRelation = masterSalon.rows[0] || null;
-
-res.json({
-ok:true,
-master:{
-...master.rows[0],
-salon_id:salonRelation?.salon_id || null,
-salon_slug:salonRelation?.salon_slug || null,
-salonSlug:salonRelation?.salon_slug || null
-},
-billing_access
+  const {slug}=req.params;
+  try{
+    const found=await pool.query(
+      `SELECT m.id,m.name,m.slug,m.user_id FROM public.masters m WHERE m.slug=$1`,
+      [slug]
+    );
+    if(!found.rows.length)return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+    const master=found.rows[0];
+    if(!hasMasterOwnership(req,master.id)){
+      return res.status(403).json({ok:false,error:"FORBIDDEN"});
+    }
+    const billing_access=await getMasterBillingAccess(pool,master.id);
+    const masterSalon=await pool.query(
+      `SELECT ms.salon_id,s.slug AS salon_slug
+         FROM public.master_salon ms
+         JOIN public.salons s ON s.id=ms.salon_id
+        WHERE ms.master_id=$1 AND ms.status='active'
+        ORDER BY ms.activated_at DESC NULLS LAST,ms.id DESC LIMIT 1`,
+      [master.id]
+    );
+    const salonRelation=masterSalon.rows[0]||null;
+    let profile={};
+    if(req.auth?.role==="master" && req.auth?.source==="session" &&
+       String(req.auth.user_id)===String(master.user_id)){
+      const auth=await pool.query(
+        `SELECT email FROM public.auth_users
+          WHERE id=$1 AND role='master' AND enabled=true LIMIT 1`,
+        [master.user_id]
+      );
+      if(auth.rows.length){
+        profile=ownerProfilePayload("master",slug,master,auth.rows[0].email,
+          billing_access.can_write);
+      }
+    }
+    return res.json({
+      ok:true,
+      master:{...master,salon_id:salonRelation?.salon_id||null,
+        salon_slug:salonRelation?.salon_slug||null,
+        salonSlug:salonRelation?.salon_slug||null},
+      billing_access,...profile
+    });
+  }catch(err){
+    console.error("MASTER_FETCH_ERROR",err);
+    return res.status(500).json({ok:false,error:"MASTER_FETCH_FAILED"});
+  }
 });
 
-}catch(err){
-
-console.error(err);
-
-res.status(500).json({
-ok:false,
-error:"MASTER_FETCH_FAILED"
-});
-
-}
-
+/* Canonical master profile write. Only the confirmed masters.name column. */
+r.patch("/masters/:slug", async(req,res)=>{
+  if(req.auth?.role!=="master" || req.auth?.source!=="session"){
+    return res.status(403).json({ok:false,error:"PROFILE_SESSION_REQUIRED"});
+  }
+  const input=validateOwnerProfilePatch("master",req.body);
+  if(!input.ok)return res.status(400).json({ok:false,error:input.error});
+  const db=await pool.connect();
+  try{
+    await db.query("BEGIN");
+    await db.query("SET LOCAL statement_timeout = '5000ms'");
+    await db.query("SET LOCAL lock_timeout = '2000ms'");
+    const before=await db.query(
+      `SELECT id,name,slug,user_id FROM public.masters
+        WHERE slug=$1 LIMIT 1 FOR UPDATE`,
+      [req.params.slug]
+    );
+    if(!before.rows.length){
+      await db.query("ROLLBACK");
+      return res.status(404).json({ok:false,error:"MASTER_NOT_FOUND"});
+    }
+    const master=before.rows[0];
+    if(!hasMasterOwnership(req,master.id) ||
+       String(req.auth.user_id)!==String(master.user_id)){
+      await db.query("ROLLBACK");
+      return res.status(403).json({ok:false,error:"FORBIDDEN"});
+    }
+    const auth=await db.query(
+      `SELECT email FROM public.auth_users WHERE id=$1 AND enabled=true
+          AND role='master' LIMIT 1`,
+      [master.user_id]
+    );
+    if(auth.rows.length!==1){
+      await db.query("ROLLBACK");
+      return res.status(403).json({ok:false,error:"PROFILE_SESSION_INVALID"});
+    }
+    await ensureMasterWriteAllowed(db,master.id);
+    if(ownerProfileRevision("master",master)!==input.revision){
+      await db.query("ROLLBACK");
+      return res.status(409).json({ok:false,error:"PROFILE_REVISION_CONFLICT"});
+    }
+    await db.query("UPDATE public.masters SET name=$2 WHERE id=$1",
+      [master.id,input.values.name]);
+    const after=await db.query(
+      "SELECT id,name,slug,user_id FROM public.masters WHERE id=$1",[master.id]);
+    if(after.rows.length!==1 ||
+       JSON.stringify(canonicalOwnerProfile("master",after.rows[0])) !==
+       JSON.stringify(input.values)){
+      await db.query("ROLLBACK");
+      return res.status(409).json({ok:false,error:"PROFILE_STORAGE_READBACK_MISMATCH"});
+    }
+    const profile=ownerProfilePayload("master",req.params.slug,after.rows[0],
+      auth.rows[0].email,true,true);
+    await db.query("COMMIT");
+    return res.json({ok:true,master:after.rows[0],...profile});
+  }catch(err){
+    try{await db.query("ROLLBACK");}catch(_ignored){}
+    if(err.code==="BILLING_BLOCKED"){
+      return res.status(403).json({ok:false,error:"PROFILE_BILLING_BLOCKED"});
+    }
+    console.error("MASTER_PROFILE_UPDATE_FAILED",err);
+    return res.status(503).json({ok:false,error:"PROFILE_STORAGE_UNAVAILABLE"});
+  }finally{
+    db.release();
+  }
 });
 
 /*
