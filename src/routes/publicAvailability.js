@@ -231,7 +231,7 @@ export async function publicMasterAvailability(req, res, inMemoryDb) {
           ok:false,error:"US_SERVICE_DURATION_INVALID",
         });
       }
-      await resolveUsBookingServicePrice(db,{
+      const verifiedPrice=await resolveUsBookingServicePrice(db,{
         marketId:Number(market.market_id),
         salonId,masterId,
         servicePk:Number(serviceRes.rows[0].service_pk),
@@ -244,6 +244,14 @@ export async function publicMasterAvailability(req, res, inMemoryDb) {
         date:requestedDate,
         timezone:calendar.date.timezone,
         location_code:calendar.location.location_code,
+        service_price:{
+          configured:true,
+          source:"us_service_price_amounts",
+          amount_type:"service_base_only",
+          currency_code:verifiedPrice.currency_code,
+          amount_minor:verifiedPrice.amount_minor,
+          price_version:verifiedPrice.price_version,
+        },
         slots:buildUsAvailableSlots(calendar,{
           masterId,durationMin,stepMin:15,nowMs:Date.now(),
         }),
