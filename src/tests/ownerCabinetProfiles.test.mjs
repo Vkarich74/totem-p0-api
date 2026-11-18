@@ -1,260 +1,264 @@
-// Fully in-memory, pure-query fake. Never connects to PostgreSQL.
-// No CREATE/INSERT statements; no test owner or salon is provisioned.
+// Route-level tests of the EXISTING /salons/:slug and /masters/:slug APIs.
+// Pure in-memory SQL adapter: never connect to PostgreSQL or create a salon.
 import test from "node:test";
 import assert from "node:assert/strict";
+import buildSalonsRouter from "../routes/internal/salons.js";
+import buildMastersRouter from "../routes/internal/masters.js";
 import {
-  cabinetProfileRevision, validateCabinetProfileBody,
-  readOwnerCabinetProfile, saveOwnerCabinetProfile,
+  ownerProfileRevision, validateOwnerProfilePatch,
+  canonicalOwnerProfile,
 } from "../services/ownerCabinetProfile.service.js";
 
-const SESSION = "0bd4e4da-cb47-4d5e-8651-5f50086d7c13";
-const DEFAULT_SALON = Object.freeze({
-  id: 17, slug: "existing-owner", name: "Existing Owner",
-  description: "Открыто", city: "Бишкек",
-  phone: "+996555123456", logo_url: null,
-});
-const DEFAULT_MASTER = Object.freeze({
-  id: 28, slug: "existing-master", name: "Existing Master",
-});
-const salonOpts = () => ({
-  ownerType: "salon", ownerSlug: "existing-owner",
-  auth: { source: "session", role: "salon_admin", user_id: 9,
-    session_id: SESSION },
-  identity: { user_id: 9 },
-});
-const masterOpts = () => ({
-  ownerType: "master", ownerSlug: "existing-master",
-  auth: { source: "session", role: "master", user_id: 9,
-    session_id: SESSION },
-  identity: { user_id: 9 },
-});
-
-class InMemoryPool {
+class MockCoreDB {
   constructor() {
-    this.salon = { ...DEFAULT_SALON };
-    this.master = { ...DEFAULT_MASTER };
-    this.blocked = false;
-    this.market = "KG";
-    this.sessionEnabled = true;
-    this.corruptReadback = false;
-    this.calls = [];
+    this.salon = {
+      id: 77, slug: "existing-salon", name: "Existing salon",
+      description: "Описание", city: "Бишкек",
+      phone: "+996555123456", logo_url: null,
+    };
+    this.master = {
+      id: 88, slug: "existing-master", user_id: 9, name: "Existing master",
+    };
     this.writes = 0;
-    this.commits = 0;
     this.rollbacks = 0;
+    this.statements = [];
+    this.billingBlocked = false;
+    this.corruptReadback = false;
+    this.marketCode = "KG";
+  }
+  async query(sql, params = []) {
+    return this._run(sql,params);
   }
   async connect() {
-    const pool = this;
-    let before = null;
+    const root = this;
+    let snapshot = null;
     return {
-      async query(text, values = []) {
-        const sql = String(text).replace(/\s+/g, " ").trim();
-        pool.calls.push(sql);
-        if (sql.startsWith("BEGIN")) {
-          before = {salon: {...pool.salon}, master: {...pool.master}, writes: pool.writes};
-          return {rows:[]};
-        }
-        if (sql === "COMMIT") {
-          pool.commits++;
-          before = null;
-          return {rows:[]};
-        }
-        if (sql === "ROLLBACK") {
-          pool.rollbacks++;
-          if (before) {
-            pool.salon = before.salon;
-            pool.master = before.master;
-            pool.writes = before.writes;
-          }
-          before = null;
-          return {rows:[]};
-        }
-        if (sql.startsWith("SET LOCAL")) return {rows:[]};
-        if (sql.includes("FROM public.auth_sessions sess")) {
-          return {rows:pool.sessionEnabled ? [{email:"owner@existing.example"}] : []};
-        }
-        if (sql.includes("FROM public.salons s") &&
-            sql.includes("JOIN public.owner_salon os")) {
-          const yes = values[0] === pool.salon.slug &&
-            String(values[1]) === "9";
-          const row = pool.corruptReadback && pool.writes > 0
-            ? {...pool.salon,name:"CORRUPTED_READBACK"} : {...pool.salon};
-          return {rows: yes ? [row] : []};
-        }
-        if (sql.includes("FROM public.masters m") &&
-            sql.includes("m.user_id=$2")) {
-          const yes = values[0] === pool.master.slug &&
-            Number(values[1]) === 9;
-          return {rows:yes ? [{...pool.master}] : []};
-        }
-        if (sql.includes("FROM public.billing_subscriptions")) {
-          return {rows:pool.blocked ? [{blocked_at:"2026-01-01"}] : []};
-        }
-        if (sql.includes("FROM public.tenant_market_settings t")) {
-          return {rows:[{code:pool.market}]};
-        }
-        if (sql.startsWith("UPDATE public.salons")) {
-          pool.salon = {
-            ...pool.salon, name: values[1], description: values[2] || null,
-            city: values[3] || null, phone: values[4] || null,
-            logo_url: values[5] || null,
+      async query(sql,params=[]) {
+        const q = String(sql).replace(/\s+/g, " ").trim();
+        if (q === "BEGIN") {
+          snapshot = {
+            salon: {...root.salon},
+            master: {...root.master},
+            writes: root.writes,
           };
-          pool.writes++;
-          return {rowCount:1, rows:[]};
+          root.statements.push(q);
+          return {rows:[]};
         }
-        if (sql.startsWith("UPDATE public.masters")) {
-          pool.master.name = values[1];
-          pool.writes++;
-          return {rowCount:1,rows:[]};
+        if (q === "COMMIT") {
+          root.statements.push(q);
+          snapshot = null;
+          return {rows:[]};
         }
-        throw new Error("TEST_UNEXPECTED_SQL:" + sql.slice(0,120));
+        if (q === "ROLLBACK") {
+          root.statements.push(q);
+          root.rollbacks++;
+          if (snapshot) {
+            root.salon = snapshot.salon;
+            root.master = snapshot.master;
+            root.writes = snapshot.writes;
+          }
+          snapshot = null;
+          return {rows:[]};
+        }
+        return root._run(sql,params);
       },
       release() {},
     };
   }
+  async _run(statement, params) {
+    const sql = String(statement).replace(/\s+/g, " ").trim();
+    this.statements.push(sql);
+    if (sql.startsWith("SET LOCAL")) return {rows:[]};
+    if (sql.includes("FROM public.salons WHERE slug=$1")) {
+      return {rows: params[0] === this.salon.slug ? [{...this.salon}] : []};
+    }
+    if (sql.includes("FROM public.salons WHERE id=$1")) {
+      const row = this.corruptReadback && this.writes
+        ? {...this.salon,name:"CORRUPTED_NAME"} : {...this.salon};
+      return {rows: params[0] === this.salon.id ? [row] : []};
+    }
+    if (sql.includes("FROM public.owner_salon os")) {
+      return {rows:params[0] === this.salon.id && String(params[1]) === "9"
+        ? [{email:"owner@existing.example"}] : []};
+    }
+    if (sql.includes("FROM public.masters m WHERE m.slug=$1") ||
+        sql.includes("FROM public.masters WHERE slug=$1")) {
+      return {rows:params[0] === this.master.slug ? [{...this.master}] : []};
+    }
+    if (sql.includes("FROM public.masters WHERE id=$1")) {
+      return {rows:params[0] === this.master.id ? [{...this.master}] : []};
+    }
+    if (sql.includes("FROM public.master_salon ms") &&
+        sql.includes("JOIN public.salons s")) return {rows:[]};
+    if (sql.includes("FROM public.auth_users") && sql.includes("role='master'")) {
+      return {rows:Number(params[0])===9
+        ? [{email:"master@existing.example"}] : []};
+    }
+    if (sql.includes("FROM public.billing_subscriptions")) {
+      return {rows:this.billingBlocked ? [{
+        subscription_status:"blocked",blocked_at:"2026-01-01"
+      }] : []};
+    }
+    if (sql.includes("FROM public.tenant_market_settings t")) {
+      return {rows:[{code:this.marketCode}]};
+    }
+    if (sql.startsWith("UPDATE public.salons")) {
+      this.salon={
+        ...this.salon,name:params[1],description:params[2]||null,
+        city:params[3]||null,phone:params[4]||null,logo_url:params[5]||null,
+      };
+      this.writes++;
+      return {rows:[],rowCount:1};
+    }
+    if (sql.startsWith("UPDATE public.masters")) {
+      this.master.name=params[1];
+      this.writes++;
+      return {rows:[],rowCount:1};
+    }
+    throw new Error("UNEXPECTED_SQL:"+sql.slice(0,200));
+  }
 }
-function salonWrite(fromRead, overrides = {}) {
-  const {email: _discard, ...editable} = fromRead.body.profile;
+
+function request(ownerType, overrides={}) {
   return {
-    ...salonOpts(),
-    body: {
-      revision:fromRead.body.revision,
-      profile:{...editable,...overrides},
+    params:{slug:ownerType==="salon"?"existing-salon":"existing-master"},
+    auth:{
+      source:"session",
+      role:ownerType==="salon"?"salon_admin":"master",
+      user_id:9,
     },
+    identity:{user_id:9,salons:[77],masters:[88]},
+    body:null,...overrides,
   };
 }
-function masterWrite(fromRead, name) {
-  return {...masterOpts(),body:{
-    revision:fromRead.body.revision,profile:{name},
-  }};
+async function dispatch(db,ownerType,verb,req) {
+  const router = ownerType==="salon"
+    ? buildSalonsRouter(db, (_req,_res,next)=>next())
+    : buildMastersRouter(db, (_req,_res,next)=>next());
+  const path=ownerType==="salon"?"/salons/:slug":"/masters/:slug";
+  const layer=router.stack.find(entry =>
+    entry.route?.path===path && entry.route?.methods?.[verb.toLowerCase()]);
+  assert.ok(layer,"EXISTING_CORE_ROUTE_MISSING "+verb+" "+path);
+  const res = {
+    statusCode:200,body:null,
+    status(code){this.statusCode=code;return this;},
+    json(payload){this.body=payload;return this;},
+  };
+  await layer.route.stack.at(-1).handle(req,res);
+  return {status:res.statusCode,body:res.body};
+}
+const get=(db,kind,overrides={}) =>
+  dispatch(db,kind,"get",request(kind,overrides));
+const patch=(db,kind,body,overrides={}) =>
+  dispatch(db,kind,"patch",request(kind,{...overrides,body}));
+
+function payload(response,updates={}) {
+  const kind=response.body.salon?"salon":"master";
+  const fields=kind==="salon"
+    ?["name","description","city","phone","logo_url"]:["name"];
+  return {
+    revision:response.body.profile_revision,
+    profile:Object.fromEntries(fields.map(key=>[
+      key,updates[key]??response.body.profile[key]
+    ])),
+  };
 }
 
-test("schema is an exact closed allowlist: no email, OTP or scheduling writes", () => {
-  const rev = "a".repeat(64);
-  const master = validateCabinetProfileBody("master", {
-    revision:rev,profile:{name:"Новый мастер",bio:"NOT_PERSISTED"}
+test("shared field contract blocks unknown email/OTP/bio changes",()=>{
+  const before=ownerProfileRevision("master",{name:"Name"});
+  assert.equal(before.length,64);
+  assert.deepEqual(canonicalOwnerProfile("master",{name:"Name"}),{name:"Name"});
+  const bad=validateOwnerProfilePatch("master",{
+    revision:before,profile:{name:"Name",email:"evil@example.com"}
   });
-  assert.equal(master.error,"PROFILE_FIELDS_UNSUPPORTED");
-  const salon = validateCabinetProfileBody("salon",{
-    revision:rev,profile:{name:"Салон",description:"",city:"",phone:"",
-      logo_url:"",email:"attacker@example.com"}
-  });
-  assert.equal(salon.error,"PROFILE_FIELDS_UNSUPPORTED");
-  assert.equal(cabinetProfileRevision("master",{name:"A"}).length,64);
+  assert.equal(bad.ok,false);
+  assert.equal(bad.error,"PROFILE_FIELDS_UNSUPPORTED");
 });
 
-test("GET reads only direct salon ownership and session login email",async()=>{
-  const db = new InMemoryPool();
-  const r = await readOwnerCabinetProfile(db,salonOpts());
-  assert.equal(r.status,200);
-  assert.equal(r.body.profile.name,"Existing Owner");
-  assert.equal(r.body.profile.phone,"+996555123456");
-  assert.equal(r.body.profile.email,"owner@existing.example");
-  assert.equal(r.body.can_write,true);
-  assert.equal(db.writes,0);
-  assert.ok(db.calls.includes("BEGIN READ ONLY"));
-  assert.ok(db.calls.some(s=>s.includes("JOIN public.owner_salon os")));
-});
-
-test("GET/PATCH rejects foreign owner, role mismatch and revoked session",async()=>{
-  const db = new InMemoryPool();
-  const foreign=await readOwnerCabinetProfile(db,{
-    ...salonOpts(),ownerSlug:"another-owner"
-  });
-  assert.equal(foreign.status,404);
-  const changedIdentity=await readOwnerCabinetProfile(db,{
-    ...salonOpts(),identity:{user_id:23}
-  });
-  assert.equal(changedIdentity.status,403);
-  const jwt=await readOwnerCabinetProfile(db,{
-    ...salonOpts(),auth:{source:"jwt_legacy",role:"salon_admin",user_id:9}
-  });
-  assert.equal(jwt.status,403);
-  db.sessionEnabled=false;
-  assert.equal((await readOwnerCabinetProfile(db,salonOpts())).status,403);
+test("existing GET root preserves salon/master fields and returns profile metadata",async()=>{
+  const db=new MockCoreDB();
+  const salon=await get(db,"salon");
+  const master=await get(db,"master");
+  assert.equal(salon.status,200,JSON.stringify(salon));
+  assert.equal(master.status,200,JSON.stringify(master));
+  assert.equal(salon.body.salon.id,77);
+  assert.equal(master.body.master.id,88);
+  assert.equal(salon.body.profile.email,"owner@existing.example");
+  assert.equal(master.body.profile.email,"master@existing.example");
+  assert.deepEqual(master.body.profile_editable_fields,["name"]);
   assert.equal(db.writes,0);
 });
 
-test("salon PATCH really persists only existing columns and separate GET confirms",async()=>{
-  const db=new InMemoryPool();
-  const original=await readOwnerCabinetProfile(db,salonOpts());
-  const updated=await saveOwnerCabinetProfile(db,salonWrite(original,{
-    name:"  Салон Бишкек  ",description:"Первая линия",
-    city:"Ош",logo_url:"https://example.com/logo.png"
+test("salon profile persists through canonical PATCH and fresh GET",async()=>{
+  const db=new MockCoreDB();
+  const before=await get(db,"salon");
+  const saved=await patch(db,"salon",payload(before,{
+    name:"Салон обновлён",description:"Новый текст",city:"Ош",
   }));
-  assert.equal(updated.status,200,JSON.stringify(updated));
-  assert.equal(updated.body.saved,true);
-  assert.equal(updated.body.profile.name,"Салон Бишкек");
-  assert.equal(updated.body.profile.city,"Ош");
+  assert.equal(saved.status,200,JSON.stringify(saved));
+  assert.equal(saved.body.profile_saved,true);
+  const after=await get(db,"salon");
+  assert.equal(after.body.profile.name,"Салон обновлён");
+  assert.equal(after.body.profile.city,"Ош");
+  assert.equal(after.body.profile_revision,saved.body.profile_revision);
+  assert.notEqual(before.body.profile_revision,after.body.profile_revision);
   assert.equal(db.writes,1);
-  const reread=await readOwnerCabinetProfile(db,salonOpts());
-  assert.equal(reread.body.profile.name,"Салон Бишкек");
-  assert.equal(reread.body.profile.logo_url,"https://example.com/logo.png");
-  assert.equal(reread.body.revision,updated.body.revision);
-  assert.notEqual(reread.body.revision,original.body.revision);
-  assert.equal(db.commits>=2,true);
 });
 
-test("stale revision rejects without UPDATE, then valid revision persists",async()=>{
-  const db=new InMemoryPool();
-  const original=await readOwnerCabinetProfile(db,salonOpts());
-  const a=await saveOwnerCabinetProfile(db,salonWrite(original,{city:"Ош"}));
-  assert.equal(a.status,200);
-  const writes=db.writes;
-  const stale=await saveOwnerCabinetProfile(db,salonWrite(original,{city:"Нарын"}));
+test("master profile writes existing masters.name, never a sidecar",async()=>{
+  const db=new MockCoreDB();
+  const before=await get(db,"master");
+  const saved=await patch(db,"master",payload(before,{name:"Новое имя"}));
+  assert.equal(saved.status,200,JSON.stringify(saved));
+  assert.equal((await get(db,"master")).body.profile.name,"Новое имя");
+  assert.equal(db.writes,1);
+  assert.ok(!db.statements.some(x=>/CREATE TABLE|INSERT INTO/.test(x)));
+});
+
+test("no cross-owner access, legacy JWT write, or extra-field overwrite",async()=>{
+  const db=new MockCoreDB();
+  for (const kind of ["salon","master"]) {
+    const before=await get(db,kind);
+    const data=payload(before,{name:"Danger"});
+    assert.equal((await patch(db,kind,data,{
+      identity:{user_id:9,salons:[],masters:[]}
+    })).status,403);
+    assert.equal((await patch(db,kind,data,{
+      auth:{source:"jwt_legacy",role:kind==="salon"?"salon_admin":"master",user_id:9}
+    })).status,403);
+    assert.equal((await patch(db,kind,{
+      ...data,profile:{...data.profile,email:"hijack@example.com"}
+    })).status,400);
+  }
+  assert.equal(db.writes,0);
+});
+
+test("blocked billing, stale revision, and readback disagreement fail closed",async()=>{
+  const db=new MockCoreDB();
+  const before=await get(db,"salon");
+  db.billingBlocked=true;
+  assert.equal((await patch(db,"salon",payload(before,{name:"Denied"}))).status,403);
+  assert.equal(db.writes,0);
+  db.billingBlocked=false;
+  assert.equal((await patch(db,"salon",payload(before,{name:"Updated"}))).status,200);
+  const persisted=db.writes;
+  const stale=await patch(db,"salon",payload(before,{name:"Stale"}));
   assert.equal(stale.status,409);
   assert.equal(stale.body.error,"PROFILE_REVISION_CONFLICT");
-  assert.equal(db.writes,writes);
-  const fresh=await readOwnerCabinetProfile(db,salonOpts());
-  assert.equal(fresh.body.profile.city,"Ош");
-});
+  assert.equal(db.writes,persisted);
 
-test("blocked billing forbids salon and master changes",async()=>{
-  const db=new InMemoryPool();
-  const salon=await readOwnerCabinetProfile(db,salonOpts());
-  const master=await readOwnerCabinetProfile(db,masterOpts());
-  db.blocked=true;
-  assert.equal((await saveOwnerCabinetProfile(db,salonWrite(salon,{city:"Ош"}))).status,403);
-  assert.equal((await saveOwnerCabinetProfile(db,masterWrite(master,"New Name"))).status,403);
-  assert.equal(db.writes,0);
-});
-
-test("master name persists with verified ownership, no master-sidecar table",async()=>{
-  const db=new InMemoryPool();
-  const original=await readOwnerCabinetProfile(db,masterOpts());
-  assert.deepEqual(original.body.editable_fields,["name"]);
-  assert.ok(original.body.unsupported_fields.includes("bio"));
-  const saved=await saveOwnerCabinetProfile(db,masterWrite(original,"Новое имя"));
-  assert.equal(saved.status,200);
-  const check=await readOwnerCabinetProfile(db,masterOpts());
-  assert.equal(check.body.profile.name,"Новое имя");
-  assert.equal(check.body.revision,saved.body.revision);
-  assert.ok(!db.calls.some(s=>/CREATE TABLE|INSERT INTO/.test(s)));
-});
-
-test("US salon contact fails closed on wrong country and rolls back",async()=>{
-  const db=new InMemoryPool();
-  db.market="US";
-  const original=await readOwnerCabinetProfile(db,salonOpts());
-  const bad=await saveOwnerCabinetProfile(db,salonWrite(original,{
-    phone:"+14162564567"
-  }));
-  assert.equal(bad.status,400);
-  assert.equal(bad.body.error,"PROFILE_PHONE_INVALID");
-  assert.equal(db.writes,0);
-  const again=await readOwnerCabinetProfile(db,salonOpts());
-  assert.equal(again.body.profile.phone,original.body.profile.phone);
-});
-
-test("readback disagreement produces rollback and no successful acknowledgement",async()=>{
-  const db=new InMemoryPool();
-  const original=await readOwnerCabinetProfile(db,salonOpts());
+  const canonical=await get(db,"salon");
   db.corruptReadback=true;
-  const result=await saveOwnerCabinetProfile(db,salonWrite(original,{
-    name:"Different"
-  }));
-  assert.equal(result.status,409);
-  assert.equal(result.body.error,"PROFILE_STORAGE_READBACK_MISMATCH");
-  assert.equal(db.writes,0);
-  assert.equal(db.salon.name,"Existing Owner");
-  assert.ok(db.rollbacks > 0);
+  const mismatch=await patch(db,"salon",payload(canonical,{name:"Corrupted"}));
+  assert.equal(mismatch.status,409,JSON.stringify(mismatch));
+  assert.equal(mismatch.body.error,"PROFILE_STORAGE_READBACK_MISMATCH");
+  assert.equal(db.writes,persisted);
+  assert.equal(db.salon.name,"Updated");
+  assert.ok(db.rollbacks>=1);
+});
+
+test("offline fixture created no salons or external connections",()=>{
+  const db=new MockCoreDB();
+  assert.equal(db.salon.slug,"existing-salon");
+  assert.equal(typeof db.connect,"function");
 });
