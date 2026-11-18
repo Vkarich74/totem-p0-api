@@ -281,7 +281,7 @@ test("closing booked day is denied; other changed weekdays remain independent",a
 test("interval conflict: start, end and proposed break cannot overlap booking",async()=>{
   for(const changes of [
     [{...SAMPLE[0],start_time:"11:00"}],
-    [{...SAMPLE[0],end_time:"10:30"}],
+    [{...SAMPLE[0],end_time:"10:30",break_start:null,break_end:null}],
     [{...SAMPLE[0],break_start:"10:30",break_end:"11:30"}],
   ]){
     const db=new MemoryPool();
