@@ -81,6 +81,8 @@ const fallSlots=buildUsAvailableSlots(fall,{
 });
 assert.ok(fallSlots.length>0);
 assert.ok(!fallSlots.some(s=>s.local_time.startsWith("01:")));
+assert.ok(!fallSlots.some(s=>s.local_time==="00:30" || s.local_time==="00:45"),
+  "A unique start ending inside autumn's duplicated 01:00 hour is NOT bookable");
 assert.ok(fallSlots.some(s=>s.local_time==="02:00" && s.start_at==="2026-11-01T07:00:00.000Z"));
 
 const azDb=makeDb("az","normal");
