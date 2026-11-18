@@ -50,7 +50,7 @@ class InMemoryPool {
         const sql = String(text).replace(/\s+/g, " ").trim();
         pool.calls.push(sql);
         if (sql.startsWith("BEGIN")) {
-          before = {salon: {...pool.salon}, master: {...pool.master}};
+          before = {salon: {...pool.salon}, master: {...pool.master}, writes: pool.writes};
           return {rows:[]};
         }
         if (sql === "COMMIT") {
@@ -63,6 +63,7 @@ class InMemoryPool {
           if (before) {
             pool.salon = before.salon;
             pool.master = before.master;
+            pool.writes = before.writes;
           }
           before = null;
           return {rows:[]};
@@ -75,7 +76,7 @@ class InMemoryPool {
             sql.includes("JOIN public.owner_salon os")) {
           const yes = values[0] === pool.salon.slug &&
             String(values[1]) === "9";
-          const row = pool.corruptReadback
+          const row = pool.corruptReadback && pool.writes > 0
             ? {...pool.salon,name:"CORRUPTED_READBACK"} : {...pool.salon};
           return {rows: yes ? [row] : []};
         }
@@ -92,7 +93,6 @@ class InMemoryPool {
           return {rows:[{code:pool.market}]};
         }
         if (sql.startsWith("UPDATE public.salons")) {
-          if (pool.corruptReadback) return {rows:[]};
           pool.salon = {
             ...pool.salon, name: values[1], description: values[2] || null,
             city: values[3] || null, phone: values[4] || null,
@@ -253,7 +253,8 @@ test("readback disagreement produces rollback and no successful acknowledgement"
     name:"Different"
   }));
   assert.equal(result.status,409);
-  assert.equal(result.body.error,"PROFILE_REVISION_CONFLICT");
+  assert.equal(result.body.error,"PROFILE_STORAGE_READBACK_MISMATCH");
   assert.equal(db.writes,0);
   assert.equal(db.salon.name,"Existing Owner");
+  assert.ok(db.rollbacks > 0);
 });
