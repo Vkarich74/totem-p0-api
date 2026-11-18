@@ -1042,11 +1042,19 @@ r.put("/masters/:slug/us-working-hours",async(req,res)=>{
     await client.query("SET LOCAL lock_timeout = '2000ms'");
     const actor=await checkedUsMasterHoursActor(client,req);
     await ensureMasterWriteAllowed(client,actor.master_id);
+    // Reuse the EXACT US public-booking transaction advisory lock (master
+    // key 973103); acquire before location row locks for consistent order.
+    // No KG/KZ endpoint acquires this lock.
+    await client.query(
+      "SELECT pg_advisory_xact_lock($1::integer, $2::integer)",
+      [973103,actor.master_id]
+    );
     const location=await selectLockedUsHoursLocation(
       client,actor.master_id,scope);
     const saved=await replaceUsMasterWeeklyHours(client,{
       locationId:location.location_id,masterId:actor.master_id,
       revision:desired.revision,hours:desired.hours,
+      timezone:location.timezone,
     });
     await client.query("COMMIT");
     started=false;
