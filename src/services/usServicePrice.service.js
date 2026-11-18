@@ -242,6 +242,31 @@ export async function resolveUsBookingServicePrice(db, {
   };
 }
 
+// Optional optimistic confirmation of the SAME canonical base-price
+// snapshot offered to the client. No tax, currency conversion or payment.
+export function verifyUsExpectedBookingServicePrice(body,canonical){
+  const supplied=body && typeof body==="object" && (
+    Object.hasOwn(body,"expected_us_price_version") ||
+    Object.hasOwn(body,"expected_us_amount_minor")
+  );
+  if(!supplied)return false; // existing API clients remain compatible
+  const version=body.expected_us_price_version;
+  const amount=body.expected_us_amount_minor;
+  if(!Number.isSafeInteger(version) || version<1 ||
+     typeof amount!=="string" ||
+     !/^[1-9][0-9]*$/.test(amount) ||
+     !Number.isSafeInteger(Number(amount)) ||
+     Number(amount)>MAX_USD_MINOR) {
+    throw bookingPriceError("US_EXPECTED_SERVICE_PRICE_INVALID",400);
+  }
+  if(!canonical || canonical.currency_code!=="USD" ||
+     version!==canonical.price_version ||
+     amount!==canonical.amount_minor) {
+    throw bookingPriceError("US_SERVICE_PRICE_CHANGED",409);
+  }
+  return true;
+}
+
 // Existing US price authority exposed for the public salon services list.
 // Do not infer USD from sms.price (legacy) or from a currency label.
 // The SAME resolveUsBookingServicePrice is used for listing, availability,
