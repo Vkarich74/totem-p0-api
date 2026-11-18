@@ -1,0 +1,48 @@
+name: Owner cabinet profiles (isolated / no database)
+on:
+  push:
+    branches:
+      - work/cabinet-profiles-20261118
+    paths:
+      - src/services/ownerCabinetProfile.service.js
+      - src/routes/internalOwnerCabinetProfiles.js
+      - src/routes/internal.js
+      - src/tests/ownerCabinetProfiles.test.mjs
+      - .github/workflows/cabinet-profiles-isolated.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-owner-profiles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      NODE_ENV: test
+      DATABASE_URL: ""
+      ODOO_URL: ""
+      RAILWAY_TOKEN: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install immutable dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Syntax check complete Backend files
+        run: |
+          set -euo pipefail
+          node --check src/services/ownerCabinetProfile.service.js
+          node --check src/routes/internalOwnerCabinetProfiles.js
+          node --check src/routes/internal.js
+          node --check src/tests/ownerCabinetProfiles.test.mjs
+      - name: Check real profile guards with in-memory existing-owner fixtures
+        run: |
+          set -euo pipefail
+          node --test src/tests/ownerCabinetProfiles.test.mjs
+      - name: Confirm no database connection or deployment
+        run: |
+          test -z "${DATABASE_URL:-}"
+          echo 'PROFILE_OFFLINE_ONLY; NO_CREATED_SALONS; NO_POSTGRES_WRITES; NO_DEPLOY'
