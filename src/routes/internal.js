@@ -40,6 +40,7 @@ import buildLocalePreferencesRouter from "./internal/localePreferences.js";
 import { buildUsPayC11OwnerRouter } from "./internalUsPayC11Owner.js";
 import { buildUsServiceTaxSettingsRouter } from "./internalUsServiceTaxSettings.js";
 import { buildUsServicePricesRouter } from "./internalUsServicePrices.js";
+import { buildOwnerCabinetProfilesRouter } from "./internalOwnerCabinetProfiles.js";
 import { buildUsServiceTaxQuoteRouter } from "./internalUsServiceTaxQuote.js";
 import { buildUsServiceTaxReportRouter } from "./internalUsServiceTaxReport.js";
 import { buildUsPayC11LiveSellerRouter } from "./internalUsPayC11LiveSeller.js";
@@ -78,6 +79,8 @@ r.use(buildUsPayC11OwnerRouter(pool));
 r.use(buildUsServiceTaxSettingsRouter(pool));
 // US-only explicit USD-cents prices; never infer from legacy KGS price.
 r.use(buildUsServicePricesRouter(pool));
+// Real editable owner cabinet profile: direct session ownership and readback.
+r.use(buildOwnerCabinetProfilesRouter(pool, internalReadRateLimit));
 // Tax-inclusive immutable quote: verified booking collector only; Stripe still OFF.
 r.use(buildUsServiceTaxQuoteRouter(pool));
 // TAX-07: signed US service-tax and partial-refund reconciliation, read only.
