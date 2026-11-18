@@ -1,0 +1,50 @@
+name: US master branch hours - canonical router (isolated)
+on:
+  push:
+    branches:
+      - work/us-master-hours-20261118
+    paths:
+      - src/routes/internal/masters.js
+      - src/services/usMasterWorkingHours.service.js
+      - src/tests/usMasterWorkingHours.test.mjs
+      - .github/workflows/us-master-hours-isolated.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  us-hours-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 13
+    env:
+      NODE_ENV: test
+      DATABASE_URL: ""
+      RAILWAY_TOKEN: ""
+      ODOO_URL: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install locked dependencies, no lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Syntax check canonical core and US-only service
+        run: |
+          set -euo pipefail
+          node --check src/routes/internal/masters.js
+          node --check src/services/usMasterWorkingHours.service.js
+          node --check src/tests/usMasterWorkingHours.test.mjs
+      - name: Exact US location, permissions, future bookings and CAS tests
+        run: |
+          set -euo pipefail
+          node --test src/tests/usMasterWorkingHours.test.mjs
+          node --test src/tests/usMasterScheduleTimezone.test.mjs
+      - name: Enforce KG/KZ legacy hours and API isolation
+        run: |
+          set -euo pipefail
+          test -z "${DATABASE_URL:-}"
+          test ! -e src/routes/internalUsMasterHours.js
+          grep -Fq 'r.get("/masters/:slug/us-working-hours"' src/routes/internal/masters.js
+          grep -Fq 'r.put("/masters/:slug/us-working-hours"' src/routes/internal/masters.js
+          grep -Fq 'us_location_master_working_hours' src/services/usMasterWorkingHours.service.js
+          echo 'US_ONLY; CANONICAL_MASTER_ROUTER; NO_TEST_SALONS; NO_DB; NO_DEPLOY'
