@@ -334,6 +334,34 @@ export async function publicCreateBooking(req, res) {
         })
       : null;
 
+    // Optional US-only price confirmation from the public booking UI.
+    // Older clients remain compatible; new clients can reject a changed
+    // price before any booking/client/slot write. The authoritative amount
+    // is ALWAYS the existing resolveUsBookingServicePrice result above.
+    if (marketContext.market_code === "US" &&
+        (Object.hasOwn(req.body || {},"expected_us_price_version") ||
+         Object.hasOwn(req.body || {},"expected_us_amount_minor"))) {
+      const version=req.body.expected_us_price_version;
+      const amount=req.body.expected_us_amount_minor;
+      if (!Number.isSafeInteger(version) || version<1 ||
+          typeof amount!=="string" ||
+          !/^[1-9][0-9]*$/.test(amount) ||
+          !Number.isSafeInteger(Number(amount)) ||
+          Number(amount)>99999999) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({
+          ok:false,error:"US_EXPECTED_SERVICE_PRICE_INVALID",
+        });
+      }
+      if(version!==usServicePrice.price_version ||
+         amount!==usServicePrice.amount_minor) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          ok:false,error:"US_SERVICE_PRICE_CHANGED",
+        });
+      }
+    }
+
     let usLocation = null;
     let normalizedStartAt = null;
     if (marketContext.market_code === "US") {
