@@ -1,5 +1,6 @@
 import parsePhoneNumber from "libphonenumber-js/max";
 import { KG_COUNTRY_PACK } from "../market-context/country-packs/KG.js";
+import { US_COUNTRY_PACK } from "../market-context/country-packs/US.js";
 import { resolveBusinessMarketContext } from "../market-context/BusinessContext.js";
 
 function rejectPhone(error) {
@@ -61,6 +62,12 @@ export function normalizeContactPhone(value, { defaultCountry = "", required = t
  * It is never selected, changed or rebound according to the phone country.
  */
 export async function normalizeContactPhoneForBusiness(db, value, { marketCode = "", required = true } = {}) {
+  // A +1 E.164 number can belong to Canada or the Caribbean. US onboarding
+  // must use the strict CountryPack rather than accepting any NANP number.
+  if (String(marketCode || "").trim().toUpperCase() === "US") {
+    if (!String(value ?? "").trim() && !required) return { ok: true, phone: null };
+    return US_COUNTRY_PACK.normalizeBusinessPhone(String(value ?? ""));
+  }
   const international = normalizeContactPhone(value, { required });
   if (international.ok || international.error !== "PHONE_COUNTRY_CODE_REQUIRED") {
     return international;
