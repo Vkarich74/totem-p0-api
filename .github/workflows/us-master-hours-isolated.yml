@@ -3,10 +3,12 @@ on:
   push:
     branches:
       - work/us-master-hours-20261118
+      - work/us-master-market-scope-20261118
     paths:
       - src/routes/internal/masters.js
       - src/services/usMasterWorkingHours.service.js
       - src/tests/usMasterWorkingHours.test.mjs
+      - src/tests/usMasterScheduleTimezone.test.mjs
       - .github/workflows/us-master-hours-isolated.yml
   workflow_dispatch:
 permissions:
@@ -41,6 +43,7 @@ jobs:
           TZ=America/New_York node --test src/tests/usMasterWorkingHours.test.mjs
           TZ=Pacific/Honolulu node --test src/tests/usMasterWorkingHours.test.mjs
           node --test src/tests/usMasterScheduleTimezone.test.mjs
+          grep -Fq 'MASTER_US_MIXED_MARKETS' src/routes/internal/masters.js
       - name: Enforce KG/KZ legacy hours and API isolation
         run: |
           set -euo pipefail
