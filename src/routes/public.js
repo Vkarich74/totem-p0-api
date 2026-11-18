@@ -7,6 +7,7 @@ import { resolveHistoricalCurrencyCode, resolveMarketContext } from "../market-c
 
 import { publicCreateBooking } from "./publicCreateBooking.js";
 import { publicMasterAvailability } from "./publicAvailability.js";
+import { resolveUsPublicServicePriceCatalog } from "../services/usServicePrice.service.js";
 import { publicUsLocationCatalog } from "./publicUsLocationCatalog.js";
 import { publicLifecycle } from "./publicLifecycle.js";
 import mobileRouter from "./publicMobile.js";
@@ -477,6 +478,16 @@ export function createPublicRouter(deps) {
           [salon_id]
         );
 
+        if(req.market_context?.market_code==="US"){
+          const services=await resolveUsPublicServicePriceCatalog(pool,{
+            salonId:salon_id,marketContext:req.market_context,
+            services:rows,
+          });
+          return res.json({
+            ok:true,market_code:"US",currency_code:"USD",services,
+          });
+        }
+        // Legacy KG/KZ public catalog response and SQL are unchanged.
         return res.json({ ok: true, services: rows });
       } catch (err) {
         console.error("PUBLIC_SALON_SERVICES_ERROR", err);
