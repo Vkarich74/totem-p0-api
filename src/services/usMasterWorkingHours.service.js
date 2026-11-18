@@ -124,8 +124,10 @@ export async function replaceUsMasterWeeklyHours(db, {
     `SELECT b.id
        FROM public.bookings b
        JOIN public.us_booking_location_links link ON link.booking_id=b.id
-      WHERE b.master_id=$1 AND link.location_id=$2 AND b.end_at>now()
-        AND lower(b.status) IN ('reserved','pending','confirmed')
+      WHERE b.master_id=$1 AND link.location_id=$2
+        AND COALESCE(b.end_at,b.start_at)>now()
+        AND lower(COALESCE(b.status,'')) NOT IN
+          ('cancelled','canceled','rejected','failed','refunded','completed')
       LIMIT 1`,
     [masterId,locationId]
   );
