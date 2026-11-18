@@ -1814,6 +1814,113 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       let provisionResult = null;
       let bindResult = null;
 
+      if(requestMarketCode(request) === "US"){
+        // US owner creation, master-salon binding, state readback and
+        // audit must either all commit or all roll back together.
+        const usDb = await pool.connect();
+        try{
+          await usDb.query("BEGIN");
+          await assertUsOpenOwnerContract(usDb, request);
+
+          if(request.owner_type === "salon"){
+            provisionResult = await createSalonCanonical({
+              pool, dbClient: usDb,
+              payload: buildSalonProvisionPayload(request),
+            });
+            const proof = await usDb.query(
+              `SELECT s.id FROM public.salons s
+                 JOIN public.tenant_market_settings t ON t.salon_id=s.id
+                 JOIN public.markets m ON m.id=t.market_id
+                WHERE s.id=$1 AND m.code='US' AND m.active=true LIMIT 1`,
+              [extractProvisionOwnerId(provisionResult)]
+            );
+            if(proof.rows.length !== 1){
+              const err = new Error("US_MARKET_BINDING_INVALID");
+              err.code = "US_MARKET_BINDING_INVALID"; err.status = 409;
+              throw err;
+            }
+          }else if(request.owner_type === "master"){
+            provisionResult = await createMasterCanonical({
+              pool, dbClient: usDb,
+              payload: buildMasterProvisionPayload(request),
+            });
+            bindResult = await bindMasterToSalonCanonical({
+              pool, dbClient: usDb,
+              payload: {
+                salon_slug: request.salon_slug,
+                master_slug: provisionResult?.canonical_slug || request.slug_final,
+                bind_mode: "active",
+                create_contract: false,
+                required_market_code: "US",
+              },
+            });
+
+            const proof = await usDb.query(
+              `SELECT ms.id FROM public.master_salon ms
+                 JOIN public.salons s ON s.id=ms.salon_id
+                 JOIN public.tenant_market_settings t ON t.salon_id=s.id
+                 JOIN public.markets m ON m.id=t.market_id
+                WHERE ms.master_id=$1 AND s.slug=$2 AND ms.status='active'
+                  AND s.enabled=true AND s.status='active'
+                  AND m.code='US' AND m.active=true LIMIT 1`,
+              [extractProvisionOwnerId(provisionResult), request.salon_slug]
+            );
+            if(proof.rows.length !== 1){
+              const err = new Error("US_MASTER_ACTIVE_SALON_REQUIRED");
+              err.code = "US_MASTER_ACTIVE_SALON_REQUIRED"; err.status = 409;
+              throw err;
+            }
+          }else{
+            const err=new Error("OWNER_TYPE_INVALID");
+            err.code="OWNER_TYPE_INVALID";err.status=400;throw err;
+          }
+
+          const ownerId=extractProvisionOwnerId(provisionResult);
+          const authUserId=extractProvisionAuthUserId(provisionResult);
+          if(!ownerId || !authUserId){
+            const err=new Error("US_OWNER_IDENTITY_NOT_READY");
+            err.code="US_OWNER_IDENTITY_NOT_READY";err.status=409;throw err;
+          }
+
+          const links=buildOwnerOpeningLinks({request,provisionResult,bindResult});
+          const resultJson={provision:provisionResult,bind:bindResult};
+          const done=await usDb.query(
+            `UPDATE public.owner_opening_requests
+                SET status='provisioned',created_owner_id=$2,
+                    created_auth_user_id=$3,provision_result_json=$4,
+                    links_json=$5,provisioned_at=NOW(),updated_at=NOW()
+              WHERE id=$1 AND status='provisioning'
+              RETURNING *`,
+            [requestId,ownerId,authUserId,JSON.stringify(resultJson),JSON.stringify(links)]
+          );
+          if(done.rows.length !== 1){
+            const err=new Error("US_PROVISION_REQUEST_STATE_CHANGED");
+            err.code="US_PROVISION_REQUEST_STATE_CHANGED";err.status=409;throw err;
+          }
+          const finalRequest=done.rows[0];
+          const auditEvent=await writeOwnerOpeningAuditEvent(usDb,{
+            request:finalRequest,
+            eventType:"owner_opening.provisioned",
+            admin,
+            data:{
+              created_owner_id:ownerId,created_auth_user_id:authUserId,
+              bind_created:Boolean(bindResult),market_code:"US",
+            },
+          });
+          await usDb.query("COMMIT");
+          return res.status(200).json({
+            ok:true,request:finalRequest,provision_result:provisionResult,
+            bind_result:bindResult,links,
+            audit_event_id:auditEvent?.id ? Number(auditEvent.id) : null,
+          });
+        }catch(err){
+          try{await usDb.query("ROLLBACK");}catch(_ignored){}
+          throw err;
+        }finally{
+          usDb.release();
+        }
+      }
+
       if(request.owner_type === "salon"){
         provisionResult = await createSalonCanonical({
           pool,
