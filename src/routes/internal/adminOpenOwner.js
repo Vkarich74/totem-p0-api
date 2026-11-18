@@ -7,6 +7,10 @@ import { createSalonCanonical } from "../../services/provision/createSalonCanoni
 import { createMasterCanonical } from "../../services/provision/createMasterCanonical.js";
 import { bindMasterToSalonCanonical } from "../../services/provision/bindMasterToSalonCanonical.js";
 import { normalizeContactPhoneForBusiness } from "../../services/contactPhone.js";
+import { US_COUNTRY_PACK } from "../../market-context/country-packs/US.js";
+import { requestMarketCode, readUsSalon, isUsSalonActive,
+  assertUsOpenOwnerContract, assertUsActivationReady
+} from "../../services/provision/usOpenOwnerGuards.js";
 
 const GMAIL_CLIENT_ID = process.env.GMAIL_CLIENT_ID || "";
 const GMAIL_CLIENT_SECRET = process.env.GMAIL_CLIENT_SECRET || "";
@@ -262,7 +266,8 @@ export async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
   });
   const phoneNormalized = phoneResult.ok ? phoneResult.phone : null;
   const city = normalizeText(body.city);
-  const workMode = normalizeText(body.work_mode || (ownerType === "master" ? "independent" : ""));
+  const workMode = normalizeText(body.work_mode || (ownerType === "master" ?
+    (marketCode === "US" ? "attached_to_salon" : "independent") : ""));
   const salonSlug = normalizeSlug(body.salon_slug);
 
   addCheck(checks, "owner_type_valid", Boolean(ownerType), {
@@ -352,8 +357,19 @@ export async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
     errors.push("CITY_REQUIRED");
   }
 
+  if(marketCode === "US" && ownerType === "salon"){
+    const state = US_COUNTRY_PACK.normalizeStateCode(body.state_code);
+    const zip = US_COUNTRY_PACK.normalizeZipCode(body.postal_code);
+    addCheck(checks, "us_state_valid", state.ok);
+    addCheck(checks, "us_zip_valid", zip.ok);
+    if(!state.ok) errors.push(state.error);
+    if(!zip.ok) errors.push(zip.error);
+  }
+
   if(ownerType === "master"){
-    const workModeValid = ["independent", "attached_to_salon"].includes(workMode);
+    const workModeValid = marketCode === "US"
+      ? workMode === "attached_to_salon"
+      : ["independent", "attached_to_salon"].includes(workMode);
     addCheck(checks, "work_mode_valid", workModeValid, {
       work_mode: workMode || null,
     });
@@ -378,6 +394,14 @@ export async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
 
         if(!salonCheck.exists){
           errors.push("SALON_NOT_FOUND");
+        }else if(marketCode === "US"){
+          const usSalon = await readUsSalon(pool, salonSlug);
+          const ready = isUsSalonActive(usSalon);
+          addCheck(checks, "us_active_salon", ready, {
+            market_code: usSalon?.market_code || null,
+            salon_enabled: usSalon?.enabled === true,
+          });
+          if(!ready) errors.push("US_ACTIVE_SALON_REQUIRED");
         }
       }
     }
@@ -400,6 +424,8 @@ export async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
       phone_raw: phoneRaw || null,
       phone_normalized: phoneNormalized || null,
       city: city || null,
+      state_code: marketCode === "US" && ownerType === "salon" ? normalizeText(body.state_code).toUpperCase() : null,
+      postal_code: marketCode === "US" && ownerType === "salon" ? normalizeText(body.postal_code) : null,
       address: normalizeText(body.address),
       description: normalizeText(body.description),
       specialization: normalizeText(body.specialization),
@@ -441,6 +467,8 @@ function normalizeOdooCoreFormIntakePayload(body = {}){
     phone,
     market_code: marketCode || null,
     city,
+    state_code: normalizeText(body.state_code).toUpperCase() || null,
+    postal_code: normalizeText(body.postal_code) || null,
     address: normalizeText(body.address),
     description,
     specialization,
@@ -905,7 +933,7 @@ function buildOwnerOpeningLinks({ request, provisionResult, bindResult = null })
   return {
     owner_type: ownerType || request.owner_type,
     slug,
-    public_url: provisionResult?.result?.urls?.public || provisionResult?.public_url || (ownerType && slug ? (ownerType === "salon" ? `/salon?slug=${encodeURIComponent(slug)}` : `/${ownerType}/${encodeURIComponent(slug)}`) : null),
+    public_url: requestMarketCode(request) === "US" ? null : (provisionResult?.result?.urls?.public || provisionResult?.public_url || (ownerType && slug ? (ownerType === "salon" ? `/salon?slug=${encodeURIComponent(slug)}` : `/${ownerType}/${encodeURIComponent(slug)}`) : null)),
     cabinet_url: provisionResult?.cabinet_url || (ownerType && slug ? `#/${ownerType}/${slug}` : null),
     internal_url: ownerType && slug ? `/internal/${ownerType === "salon" ? "salons" : "masters"}/${slug}` : null,
     provision_urls: provisionResult?.result?.urls || null,
@@ -934,7 +962,7 @@ function buildOwnerOpeningEmailPreview(request, locale){
   const links = request.links_json || {};
   const ownerType = normalizeOwnerType(request.owner_type);
   const ownerLabel = ownerType === "master" ? "мастера" : "салона";
-  const publicUrl = links.public_url || (ownerType && request.slug_final ? (ownerType === "salon" ? `/salon?slug=${encodeURIComponent(request.slug_final)}` : `/${ownerType}/${encodeURIComponent(request.slug_final)}`) : null);
+  const publicUrl = requestMarketCode(request) === "US" ? null : (links.public_url || (ownerType && request.slug_final ? (ownerType === "salon" ? `/salon?slug=${encodeURIComponent(request.slug_final)}` : `/${ownerType}/${encodeURIComponent(request.slug_final)}`) : null));
   const cabinetUrl = links.cabinet_url || (ownerType && request.slug_final ? `#/${ownerType}/${request.slug_final}` : null);
   const appBaseUrl = "https://app.totemv.com";
   const publicBaseUrl = "https://totemv.com";
@@ -1080,6 +1108,7 @@ async function activateOwnerOpeningEntity(db, request){
   }
 
   if(ownerType === "salon"){
+    await assertUsActivationReady(db, request, ownerId);
     const result = await db.query(
       `
         UPDATE public.salons
@@ -1107,6 +1136,7 @@ async function activateOwnerOpeningEntity(db, request){
   }
 
   if(ownerType === "master"){
+    await assertUsActivationReady(db, request, ownerId);
     const result = await db.query(
       `
         UPDATE public.masters
@@ -1233,176 +1263,10 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
 
   r.post("/precheck", async (req,res)=>{
     try{
-      const body = req.body || {};
-      const checks = [];
-      const errors = [];
-
-      const ownerType = normalizeOwnerType(body.owner_type);
-      const name = normalizeText(body.name);
-      const slugSource = normalizeText(body.slug || body.slug_requested || name);
-      const slugFinal = normalizeSlug(slugSource);
-      const email = normalizeEmail(body.email);
-      const phoneRaw = normalizeText(body.phone || body.phone_raw || body.phone_normalized);
-      const marketCode = normalizeText(body.market_code).toUpperCase();
-      const phoneResult = await normalizeContactPhoneForBusiness(pool, phoneRaw, {
-        marketCode,
-        required: true,
-      });
-      const phoneNormalized = phoneResult.ok ? phoneResult.phone : null;
-      const city = normalizeText(body.city);
-      const workMode = normalizeText(body.work_mode || (ownerType === "master" ? "independent" : ""));
-      const salonSlug = normalizeSlug(body.salon_slug);
-
-      addCheck(checks, "owner_type_valid", Boolean(ownerType), {
-        owner_type: ownerType || null,
-      });
-      if(!ownerType){
-        errors.push("OWNER_TYPE_INVALID");
-      }
-
-      addCheck(checks, "name_present", Boolean(name), {
-        name,
-      });
-      if(!name){
-        errors.push("NAME_REQUIRED");
-      }
-
-      addCheck(checks, "slug_present", Boolean(slugFinal), {
-        slug_requested: slugSource,
-        slug_final: slugFinal || null,
-      });
-      if(!slugFinal){
-        errors.push("SLUG_REQUIRED");
-      }
-
-      const slugLengthOk = slugFinal.length >= 3 && slugFinal.length <= 80;
-      addCheck(checks, "slug_length_valid", slugLengthOk, {
-        min: 3,
-        max: 80,
-        slug_length: slugFinal.length,
-      });
-      if(slugFinal && !slugLengthOk){
-        errors.push("SLUG_LENGTH_INVALID");
-      }
-
-      const slugReserved = RESERVED_SLUGS.has(slugFinal);
-      addCheck(checks, "slug_not_reserved", Boolean(slugFinal) && !slugReserved, {
-        slug_final: slugFinal || null,
-      });
-      if(slugFinal && slugReserved){
-        errors.push("SLUG_RESERVED");
-      }
-
-      if(slugFinal && slugLengthOk && !slugReserved){
-        const slugAvailability = await checkSlugAvailability(pool, slugFinal);
-        addCheck(checks, "slug_available", slugAvailability.available, {
-          slug_final: slugFinal,
-          conflicts: slugAvailability.conflicts,
-        });
-
-        if(!slugAvailability.available){
-          errors.push("SLUG_NOT_AVAILABLE");
-        }
-      }
-
-      const emailValid = isValidEmail(email);
-      addCheck(checks, "email_valid", emailValid, {
-        email: email || null,
-      });
-      if(!emailValid){
-        errors.push("EMAIL_INVALID");
-      }
-
-      if(emailValid){
-        const emailAvailability = await checkEmailAvailability(pool, email);
-        addCheck(checks, "email_available", emailAvailability.available, {
-          email,
-          conflicts: emailAvailability.conflicts,
-        });
-
-        if(!emailAvailability.available){
-          errors.push("EMAIL_ALREADY_EXISTS");
-        }
-      }
-
-      addCheck(checks, "phone_valid", phoneResult.ok && Boolean(phoneNormalized), {
-        phone_raw: phoneRaw || null,
-        phone_normalized: phoneNormalized || null,
-      });
-      if(!phoneResult.ok){
-        errors.push(phoneResult.error);
-      }
-
-      addCheck(checks, "city_present", Boolean(city), {
-        city,
-      });
-      if(!city){
-        errors.push("CITY_REQUIRED");
-      }
-
-      if(ownerType === "master"){
-        const workModeValid = ["independent", "attached_to_salon"].includes(workMode);
-        addCheck(checks, "work_mode_valid", workModeValid, {
-          work_mode: workMode || null,
-        });
-
-        if(!workModeValid){
-          errors.push("WORK_MODE_INVALID");
-        }
-
-        if(workMode === "attached_to_salon"){
-          addCheck(checks, "salon_slug_present", Boolean(salonSlug), {
-            salon_slug: salonSlug || null,
-          });
-
-          if(!salonSlug){
-            errors.push("SALON_SLUG_REQUIRED");
-          }else{
-            const salonCheck = await checkSalonSlug(pool, salonSlug);
-            addCheck(checks, "salon_slug_exists", salonCheck.exists, {
-              salon_slug: salonSlug,
-              salon: salonCheck.salon,
-            });
-
-            if(!salonCheck.exists){
-              errors.push("SALON_NOT_FOUND");
-            }
-          }
-        }
-      }
-
-      const valid = errors.length === 0;
-
-      return res.status(200).json({
-        ok: true,
-        valid,
-        error: valid ? null : "PRECHECK_FAILED",
-        errors,
-        normalized: {
-          owner_type: ownerType || null,
-          name,
-          slug_requested: slugSource,
-          slug_final: slugFinal || null,
-          email,
-          market_code: marketCode || null,
-          phone_raw: phoneRaw,
-          phone_normalized: phoneNormalized || null,
-          city,
-          address: normalizeText(body.address),
-          description: normalizeText(body.description),
-          specialization: normalizeText(body.specialization),
-          work_mode: ownerType === "master" ? workMode : null,
-          salon_slug: ownerType === "master" && workMode === "attached_to_salon" ? salonSlug : null,
-          admin_notes: normalizeText(body.admin_notes),
-        },
-        checks,
-      });
+      return res.status(200).json(await buildOpenOwnerPrecheck(pool, req.body || {}));
     }catch(err){
       console.error("ADMIN_OPEN_OWNER_PRECHECK_ERROR", err);
-      return res.status(500).json({
-        ok: false,
-        error: "ADMIN_OPEN_OWNER_PRECHECK_FAILED",
-      });
+      return res.status(500).json({ok:false,error:"ADMIN_OPEN_OWNER_PRECHECK_FAILED"});
     }
   });
 
@@ -1816,6 +1680,8 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
+      await assertUsOpenOwnerContract(db, current);
+
       const updatedResult = await db.query(
         `
           UPDATE public.owner_opening_requests
@@ -1846,9 +1712,9 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
     }catch(err){
       try{ await db.query("ROLLBACK"); }catch(e){}
       console.error("ADMIN_OPEN_OWNER_APPROVE_REQUEST_ERROR", err);
-      return res.status(500).json({
+      return res.status(resolveProvisionStatus(err)).json({
         ok: false,
-        error: "ADMIN_OPEN_OWNER_APPROVE_REQUEST_FAILED",
+        error: err?.status ? String(err.code) : "ADMIN_OPEN_OWNER_APPROVE_REQUEST_FAILED",
       });
     }finally{
       db.release();
@@ -1911,6 +1777,8 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
+      await assertUsOpenOwnerContract(markDb, request);
+
       const provisioningResult = await markDb.query(
         `
           UPDATE public.owner_opening_requests
@@ -1934,9 +1802,9 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
     }catch(err){
       try{ await markDb.query("ROLLBACK"); }catch(e){}
       console.error("ADMIN_OPEN_OWNER_MARK_PROVISIONING_ERROR", err);
-      return res.status(500).json({
+      return res.status(resolveProvisionStatus(err)).json({
         ok: false,
-        error: "ADMIN_OPEN_OWNER_MARK_PROVISIONING_FAILED",
+        error: err?.status ? String(err.code) : "ADMIN_OPEN_OWNER_MARK_PROVISIONING_FAILED",
       });
     }finally{
       markDb.release();
@@ -2175,7 +2043,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
     }catch(err){
       try{ await db.query("ROLLBACK"); }catch(e){}
       console.error("ADMIN_OPEN_OWNER_ACTIVATE_REQUEST_ERROR", err);
-      return res.status(500).json({
+      return res.status(resolveProvisionStatus(err)).json({
         ok: false,
         error: String(err?.code || err?.message || "ADMIN_OPEN_OWNER_ACTIVATE_REQUEST_FAILED"),
       });
