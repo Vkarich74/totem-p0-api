@@ -37,7 +37,9 @@ jobs:
       - name: Exact US location, permissions, future bookings and CAS tests
         run: |
           set -euo pipefail
-          node --test src/tests/usMasterWorkingHours.test.mjs
+          TZ=Asia/Bishkek node --test src/tests/usMasterWorkingHours.test.mjs
+          TZ=America/New_York node --test src/tests/usMasterWorkingHours.test.mjs
+          TZ=Pacific/Honolulu node --test src/tests/usMasterWorkingHours.test.mjs
           node --test src/tests/usMasterScheduleTimezone.test.mjs
       - name: Enforce KG/KZ legacy hours and API isolation
         run: |
@@ -47,4 +49,9 @@ jobs:
           grep -Fq 'r.get("/masters/:slug/us-working-hours"' src/routes/internal/masters.js
           grep -Fq 'r.put("/masters/:slug/us-working-hours"' src/routes/internal/masters.js
           grep -Fq 'us_location_master_working_hours' src/services/usMasterWorkingHours.service.js
-          echo 'US_ONLY; CANONICAL_MASTER_ROUTER; NO_TEST_SALONS; NO_DB; NO_DEPLOY'
+          grep -Fq 'changedUsHourWeekdays(' src/services/usMasterWorkingHours.service.js
+          grep -Fq 'getUsLocalInstantCandidates(' src/services/usMasterWorkingHours.service.js
+          grep -Fq 'FOR SHARE OF b' src/services/usMasterWorkingHours.service.js
+          grep -Fq 'pg_advisory_xact_lock($1::integer, $2::integer)' src/routes/internal/masters.js
+          grep -Fq 'pg_advisory_xact_lock($1::integer, $2::integer)' src/routes/publicCreateBooking.js
+          echo 'US_ONLY; SHARED_BOOKING_MASTER_LOCK; EXACT_LOCAL_INTERVALS; KG_KZ_UNCHANGED; NO_DEPLOY'
