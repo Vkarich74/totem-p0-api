@@ -5,6 +5,7 @@ import {
   reserveSlug
 } from "./slugReservation.js";
 import { normalizeContactPhoneForBusiness } from "../contactPhone.js";
+import { US_COUNTRY_PACK } from "../../market-context/country-packs/US.js";
 import {
   buildCanonicalProvisionResponse,
   buildProvisionMeta,
@@ -235,10 +236,12 @@ export async function createMasterCanonical({ pool, payload, dbClient = null }){
   try{
     if (ownsTransaction) await db.query("BEGIN");
 
-    const phoneResult = await normalizeContactPhoneForBusiness(db, input.phone, {
-      marketCode: input.market_code || "",
-      required: false,
-    });
+    const phoneResult = input.market_code === "US"
+      ? US_COUNTRY_PACK.normalizeBusinessPhone(input.phone)
+      : await normalizeContactPhoneForBusiness(db, input.phone, {
+        marketCode: input.market_code || "",
+        required: false,
+      });
     if(!phoneResult.ok){
       const error = new Error(phoneResult.error);
       error.code = phoneResult.error;
