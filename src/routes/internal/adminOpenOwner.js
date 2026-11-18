@@ -260,10 +260,12 @@ export async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
   const email = normalizeEmail(body.email);
   const phoneRaw = normalizeText(body.phone || body.phone_raw || body.phone_normalized);
   const marketCode = normalizeText(body.market_code).toUpperCase();
-  const phoneResult = await normalizeContactPhoneForBusiness(pool, phoneRaw, {
-    marketCode,
-    required: !allowMissingPhone,
-  });
+  const phoneResult = marketCode === "US"
+    ? US_COUNTRY_PACK.normalizeBusinessPhone(phoneRaw)
+    : await normalizeContactPhoneForBusiness(pool, phoneRaw, {
+      marketCode,
+      required: !allowMissingPhone,
+    });
   const phoneNormalized = phoneResult.ok ? phoneResult.phone : null;
   const city = normalizeText(body.city);
   const workMode = normalizeText(body.work_mode || (ownerType === "master" ?
