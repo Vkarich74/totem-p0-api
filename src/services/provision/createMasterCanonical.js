@@ -227,12 +227,13 @@ async function resolveMasterSlugForReservation(db, requestedSlug){
   return ensureUniqueMasterSlug(db, requested);
 }
 
-export async function createMasterCanonical({ pool, payload }){
+export async function createMasterCanonical({ pool, payload, dbClient = null }){
   const input = validateMasterProvisionInput(payload || {});
-  const db = await pool.connect();
+  const ownsTransaction = !dbClient;
+  const db = dbClient || await pool.connect();
 
   try{
-    await db.query("BEGIN");
+    if (ownsTransaction) await db.query("BEGIN");
 
     const phoneResult = await normalizeContactPhoneForBusiness(db, input.phone, {
       marketCode: input.market_code || "",
@@ -297,7 +298,7 @@ export async function createMasterCanonical({ pool, payload }){
         reason: "create_master_idempotent"
       });
 
-      await db.query("COMMIT");
+      if (ownsTransaction) await db.query("COMMIT");
 
       return buildProvisionResult({
         user: existingUserAligned,
@@ -334,7 +335,7 @@ export async function createMasterCanonical({ pool, payload }){
          created_at,
          user_id
        )
-       VALUES($1, $2, true, NOW(), $3)
+       VALUES($1, $2, $3, NOW(), $4)
        RETURNING
          id,
          slug,
@@ -342,7 +343,7 @@ export async function createMasterCanonical({ pool, payload }){
          active,
          created_at,
          user_id`,
-      [finalMasterSlug, input.name, user.id]
+      [finalMasterSlug, input.name, input.market_code !== "US", user.id]
     );
 
     const master = masterCreated.rows[0];
@@ -388,7 +389,7 @@ export async function createMasterCanonical({ pool, payload }){
       reservation_id: reservation?.reservation?.id || reservation?.id || null
     });
 
-    await db.query("COMMIT");
+    if (ownsTransaction) await db.query("COMMIT");
 
     return buildProvisionResult({
       user: finalUser,
@@ -400,9 +401,9 @@ export async function createMasterCanonical({ pool, payload }){
       isIdempotent: false
     });
   }catch(err){
-    try{
-      await db.query("ROLLBACK");
-    }catch(_error){}
+    if (ownsTransaction) {
+      try{ await db.query("ROLLBACK"); }catch(_error){}
+    }
 
     const resolved = resolveProvisionError(err);
     const wrapped = new Error(resolved.error);
@@ -411,7 +412,7 @@ export async function createMasterCanonical({ pool, payload }){
     wrapped.details = err?.details || null;
     throw wrapped;
   }finally{
-    db.release();
+    if (ownsTransaction) db.release();
   }
 }
 
