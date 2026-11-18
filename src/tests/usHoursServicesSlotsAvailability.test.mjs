@@ -141,6 +141,11 @@ test("same actual US calendar + slot engine in public GET and booking recomputat
   assert.equal(get.body.location_code,"ny");
   assert.equal(get.body.master_id,41);
   assert.equal(get.body.service_id,701);
+  assert.deepEqual(get.body.service_price,{
+    configured:true,source:"us_service_price_amounts",
+    amount_type:"service_base_only",currency_code:"USD",
+    amount_minor:"4500",price_version:1,
+  });
   const slots=get.body.slots;
   assert.ok(slots.length>0,"configured/paid service must have slots");
   assert.ok(slots.some(row=>row.local_time==="09:00"));
