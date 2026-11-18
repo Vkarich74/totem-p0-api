@@ -4,11 +4,16 @@ on:
     branches:
       - work/us-master-hours-20261118
       - work/us-master-market-scope-20261118
+      - work/us-hours-services-slots-20261118
     paths:
       - src/routes/internal/masters.js
       - src/services/usMasterWorkingHours.service.js
       - src/tests/usMasterWorkingHours.test.mjs
       - src/tests/usMasterScheduleTimezone.test.mjs
+      - src/routes/publicAvailability.js
+      - src/services/usSlots.service.js
+      - src/tests/usHoursServicesSlotsAvailability.test.mjs
+      - src/tests/us03LocationCalendarTest.mjs
       - .github/workflows/us-master-hours-isolated.yml
   workflow_dispatch:
 permissions:
@@ -43,6 +48,10 @@ jobs:
           TZ=America/New_York node --test src/tests/usMasterWorkingHours.test.mjs
           TZ=Pacific/Honolulu node --test src/tests/usMasterWorkingHours.test.mjs
           node --test src/tests/usMasterScheduleTimezone.test.mjs
+          node --test src/tests/usHoursServicesSlotsAvailability.test.mjs
+          TZ=Asia/Bishkek node src/tests/us03LocationCalendarTest.mjs
+          TZ=America/New_York node src/tests/us03LocationCalendarTest.mjs
+          TZ=Pacific/Honolulu node src/tests/us03LocationCalendarTest.mjs
           grep -Fq 'MASTER_US_MIXED_MARKETS' src/routes/internal/masters.js
       - name: Enforce KG/KZ legacy hours and API isolation
         run: |
@@ -57,4 +66,8 @@ jobs:
           grep -Fq 'FOR SHARE OF b' src/services/usMasterWorkingHours.service.js
           grep -Fq 'pg_advisory_xact_lock($1::integer, $2::integer)' src/routes/internal/masters.js
           grep -Fq 'pg_advisory_xact_lock($1::integer, $2::integer)' src/routes/publicCreateBooking.js
-          echo 'US_ONLY; SHARED_BOOKING_MASTER_LOCK; EXACT_LOCAL_INTERVALS; KG_KZ_UNCHANGED; NO_DEPLOY'
+          grep -Fq 'await resolveUsBookingServicePrice(db,{' src/routes/publicAvailability.js
+          grep -Fq 'slots:buildUsAvailableSlots(calendar,{' src/routes/publicAvailability.js
+          grep -Fq 'buildUsAvailableSlots(calendar, {' src/routes/publicCreateBooking.js
+          grep -Fq 'getUsLocalInstantCandidates(' src/services/usSlots.service.js
+          echo 'US_ONLY; CANONICAL_US_PRICE_AND_SLOT_ENGINE; KG_KZ_UNCHANGED; NO_DEPLOY'
