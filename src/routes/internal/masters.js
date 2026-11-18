@@ -2003,7 +2003,17 @@ if(usLocationScope){
     [masterId]
   );
   if(markets.rows.length !== 1 || markets.rows[0].code !== "US"){
-    return res.status(409).json({ok:false,error:"MASTER_US_MARKET_SCOPE_REQUIRED"});
+    // Distinguish a real US + non-US affiliation from a KG/KZ-only
+    // master. Only the opt-in US read returns this extra guard code.
+    // The existing KG/KZ booking endpoint and its response are unchanged.
+    const hasUs=markets.rows.some(row=>row.code==="US");
+    const hasOther=markets.rows.some(row=>row.code!=="US");
+    return res.status(409).json({
+      ok:false,
+      error:hasUs && hasOther
+        ? "MASTER_US_MIXED_MARKETS"
+        : "MASTER_US_MARKET_SCOPE_REQUIRED",
+    });
   }
 }
 
