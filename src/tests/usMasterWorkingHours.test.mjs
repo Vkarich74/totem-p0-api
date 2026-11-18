@@ -5,7 +5,11 @@ import buildMastersRouter from "../routes/internal/masters.js";
 import {
   normalizeUsWeeklyHours,validateUsHoursWriteBody,
   usHoursRevision,weeklyHoursDisplay,
+  changedUsHourWeekdays,usBookingFitsChangedHours,
 } from "../services/usMasterWorkingHours.service.js";
+import {
+  getUsLocalDate,resolveUsLocalToUtc,
+} from "../services/usTime.service.js";
 
 const SAMPLE=[
   {weekday:1,start_time:"09:00",end_time:"17:00",
@@ -26,11 +30,28 @@ const location={
   is_primary:true,
 };
 
+function futureUsBooking(weekday=1,at="10:00",durationMinutes=60,
+  timezone=location.timezone_name){
+  const baseline=getUsLocalDate(new Date(Date.now()+14*86400000),timezone);
+  let date=baseline;
+  for(let i=0;i<7 && new Date(date+"T00:00:00Z").getUTCDay()!==weekday;i++){
+    const d=new Date(date+"T00:00:00Z");
+    d.setUTCDate(d.getUTCDate()+1);
+    date=d.toISOString().slice(0,10);
+  }
+  const start_at=resolveUsLocalToUtc(date,at,timezone);
+  const end_at=new Date(new Date(start_at).getTime()+
+    durationMinutes*60000).toISOString();
+  return {id:200,location_id:78,status:"confirmed",start_at,end_at};
+}
+
+
 class MemoryPool {
   constructor(){
     this.rows=SAMPLE.map(row=>({...row}));
     this.auth=true;this.master={...owner};this.active=true;
-    this.hasUsRelation=true;this.upcoming=false;
+    this.hasUsRelation=true;
+    this.futureBookings=[];
     this.blocked=false;this.corruptReadback=false;
     this.calls=[];this.writes=0;this.rollbacks=0;
   }
@@ -85,9 +106,14 @@ class MemoryPool {
         ? [{...this.rows[0],weekday:3}]:this.rows;
       return {rows:structuredClone(data)};
     }
-    if(q.startsWith("SELECT b.id FROM public.bookings b") &&
+    if(q.startsWith("SELECT b.id,b.start_at,b.end_at,b.status") &&
        q.includes("us_booking_location_links")){
-      return {rows:this.upcoming?[{id:200}]:[]};
+      return {rows:this.futureBookings.filter(row=>row.location_id===params[1])
+        .map(({location_id,...row})=>({...row}))};
+    }
+    if(q.startsWith("SELECT pg_advisory_xact_lock(")){
+      assert.deepEqual(params,[973103,41]);
+      return {rows:[{}]};
     }
     if(q.startsWith("DELETE FROM public.us_location_master_working_hours")){
       this.rows=[];this.writes++;return {rows:[],rowCount:1};
@@ -210,16 +236,123 @@ test("no lost-update: second writer with stale revision cannot overwrite",async(
   assert.equal(db.writes,existing);
 });
 
-test("future confirmed US bookings cannot be invalidated by a changed week",async()=>{
+test("future booking on unchanged day never blocks a free weekday edit",async()=>{
   const db=new MemoryPool();
-  const get=await dispatch(db,{scope:true});
-  db.upcoming=true;
-  const edit=await dispatch(db,{scope:true,method:"PUT",
-    body:writeBody(get.body.revision)});
-  assert.equal(edit.status,409);
-  assert.equal(edit.body.error,"US_HOURS_FUTURE_BOOKINGS_CONFLICT");
+  db.futureBookings=[futureUsBooking(1,"10:00")]; // booked Monday
+  const before=await dispatch(db,{scope:true});
+  const friday=[
+    ...SAMPLE,{weekday:5,start_time:"11:00",end_time:"16:00",
+      break_start:null,break_end:null}
+  ];
+  const changed=await dispatch(db,{scope:true,method:"PUT",
+    body:writeBody(before.body.revision,friday)});
+  assert.equal(changed.status,200,JSON.stringify(changed));
+  assert.deepEqual((await dispatch(db,{scope:true})).body.hours,friday);
+  assert.equal(db.futureBookings.length,1);
+  const advisory=db.calls.findIndex(q=>q.includes("pg_advisory_xact_lock"));
+  const locationLock=db.calls.findIndex(q=>q.includes("FOR UPDATE OF l"));
+  assert.ok(advisory>=0&&locationLock>advisory,
+    "same US booking advisory lock must precede location lock");
+});
+
+test("keep a booking inside new hours: safe widening and external break",async()=>{
+  const db=new MemoryPool();
+  db.futureBookings=[futureUsBooking(1,"10:00")];
+  const before=await dispatch(db,{scope:true});
+  const result=await dispatch(db,{scope:true,method:"PUT",
+    body:writeBody(before.body.revision,EXTENDED)});
+  assert.equal(result.status,200,JSON.stringify(result));
+  assert.equal(result.body.hours[0].start_time,"08:00");
+  assert.equal(db.writes,3);
+});
+
+test("closing booked day is denied; other changed weekdays remain independent",async()=>{
+  const db=new MemoryPool();
+  db.futureBookings=[futureUsBooking(1,"10:00")];
+  const before=await dispatch(db,{scope:true});
+  const denied=await dispatch(db,{scope:true,method:"PUT",
+    body:writeBody(before.body.revision,[])});
+  assert.equal(denied.status,409);
+  assert.equal(denied.body.error,"US_HOURS_FUTURE_BOOKINGS_CONFLICT");
   assert.equal(db.writes,0);
   assert.deepEqual(db.rows,SAMPLE);
+});
+
+test("interval conflict: start, end and proposed break cannot overlap booking",async()=>{
+  for(const changes of [
+    [{...SAMPLE[0],start_time:"11:00"}],
+    [{...SAMPLE[0],end_time:"10:30"}],
+    [{...SAMPLE[0],break_start:"10:30",break_end:"11:30"}],
+  ]){
+    const db=new MemoryPool();
+    db.futureBookings=[futureUsBooking(1,"10:00")];
+    const before=await dispatch(db,{scope:true});
+    const outcome=await dispatch(db,{scope:true,method:"PUT",
+      body:writeBody(before.body.revision,changes)});
+    assert.equal(outcome.status,409,JSON.stringify(changes));
+    assert.equal(outcome.body.error,"US_HOURS_FUTURE_BOOKINGS_CONFLICT");
+    assert.equal(db.writes,0);
+  }
+});
+
+test("other physical location booking does not block current US branch",async()=>{
+  const db=new MemoryPool();
+  db.futureBookings=[{...futureUsBooking(1,"10:00"),location_id:999}];
+  const before=await dispatch(db,{scope:true});
+  const closed=await dispatch(db,{scope:true,method:"PUT",
+    body:writeBody(before.body.revision,[])});
+  assert.equal(closed.status,200,JSON.stringify(closed));
+  assert.deepEqual(db.rows,[]);
+});
+
+test("pure helper compares only modified weekdays and handles minute edges",()=>{
+  assert.deepEqual(
+    [...changedUsHourWeekdays(SAMPLE,[...SAMPLE,EXTENDED[1]])],[5]);
+  const booked=futureUsBooking(1,"10:00");
+  assert.equal(usBookingFitsChangedHours(booked,{
+    timezone:location.timezone_name,
+    changedWeekdays:new Set([5]),hours:[...SAMPLE,EXTENDED[1]],
+  }),true);
+  assert.equal(usBookingFitsChangedHours(booked,{
+    timezone:location.timezone_name,
+    changedWeekdays:new Set([1]),hours:SAMPLE,
+  }),true);
+  const edge=futureUsBooking(1,"12:00");
+  assert.equal(usBookingFitsChangedHours(edge,{
+    timezone:location.timezone_name,changedWeekdays:new Set([1]),hours:SAMPLE,
+  }),false,"booking inside protected break");
+  const beforeBreak=futureUsBooking(1,"11:00");
+  assert.equal(usBookingFitsChangedHours(beforeBreak,{
+    timezone:location.timezone_name,changedWeekdays:new Set([1]),hours:SAMPLE,
+  }),true,"ending exactly at break is safe");
+});
+
+test("DST ambiguity and local midnight fail closed on affected weekday",()=>{
+  const zone="America/New_York";
+  const sunday=new Set([0]);
+  const sundayHours=[{weekday:0,start_time:"00:00",end_time:"23:00",
+    break_start:null,break_end:null}];
+  const fold={
+    start_at:"2026-11-01T05:30:00.000Z",
+    end_at:"2026-11-01T06:00:00.000Z"
+  };
+  assert.equal(usBookingFitsChangedHours(fold,{
+    timezone:zone,changedWeekdays:sunday,hours:sundayHours,
+  }),false,"DST fold has ambiguous wall time");
+  const gap={
+    start_at:"2027-03-14T06:30:00.000Z",
+    end_at:"2027-03-14T07:30:00.000Z",
+  };
+  assert.equal(usBookingFitsChangedHours(gap,{
+    timezone:zone,changedWeekdays:sunday,hours:sundayHours,
+  }),false,"DST gap offset change needs explicit review");
+  const crossing={
+    start_at:"2027-01-04T04:30:00.000Z",
+    end_at:"2027-01-04T05:30:00.000Z",
+  };
+  assert.equal(usBookingFitsChangedHours(crossing,{
+    timezone:zone,changedWeekdays:sunday,hours:sundayHours,
+  }),false,"local Sunday→Monday midnight");
 });
 
 test("direct master authorization and exact salon/location required",async()=>{
