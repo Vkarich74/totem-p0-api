@@ -1757,7 +1757,7 @@ const { slug } = req.params;
 try{
 
 const master = await pool.query(
-`SELECT id,user_id FROM masters WHERE slug=$1`,
+`SELECT id FROM masters WHERE slug=$1`,
 [slug]
 );
 
@@ -1775,8 +1775,13 @@ return res.status(403).json({ok:false,error:"FORBIDDEN"});
 // location metadata. The existing KG/KZ feed is left untouched.
 const usLocationScope = req.query?.calendar_scope === "us_location";
 if(usLocationScope){
+  // Preserve the original KG/KZ master lookup byte-for-byte.
+  const assigned = await pool.query(
+    "SELECT user_id FROM masters WHERE id=$1 LIMIT 1",[masterId]
+  );
   if(req.auth?.role !== "master" || req.auth?.source !== "session" ||
-     String(req.auth?.user_id) !== String(master.rows[0].user_id)){
+     assigned.rows.length !== 1 ||
+     String(req.auth?.user_id) !== String(assigned.rows[0].user_id)){
     return res.status(403).json({ok:false,error:"MASTER_US_SESSION_REQUIRED"});
   }
   // One master may serve several US locations and IANA zones.
