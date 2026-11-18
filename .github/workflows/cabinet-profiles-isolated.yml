@@ -42,6 +42,14 @@ jobs:
         run: |
           set -euo pipefail
           node --test src/tests/ownerCabinetProfiles.test.mjs
+      - name: Guarantee one canonical owner profile router, no sidecars
+        run: |
+          set -euo pipefail
+          test ! -e src/routes/internalOwnerCabinetProfiles.js
+          ! grep -q 'cabinet-profile/:ownerType' src/routes/internal.js
+          grep -Fq 'r.patch("/salons/:slug"' src/routes/internal/salons.js
+          grep -Fq 'r.patch("/masters/:slug"' src/routes/internal/masters.js
+          ! grep -E 'export async function (readOwnerCabinetProfile|saveOwnerCabinetProfile)' src/services/ownerCabinetProfile.service.js
       - name: Confirm no database connection or deployment
         run: |
           test -z "${DATABASE_URL:-}"
