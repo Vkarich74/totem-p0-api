@@ -1847,7 +1847,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
               payload: buildMasterProvisionPayload(request),
             });
             bindResult = await bindMasterToSalonCanonical({
-              pool, dbClient: usDb,
+              pool, dbClient: usDb, verifiedUsAdminProvision: true,
               payload: {
                 salon_slug: request.salon_slug,
                 master_slug: provisionResult?.canonical_slug || request.slug_final,
