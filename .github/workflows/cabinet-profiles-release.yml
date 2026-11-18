@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - release/cabinet-profiles-20261119
+      - release/cabinet-profiles-prod-aligned-20261119
     paths:
       - src/services/ownerCabinetProfile.service.js
       - src/routes/internal/salons.js
