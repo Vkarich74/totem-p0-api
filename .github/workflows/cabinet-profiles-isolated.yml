@@ -5,8 +5,8 @@ on:
       - work/cabinet-profiles-20261118
     paths:
       - src/services/ownerCabinetProfile.service.js
-      - src/routes/internalOwnerCabinetProfiles.js
-      - src/routes/internal.js
+      - src/routes/internal/salons.js
+      - src/routes/internal/masters.js
       - src/tests/ownerCabinetProfiles.test.mjs
       - .github/workflows/cabinet-profiles-isolated.yml
   workflow_dispatch:
@@ -35,10 +35,10 @@ jobs:
         run: |
           set -euo pipefail
           node --check src/services/ownerCabinetProfile.service.js
-          node --check src/routes/internalOwnerCabinetProfiles.js
-          node --check src/routes/internal.js
+          node --check src/routes/internal/salons.js
+          node --check src/routes/internal/masters.js
           node --check src/tests/ownerCabinetProfiles.test.mjs
-      - name: Check real profile guards with in-memory existing-owner fixtures
+      - name: Verify canonical GET and PATCH using in-memory existing-owner fixtures
         run: |
           set -euo pipefail
           node --test src/tests/ownerCabinetProfiles.test.mjs
