@@ -5,12 +5,17 @@ on:
       - work/us-master-hours-20261118
       - work/us-master-market-scope-20261118
       - work/us-hours-services-slots-20261118
+      - work/us-public-service-price-20261119
     paths:
       - src/routes/internal/masters.js
       - src/services/usMasterWorkingHours.service.js
       - src/tests/usMasterWorkingHours.test.mjs
       - src/tests/usMasterScheduleTimezone.test.mjs
       - src/routes/publicAvailability.js
+      - src/routes/public.js
+      - src/services/usServicePrice.service.js
+      - src/tests/usPublicServicePriceCatalog.test.mjs
+      - src/routes/publicCreateBooking.js
       - src/services/usSlots.service.js
       - src/tests/usHoursServicesSlotsAvailability.test.mjs
       - src/tests/us03LocationCalendarTest.mjs
@@ -49,6 +54,9 @@ jobs:
           TZ=Pacific/Honolulu node --test src/tests/usMasterWorkingHours.test.mjs
           node --test src/tests/usMasterScheduleTimezone.test.mjs
           node --test src/tests/usHoursServicesSlotsAvailability.test.mjs
+          node --test src/tests/usPublicServicePriceCatalog.test.mjs
+          node --check src/routes/public.js
+          node --check src/routes/publicCreateBooking.js
           TZ=Asia/Bishkek node src/tests/us03LocationCalendarTest.mjs
           TZ=America/New_York node src/tests/us03LocationCalendarTest.mjs
           TZ=Pacific/Honolulu node src/tests/us03LocationCalendarTest.mjs
@@ -70,4 +78,8 @@ jobs:
           grep -Fq 'slots:buildUsAvailableSlots(calendar,{' src/routes/publicAvailability.js
           grep -Fq 'buildUsAvailableSlots(calendar, {' src/routes/publicCreateBooking.js
           grep -Fq 'getUsLocalInstantCandidates(' src/services/usSlots.service.js
-          echo 'US_ONLY; CANONICAL_US_PRICE_AND_SLOT_ENGINE; KG_KZ_UNCHANGED; NO_DEPLOY'
+          grep -Fq 'resolveUsPublicServicePriceCatalog(pool,{' src/routes/public.js
+          grep -Fq 'verifyUsExpectedBookingServicePrice(req.body,usServicePrice)' src/routes/publicCreateBooking.js
+          grep -Fq 'US_SERVICE_PRICE_CHANGED' src/services/usServicePrice.service.js
+          grep -Fq 'service_price:{' src/routes/publicAvailability.js
+          echo 'US_ONLY; SAME_US_CENTS_SOURCE_PUBLIC_AND_BOOKING; KG_KZ_UNCHANGED; NO_DEPLOY'
