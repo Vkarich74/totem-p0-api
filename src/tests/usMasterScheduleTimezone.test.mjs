@@ -33,9 +33,11 @@ class BookingMockDB {
   async query(raw,values=[]){
     const sql=String(raw).replace(/\s+/g," ").trim();
     this.calls.push({sql,values});
-    if(sql.includes("SELECT id,user_id FROM masters WHERE slug=$1")){
-      return {rows: values[0]==="existing-master"
-        ?[{id:41,user_id:17}]:[]};
+    if(sql.includes("SELECT id FROM masters WHERE slug=$1")){
+      return {rows: values[0]==="existing-master" ? [{id:41}] : []};
+    }
+    if(sql.includes("SELECT user_id FROM masters WHERE id=$1 LIMIT 1")){
+      return {rows: Number(values[0])===41 ? [{user_id:17}] : []};
     }
     if(sql.includes("SELECT DISTINCT mk.code") &&
        sql.includes("FROM public.master_salon ms")){
