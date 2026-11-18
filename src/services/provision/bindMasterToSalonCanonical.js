@@ -85,10 +85,13 @@ function validateBindInput(payload = {}){
 
 async function findSalonBySlug(db, slug){
   const result = await db.query(
-    `SELECT id, slug, name, status
-     FROM salons
-     WHERE slug = $1
-     LIMIT 1`,
+    `SELECT s.id, s.slug, s.name, s.status, s.enabled,
+            m.code AS market_code, m.active AS market_active
+       FROM salons s
+       LEFT JOIN public.tenant_market_settings tms ON tms.salon_id=s.id
+       LEFT JOIN public.markets m ON m.id=tms.market_id
+      WHERE s.slug = $1
+      LIMIT 1`,
     [slug]
   );
 
@@ -336,7 +339,7 @@ function buildBindResult({ salon, master, relationState, contractState }){
   });
 }
 
-export async function bindMasterToSalonCanonical({ pool, payload, dbClient = null }){
+export async function bindMasterToSalonCanonical({ pool, payload, dbClient = null, verifiedUsAdminProvision = false }){
   const input = validateBindInput(payload || {});
   const ownsTransaction = !dbClient;
   const db = dbClient || await pool.connect();
@@ -358,19 +361,17 @@ export async function bindMasterToSalonCanonical({ pool, payload, dbClient = nul
       throw err;
     }
 
-    if (input.required_market_code === "US") {
-      const marketResult = await db.query(
-        `SELECT m.code, m.active, s.enabled, s.status
-           FROM public.salons s
-           JOIN public.tenant_market_settings tms ON tms.salon_id=s.id
-           JOIN public.markets m ON m.id=tms.market_id
-          WHERE s.id=$1
-          LIMIT 1 FOR SHARE OF s`,
-        [salon.id]
-      );
-      const matching = marketResult.rows[0];
-      if (!matching || matching.code !== "US" || matching.active !== true ||
-          matching.enabled !== true || matching.status !== "active") {
+    if (salon.market_code === "US" || input.required_market_code === "US") {
+      // The HTTP payload cannot elevate itself to a verified US Admin scope.
+      // Other legacy callers keep their old KG/KZ behavior.
+      if (verifiedUsAdminProvision !== true) {
+        const error = new Error("US_ADMIN_PROVISION_REQUIRED");
+        error.code = "US_ADMIN_PROVISION_REQUIRED";
+        error.status = 403;
+        throw error;
+      }
+      if (salon.market_code !== "US" || salon.market_active !== true ||
+          salon.enabled !== true || salon.status !== "active") {
         const error = new Error("US_ACTIVE_SALON_REQUIRED");
         error.code = "US_ACTIVE_SALON_REQUIRED";
         error.status = 409;
