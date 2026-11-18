@@ -75,6 +75,8 @@ function validateBindInput(payload = {}){
     salon_slug: salonSlug,
     master_slug: masterSlug,
     bind_mode: bindMode,
+    // Used only by callers explicitly provisioning a US salon-owned master.
+    required_market_code: normalizeText(payload.required_market_code).toUpperCase() || null,
     create_contract: createContract,
     contract_terms: createContract ? validateTerms(payload.contract_terms || {}) : null,
     effective_from: effectiveFrom
@@ -334,12 +336,13 @@ function buildBindResult({ salon, master, relationState, contractState }){
   });
 }
 
-export async function bindMasterToSalonCanonical({ pool, payload }){
+export async function bindMasterToSalonCanonical({ pool, payload, dbClient = null }){
   const input = validateBindInput(payload || {});
-  const db = await pool.connect();
+  const ownsTransaction = !dbClient;
+  const db = dbClient || await pool.connect();
 
   try{
-    await db.query("BEGIN");
+    if (ownsTransaction) await db.query("BEGIN");
 
     const salon = await findSalonBySlug(db, input.salon_slug);
     if(!salon){
@@ -355,6 +358,26 @@ export async function bindMasterToSalonCanonical({ pool, payload }){
       throw err;
     }
 
+    if (input.required_market_code === "US") {
+      const marketResult = await db.query(
+        `SELECT m.code, m.active, s.enabled, s.status
+           FROM public.salons s
+           JOIN public.tenant_market_settings tms ON tms.salon_id=s.id
+           JOIN public.markets m ON m.id=tms.market_id
+          WHERE s.id=$1
+          LIMIT 1 FOR SHARE OF s`,
+        [salon.id]
+      );
+      const matching = marketResult.rows[0];
+      if (!matching || matching.code !== "US" || matching.active !== true ||
+          matching.enabled !== true || matching.status !== "active") {
+        const error = new Error("US_ACTIVE_SALON_REQUIRED");
+        error.code = "US_ACTIVE_SALON_REQUIRED";
+        error.status = 409;
+        throw error;
+      }
+    }
+
     const relationState = await upsertMasterSalonRelation(db, salon.id, master.id, input.bind_mode);
     const contractState = await ensureContractState(db, {
       create_contract: input.create_contract,
@@ -364,11 +387,11 @@ export async function bindMasterToSalonCanonical({ pool, payload }){
       effective_from: input.effective_from
     });
 
-    await db.query("COMMIT");
+    if (ownsTransaction) await db.query("COMMIT");
 
     return buildBindResult({ salon, master, relationState, contractState });
   }catch(err){
-    try{ await db.query("ROLLBACK"); }catch(e){}
+    if (ownsTransaction) { try{ await db.query("ROLLBACK"); }catch(e){} }
 
     const resolved = resolveProvisionError(err);
     const wrapped = new Error(resolved.error);
@@ -377,7 +400,7 @@ export async function bindMasterToSalonCanonical({ pool, payload }){
     wrapped.details = err?.details || null;
     throw wrapped;
   }finally{
-    db.release();
+    if (ownsTransaction) db.release();
   }
 }
 
