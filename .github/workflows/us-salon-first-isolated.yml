@@ -1,0 +1,50 @@
+name: US salon-first isolated gate (no deployment)
+
+on:
+  push:
+    branches:
+      - work/us-salon-first-20261118
+    paths:
+      - src/routes/internal/adminOpenOwner.js
+      - src/services/contactPhone.js
+      - src/services/provision/**
+      - src/tests/usSalonFirstPrecheck.test.mjs
+      - .github/workflows/us-salon-first-isolated.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-contract-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      DATABASE_URL: ""
+      ODOO_BRIDGE_TOKEN: ""
+      GMAIL_REFRESH_TOKEN: ""
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install locked dependencies without lifecycle side effects
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Node syntax check, never start production API
+        run: |
+          set -euo pipefail
+          node --check src/routes/internal/adminOpenOwner.js
+          node --check src/services/contactPhone.js
+          node --check src/services/provision/usOpenOwnerGuards.js
+          node --check src/services/provision/createSalonCanonical.js
+          node --check src/services/provision/createMasterCanonical.js
+          node --check src/services/provision/bindMasterToSalonCanonical.js
+      - name: Pure offline US state, ZIP, phone tests
+        run: node src/tests/usCountryPackV1Test.mjs
+      - name: Offline precheck, API-fixture and KG compatibility
+        run: |
+          node --test             src/tests/usSalonFirstPrecheck.test.mjs             src/tests/contactPhoneInternational.test.mjs             src/tests/contactPhoneOpenOwnerRoutes.test.mjs
+      - name: Assert no deployment, no production connection
+        run: echo 'ISOLATED_BACKEND_BUILD_TEST_PASS; NO_DEPLOY; NO_DB_WRITES'
