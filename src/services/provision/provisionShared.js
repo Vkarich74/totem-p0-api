@@ -430,6 +430,10 @@ export function resolveProvisionError(err){
     };
   }
 
+  if(code === "US_ADMIN_PROVISION_REQUIRED"){
+    return { status: 403, error: code };
+  }
+
   const notFoundCodes = new Set([
     "SALON_NOT_FOUND",
     "MASTER_NOT_FOUND",
