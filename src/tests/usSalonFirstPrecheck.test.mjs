@@ -29,6 +29,7 @@ class USFixturePool {
       return { rows: sql.includes("select id, slug, name") && values[0] === "us-studio"
         ? [{ id: 701, slug: "us-studio", name: "US Studio" }] : [] };
     }
+    if (sql.includes("from public.masters master")) return { rows: [{ salon_id: 701 }] };
     if (sql.includes("from public.masters")) return { rows: [] };
     if (sql.includes("from public.slug_reservations")) return { rows: [] };
     if (sql.includes("from public.auth_users")) return { rows: [] };
@@ -126,7 +127,8 @@ test("US master activation stays blocked without verified primary salon location
     owner_type:"master",work_mode:"attached_to_salon",salon_slug:"us-studio",
     precheck_result_json:{normalized:{market_code:"US"}}
   };
-  // Fake owner relation query must be handled separately; this proves no
-  // activation is reported simply because the request has US market text.
-  await assert.rejects(assertUsActivationReady(db,request,802));
+  await assert.rejects(
+    assertUsActivationReady(db,request,802),
+    e => e.code === "US_LOCATION_NOT_READY"
+  );
 });
