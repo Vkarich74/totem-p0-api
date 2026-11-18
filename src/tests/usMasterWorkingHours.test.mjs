@@ -108,7 +108,12 @@ class MemoryPool {
     }
     if(q.startsWith("SELECT b.id,b.start_at,b.end_at,b.status") &&
        q.includes("us_booking_location_links")){
-      return {rows:this.futureBookings.filter(row=>row.location_id===params[1])
+      const terminal=new Set(["cancelled","canceled","rejected",
+        "failed","refunded","completed"]);
+      return {rows:this.futureBookings
+        .filter(row=>row.location_id===params[1])
+        .filter(row=>!terminal.has(String(row.status||"").toLowerCase()))
+        .filter(row=>new Date(row.end_at||row.start_at).getTime()>Date.now())
         .map(({location_id,...row})=>({...row}))};
     }
     if(q.startsWith("SELECT pg_advisory_xact_lock(")){
@@ -264,6 +269,31 @@ test("keep a booking inside new hours: safe widening and external break",async()
   assert.equal(result.status,200,JSON.stringify(result));
   assert.equal(result.body.hours[0].start_time,"08:00");
   assert.equal(db.writes,3);
+});
+
+test("shortening only unused portion of booked Monday remains allowed",async()=>{
+  const db=new MemoryPool();
+  db.futureBookings=[futureUsBooking(1,"10:00")]; // 10:00–11:00
+  const before=await dispatch(db,{scope:true});
+  const shorter=[{weekday:1,start_time:"09:30",end_time:"12:00",
+    break_start:"11:00",break_end:"11:30"}];
+  const outcome=await dispatch(db,{scope:true,method:"PUT",
+    body:writeBody(before.body.revision,shorter)});
+  assert.equal(outcome.status,200,JSON.stringify(outcome));
+  assert.deepEqual((await dispatch(db,{scope:true})).body.hours,shorter);
+});
+
+test("cancelled and completed future reservations are not active conflicts",async()=>{
+  const db=new MemoryPool();
+  db.futureBookings=[
+    {...futureUsBooking(1,"10:00"),status:"cancelled"},
+    {...futureUsBooking(1,"12:00"),id:201,status:"completed"},
+  ];
+  const before=await dispatch(db,{scope:true});
+  const change=await dispatch(db,{scope:true,method:"PUT",
+    body:writeBody(before.body.revision,[])});
+  assert.equal(change.status,200,JSON.stringify(change));
+  assert.equal(db.writes,1);
 });
 
 test("closing booked day is denied; other changed weekdays remain independent",async()=>{
