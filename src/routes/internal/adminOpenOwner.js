@@ -436,7 +436,7 @@ export async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
       phone_normalized: phoneNormalized || null,
       city: city || null,
       state_code: marketCode === "US" && ownerType === "salon" ? normalizeText(body.state_code).toUpperCase() : null,
-      postal_code: marketCode === "US" && ownerType === "salon" ? normalizeText(body.postal_code) : null,
+      postal_code: marketCode === "US" && ownerType === "salon" ? (US_COUNTRY_PACK.normalizeZipCode(body.postal_code).postal_code || null) : null,
       address: normalizeText(body.address),
       description: normalizeText(body.description),
       specialization: normalizeText(body.specialization),
