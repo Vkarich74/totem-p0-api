@@ -113,7 +113,7 @@ export async function readUsServiceLinkOptions(pool,options={}) {
         ].join(" "),[scope.owner_id]);
       const catalog=await db.query(
         [
-          "SELECT DISTINCT sms.master_id,sms.service_pk,svc.name,sms.duration_min",
+          "SELECT DISTINCT sms.master_id,sms.service_pk,svc.name,svc.duration_min",
           "FROM public.salon_master_services sms",
           "JOIN public.services svc ON svc.id=sms.service_pk",
           "JOIN public.master_salon ms ON ms.master_id=sms.master_id",
@@ -126,7 +126,7 @@ export async function readUsServiceLinkOptions(pool,options={}) {
           "WHERE sms.active IS TRUE AND sms.currency_code='USD'",
           "AND market.id=$2 AND market.code='US' AND market.country_code='US'",
           "AND market.default_currency='USD' AND market.active IS TRUE",
-          "ORDER BY sms.master_id,sms.service_pk,svc.name,sms.duration_min LIMIT 300",
+          "ORDER BY sms.master_id,sms.service_pk,svc.name,svc.duration_min LIMIT 300",
         ].join(" "),[scope.owner_id,scope.market_id]);
       return {status:200,body:{
         ok:true,market_code:"US",currency_code:"USD",
@@ -154,7 +154,7 @@ export async function readUsServiceLinkOptions(pool,options={}) {
       ].join(" "),[scope.owner_id,scope.market_id]);
     const catalog=await db.query(
       [
-        "SELECT DISTINCT sms.master_id,sms.service_pk,svc.name,sms.duration_min",
+        "SELECT DISTINCT sms.master_id,sms.service_pk,svc.name,svc.duration_min",
         "FROM public.salon_master_services sms",
         "JOIN public.services svc ON svc.id=sms.service_pk",
         "JOIN public.master_salon ms ON ms.salon_id=sms.salon_id",
@@ -164,7 +164,7 @@ export async function readUsServiceLinkOptions(pool,options={}) {
         "WHERE sms.master_id=$1 AND sms.active IS TRUE AND sms.currency_code='USD'",
         "AND market.id=$2 AND market.code='US' AND market.country_code='US'",
         "AND market.default_currency='USD' AND market.active IS TRUE",
-        "ORDER BY sms.master_id,sms.service_pk,svc.name,sms.duration_min LIMIT 300",
+        "ORDER BY sms.master_id,sms.service_pk,svc.name,svc.duration_min LIMIT 300",
       ].join(" "),[scope.owner_id,scope.market_id]);
     return {status:200,body:{
       ok:true,market_code:"US",currency_code:"USD",
