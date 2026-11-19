@@ -38,6 +38,7 @@ export async function listAdminMarkets(db) {
       country_code: row.country_code,
       database_active: databaseActive,
       admin_operation_enabled: operationEnabled,
+      owner_activation_enabled: databaseActive && code === "KG",
       admin_status: code === "KZ" ? "inactive_policy" :
         operationEnabled ? "active" : "inactive",
       currency_code: row.default_currency,
@@ -46,6 +47,22 @@ export async function listAdminMarkets(db) {
       configuration_conflict: code === "KZ" && databaseActive,
     };
   });
+}
+
+// Until the separate US manual activation contract is implemented, Admin must
+// not create/approve/provision/activate US owners via the legacy KG lifecycle.
+// KZ is policy-inactive even if a DB configuration is accidentally enabled.
+export function assertAdminOpeningMarketPolicy(source) {
+  const raw = typeof source === "string" ? source :
+    source?.precheck_result_json?.normalized?.market_code ??
+    source?.precheck_result_json?.market_code ??
+    source?.market_code ??
+    "";
+  const code = String(raw || "").trim().toUpperCase();
+  if (code === "KZ") throw fault("ADMIN_MARKET_INACTIVE");
+  if (code === "US") throw fault("ADMIN_US_OPEN_OWNER_PENDING");
+  if (code && code !== "KG") throw fault("ADMIN_MARKET_CODE_UNSUPPORTED", 400);
+  return code || null;
 }
 
 export async function requireActiveAdminMarket(db, rawCode) {
@@ -187,7 +204,7 @@ export async function readScopedAdminList(db, { kind, marketCode, limit, offset 
 // Invoke inside the same SQL transaction, AFTER locking the owner row and
 // BEFORE UPDATE. Existing unbound legacy-KG operations stay unchanged when
 // the caller supplies no market_code; an explicit market can NEVER be guessed.
-export async function assertAdminOwnerActionMarket(db, { ownerType, ownerId, requestedMarketCode }) {
+export async function assertAdminOwnerActionMarket(db, { ownerType, ownerId, requestedMarketCode, action }) {
   const hasRequest = requestedMarketCode !== undefined && requestedMarketCode !== null;
   const requested = hasRequest ? parseAdminMarketCode(requestedMarketCode) : null;
   if (!Number.isSafeInteger(ownerId) || ownerId <= 0 ||
@@ -228,6 +245,7 @@ export async function assertAdminOwnerActionMarket(db, { ownerType, ownerId, req
     throw fault("ADMIN_OWNER_MARKET_MISMATCH");
   }
   if (boundCode === "US") {
+    if (action === "unsuspend") throw fault("ADMIN_US_ACTIVATION_GATE_PENDING");
     if (requested !== "US") throw fault("ADMIN_US_EXPLICIT_MARKET_REQUIRED");
     const activeRows = rows.filter(row => ownerType === "salon" ||
       (row.relation_status === "active" && row.salon_enabled === true && row.salon_status === "active"));
