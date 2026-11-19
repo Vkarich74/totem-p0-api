@@ -23,6 +23,7 @@ import { releaseCalendarSlotForBooking } from "../../services/calendarSlots.serv
 import { buildSalonCalendarResponse } from "../../services/salonCalendar.service.js";
 import { buildUsOwnerLocationsRouter } from "./usOwnerLocations.js";
 import { requireCurrencyCode, resolveBusinessMarketContext, resolveOwnerMarketContext } from "../../market-context/BusinessContext.js";
+import { rejectLegacyUsServiceMutation } from "../../services/usServiceLink.service.js";
 import {
   canonicalOwnerProfile, ownerProfileRevision,
   validateOwnerProfilePatch, canonicalSalonContact, ownerProfilePayload
@@ -1667,6 +1668,9 @@ if(!hasSalonOwnership(req, salonId)){
 await db.query("ROLLBACK");
 return res.status(403).json({ok:false,error:"FORBIDDEN"});
 }
+
+const blockedUs = await rejectLegacyUsServiceMutation(db,salonId);
+if(blockedUs){await db.query("ROLLBACK");return res.status(blockedUs.status).json({ok:false,error:blockedUs.error});}
 
 const access = await ensureSalonWriteAllowed(db, salonId);
 
