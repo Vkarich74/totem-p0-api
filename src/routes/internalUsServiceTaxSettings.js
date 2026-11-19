@@ -13,13 +13,13 @@ export function buildUsServiceTaxSettingsRouter(pool) {
     throw new Error("US_TAX_SETTINGS_DB_REQUIRED");
   }
   const router = express.Router();
-  router.use(requireAuth);
-  router.use((_req, res, next) => {
+  const routeGuards = [requireAuth];
+  routeGuards.push((_req, res, next) => {
     res.set("Cache-Control", "no-store");
     next();
   });
 
-  router.get("/us-service-tax/:ownerType/:ownerSlug", async (req, res) => {
+  router.get("/us-service-tax/:ownerType/:ownerSlug", ...routeGuards, async(req, res) => {
     try {
       const answer = await readUsOwnerServiceTax(pool, {
         ownerType: req.params.ownerType,
@@ -34,7 +34,7 @@ export function buildUsServiceTaxSettingsRouter(pool) {
     }
   });
 
-  router.put("/us-service-tax/:ownerType/:ownerSlug", async (req, res) => {
+  router.put("/us-service-tax/:ownerType/:ownerSlug", ...routeGuards, async(req, res) => {
     try {
       const answer = await saveUsOwnerServiceTax(pool, {
         ownerType: req.params.ownerType,

@@ -1,0 +1,64 @@
+name: HOTFIX root US routers — preserve canonical owner/admin auth
+on:
+  push:
+    branches:
+      - hotfix/us-router-auth-isolation-20261119
+    paths:
+      - src/routes/internalUsPayC11Owner.js
+      - src/routes/internalUsServiceTaxSettings.js
+      - src/routes/internalUsServicePrices.js
+      - src/routes/internalUsServiceTaxQuote.js
+      - src/routes/internalUsServiceTaxReport.js
+      - src/routes/internalUsPayC11LiveSeller.js
+      - src/routes/internalUsPayC11LiveRefund.js
+      - src/tests/usRouterAuthIsolation.test.mjs
+      - .github/workflows/us-router-auth-isolation.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  root-router-auth-isolation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      NODE_ENV: test
+      DATABASE_URL: ""
+      REDIS_URL: ""
+      RAILWAY_TOKEN: ""
+      ODOO_URL: ""
+      US_PAY_C11_LIVE_CONNECT_ENABLED: "false"
+      US_PAY_C11_LIVE_REFUNDS_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Locked install without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Syntax check root US routers and offline test
+        run: |
+          set -euo pipefail
+          node --check src/routes/internalUsPayC11Owner.js
+          node --check src/routes/internalUsServiceTaxSettings.js
+          node --check src/routes/internalUsServicePrices.js
+          node --check src/routes/internalUsServiceTaxQuote.js
+          node --check src/routes/internalUsServiceTaxReport.js
+          node --check src/routes/internalUsPayC11LiveSeller.js
+          node --check src/routes/internalUsPayC11LiveRefund.js
+          node --check src/tests/usRouterAuthIsolation.test.mjs
+      - name: Test real Express route matching without any data
+        run: |
+          set -euo pipefail
+          test -z "${DATABASE_URL:-}"
+          test -z "${REDIS_URL:-}"
+          node --test src/tests/usRouterAuthIsolation.test.mjs
+      - name: Ensure no new root cabinet transport and Admin HOTFIX retained
+        run: |
+          set -euo pipefail
+          grep -Fq 'r.use("/admin", adminContainer)' src/routes/internal.js
+          grep -Fq 'adminProtectedContainer.use(AdminRuntimeGuard)' src/routes/internal.js
+          grep -Fq 'r.post("/auth/login", async' src/routes/internal.js
+          test ! -e src/routes/internalOwnerCabinetProfiles.js
+          test ! -e src/routes/internalUsMasterHours.js
+          echo 'ONLY_EXISTING_US_ROUTERS; ADMIN_OWNER_AUTH_REACHABLE; NO_DB_NO_USERS_NO_DEPLOY'
