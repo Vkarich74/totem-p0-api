@@ -6,6 +6,7 @@ on:
       - "release/admin-market-contract-b-*"
     paths:
       - "src/routes/internal/admin.js"
+      - "src/routes/internal/adminOpenOwner.js"
       - "src/routes/internal/adminMarketsContract.js"
       - "src/tests/adminMarketsContract.test.mjs"
       - "src/tests/adminMarketSqlSmoke.test.mjs"
@@ -13,6 +14,7 @@ on:
   pull_request:
     paths:
       - "src/routes/internal/admin.js"
+      - "src/routes/internal/adminOpenOwner.js"
       - "src/routes/internal/adminMarketsContract.js"
       - "src/tests/adminMarketsContract.test.mjs"
       - "src/tests/adminMarketSqlSmoke.test.mjs"
@@ -50,6 +52,7 @@ jobs:
       - name: Syntax of complete Backend files
         run: |
           node --check src/routes/internal/admin.js
+          node --check src/routes/internal/adminOpenOwner.js
           node --check src/routes/internal/adminMarketsContract.js
           node --check src/tests/adminMarketsContract.test.mjs
           node --check src/tests/adminMarketSqlSmoke.test.mjs
