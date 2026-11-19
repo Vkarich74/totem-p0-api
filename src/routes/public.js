@@ -9,7 +9,7 @@ import { publicCreateBooking } from "./publicCreateBooking.js";
 import { publicMasterAvailability } from "./publicAvailability.js";
 import { resolveUsPublicServicePriceCatalog } from "../services/usServicePrice.service.js";
 import { publicUsLocationCatalog } from "./publicUsLocationCatalog.js";
-import { publicLifecycle } from "./publicLifecycle.js";
+import { publicLifecycle, authorizePublicSalonBookingReader } from "./publicLifecycle.js";
 import { resolveAuth } from "../middleware/resolveAuth.js";
 import mobileRouter from "./publicMobile.js";
 import { buildPublicUsPayC11Router } from "./publicUsPayC11.js";
@@ -150,10 +150,9 @@ export function createPublicRouter(deps) {
     "/salons/:slug/bookings/:id/lifecycle",
     resolveTenant,
     buildPublicAccessGuard("booking_create"),
-    // US-only: verify the existing owner session for state-changing actions.
-    // KG/KZ keep their original middleware chain and request contract.
-    (req,res,next) => req.market_context?.market_code === "US"
-      ? resolveAuth(req,res,next) : next(),
+    // All markets: the existing valid owner session is now mandatory.
+    // No public client may mutate a booking status or pending payment.
+    resolveAuth,
     publicLifecycle
   );
 
@@ -347,9 +346,18 @@ export function createPublicRouter(deps) {
     "/salons/:slug/bookings",
     resolveTenant,
     buildPublicAccessGuard("booking_read"),
+    resolveAuth,
     async (req, res) => {
       try {
         const { salon_id } = req.tenant;
+        // This legacy GET includes client names and prices. Require the
+        // exact existing salon_admin relation; master uses his own cabinet.
+        const access=await authorizePublicSalonBookingReader(pool,req.auth,salon_id);
+        if(!access.ok){
+          res.set("Cache-Control","no-store");
+          return res.status(access.status).json({ok:false,error:access.error});
+        }
+        res.set("Cache-Control","private, no-store");
         const { status, master_id } = req.query;
 
         let conditions = ["b.salon_id = $1"];
