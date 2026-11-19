@@ -1270,14 +1270,190 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
   });
 
   r.post("/precheck", async (req,res)=>{
-    try {
-      const marketCode = normalizeText(req.body?.market_code).toUpperCase();
-      assertAdminOpeningMarketPolicy(marketCode);
-      return res.status(200).json(await buildOpenOwnerPrecheck(pool, req.body || {}));
-    } catch (error) {
-      if (error?.isAdminMarketError) return res.status(error.statusCode).json({ok:false,error:error.code});
-      console.error("ADMIN_OPEN_OWNER_PRECHECK_ERROR", error?.code || "UNKNOWN");
-      return res.status(500).json({ok:false,error:"ADMIN_OPEN_OWNER_PRECHECK_FAILED"});
+    try{
+      const body = req.body || {};
+      const checks = [];
+      const errors = [];
+
+      const ownerType = normalizeOwnerType(body.owner_type);
+      const name = normalizeText(body.name);
+      const slugSource = normalizeText(body.slug || body.slug_requested || name);
+      const slugFinal = normalizeSlug(slugSource);
+      const email = normalizeEmail(body.email);
+      const phoneRaw = normalizeText(body.phone || body.phone_raw || body.phone_normalized);
+      const marketCode = normalizeText(body.market_code).toUpperCase();
+      try {
+        assertAdminOpeningMarketPolicy(marketCode);
+      } catch (policyError) {
+        return res.status(policyError.statusCode).json({
+          ok: false, error: policyError.code,
+        });
+      }
+
+      // US uses one strictly validated CountryPack precheck; legacy KG follows unchanged below.
+      if (marketCode === "US") {
+        return res.status(200).json(await buildOpenOwnerPrecheck(pool, body));
+      }
+
+      const phoneResult = await normalizeContactPhoneForBusiness(pool, phoneRaw, {
+        marketCode,
+        required: true,
+      });
+      const phoneNormalized = phoneResult.ok ? phoneResult.phone : null;
+      const city = normalizeText(body.city);
+      const workMode = normalizeText(body.work_mode || (ownerType === "master" ? "independent" : ""));
+      const salonSlug = normalizeSlug(body.salon_slug);
+
+      addCheck(checks, "owner_type_valid", Boolean(ownerType), {
+        owner_type: ownerType || null,
+      });
+      if(!ownerType){
+        errors.push("OWNER_TYPE_INVALID");
+      }
+
+      addCheck(checks, "name_present", Boolean(name), {
+        name,
+      });
+      if(!name){
+        errors.push("NAME_REQUIRED");
+      }
+
+      addCheck(checks, "slug_present", Boolean(slugFinal), {
+        slug_requested: slugSource,
+        slug_final: slugFinal || null,
+      });
+      if(!slugFinal){
+        errors.push("SLUG_REQUIRED");
+      }
+
+      const slugLengthOk = slugFinal.length >= 3 && slugFinal.length <= 80;
+      addCheck(checks, "slug_length_valid", slugLengthOk, {
+        min: 3,
+        max: 80,
+        slug_length: slugFinal.length,
+      });
+      if(slugFinal && !slugLengthOk){
+        errors.push("SLUG_LENGTH_INVALID");
+      }
+
+      const slugReserved = RESERVED_SLUGS.has(slugFinal);
+      addCheck(checks, "slug_not_reserved", Boolean(slugFinal) && !slugReserved, {
+        slug_final: slugFinal || null,
+      });
+      if(slugFinal && slugReserved){
+        errors.push("SLUG_RESERVED");
+      }
+
+      if(slugFinal && slugLengthOk && !slugReserved){
+        const slugAvailability = await checkSlugAvailability(pool, slugFinal);
+        addCheck(checks, "slug_available", slugAvailability.available, {
+          slug_final: slugFinal,
+          conflicts: slugAvailability.conflicts,
+        });
+
+        if(!slugAvailability.available){
+          errors.push("SLUG_NOT_AVAILABLE");
+        }
+      }
+
+      const emailValid = isValidEmail(email);
+      addCheck(checks, "email_valid", emailValid, {
+        email: email || null,
+      });
+      if(!emailValid){
+        errors.push("EMAIL_INVALID");
+      }
+
+      if(emailValid){
+        const emailAvailability = await checkEmailAvailability(pool, email);
+        addCheck(checks, "email_available", emailAvailability.available, {
+          email,
+          conflicts: emailAvailability.conflicts,
+        });
+
+        if(!emailAvailability.available){
+          errors.push("EMAIL_ALREADY_EXISTS");
+        }
+      }
+
+      addCheck(checks, "phone_valid", phoneResult.ok && Boolean(phoneNormalized), {
+        phone_raw: phoneRaw || null,
+        phone_normalized: phoneNormalized || null,
+      });
+      if(!phoneResult.ok){
+        errors.push(phoneResult.error);
+      }
+
+      addCheck(checks, "city_present", Boolean(city), {
+        city,
+      });
+      if(!city){
+        errors.push("CITY_REQUIRED");
+      }
+
+      if(ownerType === "master"){
+        const workModeValid = ["independent", "attached_to_salon"].includes(workMode);
+        addCheck(checks, "work_mode_valid", workModeValid, {
+          work_mode: workMode || null,
+        });
+
+        if(!workModeValid){
+          errors.push("WORK_MODE_INVALID");
+        }
+
+        if(workMode === "attached_to_salon"){
+          addCheck(checks, "salon_slug_present", Boolean(salonSlug), {
+            salon_slug: salonSlug || null,
+          });
+
+          if(!salonSlug){
+            errors.push("SALON_SLUG_REQUIRED");
+          }else{
+            const salonCheck = await checkSalonSlug(pool, salonSlug);
+            addCheck(checks, "salon_slug_exists", salonCheck.exists, {
+              salon_slug: salonSlug,
+              salon: salonCheck.salon,
+            });
+
+            if(!salonCheck.exists){
+              errors.push("SALON_NOT_FOUND");
+            }
+          }
+        }
+      }
+
+      const valid = errors.length === 0;
+
+      return res.status(200).json({
+        ok: true,
+        valid,
+        error: valid ? null : "PRECHECK_FAILED",
+        errors,
+        normalized: {
+          owner_type: ownerType || null,
+          name,
+          slug_requested: slugSource,
+          slug_final: slugFinal || null,
+          email,
+          market_code: marketCode || null,
+          phone_raw: phoneRaw,
+          phone_normalized: phoneNormalized || null,
+          city,
+          address: normalizeText(body.address),
+          description: normalizeText(body.description),
+          specialization: normalizeText(body.specialization),
+          work_mode: ownerType === "master" ? workMode : null,
+          salon_slug: ownerType === "master" && workMode === "attached_to_salon" ? salonSlug : null,
+          admin_notes: normalizeText(body.admin_notes),
+        },
+        checks,
+      });
+    }catch(err){
+      console.error("ADMIN_OPEN_OWNER_PRECHECK_ERROR", err);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_OPEN_OWNER_PRECHECK_FAILED",
+      });
     }
   });
 
