@@ -7,6 +7,7 @@ import { createSalonCanonical } from "../../services/provision/createSalonCanoni
 import { createMasterCanonical } from "../../services/provision/createMasterCanonical.js";
 import { bindMasterToSalonCanonical } from "../../services/provision/bindMasterToSalonCanonical.js";
 import { normalizeContactPhoneForBusiness } from "../../services/contactPhone.js";
+import { assertAdminOpeningMarketPolicy } from "./adminMarketsContract.js";
 
 const GMAIL_CLIENT_ID = process.env.GMAIL_CLIENT_ID || "";
 const GMAIL_CLIENT_SECRET = process.env.GMAIL_CLIENT_SECRET || "";
@@ -256,6 +257,19 @@ export async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
   const email = normalizeEmail(body.email);
   const phoneRaw = normalizeText(body.phone || body.phone_raw || body.phone_normalized);
   const marketCode = normalizeText(body.market_code).toUpperCase();
+  // Legacy KG intake remains unchanged. Reject KZ and unready US before
+  // any owner-opening write, including Odoo bridge intake.
+  try {
+    assertAdminOpeningMarketPolicy(marketCode);
+  } catch (policyError) {
+    return {
+      ok: true, valid: false, error: "PRECHECK_FAILED",
+      errors: [policyError.code],
+      normalized: { market_code: marketCode || null },
+      checks: [],
+    };
+  }
+
   const phoneResult = await normalizeContactPhoneForBusiness(pool, phoneRaw, {
     marketCode,
     required: !allowMissingPhone,
@@ -1244,6 +1258,14 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       const email = normalizeEmail(body.email);
       const phoneRaw = normalizeText(body.phone || body.phone_raw || body.phone_normalized);
       const marketCode = normalizeText(body.market_code).toUpperCase();
+      try {
+        assertAdminOpeningMarketPolicy(marketCode);
+      } catch (policyError) {
+        return res.status(policyError.statusCode).json({
+          ok: false, error: policyError.code,
+        });
+      }
+
       const phoneResult = await normalizeContactPhoneForBusiness(pool, phoneRaw, {
         marketCode,
         required: true,
@@ -1424,6 +1446,13 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         ok: false,
         error: intake.error.code,
       });
+    }
+
+    // Backend-only activation policy; Odoo application is not modified.
+    try {
+      assertAdminOpeningMarketPolicy(intake.market_code || "");
+    } catch (policyError) {
+      return res.status(policyError.statusCode).json({ ok: false, error: policyError.code });
     }
 
     const odooRequestId = normalizeText(intake.odoo_request_id);
@@ -1798,6 +1827,14 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
+      // KZ stays inactive and legacy US opening cannot bypass stage-C readiness.
+      try {
+        assertAdminOpeningMarketPolicy(current);
+      } catch (policyError) {
+        await db.query("ROLLBACK");
+        return res.status(policyError.statusCode).json({ ok: false, error: policyError.code });
+      }
+
       if(current.status === "approved"){
         await db.query("COMMIT");
         return res.status(200).json({
@@ -1891,6 +1928,14 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
           ok: false,
           error: "OWNER_OPENING_REQUEST_NOT_FOUND",
         });
+      }
+
+      // KZ stays inactive and legacy US opening cannot bypass stage-C readiness.
+      try {
+        assertAdminOpeningMarketPolicy(request);
+      } catch (policyError) {
+        await markDb.query("ROLLBACK");
+        return res.status(policyError.statusCode).json({ ok: false, error: policyError.code });
       }
 
       if(request.status === "provisioned"){
@@ -2118,6 +2163,14 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
           ok: false,
           error: "OWNER_OPENING_REQUEST_NOT_FOUND",
         });
+      }
+
+      // KZ stays inactive and legacy US opening cannot bypass stage-C readiness.
+      try {
+        assertAdminOpeningMarketPolicy(current);
+      } catch (policyError) {
+        await db.query("ROLLBACK");
+        return res.status(policyError.statusCode).json({ ok: false, error: policyError.code });
       }
 
       if(current.status === "activated"){
