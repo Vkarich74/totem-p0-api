@@ -123,7 +123,7 @@ export async function readUsServiceLinkOptions(pool,options={}) {
           "JOIN public.tenant_market_settings tm ON tm.salon_id=sms.salon_id",
           "JOIN public.markets market ON market.id=tm.market_id",
           "JOIN public.masters m ON m.id=ms.master_id AND m.active IS TRUE",
-          "WHERE sms.active IS TRUE AND sms.currency_code='USD'",
+          "WHERE sms.salon_id=$1 AND sms.active IS TRUE AND sms.currency_code='USD'",
           "AND market.id=$2 AND market.code='US' AND market.country_code='US'",
           "AND market.default_currency='USD' AND market.active IS TRUE",
           "ORDER BY sms.master_id,sms.service_pk,svc.name,svc.duration_min LIMIT 300",
@@ -199,6 +199,8 @@ export async function saveUsServiceLink(pool,options={}) {
     if (!target) return reply(404,"US_SERVICE_LINK_TARGET_NOT_FOUND");
 
     // Serialize creation within one salon, and never reopen a disabled link.
+// An owner attaches only services already used inside THAT salon.
+// A master attaches only their OWN US catalog from an authorized US salon.
     await db.query("SELECT pg_advisory_xact_lock(981201,$1)",[Number(target.salon_id)]);
     let servicePk=input.servicePk;
     if (input.operation==="attach") {
@@ -210,12 +212,17 @@ export async function saveUsServiceLink(pool,options={}) {
           "AND source_ms.master_id=old.master_id AND source_ms.status='active'",
           "JOIN public.tenant_market_settings tm ON tm.salon_id=old.salon_id",
           "JOIN public.markets market ON market.id=tm.market_id",
-          "WHERE old.master_id=$2 AND old.service_pk=svc.id",
+          "WHERE old.service_pk=svc.id",
+          "AND (($4='salon' AND old.salon_id=$5)",
+          "OR ($4='master' AND old.master_id=$2))",
           "AND old.active IS TRUE AND old.currency_code='USD'",
           "AND market.id=$3 AND market.code='US' AND market.country_code='US'",
           "AND market.active IS TRUE AND market.default_currency='USD')",
           "LIMIT 1 FOR SHARE OF svc",
-        ].join(" "),[servicePk,Number(target.master_id),Number(scope.market_id)]);
+        ].join(" "),[
+          servicePk,Number(target.master_id),Number(scope.market_id),
+          options.ownerType,Number(target.salon_id),
+        ]);
       if (source.rows.length!==1) return reply(404,"US_SERVICE_LINK_SOURCE_NOT_FOUND");
     }
 
