@@ -7,6 +7,7 @@ import {
   ensureSalonMarketBinding,
 } from "../../market-context/BusinessContext.js";
 import { normalizeContactPhoneForBusiness } from "../contactPhone.js";
+import { US_COUNTRY_PACK } from "../../market-context/country-packs/US.js";
 import {
   buildCanonicalProvisionResponse,
   buildProvisionMeta,
@@ -244,17 +245,20 @@ async function resolveSalonSlugForReservation(db, requestedSlug){
   return ensureUniqueSalonSlug(db, requested);
 }
 
-export async function createSalonCanonical({ pool, payload }){
+export async function createSalonCanonical({ pool, payload, dbClient = null }){
   const input = validateSalonProvisionInput(payload || {});
-  const db = await pool.connect();
+  const ownsTransaction = !dbClient;
+  const db = dbClient || await pool.connect();
 
   try{
-    await db.query("BEGIN");
+    if (ownsTransaction) await db.query("BEGIN");
 
-    const phoneResult = await normalizeContactPhoneForBusiness(db, input.phone, {
-      marketCode: input.market_code || "",
-      required: false,
-    });
+    const phoneResult = input.market_code === "US"
+      ? US_COUNTRY_PACK.normalizeBusinessPhone(input.phone)
+      : await normalizeContactPhoneForBusiness(db, input.phone, {
+        marketCode: input.market_code || "",
+        required: false,
+      });
     if(!phoneResult.ok){
       const error = new Error(phoneResult.error);
       error.code = phoneResult.error;
@@ -294,7 +298,7 @@ export async function createSalonCanonical({ pool, payload }){
         reason: "create_salon_idempotent"
       });
 
-      await db.query("COMMIT");
+      if (ownsTransaction) await db.query("COMMIT");
 
       return buildProvisionResult({
         user: existingUser,
@@ -393,7 +397,7 @@ export async function createSalonCanonical({ pool, payload }){
       reservation_id: reservation?.reservation?.id || reservation?.id || null
     });
 
-    await db.query("COMMIT");
+    if (ownsTransaction) await db.query("COMMIT");
 
     return buildProvisionResult({
       user,
@@ -407,9 +411,9 @@ export async function createSalonCanonical({ pool, payload }){
       isIdempotent: false
     });
   }catch(err){
-    try{
-      await db.query("ROLLBACK");
-    }catch(_error){}
+    if (ownsTransaction) {
+      try{ await db.query("ROLLBACK"); }catch(_error){}
+    }
 
     const resolved = resolveProvisionError(err);
     const wrapped = new Error(resolved.error);
@@ -418,7 +422,7 @@ export async function createSalonCanonical({ pool, payload }){
     wrapped.details = err?.details || null;
     throw wrapped;
   }finally{
-    db.release();
+    if (ownsTransaction) db.release();
   }
 }
 
