@@ -103,11 +103,12 @@ VALUES
  (34,'kg-salon','SYNTHETIC_KG_SALON');
 INSERT INTO public.masters(id,slug,name,user_id)
 VALUES (46,'us-master','SYNTHETIC_MASTER',82),
-       (47,'kg-master','SYNTHETIC_KG_MASTER',82);
+       (47,'kg-master','SYNTHETIC_KG_MASTER',82),
+       (48,'us-master-secondary','SYNTHETIC_SECOND_MASTER',82);
 INSERT INTO public.owner_salon(owner_id,salon_id,status)
 VALUES ('81',32,'active'),('83',33,'active');
 INSERT INTO public.master_salon(salon_id,master_id,status)
-VALUES (32,46,'active'),(33,46,'active'),(34,47,'active');
+VALUES (32,46,'active'),(32,48,'active'),(33,46,'active'),(34,47,'active');
 -- Deliberately mixed-market membership: last KG salon must NOT authorize US operations.
 INSERT INTO public.master_salon(salon_id,master_id,status) VALUES (34,46,'active');
 INSERT INTO public.markets(id,code,country_code,active,default_currency)
