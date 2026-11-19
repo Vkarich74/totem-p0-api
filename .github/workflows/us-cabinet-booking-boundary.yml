@@ -1,0 +1,60 @@
+name: RELEASE US cabinet booking boundary — legacy guard and owner lifecycle
+on:
+  push:
+    branches:
+      - release/us-cabinet-booking-boundary-20261119
+    paths:
+      - src/routes/internal/masters.js
+      - src/routes/public.js
+      - src/routes/publicLifecycle.js
+      - src/tests/usCabinetBookingBoundary.test.mjs
+      - .github/workflows/us-cabinet-booking-boundary.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  us-cabinet-booking-boundary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    env:
+      NODE_ENV: test
+      DATABASE_URL: ""
+      REDIS_URL: ""
+      RAILWAY_TOKEN: ""
+      ODOO_URL: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Offline dependencies only
+        run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Syntax checks
+        run: |
+          set -euo pipefail
+          node --check src/routes/internal/masters.js
+          node --check src/routes/public.js
+          node --check src/routes/publicLifecycle.js
+          node --check src/tests/usCabinetBookingBoundary.test.mjs
+      - name: US owner/security/market/booking chain mocks
+        run: |
+          set -euo pipefail
+          test -z "${DATABASE_URL:-}"
+          node --test src/tests/usCabinetBookingBoundary.test.mjs
+      - name: Existing KG KZ legacy, US IANA/DST and price contracts
+        run: |
+          set -euo pipefail
+          node --test src/tests/usHoursServicesSlotsAvailability.test.mjs
+          node --test src/tests/usMasterWorkingHours.test.mjs
+          node --test src/tests/usPublicServicePriceCatalog.test.mjs
+          node --test src/tests/usMasterScheduleTimezone.test.mjs
+      - name: No new owner cabinets, routes, schema or transactions
+        run: |
+          set -euo pipefail
+          test -z "${DATABASE_URL:-}"
+          ! git diff --name-only HEAD^ HEAD | grep -E '^(migrations/|db/|src/routes/internal\.js$|src/money-core/|src/payments/)'
+          grep -Fq 'r.post("/masters/:slug/bookings"' src/routes/internal/masters.js
+          grep -Fq 'publicLifecycle' src/routes/public.js
+          grep -Fq 'checkUsLifecycleSession' src/routes/publicLifecycle.js
+          echo 'NO_TEST_USERS_SALONS_BOOKINGS_PAYMENTS; NO_DB_CONNECTION'

@@ -29,6 +29,34 @@ import {
   readUsMasterWeeklyHours, replaceUsMasterWeeklyHours,
 } from "../../services/usMasterWorkingHours.service.js";
 
+// Existing legacy master quick-booking endpoint cannot provide the
+// US location, IANA slot and authoritative USD price snapshot contracts.
+// Fail closed BEFORE any client, slot or booking is written. KG/KZ unchanged.
+export async function checkMasterQuickBookingMarket(db, salonId) {
+  if(!Number.isSafeInteger(Number(salonId)) || Number(salonId)<1) {
+    return {ok:false,status:409,error:"MASTER_QUICK_BOOKING_MARKET_UNRESOLVED"};
+  }
+  const market=await db.query(
+    `SELECT mk.code AS market_code, mk.country_code, mk.default_currency, mk.active
+       FROM public.tenant_market_settings t
+       JOIN public.markets mk ON mk.id=t.market_id
+       WHERE t.salon_id=$1
+       LIMIT 1`,
+    [Number(salonId)]
+  );
+  if(market.rows.length!==1 || market.rows[0].active!==true) {
+    return {ok:false,status:409,error:"MASTER_QUICK_BOOKING_MARKET_UNRESOLVED"};
+  }
+  const code=String(market.rows[0].market_code||"").trim().toUpperCase();
+  if(code==="US") {
+    return {ok:false,status:409,error:"US_QUICK_BOOKING_LOCATION_PRICE_REQUIRED"};
+  }
+  if(code!=="KG" && code!=="KZ") {
+    return {ok:false,status:409,error:"MASTER_QUICK_BOOKING_MARKET_UNSUPPORTED"};
+  }
+  return {ok:true,market_code:code};
+}
+
 export default function buildMastersRouter(pool, internalReadRateLimit){
 
 const r = express.Router();
@@ -2916,6 +2944,11 @@ return res.status(400).json({ok:false,error:"SERVICE_INACTIVE"});
 }
 
 const salonId = serviceLink.rows[0].salon_id;
+const bookingMarket = await checkMasterQuickBookingMarket(db,salonId);
+if(!bookingMarket.ok){
+  await db.query("ROLLBACK");
+  return res.status(bookingMarket.status).json({ok:false,error:bookingMarket.error});
+}
 const salonSlug = serviceLink.rows[0].slug;
 const servicePk = Number(serviceLink.rows[0].service_pk);
 const priceSnapshot = Number(serviceLink.rows[0].price);
