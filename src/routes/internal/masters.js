@@ -20,6 +20,7 @@ import {
 getCollectionAnchors
 } from "../../services/paymentCollectionAnchors.service.js";
 import { normalizePhoneForMarket, requireCurrencyCode, resolveBusinessMarketContext, resolveOwnerMarketContext } from "../../market-context/BusinessContext.js";
+import { rejectLegacyUsServiceMutation } from "../../services/usServiceLink.service.js";
 import {
   canonicalOwnerProfile, ownerProfileRevision,
   validateOwnerProfilePatch, ownerProfilePayload
@@ -1518,6 +1519,10 @@ const services = await pool.query(`
 SELECT
 sms.id,
 sms.service_pk,
+sms.salon_id,
+salon.slug AS salon_slug,
+sms.currency_code,
+mk.code AS market_code,
 s.service_id AS catalog_service_id,
 s.name,
 sms.price,
@@ -1525,6 +1530,9 @@ sms.duration_min,
 sms.active
 FROM salon_master_services sms
 JOIN services s ON s.id=sms.service_pk
+LEFT JOIN public.salons salon ON salon.id=sms.salon_id
+LEFT JOIN public.tenant_market_settings tm ON tm.salon_id=sms.salon_id
+LEFT JOIN public.markets mk ON mk.id=tm.market_id
 WHERE sms.master_id=$1
 ORDER BY sms.id DESC
 `,[masterId]);
@@ -1617,6 +1625,8 @@ return res.status(400).json({ok:false,error:"MASTER_ACTIVE_SALON_REQUIRED"});
 }
 
 const salonId = relation.rows[0].salon_id;
+const blockedUs = await rejectLegacyUsServiceMutation(db,salonId);
+if(blockedUs){await db.query("ROLLBACK");return res.status(blockedUs.status).json({ok:false,error:blockedUs.error});}
 
 const nextServiceId = await db.query(`
 SELECT COALESCE(MAX(service_id::int),0)+1 AS next_service_id
@@ -1749,6 +1759,7 @@ const billing_access = await ensureMasterWriteAllowed(db, masterId);
 const existing = await db.query(`
 SELECT
 sms.id,
+sms.salon_id,
 sms.service_pk,
 sms.price,
 sms.duration_min,
@@ -1771,6 +1782,8 @@ return res.status(404).json({ok:false,error:"MASTER_SERVICE_NOT_FOUND"});
 }
 
 const current = existing.rows[0];
+const blockedUs = await rejectLegacyUsServiceMutation(db,current.salon_id);
+if(blockedUs){await db.query("ROLLBACK");return res.status(blockedUs.status).json({ok:false,error:blockedUs.error});}
 
 const nextName =
   typeof name === "string" ? String(name).trim() : current.name;
@@ -1906,7 +1919,8 @@ const billing_access = await ensureMasterWriteAllowed(db, masterId);
 const existing = await db.query(`
 SELECT
 sms.id,
-sms.service_pk
+sms.service_pk,
+sms.salon_id
 FROM salon_master_services sms
 WHERE sms.id=$1
 AND sms.master_id=$2
@@ -1923,6 +1937,8 @@ return res.status(404).json({ok:false,error:"MASTER_SERVICE_NOT_FOUND"});
 }
 
 const servicePk = existing.rows[0].service_pk;
+const blockedUs = await rejectLegacyUsServiceMutation(db,existing.rows[0].salon_id);
+if(blockedUs){await db.query("ROLLBACK");return res.status(blockedUs.status).json({ok:false,error:blockedUs.error});}
 
 await db.query(`
 DELETE FROM salon_master_services
