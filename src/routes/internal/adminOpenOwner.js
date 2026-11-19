@@ -2438,7 +2438,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
           "SELECT 1 FROM public.owner_salon os",
           "JOIN public.auth_users u ON u.id=$2",
           "WHERE os.salon_id=$1 AND os.owner_id=$3 AND os.status='active'",
-          "AND u.enabled=true AND u.role='salon_admin' LIMIT 1",
+          "AND u.enabled=false AND u.role='salon_admin' LIMIT 1",
         ].join(" "),
         [owner.id,locked.created_auth_user_id,String(locked.created_auth_user_id)]
       );
@@ -2543,6 +2543,18 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       if (requestMarketCode(current) === "US") await assertUsActivationReady(db,current,Number(current.created_owner_id));
 
       const ownerActivation = await activateOwnerOpeningEntity(db, current);
+      if (requestMarketCode(current) === "US") {
+        // No US OTP/login until verified business activation; same transaction.
+        const userRole = current.owner_type === "salon" ? "salon_admin" : "master";
+        const unlocked = await db.query(
+          "UPDATE public.auth_users SET enabled=true WHERE id=$1 AND role=$2 AND enabled=false RETURNING id",
+          [current.created_auth_user_id,userRole]
+        );
+        if (unlocked.rows.length !== 1) {
+          const error = new Error("US_AUTH_ACTIVATION_READBACK_MISMATCH");
+          error.code = "US_AUTH_ACTIVATION_READBACK_MISMATCH";error.status=409;throw error;
+        }
+      }
 
       const updatedResult = await db.query(
         `
