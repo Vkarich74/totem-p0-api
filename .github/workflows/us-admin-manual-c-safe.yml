@@ -1,0 +1,55 @@
+name: US Admin manual activation — safe static gate
+
+on:
+  push:
+    branches:
+      - "release/us-admin-open-owner-c-*"
+    paths:
+      - "src/routes/internal/adminOpenOwner.js"
+      - "src/routes/internal/adminMarketsContract.js"
+      - "src/routes/internal/usOwnerLocations.js"
+      - "src/services/provision/**"
+      - "src/tests/usAdminManualPolicyNoBusiness.test.mjs"
+      - ".github/workflows/us-admin-manual-c-safe.yml"
+  pull_request:
+    paths:
+      - "src/routes/internal/adminOpenOwner.js"
+      - "src/routes/internal/adminMarketsContract.js"
+      - "src/routes/internal/usOwnerLocations.js"
+      - "src/services/provision/**"
+      - "src/tests/usAdminManualPolicyNoBusiness.test.mjs"
+      - ".github/workflows/us-admin-manual-c-safe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  source-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - name: Install existing dependencies without scripts
+        run: npm ci --ignore-scripts
+      - name: Syntax check complete files, no database access
+        run: |
+          node --check src/routes/internal/adminOpenOwner.js
+          node --check src/routes/internal/adminMarketsContract.js
+          node --check src/routes/internal/usOwnerLocations.js
+          node --check src/services/provision/usOpenOwnerGuards.js
+          node --check src/services/provision/usAdminPrimaryLocation.service.js
+          node --check src/services/provision/createSalonCanonical.js
+          node --check src/services/provision/createMasterCanonical.js
+          node --check src/services/provision/bindMasterToSalonCanonical.js
+          node --check src/services/provision/provisionShared.js
+          node --check src/tests/usAdminManualPolicyNoBusiness.test.mjs
+      - name: KG preserved, KZ denied, US feature default off
+        run: node --test src/tests/usAdminManualPolicyNoBusiness.test.mjs
+      - name: No business fixture or SQL test table creation
+        run: |
+          test ! -e src/tests/usAdminManualFixtures.sql
+          echo "Source-only CI. No DATABASE_URL/PGTEST_URL. No INSERT, mock tenant, test salon, test master, or payment."
