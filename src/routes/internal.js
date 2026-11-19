@@ -71,6 +71,9 @@ adminProtectedContainer.use('/moderation', moderationRouter);
 adminProtectedContainer.use('/messages', messagesRouter);
 const adminOpenOwnerRouter = buildAdminOpenOwnerRouter(pool, internalReadRateLimit);
 adminProtectedContainer.use('/open-owner', adminOpenOwnerRouter);
+// Public admin login must be routed BEFORE root-mounted US owner requireAuth.
+// Protected admin routes remain behind AdminRuntimeGuard.
+r.use("/admin", adminContainer);
 r.use(buildLocalePreferencesRouter(pool, internalReadRateLimit));
 // Owner-authenticated US-only recipient choice; read model remains separate.
 r.use(buildUsPayC11OwnerRouter(pool));
@@ -1274,7 +1277,7 @@ r.use(salonsRouter);
 const adminRouter = buildAdminRouter(pool, internalReadRateLimit);
 adminProtectedContainer.use('/', adminRouter);
 adminContainer.use('/', adminProtectedContainer);
-r.use("/admin", adminContainer);
+
 
 const provisionRouter = buildProvisionRouter(pool);
 r.use(provisionRouter);

@@ -1,0 +1,53 @@
+name: HOTFIX admin login route ordering
+on:
+  push:
+    branches:
+      - hotfix/admin-login-routing-20261119
+    paths:
+      - src/routes/internal.js
+      - .github/workflows/admin-login-hotfix.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  admin-login-routing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      DATABASE_URL: ""
+      RAILWAY_TOKEN: ""
+      ODOO_URL: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify admin login is reachable before global owner guards
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const source=fs.readFileSync('src/routes/internal.js','utf8');
+          const auth=fs.readFileSync('src/routes/internal/adminAuth.js','utf8');
+          const guard=fs.readFileSync('src/middleware/AdminRuntimeGuard.js','utf8');
+          const find=(s)=>{const i=source.indexOf(s);assert.ok(i>=0,'Missing '+s);return i};
+          const mounted=find('r.use("/admin", adminContainer)');
+          assert.equal(source.split('r.use("/admin", adminContainer)').length,2);
+          assert.ok(find("adminContainer.use('/auth', adminAuthRouter)")<mounted);
+          assert.ok(mounted<find('r.use(buildUsPayC11OwnerRouter(pool))'));
+          assert.ok(mounted<find('r.use(buildUsServiceTaxSettingsRouter(pool))'));
+          assert.ok(mounted<find('r.use(buildUsServicePricesRouter(pool))'));
+          assert.ok(mounted<find('const moneyCoreRouter = buildMoneyCoreRouter(pool)'));
+          assert.ok(source.includes('adminProtectedContainer.use(AdminRuntimeGuard)'));
+          assert.ok(source.includes("adminContainer.use('/', adminProtectedContainer)"));
+          assert.ok(auth.includes('r.post("/login",'));
+          assert.ok(auth.includes("role = 'admin'"));
+          assert.ok(guard.includes('NO_AUTH'));
+          console.log('ADMIN_LOGIN_REACHABLE_AND_PROTECTED_ADMIN_GUARDED_PASS');
+          NODE
+      - name: Syntax and source changes only
+        run: |
+          node --check src/routes/internal.js
+          node --check src/routes/internal/adminAuth.js
+          node --check src/middleware/AdminRuntimeGuard.js
+          test -z "${DATABASE_URL:-}"
