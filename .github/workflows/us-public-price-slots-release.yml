@@ -1,0 +1,82 @@
+name: RELEASE US prices slots public booking — production aligned
+on:
+  push:
+    branches:
+      - release/us-public-price-slots-20261119
+    paths:
+      - src/routes/internal/masters.js
+      - src/services/usMasterWorkingHours.service.js
+      - src/tests/usMasterWorkingHours.test.mjs
+      - src/tests/usMasterScheduleTimezone.test.mjs
+      - src/routes/publicAvailability.js
+      - src/routes/public.js
+      - src/services/usServicePrice.service.js
+      - src/tests/usPublicServicePriceCatalog.test.mjs
+      - src/routes/publicCreateBooking.js
+      - src/services/usSlots.service.js
+      - src/tests/usHoursServicesSlotsAvailability.test.mjs
+      - src/tests/us03LocationCalendarTest.mjs
+      - .github/workflows/us-public-price-slots-release.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  us-hours-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 13
+    env:
+      NODE_ENV: test
+      DATABASE_URL: ""
+      RAILWAY_TOKEN: ""
+      ODOO_URL: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install locked dependencies, no lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Syntax check canonical core and US-only service
+        run: |
+          set -euo pipefail
+          node --check src/routes/internal/masters.js
+          node --check src/services/usMasterWorkingHours.service.js
+          node --check src/tests/usMasterWorkingHours.test.mjs
+      - name: Exact US location, permissions, future bookings and CAS tests
+        run: |
+          set -euo pipefail
+          TZ=Asia/Bishkek node --test src/tests/usMasterWorkingHours.test.mjs
+          TZ=America/New_York node --test src/tests/usMasterWorkingHours.test.mjs
+          TZ=Pacific/Honolulu node --test src/tests/usMasterWorkingHours.test.mjs
+          node --test src/tests/usMasterScheduleTimezone.test.mjs
+          node --test src/tests/usHoursServicesSlotsAvailability.test.mjs
+          node --test src/tests/usPublicServicePriceCatalog.test.mjs
+          node --check src/routes/public.js
+          node --check src/routes/publicCreateBooking.js
+          TZ=Asia/Bishkek node src/tests/us03LocationCalendarTest.mjs
+          TZ=America/New_York node src/tests/us03LocationCalendarTest.mjs
+          TZ=Pacific/Honolulu node src/tests/us03LocationCalendarTest.mjs
+          grep -Fq 'MASTER_US_MIXED_MARKETS' src/routes/internal/masters.js
+      - name: Enforce KG/KZ legacy hours and API isolation
+        run: |
+          set -euo pipefail
+          test -z "${DATABASE_URL:-}"
+          test ! -e src/routes/internalUsMasterHours.js
+          grep -Fq 'r.get("/masters/:slug/us-working-hours"' src/routes/internal/masters.js
+          grep -Fq 'r.put("/masters/:slug/us-working-hours"' src/routes/internal/masters.js
+          grep -Fq 'us_location_master_working_hours' src/services/usMasterWorkingHours.service.js
+          grep -Fq 'changedUsHourWeekdays(' src/services/usMasterWorkingHours.service.js
+          grep -Fq 'getUsLocalInstantCandidates(' src/services/usMasterWorkingHours.service.js
+          grep -Fq 'FOR SHARE OF b' src/services/usMasterWorkingHours.service.js
+          grep -Fq 'pg_advisory_xact_lock($1::integer, $2::integer)' src/routes/internal/masters.js
+          grep -Fq 'pg_advisory_xact_lock($1::integer, $2::integer)' src/routes/publicCreateBooking.js
+          grep -Fq 'await resolveUsBookingServicePrice(db,{' src/routes/publicAvailability.js
+          grep -Fq 'slots:buildUsAvailableSlots(calendar,{' src/routes/publicAvailability.js
+          grep -Fq 'buildUsAvailableSlots(calendar, {' src/routes/publicCreateBooking.js
+          grep -Fq 'getUsLocalInstantCandidates(' src/services/usSlots.service.js
+          grep -Fq 'resolveUsPublicServicePriceCatalog(pool,{' src/routes/public.js
+          grep -Fq 'verifyUsExpectedBookingServicePrice(req.body,usServicePrice)' src/routes/publicCreateBooking.js
+          grep -Fq 'US_SERVICE_PRICE_CHANGED' src/services/usServicePrice.service.js
+          grep -Fq 'service_price:{' src/routes/publicAvailability.js
+          echo 'US_ONLY; SAME_US_CENTS_SOURCE_PUBLIC_AND_BOOKING; KG_KZ_UNCHANGED; NO_DEPLOY'

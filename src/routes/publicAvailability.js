@@ -1,6 +1,7 @@
 import { pool } from "../db.js";
 import { buildSalonCalendarResponse } from "../services/salonCalendar.service.js";
 import { buildUsAvailableSlots } from "../services/usSlots.service.js";
+import { resolveUsBookingServicePrice } from "../services/usServicePrice.service.js";
 
 function formatZoneParts(date, timeZone) {
   const formatter = new Intl.DateTimeFormat("en-CA", {
@@ -126,7 +127,11 @@ function parseRequestedDate(req) {
   return from.toISOString().slice(0, 10);
 }
 
-export async function publicMasterAvailability(req, res) {
+export async function publicMasterAvailability(req, res, inMemoryDb) {
+  // Express passes its next() function as argument three. An explicit
+  // query-capable adapter is used only by isolated in-memory route tests.
+  const db = inMemoryDb && typeof inMemoryDb.query === "function"
+    ? inMemoryDb : pool;
   try {
     const salonId = Number(req.tenant?.salon_id);
     const masterId = Number(req.params.master_id);
@@ -153,7 +158,7 @@ export async function publicMasterAvailability(req, res) {
       return res.status(400).json({ ok: false, error: "INVALID_RANGE" });
     }
 
-    const salonRes = await pool.query(
+    const salonRes = await db.query(
       `SELECT id, slug, name, city, status, enabled
        FROM public.salons
        WHERE id = $1
@@ -165,10 +170,11 @@ export async function publicMasterAvailability(req, res) {
       return res.status(404).json({ ok: false, error: "SALON_NOT_FOUND" });
     }
 
-    const serviceRes = await pool.query(
+    const serviceRes = await db.query(
       `SELECT
          sms.id,
          sms.master_id,
+         sms.service_pk,
          sms.duration_min
        FROM public.salon_master_services sms
        JOIN public.master_salon ms
@@ -193,22 +199,61 @@ export async function publicMasterAvailability(req, res) {
       return res.status(409).json({ ok: false, error: "SERVICE_DURATION_INVALID" });
     }
 
-    const calendar = await buildSalonCalendarResponse(pool, {
+    const calendar = await buildSalonCalendarResponse(db, {
       salonRow: salonRes.rows[0],
       requestedDate,
       locationCode: req.query?.location_code ?? null
     });
 
     if (calendar.market_code === "US") {
+      // The slot list must satisfy the SAME US service-price contract as
+      // publicCreateBooking. Working hours alone do not make an unpriced
+      // salon_master_services link bookable. No second price/slot engine.
+      const market = req.market_context;
+      if (market?.market_code !== "US" ||
+          market?.country_code !== "US" ||
+          market?.currency_code !== "USD" ||
+          !Number.isSafeInteger(Number(market.market_id)) ||
+          Number(market.market_id) < 1) {
+        return res.status(409).json({
+          ok:false,error:"US_SERVICE_PRICE_CONTEXT_INVALID",
+        });
+      }
+      if (salonRes.rows[0].status !== "active" ||
+          salonRes.rows[0].enabled === false) {
+        return res.status(409).json({
+          ok:false,error:"US_SALON_NOT_BOOKABLE",
+        });
+      }
+      if (!Number.isSafeInteger(durationMin) ||
+          durationMin < 1 || durationMin > 1440) {
+        return res.status(409).json({
+          ok:false,error:"US_SERVICE_DURATION_INVALID",
+        });
+      }
+      const verifiedPrice=await resolveUsBookingServicePrice(db,{
+        marketId:Number(market.market_id),
+        salonId,masterId,
+        servicePk:Number(serviceRes.rows[0].service_pk),
+        serviceLinkId:serviceId,
+      });
       return res.json({
-        ok: true,
-        master_id: masterId,
-        service_id: serviceId,
-        date: requestedDate,
-        timezone: calendar.date.timezone,
-        location_code: calendar.location.location_code,
-        slots: buildUsAvailableSlots(calendar, {
-          masterId, durationMin, stepMin: 15, nowMs: Date.now(),
+        ok:true,
+        master_id:masterId,
+        service_id:serviceId,
+        date:requestedDate,
+        timezone:calendar.date.timezone,
+        location_code:calendar.location.location_code,
+        service_price:{
+          configured:true,
+          source:"us_service_price_amounts",
+          amount_type:"service_base_only",
+          currency_code:verifiedPrice.currency_code,
+          amount_minor:verifiedPrice.amount_minor,
+          price_version:verifiedPrice.price_version,
+        },
+        slots:buildUsAvailableSlots(calendar,{
+          masterId,durationMin,stepMin:15,nowMs:Date.now(),
         }),
       });
     }
