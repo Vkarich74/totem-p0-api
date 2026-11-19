@@ -2231,6 +2231,7 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
         ownerType: "salon",
         ownerId: id,
         requestedMarketCode: req.body?.market_code,
+        action,
       });
 
       const updateResult = await db.query(
@@ -2346,6 +2347,7 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
         ownerType: "master",
         ownerId: id,
         requestedMarketCode: req.body?.market_code,
+        action,
       });
 
       const updateResult = await db.query(
