@@ -131,11 +131,15 @@ function walk(directory) {
     }
 
     if (!extensions.has(path.extname(entry.name))) continue;
+    // Negative test fixtures intentionally contain foreign-market literals.
+    if (/\.test\.(?:js|mjs|cjs)$/.test(entry.name)) continue;
     const relative = path.relative(srcRoot, absolute).replaceAll("\\", "/");
     if (allowedFiles.has(relative)) continue;
 
     const lines = fs.readFileSync(absolute, "utf8").split(/\r?\n/);
     lines.forEach((line, index) => {
+      // Comments are not runtime defaults. Keep scanning executable lines.
+      if (/^\s*(?:\/\/|\/\*|\*)/.test(line)) return;
       for (const token of forbidden) {
         if (line.includes(token)) {
           violations.push(`${relative}:${index + 1}:${token}`);

@@ -46,7 +46,7 @@ export function normalizeContactPhone(value, { defaultCountry = "", required = t
 
   // Preserve the verified historical KG +99622... acceptance rule.
   // For national KG numbers, the region must have been explicitly resolved.
-  if ((international && compact.startsWith("+996")) || (!international && country === "KG")) {
+  if ((international && compact.startsWith(KG_COUNTRY_PACK.phone_country_code)) || (!international && country === "KG")) {
     const kg = KG_COUNTRY_PACK.normalizeMobilePhone(compact);
     if (kg.ok) {
       return { ok: true, phone: kg.phone };

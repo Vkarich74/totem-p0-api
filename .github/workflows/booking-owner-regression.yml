@@ -8,6 +8,8 @@ on:
       - src/routes/publicLifecycle.js
       - src/tests/usCabinetBookingBoundary.test.mjs
       - src/tests/bookingOwnerAllMarketsRegression.test.mjs
+      - src/tests/g10GeneralizationTest.mjs
+      - src/services/contactPhone.js
       - .github/workflows/booking-owner-regression.yml
   workflow_dispatch:
 permissions:
@@ -49,6 +51,7 @@ jobs:
           set -euo pipefail
           node --test src/tests/g07MarketContextTest.mjs
           node --test src/tests/g10GeneralizationTest.mjs
+          node --test src/tests/contactPhoneInternational.test.mjs
           node --test src/tests/usHoursServicesSlotsAvailability.test.mjs
           node --test src/tests/usMasterWorkingHours.test.mjs
           node --test src/tests/usMasterScheduleTimezone.test.mjs
