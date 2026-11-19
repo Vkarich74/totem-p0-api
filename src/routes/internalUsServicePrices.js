@@ -1,6 +1,7 @@
 // US-PAY / TAX-03 — authorized USD cents service-price settings only.
 // No Stripe charge, tax calculation, refund, legacy price conversion or KG writes.
 import express from "express";
+import {readUsServiceLinkOptions,saveUsServiceLink,usServiceLinkErrorResponse} from "../services/usServiceLink.service.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import {
   readUsOwnerServicePrice,
@@ -52,6 +53,35 @@ export function buildUsServicePricesRouter(pool) {
       } catch (error) {
         const reply = usServicePriceErrorResponse(error);
         return res.status(reply.status).json(reply.body);
+      }
+    }
+  );
+  // US-SERVICES-01: same existing /internal router, strict session + owner scope.
+  router.get("/us-service-links/:ownerType/:ownerSlug/options",
+    ...routeGuards,async(req,res)=>{
+      try {
+        const answer=await readUsServiceLinkOptions(pool,{
+          ownerType:req.params.ownerType,ownerSlug:req.params.ownerSlug,
+          auth:req.auth,identity:req.identity,
+        });
+        return res.status(answer.status).json(answer.body);
+      } catch(error) {
+        const failed=usServiceLinkErrorResponse(error);
+        return res.status(failed.status).json(failed.body);
+      }
+    }
+  );
+  router.post("/us-service-links/:ownerType/:ownerSlug",
+    ...routeGuards,async(req,res)=>{
+      try {
+        const answer=await saveUsServiceLink(pool,{
+          ownerType:req.params.ownerType,ownerSlug:req.params.ownerSlug,
+          auth:req.auth,identity:req.identity,body:req.body,
+        });
+        return res.status(answer.status).json(answer.body);
+      } catch(error) {
+        const failed=usServiceLinkErrorResponse(error);
+        return res.status(failed.status).json(failed.body);
       }
     }
   );
