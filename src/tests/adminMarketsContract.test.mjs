@@ -5,6 +5,7 @@ import {
   listAdminMarkets,
   readScopedAdminList,
   assertAdminOwnerActionMarket,
+  assertAdminOpeningMarketPolicy,
 } from "../routes/internal/adminMarketsContract.js";
 
 function dbFromRows(rows, calls = []) {
@@ -143,4 +144,31 @@ test("KZ inactive policy and DB market active gate both fail closed", async () =
     dbFromRows([{market_code:"US",market_active:false}]),
     {ownerType:"salon",ownerId:7,requestedMarketCode:"US"},
   ),{code:"ADMIN_MARKET_INACTIVE"});
+});
+
+
+test("legacy opening policy: KG and missing legacy market work, KZ/US are held", () => {
+  assert.equal(assertAdminOpeningMarketPolicy("KG"),"KG");
+  assert.equal(assertAdminOpeningMarketPolicy(""),null);
+  assert.throws(() => assertAdminOpeningMarketPolicy("KZ"),
+    {code:"ADMIN_MARKET_INACTIVE",statusCode:409});
+  assert.throws(() => assertAdminOpeningMarketPolicy("US"),
+    {code:"ADMIN_US_OPEN_OWNER_PENDING",statusCode:409});
+  assert.throws(() => assertAdminOpeningMarketPolicy({
+    precheck_result_json:{normalized:{market_code:"US"}}
+  }),{code:"ADMIN_US_OPEN_OWNER_PENDING"});
+  assert.throws(() => assertAdminOpeningMarketPolicy({
+    precheck_result_json:{normalized:{market_code:"KZ"}}
+  }),{code:"ADMIN_MARKET_INACTIVE"});
+});
+
+test("US unsuspend cannot circumvent the later geo/readiness activation gate", async () => {
+  const db=dbFromRows([{market_code:"US",market_active:true}]);
+  await assert.rejects(assertAdminOwnerActionMarket(db,{
+    ownerType:"salon",ownerId:55,requestedMarketCode:"US",action:"unsuspend",
+  }),{code:"ADMIN_US_ACTIVATION_GATE_PENDING"});
+  const suspend=await assertAdminOwnerActionMarket(db,{
+    ownerType:"salon",ownerId:55,requestedMarketCode:"US",action:"suspend",
+  });
+  assert.equal(suspend.market_code,"US");
 });
