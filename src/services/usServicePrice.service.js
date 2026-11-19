@@ -242,6 +242,91 @@ export async function resolveUsBookingServicePrice(db, {
   };
 }
 
+// Optional optimistic confirmation of the SAME canonical base-price
+// snapshot offered to the client. No tax, currency conversion or payment.
+export function verifyUsExpectedBookingServicePrice(body,canonical){
+  const supplied=body && typeof body==="object" && (
+    Object.hasOwn(body,"expected_us_price_version") ||
+    Object.hasOwn(body,"expected_us_amount_minor")
+  );
+  if(!supplied)return false; // existing API clients remain compatible
+  const version=body.expected_us_price_version;
+  const amount=body.expected_us_amount_minor;
+  if(!Number.isSafeInteger(version) || version<1 ||
+     typeof amount!=="string" ||
+     !/^[1-9][0-9]*$/.test(amount) ||
+     !Number.isSafeInteger(Number(amount)) ||
+     Number(amount)>MAX_USD_MINOR) {
+    throw bookingPriceError("US_EXPECTED_SERVICE_PRICE_INVALID",400);
+  }
+  if(!canonical || canonical.currency_code!=="USD" ||
+     version!==canonical.price_version ||
+     amount!==canonical.amount_minor) {
+    throw bookingPriceError("US_SERVICE_PRICE_CHANGED",409);
+  }
+  return true;
+}
+
+// Existing US price authority exposed for the public salon services list.
+// Do not infer USD from sms.price (legacy) or from a currency label.
+// The SAME resolveUsBookingServicePrice is used for listing, availability,
+// and booking. Only its proven "not configured" result can be listed as
+// unavailable; database, permission and context errors fail closed.
+export async function resolveUsPublicServicePriceCatalog(db, {
+  salonId,marketContext,services,
+} = {}) {
+  const salon=positiveId(salonId);
+  const market=positiveId(marketContext?.market_id);
+  if(!db || typeof db.query!=="function" || !salon || !market ||
+     marketContext?.market_code!=="US" ||
+     marketContext?.country_code!=="US" ||
+     marketContext?.currency_code!=="USD" ||
+     !Array.isArray(services)) {
+    throw bookingPriceError("US_SERVICE_PRICE_CONTEXT_INVALID",409);
+  }
+  const result=[];
+  // Bound concurrent database reads for large salons, without filtering
+  // or arbitrarily truncating the public services list.
+  for(let offset=0;offset<services.length;offset+=8) {
+    const batch=services.slice(offset,offset+8);
+    const resolved=await Promise.all(batch.map(async row=>{
+      const link=positiveId(row?.id);
+      const rowSalon=positiveId(row?.salon_id);
+      const master=positiveId(row?.master_id);
+      const service=positiveId(row?.service_pk);
+      if(!link || rowSalon!==salon || !master || !service) {
+        throw bookingPriceError("US_SERVICE_PRICE_CONTEXT_INVALID",409);
+      }
+      let verified=null;
+      try {
+        verified=await resolveUsBookingServicePrice(db,{
+          marketId:market,salonId:salon,masterId:master,
+          servicePk:service,serviceLinkId:link,
+        });
+      }catch(err){
+        if(err?.code!=="US_SERVICE_PRICE_NOT_CONFIGURED")throw err;
+      }
+      // Explicitly strip numeric legacy prices and legacy currency from
+      // public US response. The consumer cannot mistake them for USD.
+      const {price: _legacyPrice,currency_code: _legacyCurrency,
+        ...safeRow}=row;
+      return {
+        ...safeRow,
+        service_price:{
+          configured:Boolean(verified),
+          source:"us_service_price_amounts",
+          amount_type:"service_base_only",
+          currency_code:"USD",
+          amount_minor:verified?.amount_minor??null,
+          price_version:verified?.price_version??0,
+        },
+      };
+    }));
+    result.push(...resolved);
+  }
+  return result;
+}
+
 export async function createUsBookingPriceSnapshot(db, {
   bookingId, price,
 } = {}) {

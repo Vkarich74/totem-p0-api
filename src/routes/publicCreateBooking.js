@@ -10,6 +10,7 @@ import { normalizeUsBookingStart } from "../services/usTime.service.js";
 import {
   resolveUsBookingServicePrice,
   createUsBookingPriceSnapshot,
+  verifyUsExpectedBookingServicePrice,
 } from "../services/usServicePrice.service.js";
 
 function buildClientCabinetUrl(clientId, token) {
@@ -333,6 +334,12 @@ export async function publicCreateBooking(req, res) {
           serviceLinkId: serviceLink.id,
         })
       : null;
+
+    // Compare the price just displayed to this SAME transaction's
+    // canonical US booking price before writing client, slot or booking.
+    if (marketContext.market_code === "US") {
+      verifyUsExpectedBookingServicePrice(req.body,usServicePrice);
+    }
 
     let usLocation = null;
     let normalizedStartAt = null;
