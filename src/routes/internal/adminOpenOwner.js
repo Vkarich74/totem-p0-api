@@ -2418,6 +2418,14 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         err.code = "US_OWNER_REQUEST_CHANGED";err.status=409;throw err;
       }
       await assertUsOpenOwnerContract(db,locked);
+      const lockedNormalized = locked.precheck_result_json?.normalized || {};
+      if (draft.state_code !== lockedNormalized.state_code ||
+          draft.postal_code !== lockedNormalized.postal_code ||
+          draft.city_name.trim().toLowerCase() !== String(locked.city || "").trim().toLowerCase()) {
+        const error = new Error("US_LOCATION_REQUEST_MISMATCH");
+        error.code = "US_LOCATION_REQUEST_MISMATCH"; error.status = 409;
+        throw error;
+      }
       const owner = await readUsSalon(db,locked.slug_final);
       if (Number(owner?.id) !== Number(locked.created_owner_id) ||
           owner?.market_code !== "US" || owner?.market_active !== true ||
