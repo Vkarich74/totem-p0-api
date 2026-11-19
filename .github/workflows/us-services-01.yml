@@ -10,6 +10,8 @@ on:
       - src/routes/internal/masters.js
       - src/routes/internal/salons.js
       - src/tests/usServiceLinkScoped.test.mjs
+      - tests/sql/us_services_01_isolated_fixture.sql
+      - tests/usServiceLinksPostgres.test.mjs
       - .github/workflows/us-services-01.yml
   workflow_dispatch:
 permissions:
@@ -42,12 +44,34 @@ jobs:
           node --check src/routes/internal/masters.js
           node --check src/routes/internal/salons.js
           node --check src/tests/usServiceLinkScoped.test.mjs
+          node --check tests/usServiceLinksPostgres.test.mjs
       - name: Scope and atomicity offline regression
         run: |
           set -euo pipefail
           test -z "$DATABASE_URL"
           test -z "$US_PAY_C11_LIVE_STRIPE_SECRET_KEY"
           node --test src/tests/usServiceLinkScoped.test.mjs
+      - name: Disposable PostgreSQL17 owner transaction acceptance
+        env:
+          US_SERVICES_01_TEST_DB: postgres://usservices01:local_fake_secret@127.0.0.1:55432/us_services_01_test
+        run: |
+          set -euo pipefail
+          test -z "${DATABASE_URL:-}"
+          docker run --rm -d --name us-services-01-pg17 \
+            -p 127.0.0.1:55432:5432 \
+            -e POSTGRES_DB=us_services_01_test \
+            -e POSTGRES_USER=usservices01 \
+            -e POSTGRES_PASSWORD=local_fake_secret \
+            postgres:17
+          for i in $(seq 1 45); do
+            if docker exec us-services-01-pg17 pg_isready -U usservices01 -d us_services_01_test >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          docker exec -i us-services-01-pg17 psql -X -v ON_ERROR_STOP=1 \
+            -U usservices01 -d us_services_01_test \
+            < tests/sql/us_services_01_isolated_fixture.sql
+          node --test tests/usServiceLinksPostgres.test.mjs
+          echo "US_SERVICES_01_PG17_SYNTHETIC_PASS"
       - name: Existing US catalog booking and owner regressions
         run: |
           set -euo pipefail
