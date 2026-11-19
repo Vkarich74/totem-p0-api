@@ -108,7 +108,7 @@ async function createProvisionMasterAuthUser(db, { input, masterSlug }){
     pushParamColumn("master_slug", masterSlug);
   }
 
-  pushParamColumn("enabled", true);
+  pushParamColumn("enabled", input.market_code !== "US");
 
   columns.push("created_at");
   valueSql.push("NOW()");
