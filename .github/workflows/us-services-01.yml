@@ -12,6 +12,7 @@ on:
       - src/tests/usServiceLinkScoped.test.mjs
       - tests/sql/us_services_01_isolated_fixture.sql
       - tests/usServiceLinksPostgres.test.mjs
+      - audits/us-services-01-production-schema-read-only.sql
       - .github/workflows/us-services-01.yml
   workflow_dispatch:
 permissions:
@@ -71,6 +72,14 @@ jobs:
             -U usservices01 -d us_services_01_test \
             < tests/sql/us_services_01_isolated_fixture.sql
           node --test tests/usServiceLinksPostgres.test.mjs
+          docker exec -i us-services-01-pg17 psql -X -v ON_ERROR_STOP=1 \
+            -U usservices01 -d us_services_01_test -At -F '|' \
+            < audits/us-services-01-production-schema-read-only.sql \
+            > /tmp/us-services-01-schema-preflight.txt
+          grep -Fq 'SCHEMA_PASS_RELEASE_GATE_1' /tmp/us-services-01-schema-preflight.txt
+          ! grep -Fq '|BLOCK|' /tmp/us-services-01-schema-preflight.txt
+          grep -Fq '|on|' /tmp/us-services-01-schema-preflight.txt
+          echo "US_SERVICES_01_SCHEMA_AUDIT_SYNTHETIC_PASS"
           echo "US_SERVICES_01_PG17_SYNTHETIC_PASS"
       - name: Existing US catalog booking and owner regressions
         run: |
