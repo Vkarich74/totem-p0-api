@@ -49,7 +49,7 @@ test("scoped SQL filters BEFORE LIMIT and returns real total and market proof", 
   for (const kind of ["salons","masters","clients","bookings"]) {
     const calls=[];
     const db = dbFromRows((sql, params) => sql.startsWith("SELECT code, active")
-      ? [{code:"US",active:true}]
+      ? [{code:"US",active:true,country_code:"US",default_currency:"USD"}]
       : [{total_count:1204,items:[{id:9,market_code:"US",market_active:true,currency_code:"USD"}]}], calls);
     const data=await readScopedAdminList(db,{kind,marketCode:"US",limit:20,offset:20});
     assert.equal(data.pagination.total,1204);
@@ -67,7 +67,7 @@ test("scoped SQL filters BEFORE LIMIT and returns real total and market proof", 
 
 test("scoped SQL remains safely empty on offset beyond final page", async () => {
   const db=dbFromRows((sql) => sql.startsWith("SELECT code, active")
-    ? [{code:"KG",active:true}] : [{total_count:47,items:[]}]);
+    ? [{code:"KG",active:true,country_code:"KG",default_currency:"KGS"}] : [{total_count:47,items:[]}]);
   const data=await readScopedAdminList(db,{kind:"salons",marketCode:"KG",limit:20,offset:60});
   assert.equal(data.pagination.total,47);
   assert.deepEqual(data.items,[]);
@@ -75,7 +75,7 @@ test("scoped SQL remains safely empty on offset beyond final page", async () => 
 
 test("server never accepts mismatched market or inactive market readback", async () => {
   const wrong=dbFromRows(sql=>sql.startsWith("SELECT code, active")
-    ? [{code:"US",active:true}]
+    ? [{code:"US",active:true,country_code:"US",default_currency:"USD"}]
     : [{total_count:1,items:[{market_code:"KG",market_active:true}]}]);
   await assert.rejects(readScopedAdminList(wrong,{kind:"clients",marketCode:"US",limit:10,offset:0}),
     {code:"ADMIN_MARKET_READBACK_MISMATCH"});
@@ -101,7 +101,7 @@ test("existing unbound legacy owner is not silently reclassified KG and US spoof
 });
 
 test("US salon action needs explicit US, wrong market and KZ are always denied", async () => {
-  const us=dbFromRows([{market_code:"US",market_active:true}]);
+  const us=dbFromRows([{market_code:"US",market_active:true,currency_code:"USD"}]);
   await assert.rejects(assertAdminOwnerActionMarket(us,{ownerType:"salon",ownerId:41}),
     {code:"ADMIN_US_EXPLICIT_MARKET_REQUIRED"});
   await assert.rejects(assertAdminOwnerActionMarket(us,{ownerType:"salon",ownerId:41,requestedMarketCode:"KG"}),
@@ -114,7 +114,7 @@ test("US salon action needs explicit US, wrong market and KZ are always denied",
 });
 
 test("US master requires one active salon and disallows cross-market ambiguity", async () => {
-  const live={salon_id:42,relation_status:"active",salon_enabled:true,salon_status:"active",market_code:"US",market_active:true};
+  const live={salon_id:42,relation_status:"active",salon_enabled:true,salon_status:"active",market_code:"US",market_active:true,currency_code:"USD"};
   const single=dbFromRows([live]);
   await assert.rejects(assertAdminOwnerActionMarket(single,{ownerType:"master",ownerId:66}),
     {code:"ADMIN_US_EXPLICIT_MARKET_REQUIRED"});
@@ -163,7 +163,7 @@ test("legacy opening policy: KG and missing legacy market work, KZ/US are held",
 });
 
 test("US unsuspend cannot circumvent the later geo/readiness activation gate", async () => {
-  const db=dbFromRows([{market_code:"US",market_active:true}]);
+  const db=dbFromRows([{market_code:"US",market_active:true,currency_code:"USD"}]);
   await assert.rejects(assertAdminOwnerActionMarket(db,{
     ownerType:"salon",ownerId:55,requestedMarketCode:"US",action:"unsuspend",
   }),{code:"ADMIN_US_ACTIVATION_GATE_PENDING"});
@@ -171,4 +171,25 @@ test("US unsuspend cannot circumvent the later geo/readiness activation gate", a
     ownerType:"salon",ownerId:55,requestedMarketCode:"US",action:"suspend",
   });
   assert.equal(suspend.market_code,"US");
+});
+
+
+test("tenant currency mismatch cannot masquerade as USD in US scoped records", async () => {
+  const bad=dbFromRows((sql) => sql.startsWith("SELECT code, active")
+    ? [{code:"US",active:true,country_code:"US",default_currency:"USD"}]
+    : [{total_count:1,items:[{id:2,market_code:"US",market_active:true,currency_code:"KGS"}]}]);
+  await assert.rejects(readScopedAdminList(bad,{
+    kind:"salons",marketCode:"US",limit:10,offset:0,
+  }),{code:"ADMIN_MARKET_READBACK_MISMATCH"});
+  await assert.rejects(assertAdminOwnerActionMarket(
+    dbFromRows([{market_code:"US",market_active:true,currency_code:"KGS"}]),
+    {ownerType:"salon",ownerId:2,requestedMarketCode:"US",action:"suspend"},
+  ),{code:"ADMIN_OWNER_CURRENCY_MISMATCH"});
+});
+
+test("misconfigured market country or USD default fails closed", async () => {
+  const db=dbFromRows([{code:"US",active:true,country_code:"US",default_currency:"KGS"}]);
+  await assert.rejects(readScopedAdminList(db,{
+    kind:"bookings",marketCode:"US",limit:10,offset:0,
+  }),{code:"ADMIN_MARKET_CONFIGURATION_CONFLICT"});
 });
