@@ -1,0 +1,60 @@
+name: RELEASE US lifecycle — atomic confirm complete cancel (offline only)
+on:
+  push:
+    branches:
+      - release/us-lifecycle-atomic-20261119
+    paths:
+      - src/routes/publicLifecycle.js
+      - src/tests/usLifecycleAtomicConcurrency.test.mjs
+      - .github/workflows/us-lifecycle-atomic.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  us-lifecycle-atomic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NODE_ENV: test
+      DATABASE_URL: ""
+      REDIS_URL: ""
+      RAILWAY_TOKEN: ""
+      ODOO_URL: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Pinned offline dependency install
+        run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - name: JS syntax
+        run: |
+          set -euo pipefail
+          node --check src/routes/publicLifecycle.js
+          node --check src/tests/usLifecycleAtomicConcurrency.test.mjs
+      - name: US transactional concurrency, owner scope, CAS and payment invariants
+        run: |
+          set -euo pipefail
+          test -z "${DATABASE_URL:-}"
+          node --test src/tests/usLifecycleAtomicConcurrency.test.mjs
+      - name: Existing US owner, location, IANA and USD contract
+        run: |
+          set -euo pipefail
+          node --test src/tests/usCabinetBookingBoundary.test.mjs
+          node --test src/tests/usHoursServicesSlotsAvailability.test.mjs
+          node --test src/tests/usMasterScheduleTimezone.test.mjs
+          node --test src/tests/usPublicServicePriceCatalog.test.mjs
+      - name: Shared route authorization guard must remain
+        run: |
+          set -euo pipefail
+          node --test src/tests/bookingOwnerAllMarketsRegression.test.mjs
+      - name: No schema, no new route, no db credentials or live user/booking writes
+        run: |
+          set -euo pipefail
+          test -z "${DATABASE_URL:-}"
+          test -z "${REDIS_URL:-}"
+          ! git diff --name-only HEAD^ HEAD | grep -E '^(migrations/|db/|src/routes/public\.js$|src/routes/internal\.js$|src/money-core/|src/payments/)'
+          grep -Fq 'if(isUsMarket){' src/routes/publicLifecycle.js
+          grep -Fq 'FOR UPDATE OF b' src/routes/publicLifecycle.js
+          echo 'US_BOOKING_LIFECYCLE_SERIALIZED; EXISTING_ROUTE; NO_DB_OR_TEST_USERS'

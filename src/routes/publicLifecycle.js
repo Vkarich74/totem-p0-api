@@ -160,6 +160,157 @@ export async function authorizeBookingLifecycleActor(db,auth,salonId,masterId){
     : result.error.replace(/^US_LIFECYCLE_/,"BOOKING_OWNER_")};
 }
 
+// US-only serializable booking lifecycle. Uses the SAME /public/.../lifecycle
+// route and existing owner/tenant contract. KG/KZ keep their prior code path.
+// The booking row lock is acquired before status check and retained through
+// the slot/payment side effects, so simultaneous US lifecycle calls serialize.
+export async function executeUsLifecycleTransaction(db, {auth, salonId, bookingId, action}) {
+  const session=checkUsLifecycleSession(auth);
+  if(!session.ok)return {http:session.status,body:{ok:false,error:session.error}};
+  if(!Number.isSafeInteger(Number(salonId)) || Number(salonId)<1 ||
+     !Number.isSafeInteger(Number(bookingId)) || Number(bookingId)<1 ||
+     !["confirm","complete","cancel"].includes(action)) {
+    return {http:400,body:{ok:false,error:"US_LIFECYCLE_REQUEST_INVALID"}};
+  }
+  const tx=await db.connect();
+  let opened=false;
+  try{
+    await tx.query("BEGIN");
+    opened=true;
+    const selected=await tx.query(
+      `SELECT b.id,b.status,b.salon_id,b.salon_slug,b.master_id,
+              m.slug AS master_slug,b.client_id,b.service_id,
+              b.start_at,b.end_at,b.price_snapshot
+         FROM public.bookings b
+         LEFT JOIN public.masters m ON m.id=b.master_id
+        WHERE b.id=$1 AND b.salon_id=$2
+        FOR UPDATE OF b`,
+      [Number(bookingId),Number(salonId)]
+    );
+    const booking=selected.rows?.[0];
+    if(!booking){
+      await tx.query("ROLLBACK");opened=false;
+      return {http:404,body:{ok:false,error:"BOOKING_NOT_FOUND"}};
+    }
+    const ownership=await authorizeUsLifecycleActor(tx,auth,salonId,booking.master_id);
+    if(!ownership.ok){
+      await tx.query("ROLLBACK");opened=false;
+      return {http:ownership.status,body:{ok:false,error:ownership.error}};
+    }
+    const previous=String(booking.status||"").toLowerCase();
+    if(action==="confirm" && previous==="confirmed"){
+      await tx.query("COMMIT");opened=false;
+      return {http:200,body:{ok:true,status:"already_confirmed"}};
+    }
+    if(action==="cancel" && (previous==="cancelled" || previous==="canceled")){
+      await tx.query("COMMIT");opened=false;
+      return {http:200,body:{ok:true,status:"already_cancelled"}};
+    }
+    if(action==="complete" && previous==="reserved"){
+      await tx.query("ROLLBACK");opened=false;
+      return {http:409,body:{ok:false,error:"BOOKING_PAYMENT_REQUIRED",status:booking.status}};
+    }
+    if(previous!=="reserved" && !(previous==="confirmed" &&
+      (action==="complete" || action==="cancel"))){
+      await tx.query("ROLLBACK");opened=false;
+      const error=action==="cancel" && previous==="completed"
+        ? "CANNOT_CANCEL_COMPLETED" : "INVALID_STATUS";
+      return {http:409,body:{ok:false,error,status:booking.status}};
+    }
+    if(action==="complete"){
+      // Check pending cash while the booking row remains locked.
+      const payment=await tx.query(
+        `SELECT id,provider,status,is_active
+           FROM public.payments
+          WHERE booking_id=$1 AND provider='direct'
+            AND status='pending' AND is_active=true
+          ORDER BY updated_at DESC NULLS LAST,id DESC LIMIT 1`,
+        [Number(bookingId)]
+      );
+      if(payment.rows?.length){
+        const p=payment.rows[0];
+        await tx.query("ROLLBACK");opened=false;
+        return {http:409,body:{
+          ok:false,error:"CASH_PAYMENT_PENDING_CONFIRMATION",
+          message_ru:"Нельзя завершить визит: наличные ожидают подтверждения.",
+          payment_label_ru:getPublicLifecyclePaymentLabelRu(
+            p.provider,p.status,Boolean(p.id)),
+          cash_pending_alert:true,
+        }};
+      }
+    }
+    const next=action==="confirm"?"confirmed":
+      action==="complete"?"completed":"cancelled";
+    const update=action==="confirm"
+      ? `UPDATE public.bookings SET status='confirmed',confirmed_at=NOW()
+           WHERE id=$1 AND salon_id=$2 AND status=$3 RETURNING id`
+      : `UPDATE public.bookings SET status=$4
+           WHERE id=$1 AND salon_id=$2 AND status=$3 RETURNING id`;
+    const parameters=action==="confirm"
+      ? [Number(bookingId),Number(salonId),booking.status]
+      : [Number(bookingId),Number(salonId),booking.status,next];
+    const updated=await tx.query(update,parameters);
+    if(updated.rowCount!==1){
+      await tx.query("ROLLBACK");opened=false;
+      return {http:409,body:{ok:false,error:"US_LIFECYCLE_STATUS_CONFLICT"}};
+    }
+    if(action==="cancel"){
+      await tx.query(
+        `UPDATE public.payments
+            SET status='rejected',is_active=false,rejected_at=NOW(),
+                rejection_reason='booking_cancelled',updated_at=NOW()
+          WHERE booking_id=$1 AND provider='direct'
+            AND status='pending' AND is_active=true`,
+        [Number(bookingId)]
+      );
+      await releaseCalendarSlotForBooking(tx,Number(bookingId),"booking_cancelled");
+    }
+    await tx.query("COMMIT");opened=false;
+    return {http:200,body:{ok:true,status:next},
+      notify:action!=="confirm",booking,action};
+  }catch(error){
+    if(opened){
+      try{await tx.query("ROLLBACK");}catch(rollbackError){
+        console.error("US_LIFECYCLE_ROLLBACK_ERROR",rollbackError);
+      }
+    }
+    throw error;
+  }finally{
+    tx.release();
+  }
+}
+
+// Keep existing legacy KG/KZ notification path unmodified. For successful
+// US completion/cancellation, notify only AFTER the transaction commits.
+async function notifyUsLifecycleAfterCommit(booking,action) {
+  const nextStatus=action==="complete"?"completed":"cancelled";
+  const notificationAction=action==="complete"?"completed":"cancel";
+  const payload={
+    booking_id:Number(booking.id),
+    salon_id:Number(booking.salon_id),
+    salon_slug:String(booking.salon_slug||""),
+    master_id:Number(booking.master_id),
+    client_id:Number(booking.client_id),
+    service_id:Number(booking.service_id),
+    start_at:booking.start_at ? new Date(booking.start_at).toISOString() : null,
+    end_at:booking.end_at ? new Date(booking.end_at).toISOString() : null,
+    price:Number(booking.price_snapshot||0),
+    lifecycle_action:action,next_status:nextStatus,
+  };
+  for(const targetType of ["client","master","salon"]){
+    const targetId=targetType==="client"?String(booking.client_id):
+      targetType==="master"?String(booking.master_id):String(booking.salon_id);
+    const template=buildBookingLifecycleNotificationTemplate(
+      notificationAction,targetType);
+    await createNotification(pool,{
+      target_type:targetType,target_id:targetId,
+      owner_type:"salon",owner_id:booking.salon_id,channel:"in_app",
+      ...template,action_url:buildLifecycleActionUrl(booking,targetType),
+      status:"sent",payload_json:payload,
+    });
+  }
+}
+
 export async function publicLifecycle(req, res) {
   try {
     const { salon_id } = req.tenant;
@@ -180,6 +331,20 @@ export async function publicLifecycle(req, res) {
       : checkBookingOwnerSession(req.auth);
     if(!session.ok){
       return res.status(session.status).json({ok:false,error:session.error});
+    }
+
+    if(isUsMarket){
+      const result=await executeUsLifecycleTransaction(pool,{
+        auth:req.auth,salonId:salon_id,bookingId,action,
+      });
+      if(result.notify){
+        try{
+          await notifyUsLifecycleAfterCommit(result.booking,result.action);
+        }catch(error){
+          console.error("US_LIFECYCLE_NOTIFICATION_ERROR",error);
+        }
+      }
+      return res.status(result.http).json(result.body);
     }
 
     const { rows } = await pool.query(
