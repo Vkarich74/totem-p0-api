@@ -25,6 +25,8 @@ permissions:
 
 jobs:
   market-contract:
+    # Stage C is source-only by explicit user contract: NEVER start PostgreSQL fixture schemas.
+    if: ${{ !startsWith(github.head_ref, 'release/us-admin-open-owner-c-') }}
     runs-on: ubuntu-latest
     timeout-minutes: 12
     services:
