@@ -85,7 +85,7 @@ BEGIN
   RETURN NEW;
 END;
 $body$;
-CREATE TRIGGER us_service_price_check
+CREATE TRIGGER us_pay_c11_service_price_guard
 BEFORE INSERT OR UPDATE ON public.us_service_price_amounts
 FOR EACH ROW EXECUTE FUNCTION public.us_service_price_check();
 
