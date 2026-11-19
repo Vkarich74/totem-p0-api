@@ -111,11 +111,27 @@ export async function readUsServiceLinkOptions(pool,options={}) {
           "WHERE ms.salon_id=$1 AND ms.status='active' AND m.active IS TRUE",
           "ORDER BY m.name,m.id",
         ].join(" "),[scope.owner_id]);
+      const catalog=await db.query(
+        [
+          "SELECT DISTINCT sms.master_id,sms.service_pk,svc.name,sms.duration_min",
+          "FROM public.salon_master_services sms",
+          "JOIN public.services svc ON svc.id=sms.service_pk",
+          "JOIN public.master_salon ms ON ms.master_id=sms.master_id",
+          "AND ms.salon_id=$1 AND ms.status='active'",
+          "JOIN public.masters m ON m.id=ms.master_id AND m.active IS TRUE",
+          "WHERE sms.active IS TRUE ORDER BY sms.master_id,sms.service_pk,svc.name,sms.duration_min",
+          "LIMIT 300",
+        ].join(" "),[scope.owner_id]);
       return {status:200,body:{
         ok:true,market_code:"US",currency_code:"USD",
         owner_type:"salon",owner_slug:options.ownerSlug,
         masters:result.rows.map(row=>({id:Number(row.id),slug:row.slug,name:row.name})),
-        salons:[],read_only:true,
+        salons:[],
+        catalog_services:catalog.rows.map(row=>({
+          master_id:Number(row.master_id),service_pk:Number(row.service_pk),
+          name:row.name,duration_min:Number(row.duration_min),
+        })),
+        read_only:true,
       }};
     }
     const result=await db.query(
@@ -130,11 +146,24 @@ export async function readUsServiceLinkOptions(pool,options={}) {
         "AND m.active IS TRUE AND m.default_currency='USD'",
         "ORDER BY s.name,s.id",
       ].join(" "),[scope.owner_id,scope.market_id]);
+    const catalog=await db.query(
+      [
+        "SELECT DISTINCT sms.master_id,sms.service_pk,svc.name,sms.duration_min",
+        "FROM public.salon_master_services sms",
+        "JOIN public.services svc ON svc.id=sms.service_pk",
+        "WHERE sms.master_id=$1 AND sms.active IS TRUE",
+        "ORDER BY sms.master_id,sms.service_pk,svc.name,sms.duration_min LIMIT 300",
+      ].join(" "),[scope.owner_id]);
     return {status:200,body:{
       ok:true,market_code:"US",currency_code:"USD",
       owner_type:"master",owner_slug:options.ownerSlug,
       salons:result.rows.map(row=>({id:Number(row.id),slug:row.slug,name:row.name})),
-      masters:[],read_only:true,
+      masters:[],
+      catalog_services:catalog.rows.map(row=>({
+          master_id:Number(row.master_id),service_pk:Number(row.service_pk),
+          name:row.name,duration_min:Number(row.duration_min),
+        })),
+      read_only:true,
     }};
   });
 }
