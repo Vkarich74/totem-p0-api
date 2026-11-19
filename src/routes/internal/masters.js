@@ -20,7 +20,7 @@ import {
 getCollectionAnchors
 } from "../../services/paymentCollectionAnchors.service.js";
 import { normalizePhoneForMarket, requireCurrencyCode, resolveBusinessMarketContext, resolveOwnerMarketContext } from "../../market-context/BusinessContext.js";
-import { rejectLegacyUsServiceMutation } from "../../services/usServiceLink.service.js";
+import { rejectLegacyUsServiceMutation, rejectLegacyUsMasterServiceCreation } from "../../services/usServiceLink.service.js";
 import {
   canonicalOwnerProfile, ownerProfileRevision,
   validateOwnerProfilePatch, ownerProfilePayload
@@ -1606,6 +1606,12 @@ const masterId = master.rows[0].id;
 if(!hasMasterOwnership(req, masterId)){
 await db.query("ROLLBACK");
 return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
+const mixedMarketBlock = await rejectLegacyUsMasterServiceCreation(db,masterId);
+if(mixedMarketBlock){
+  await db.query("ROLLBACK");
+  return res.status(mixedMarketBlock.status).json({ok:false,error:mixedMarketBlock.error});
 }
 
 const billing_access = await ensureMasterWriteAllowed(db, masterId);
