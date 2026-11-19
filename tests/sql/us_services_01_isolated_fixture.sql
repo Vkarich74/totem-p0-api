@@ -108,6 +108,8 @@ INSERT INTO public.owner_salon(owner_id,salon_id,status)
 VALUES ('81',32,'active'),('83',33,'active');
 INSERT INTO public.master_salon(salon_id,master_id,status)
 VALUES (32,46,'active'),(33,46,'active'),(34,47,'active');
+-- Deliberately mixed-market membership: last KG salon must NOT authorize US operations.
+INSERT INTO public.master_salon(salon_id,master_id,status) VALUES (34,46,'active');
 INSERT INTO public.markets(id,code,country_code,active,default_currency)
 VALUES (4,'US','US',true,'USD'),(1,'KG','KG',true,'KGS');
 INSERT INTO public.tenant_market_settings(salon_id,market_id)
@@ -120,5 +122,12 @@ VALUES (32,46,1,0,60,true,'USD');
 INSERT INTO public.us_service_price_amounts
 (salon_master_service_id,market_id,amount_minor,currency_code)
 VALUES (1,4,1300,'USD');
+-- KG-only source service for the same master. It must never be offered
+-- or accepted as an existing US service link.
+INSERT INTO public.services(service_id,name,duration_min,price)
+VALUES ('11','SYNTHETIC_KG_PRIVATE_CATALOG',30,0);
+INSERT INTO public.salon_master_services
+(salon_id,master_id,service_pk,price,duration_min,active,currency_code)
+VALUES (34,46,2,0,30,true,'KGS');
 
 COMMIT;
