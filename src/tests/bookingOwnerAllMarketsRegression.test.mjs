@@ -128,7 +128,7 @@ test("both public booking endpoints require authenticated owner session",()=>{
   assert.match(getScope,/buildPublicAccessGuard\("booking_read"\),\s*resolveAuth/);
   assert.match(getScope,/authorizePublicSalonBookingReader\(pool,req\.auth,salon_id\)/);
   assert.match(getScope,/Cache-Control","private, no-store"/);
-  assert.match(postScope,/buildPublicAccessGuard\("booking_create"\),\s*resolveAuth/);
+  assert.match(postScope,/buildPublicAccessGuard\("booking_create"\),[\s\S]*?resolveAuth,\s*publicLifecycle/);
   assert.doesNotMatch(postScope,/market_code === "US"\s*\?/);
 });
 
