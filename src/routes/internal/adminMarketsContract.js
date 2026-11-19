@@ -63,7 +63,7 @@ export function assertAdminOpeningMarketPolicy(source) {
   if (code === "US" && process.env.TOTEM_US_ADMIN_MANUAL_ACTIVATION !== "true") {
     throw fault("ADMIN_US_OPEN_OWNER_PENDING");
   }
-  if (code && code !== "KG") throw fault("ADMIN_MARKET_CODE_UNSUPPORTED", 400);
+  if (code && code !== "KG" && code !== "US") throw fault("ADMIN_MARKET_CODE_UNSUPPORTED", 400);
   return code || null;
 }
 
