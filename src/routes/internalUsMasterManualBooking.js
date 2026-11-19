@@ -84,6 +84,26 @@ async function authorize(pool,{auth,identity,masterSlug,body}) {
     ]);
     if(target.rows.length!==1)
       return deny(404,"US_MANUAL_SERVICE_SCOPE_NOT_FOUND");
+    const billing=await db.query(
+      "SELECT subscription_status,blocked_at,next_charge_at,grace_until "+
+      "FROM public.billing_subscriptions "+
+      "WHERE owner_type='master' AND owner_id=$1 LIMIT 1",
+      [Number(owner.owner_id)]
+    );
+    const sub=billing.rows[0];
+    if(sub){
+      const now=Date.now();
+      const nextCharge=sub.next_charge_at
+        ? new Date(sub.next_charge_at).getTime():null;
+      const graceUntil=sub.grace_until
+        ? new Date(sub.grace_until).getTime():null;
+      const state=sub.blocked_at?"blocked"
+        : nextCharge&&nextCharge<now
+          ? graceUntil&&graceUntil>=now?"grace":"overdue"
+          : String(sub.subscription_status||"active");
+      if(state!=="active"&&state!=="grace")
+        return deny(403,"US_MANUAL_MASTER_BILLING_BLOCKED");
+    }
     const row=target.rows[0];
     await resolveUsSalonLocation(db,{
       salonId:Number(row.salon_id),locationCode:body.location_code,
