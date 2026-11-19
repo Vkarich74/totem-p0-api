@@ -16,7 +16,7 @@ function problem(code, status = 400) {
   return e;
 }
 
-function normalizeDraft(raw, { update = false } = {}) {
+export function normalizeDraft(raw, { update = false } = {}) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw) ||
       Object.keys(raw).some(key => !FIELDS.has(key))) {
     throw problem("US_LOCATION_FIELDS_INVALID");
@@ -103,7 +103,7 @@ async function catalogs(db) {
   };
 }
 
-async function checkCatalogKeys(db, draft) {
+export async function checkCatalogKeys(db, draft) {
   const valid = await db.query(
     `SELECT EXISTS(SELECT 1 FROM public.us_states
                      WHERE code=$1 AND country_code='US') AS state_ok,
