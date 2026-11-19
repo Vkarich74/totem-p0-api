@@ -1,0 +1,70 @@
+name: RELEASE US live payment manual reconciliation — read-only
+on:
+  push:
+    branches:
+      - release/us-live-payment-reconciliation-20261119
+    paths:
+      - src/routes/internalUsPayC11LiveRefund.js
+      - src/services/usPayC11LiveReconciliation.service.js
+      - src/tests/usC11LiveReconciliationReadOnly.test.mjs
+      - .github/workflows/us-live-payment-reconciliation.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  us-reconciliation-readonly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 16
+    env:
+      NODE_ENV: test
+      DATABASE_URL: ""
+      REDIS_URL: ""
+      RAILWAY_TOKEN: ""
+      US_PAY_C11_LIVE_PAYMENTS_ENABLED: "false"
+      US_PAY_C11_LIVE_PAYMENT_WEBHOOK_ENABLED: "false"
+      US_PAY_C11_LIVE_REFUNDS_ENABLED: "false"
+      US_PAY_C11_LIVE_FINANCE_EVENTS_ENABLED: "false"
+      US_PAY_C11_LIVE_STRIPE_SECRET_KEY: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: No installation scripts or outbound database
+        run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Syntax and offline US owner reconciliation contract
+        run: |
+          set -euo pipefail
+          node --check src/routes/internalUsPayC11LiveRefund.js
+          node --check src/services/usPayC11LiveReconciliation.service.js
+          node --check src/tests/usC11LiveReconciliationReadOnly.test.mjs
+          test -z "$DATABASE_URL"
+          test -z "$REDIS_URL"
+          node --test src/tests/usC11LiveReconciliationReadOnly.test.mjs
+      - name: Existing signed Stripe webhook and US booking lifecycle regressions
+        run: |
+          set -euo pipefail
+          node --test \
+            src/tests/usLifecycleAtomicConcurrency.test.mjs \
+            src/tests/usStripeBookingWebhookConsistency.test.mjs \
+            src/services/usPayC11ReadService.test.js \
+            src/services/usPayC11ReadModel.test.js
+      - name: Existing US owners, services, slots and IANA
+        run: |
+          set -euo pipefail
+          node --test \
+            src/tests/usCabinetBookingBoundary.test.mjs \
+            src/tests/usHoursServicesSlotsAvailability.test.mjs \
+            src/tests/usMasterScheduleTimezone.test.mjs \
+            src/tests/usPublicServicePriceCatalog.test.mjs
+      - name: No new payment engine, tables, refunds, or test data
+        run: |
+          set -euo pipefail
+          test -z "$DATABASE_URL"
+          test -z "$US_PAY_C11_LIVE_STRIPE_SECRET_KEY"
+          ! git diff --name-only HEAD^ HEAD | grep -E '^(migrations/|db/|src/app\.js$|src/routes/internal\.js$|src/routes/public\.js$|src/payments/|src/money-core/)'
+          ! grep -Eq 'fetch\(|https?://|UPDATE public|INSERT INTO public|DELETE FROM public|stripe_refunds\.create' src/services/usPayC11LiveReconciliation.service.js
+          grep -Fq 'BEGIN READ ONLY' src/services/usPayC11LiveReconciliation.service.js
+          grep -Fq 'readUsC11LiveReconciliation(pool' src/routes/internalUsPayC11LiveRefund.js
+          echo 'US_ONLY_MANUAL_RECONCILIATION_READONLY; NO_DB_STRIPE_USER_OR_BOOKING_WRITES'

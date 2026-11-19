@@ -3,6 +3,7 @@
 // is ever enabled in an audited production release. Default: OFF.
 // Never accepts Stripe Account ID, booking recipient or payment ID as body.
 import express from "express";
+import {readUsC11LiveReconciliation} from "../services/usPayC11LiveReconciliation.service.js";
 import {requireAuth} from "../middleware/requireAuth.js";
 import {
   authorizeUsC11LiveRefund,
@@ -27,6 +28,30 @@ export function buildUsPayC11LiveRefundRouter(pool,{
     }
     return next();
   });
+  // Read-only manual reconciliation is available without enabling LIVE
+  // Stripe charges/refunds. It is NOT a financial or review-close action.
+  // Seller scope is rechecked against auth_sessions and US market in service.
+  router.get(
+    "/us-pay-c11/live-connect/:ownerType/:ownerId/bookings/:bookingId/reconciliation",
+    requireAuth, async(req,res)=>{
+      res.set("Cache-Control","private, no-store");
+      res.set("Referrer-Policy","no-referrer");
+      try{
+        const result=await readUsC11LiveReconciliation(pool,{
+          auth:req.auth,ownerType:req.params.ownerType,
+          ownerId:req.params.ownerId,bookingId:req.params.bookingId,
+        });
+        return res.status(result.status).json(result.body);
+      }catch(error){
+        console.error("US_C11_RECONCILIATION_READ_FAILED",
+          String(error?.code||"INTERNAL"));
+        return res.status(503).json({
+          ok:false,error:"US_C11_RECONCILIATION_READ_UNAVAILABLE",
+        });
+      }
+    }
+  );
+
   router.get(
     "/us-pay-c11/live-connect/:ownerType/:ownerId/bookings/:bookingId/refund/quote",
     ...routeGuards, async(req,res)=>{
