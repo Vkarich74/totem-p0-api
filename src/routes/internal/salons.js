@@ -23,6 +23,10 @@ import { releaseCalendarSlotForBooking } from "../../services/calendarSlots.serv
 import { buildSalonCalendarResponse } from "../../services/salonCalendar.service.js";
 import { buildUsOwnerLocationsRouter } from "./usOwnerLocations.js";
 import { requireCurrencyCode, resolveBusinessMarketContext, resolveOwnerMarketContext } from "../../market-context/BusinessContext.js";
+import {
+  canonicalOwnerProfile, ownerProfileRevision,
+  validateOwnerProfilePatch, canonicalSalonContact, ownerProfilePayload
+} from "../../services/ownerCabinetProfile.service.js";
 
 export default function buildSalonsRouter(pool, internalReadRateLimit){
 
@@ -907,51 +911,126 @@ db.release();
 
 
 /* SALON ROOT */
+/* SALON ROOT — canonical GET + PATCH profile. No parallel owner routes. */
 r.get("/salons/:slug", internalReadRateLimit, async (req,res)=>{
-
-const { slug } = req.params;
-
-try{
-
-const salon = await pool.query(
-`SELECT id,name,slug FROM salons WHERE slug=$1`,
-[slug]
-);
-
-if(!salon.rows.length){
-return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
-}
-
-if(!hasSalonOwnership(req, salon.rows[0].id)){
-return res.status(403).json({ok:false,error:"FORBIDDEN"});
-}
-
-const access = await getSalonBillingAccess(pool, salon.rows[0].id);
-
-res.json({
-ok:true,
-salon:salon.rows[0],
-billing_access:{
-exists:access.exists,
-subscription_status:access.subscription_status,
-access_state:access.access_state,
-can_write:access.can_write,
-can_withdraw:access.can_withdraw,
-billing:access.billing
-}
+  const {slug}=req.params;
+  try{
+    const result=await pool.query(
+      "SELECT id,name,slug,description,city,phone,logo_url FROM public.salons WHERE slug=$1",
+      [slug]
+    );
+    if(!result.rows.length)return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+    const salon=result.rows[0];
+    if(!hasSalonOwnership(req,salon.id)){
+      return res.status(403).json({ok:false,error:"FORBIDDEN"});
+    }
+    const access=await getSalonBillingAccess(pool,salon.id);
+    let profile={};
+    // Existing auth resolver and hasSalonOwnership remain authoritative.
+    // Direct owner_salon is additionally required for editing metadata.
+    if(req.auth?.role==="salon_admin" && req.auth?.source==="session"){
+      const owner=await pool.query(
+        `SELECT u.email FROM public.owner_salon os
+           JOIN public.auth_users u ON u.id=$2
+          WHERE os.salon_id=$1 AND os.owner_id=$2::text
+            AND os.status='active' AND u.role='salon_admin' AND u.enabled=true
+          LIMIT 1`,
+        [salon.id,req.auth.user_id]
+      );
+      if(owner.rows.length){
+        profile=ownerProfilePayload("salon",slug,salon,owner.rows[0].email,access.can_write);
+      }
+    }
+    return res.json({ok:true,salon,...profile,billing_access:access});
+  }catch(err){
+    console.error("SALON_FETCH_ERROR",err);
+    return res.status(500).json({ok:false,error:"SALON_FETCH_FAILED"});
+  }
 });
 
-}catch(err){
+// Update only the already existing salon profile fields. The route reuses
+// the canonical identity/ownership, billing and salon model, not a sidecar.
+r.patch("/salons/:slug", async(req,res)=>{
+  if(req.auth?.role!=="salon_admin" || req.auth?.source!=="session"){
+    return res.status(403).json({ok:false,error:"PROFILE_SESSION_REQUIRED"});
+  }
+  const input=validateOwnerProfilePatch("salon",req.body);
+  if(!input.ok)return res.status(400).json({ok:false,error:input.error});
 
-console.error("SALON_FETCH_ERROR",err);
-
-res.status(500).json({
-ok:false,
-error:"SALON_FETCH_FAILED"
-});
-
-}
-
+  const db=await pool.connect();
+  try{
+    await db.query("BEGIN");
+    await db.query("SET LOCAL statement_timeout = '5000ms'");
+    await db.query("SET LOCAL lock_timeout = '2000ms'");
+    const before=await db.query(
+      `SELECT id,name,slug,description,city,phone,logo_url
+         FROM public.salons WHERE slug=$1 LIMIT 1 FOR UPDATE`,
+      [req.params.slug]
+    );
+    if(!before.rows.length){
+      await db.query("ROLLBACK");
+      return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
+    }
+    const row=before.rows[0];
+    if(!hasSalonOwnership(req,row.id)){
+      await db.query("ROLLBACK");
+      return res.status(403).json({ok:false,error:"FORBIDDEN"});
+    }
+    const direct=await db.query(
+      `SELECT u.email FROM public.owner_salon os
+         JOIN public.auth_users u ON u.id=$2
+        WHERE os.salon_id=$1 AND os.owner_id=$2::text AND os.status='active'
+          AND u.enabled=true AND u.role='salon_admin' LIMIT 1`,
+      [row.id,req.auth.user_id]
+    );
+    if(direct.rows.length!==1){
+      await db.query("ROLLBACK");
+      return res.status(403).json({ok:false,error:"PROFILE_OWNER_NOT_FOUND"});
+    }
+    await ensureSalonWriteAllowed(db,row.id);
+    if(ownerProfileRevision("salon",row)!==input.revision){
+      await db.query("ROLLBACK");
+      return res.status(409).json({ok:false,error:"PROFILE_REVISION_CONFLICT"});
+    }
+    if(input.values.phone!==String(row.phone??"")){
+      const phone=await canonicalSalonContact(db,row.id,input.values.phone);
+      if(!phone.ok){
+        await db.query("ROLLBACK");
+        return res.status(400).json({ok:false,error:phone.error});
+      }
+      input.values.phone=phone.phone;
+    }
+    await db.query(
+      `UPDATE public.salons
+          SET name=$2,description=NULLIF($3,''),city=NULLIF($4,''),
+              phone=NULLIF($5,''),logo_url=NULLIF($6,'')
+        WHERE id=$1`,
+      [row.id,input.values.name,input.values.description,input.values.city,
+        input.values.phone,input.values.logo_url]
+    );
+    const after=await db.query(
+      "SELECT id,name,slug,description,city,phone,logo_url FROM public.salons WHERE id=$1",
+      [row.id]
+    );
+    if(after.rows.length!==1 || JSON.stringify(canonicalOwnerProfile("salon",after.rows[0])) !==
+       JSON.stringify(input.values)){
+      await db.query("ROLLBACK");
+      return res.status(409).json({ok:false,error:"PROFILE_STORAGE_READBACK_MISMATCH"});
+    }
+    const metadata=ownerProfilePayload("salon",req.params.slug,after.rows[0],
+      direct.rows[0].email,true,true);
+    await db.query("COMMIT");
+    return res.json({ok:true,salon:after.rows[0],...metadata});
+  }catch(err){
+    try{await db.query("ROLLBACK");}catch(_ignored){}
+    if(err.code==="BILLING_BLOCKED"){
+      return res.status(403).json({ok:false,error:"PROFILE_BILLING_BLOCKED"});
+    }
+    console.error("SALON_PROFILE_UPDATE_FAILED",err);
+    return res.status(503).json({ok:false,error:"PROFILE_STORAGE_UNAVAILABLE"});
+  }finally{
+    db.release();
+  }
 });
 
 /* SALON NOTIFICATIONS */
