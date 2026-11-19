@@ -2284,6 +2284,86 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
 
   // Only a real provisioned US salon can receive an Admin-verified primary
   // branch. No new owner identity, parallel location table or implicit access.
+
+  // Admin-only read-only geographic catalogs. US activation remains protected
+  // by the separate server feature gate and immutable owner-market checks.
+  r.get("/us-geo-catalog", async (_req,res)=>{
+    try {
+      await requireActiveAdminMarket(pool,"US");
+      const [states,zones] = await Promise.all([
+        pool.query("SELECT code,name_en,kind FROM public.us_states WHERE country_code='US' ORDER BY name_en"),
+        pool.query("SELECT name FROM public.us_timezones ORDER BY name"),
+      ]);
+      if (states.rows.length !== 51 || zones.rows.length !== 29) {
+        return res.status(503).json({ok:false,error:"US_LOCATION_CATALOG_INCOMPLETE"});
+      }
+      return res.json({
+        ok:true,market_code:"US",currency_code:"USD",
+        states:states.rows,timezones:zones.rows.map(row=>row.name),
+        owner_activation_enabled:process.env.TOTEM_US_ADMIN_MANUAL_ACTIVATION==="true",
+      });
+    }catch(error){
+      const status=Number(error?.statusCode || error?.status || 500);
+      return res.status(status>=400&&status<=499?status:500).json({
+        ok:false,error:status>=400&&status<=499?String(error.code):"US_GEO_CATALOG_FAILED",
+      });
+    }
+  });
+
+  // Read-only Admin readback for a SPECIFIC existing provisioned US salon.
+  // Never infer a market from phone, locale, city, or request URL.
+  r.get("/requests/:id/us-primary-location", async (req,res)=>{
+    const requestId=normalizeRequestId(req.params?.id);
+    if(!requestId) return res.status(400).json({ok:false,error:"REQUEST_ID_INVALID"});
+    try {
+      const found=await pool.query(
+        "SELECT * FROM public.owner_opening_requests WHERE id=$1 LIMIT 1",
+        [requestId]
+      );
+      const request=found.rows[0];
+      if(!request) return res.status(404).json({ok:false,error:"OWNER_OPENING_REQUEST_NOT_FOUND"});
+      if(requestMarketCode(request)!=="US" || request.owner_type!=="salon") {
+        return res.status(409).json({ok:false,error:"US_SALON_REQUIRED"});
+      }
+      const salon=await readUsSalon(pool,request.slug_final);
+      if(!salon || Number(salon.id)!==Number(request.created_owner_id) ||
+          salon.market_code!=="US" || salon.market_active!==true ||
+          salon.country_code!=="US" || salon.currency_code!=="USD") {
+        return res.status(409).json({ok:false,error:"US_OWNER_MARKET_BINDING_INVALID"});
+      }
+      const locations=await pool.query(
+        [
+          "SELECT l.location_code,l.state_code,l.city_name,l.street_line1,",
+          "l.street_line2,l.postal_code,l.timezone_name,l.is_primary,l.enabled,",
+          "g.status AS geo_status,g.reasons AS geo_reasons,",
+          "g.checked_at AS geo_checked_at,g.expires_at AS geo_expires_at",
+          "FROM public.us_salon_locations l",
+          "LEFT JOIN public.us_location_geo_verifications g ON g.location_id=l.id",
+          "WHERE l.salon_id=$1 ORDER BY l.is_primary DESC,l.location_code",
+        ].join(" "),
+        [salon.id]
+      );
+      let ready=false;
+      if(locations.rows.some(loc=>loc.is_primary===true&&loc.enabled===true)){
+        try{await assertUsSalonLocationReady(pool,Number(salon.id));ready=true;}catch(error){
+          if(error?.code!=="US_LOCATION_NOT_READY") throw error;
+        }
+      }
+      return res.json({
+        ok:true,request_id:requestId,market_code:"US",currency_code:"USD",
+        status:request.status,owner_id:Number(salon.id),
+        can_prepare:request.status==="provisioned" &&
+          process.env.TOTEM_US_ADMIN_MANUAL_ACTIVATION==="true",
+        location_ready:ready,locations:locations.rows,
+      });
+    }catch(error){
+      const status=Number(error?.statusCode || error?.status || 500);
+      return res.status(status>=400&&status<=499?status:500).json({
+        ok:false,error:status>=400&&status<=499?String(error.code):"US_PRIMARY_LOCATION_READ_FAILED",
+      });
+    }
+  });
+
   r.post("/requests/:id/us-primary-location", async (req,res)=>{
     const requestId = normalizeRequestId(req.params?.id);
     if (!requestId) return res.status(400).json({ok:false,error:"REQUEST_ID_INVALID"});
