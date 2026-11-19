@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {readUsServiceLinkOptions,saveUsServiceLink,
-  rejectLegacyUsServiceMutation} from "../services/usServiceLink.service.js";
+  rejectLegacyUsServiceMutation,rejectLegacyUsMasterServiceCreation} from "../services/usServiceLink.service.js";
 
 const SESSION="11111111-2222-4333-8444-555555555555";
 const salonAuth={source:"session",role:"salon_admin",user_id:81,session_id:SESSION};
@@ -71,10 +71,17 @@ class MemoryPool {
           return {rows:[{id:32,name:"Example US salon",slug:"us-salon"}]};
         }
         if(sql.includes("SELECT DISTINCT sms.master_id,sms.service_pk")) {
+          assert.match(sql,/source_ms|JOIN public.master_salon ms/);
+          assert.match(sql,/market\.code='US'/);
+          assert.match(sql,/sms\.currency_code='USD'/);
+          assert.ok(values.includes(4),"US market id must be scoped");
           return {rows:[{master_id:46,service_pk:6,name:"Hair styling",
             duration_min:60}]};
         }
         if(sql.includes("FROM public.services svc WHERE svc.id=$1")) {
+          assert.match(sql,/market\.code='US'/);
+          assert.match(sql,/old\.currency_code='USD'/);
+          assert.deepEqual(values,[6,46,4]);
           return {rows:state.settings.source===false?[]:[{id:6}]};
         }
         if(sql.includes("SELECT sms.id FROM public.salon_master_services sms")&&
@@ -106,6 +113,10 @@ class MemoryPool {
         if(sql.includes("SELECT sms.id,sms.salon_id,sms.master_id,sms.service_pk")) {
           if(state.settings.corruptReadback)return {rows:[]};
           return {rows:[{...state.link,...state.price,active:true,currency_code:"USD"}]};
+        }
+        if(sql.includes("SELECT EXISTS (SELECT 1 FROM public.master_salon ms")) {
+          assert.equal(values[0],46);
+          return {rows:[{has_us_scope:state.settings.masterUs===true}]};
         }
         if(sql.includes("FROM public.tenant_market_settings tm JOIN public.markets m")) {
           return {rows:state.settings.legacyMarket==="missing"?[]:
@@ -224,4 +235,33 @@ test("legacy US mutation hard-stops while active KG route remains intact",async(
   assert.equal(await rejectLegacyUsServiceMutation(await kg.connect(),32),null);
   const missing=new MemoryPool({legacyMarket:"missing"});
   assert.equal((await rejectLegacyUsServiceMutation(await missing.connect(),32)).status,409);
+});
+
+test("master with both US and KG salons cannot enter legacy auto-salon route",async()=>{
+  const mixed=new MemoryPool({masterUs:true});
+  const masterDb=await mixed.connect();
+  const denied=await rejectLegacyUsMasterServiceCreation(masterDb,46);
+  assert.deepEqual(denied,{status:409,error:"US_SERVICE_LINK_ENDPOINT_REQUIRED"});
+  assert.equal(mixed.writes,0);
+  const kg=new MemoryPool({masterUs:false});
+  const allowed=await rejectLegacyUsMasterServiceCreation(await kg.connect(),46);
+  assert.equal(allowed,null);
+  assert.equal(kg.writes,0);
+  const bad=new MemoryPool();
+  assert.equal((await rejectLegacyUsMasterServiceCreation(await bad.connect(),0)).status,409);
+  assert.equal(bad.calls.length,0);
+});
+
+test("source list and attach SQL reject KG/other market contamination",async()=>{
+  const salonDb=new MemoryPool();
+  const options=await readUsServiceLinkOptions(salonDb,salonReq);
+  assert.equal(options.status,200);
+  assert.ok(salonDb.calls.some(call=>call.sql.includes("market.id=$2") &&
+    call.sql.includes("sms.currency_code='USD'")));
+  const attachDb=new MemoryPool();
+  const bound=await saveUsServiceLink(attachDb,{...salonReq,body:attach});
+  assert.equal(bound.status,200);
+  assert.ok(attachDb.calls.some(call=>call.sql.includes("old.service_pk=svc.id") &&
+    call.sql.includes("market.id=$3") &&
+    call.sql.includes("old.currency_code='USD'")));
 });
