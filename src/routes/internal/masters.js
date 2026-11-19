@@ -1773,6 +1773,34 @@ if(!hasMasterOwnership(req, masterId)){
 return res.status(403).json({ok:false,error:"FORBIDDEN"});
 }
 
+// Only an explicit US master-cabinet read opts into per-booking IANA
+// location metadata. The existing KG/KZ feed is left untouched.
+const usLocationScope = req.query?.calendar_scope === "us_location";
+if(usLocationScope){
+  // Preserve the original KG/KZ master lookup byte-for-byte.
+  const assigned = await pool.query(
+    "SELECT user_id FROM masters WHERE id=$1 LIMIT 1",[masterId]
+  );
+  if(req.auth?.role !== "master" || req.auth?.source !== "session" ||
+     assigned.rows.length !== 1 ||
+     String(req.auth?.user_id) !== String(assigned.rows[0].user_id)){
+    return res.status(403).json({ok:false,error:"MASTER_US_SESSION_REQUIRED"});
+  }
+  // One master may serve several US locations and IANA zones.
+  // Match the COUNTRY of every active salon, never demand one shared zone.
+  const markets = await pool.query(
+    `SELECT DISTINCT mk.code
+       FROM public.master_salon ms
+       JOIN public.tenant_market_settings t ON t.salon_id=ms.salon_id
+       JOIN public.markets mk ON mk.id=t.market_id
+      WHERE ms.master_id=$1 AND ms.status='active'`,
+    [masterId]
+  );
+  if(markets.rows.length !== 1 || markets.rows[0].code !== "US"){
+    return res.status(409).json({ok:false,error:"MASTER_US_MARKET_SCOPE_REQUIRED"});
+  }
+}
+
 const bookings = await pool.query(`
 SELECT
 b.id,
@@ -1805,7 +1833,7 @@ WHERE b.master_id=$1
 ORDER BY b.start_at DESC
 `,[masterId]);
 
-const bookingsRows = bookings.rows.map((booking)=>({
+let bookingsRows = bookings.rows.map((booking)=>({
 ...booking,
 payment_label_ru:getBookingPaymentLabelRu(
 booking.payment_provider,
@@ -1815,12 +1843,62 @@ Boolean(booking.payment_id)
 cash_pending_alert:String(booking.payment_provider || "").toLowerCase()==="direct" && String(booking.payment_status || "").toLowerCase()==="pending" && Boolean(booking.payment_is_active)
 }));
 
+if(usLocationScope && bookingsRows.length){
+  // Reuse the existing booking relation and US booking→location link.
+  // No independent US booking, timezone table, or status mutation.
+  const related = await pool.query(
+    `SELECT b.id AS booking_id, b.salon_id,
+            l.location_code, l.timezone_name AS location_timezone,
+            sl.slug AS salon_slug, sl.name AS salon_name
+       FROM public.bookings b
+       JOIN public.us_booking_location_links link ON link.booking_id=b.id
+       JOIN public.us_salon_locations l
+         ON l.id=link.location_id AND l.salon_id=b.salon_id
+       JOIN public.salons sl ON sl.id=b.salon_id
+       JOIN public.tenant_market_settings t ON t.salon_id=b.salon_id
+       JOIN public.markets mk ON mk.id=t.market_id AND mk.code='US'
+      WHERE b.master_id=$1 AND b.id=ANY($2::int[])`,
+    [masterId,bookingsRows.map(row=>Number(row.id))]
+  );
+  // A missing immutable location link must never be replaced by
+  // browser timezone or a default market zone.
+  if(related.rows.length !== bookingsRows.length){
+    return res.status(409).json({ok:false,error:"MASTER_US_BOOKING_LOCATION_REQUIRED"});
+  }
+  const byId = new Map(related.rows.map(row=>[Number(row.booking_id),row]));
+  if(byId.size !== bookingsRows.length){
+    return res.status(409).json({ok:false,error:"MASTER_US_BOOKING_LOCATION_DUPLICATE"});
+  }
+  for(const item of related.rows){
+    const zone=String(item.location_timezone||"").trim();
+    if(!zone || zone === "UTC" || zone === "Etc/UTC"){
+      return res.status(409).json({ok:false,error:"MASTER_US_BOOKING_TIMEZONE_INVALID"});
+    }
+    try{
+      new Intl.DateTimeFormat("en-US",{timeZone:zone}).format(new Date());
+    }catch(_ignored){
+      return res.status(409).json({ok:false,error:"MASTER_US_BOOKING_TIMEZONE_INVALID"});
+    }
+  }
+  bookingsRows = bookingsRows.map(booking=>{
+    const scope=byId.get(Number(booking.id));
+    return {...booking,
+      salon_id:Number(scope.salon_id),
+      salon_slug:String(scope.salon_slug),
+      salon_name:String(scope.salon_name||""),
+      location_code:String(scope.location_code),
+      location_timezone:String(scope.location_timezone)
+    };
+  });
+}
+
 const billing_access = await getMasterBillingAccess(pool, masterId);
 
 res.json({
 ok:true,
 bookings:bookingsRows,
-billing_access
+billing_access,
+...(usLocationScope ? {calendar_scope:"us_location",market_code:"US"} : {})
 });
 
 }catch(err){

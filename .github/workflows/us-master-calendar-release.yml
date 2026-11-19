@@ -1,0 +1,48 @@
+name: RELEASE US master schedule timezone - canonical feed (isolated)
+on:
+  push:
+    branches:
+      - release/us-master-calendar-prod-aligned-20261119
+    paths:
+      - src/routes/internal/masters.js
+      - src/tests/usMasterScheduleTimezone.test.mjs
+      - .github/workflows/us-master-calendar-release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  us-master-readonly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    env:
+      NODE_ENV: test
+      DATABASE_URL: ""
+      RAILWAY_TOKEN: ""
+      ODOO_URL: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install pinned backend packages
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Syntax check canonical master router
+        run: |
+          set -euo pipefail
+          node --check src/routes/internal/masters.js
+          node --check src/tests/usMasterScheduleTimezone.test.mjs
+      - name: Verify default KG/KZ route and US opt-in location joins
+        run: |
+          set -euo pipefail
+          node --test src/tests/usMasterScheduleTimezone.test.mjs
+      - name: No new API router, fixture DB or production
+        run: |
+          set -euo pipefail
+          test -z "${DATABASE_URL:-}"
+          test ! -e src/routes/internalUsMasterSchedule.js
+          grep -Fq 'r.get("/masters/:slug/bookings"' src/routes/internal/masters.js
+          grep -Fq 'calendar_scope === "us_location"' src/routes/internal/masters.js
+          echo 'CORE_MASTER_ROUTE_ONLY; KG_KZ_UNCHANGED; NO_DB_WRITES; NO_DEPLOY'
