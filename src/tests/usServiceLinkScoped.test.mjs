@@ -75,13 +75,18 @@ class MemoryPool {
           assert.match(sql,/market\.code='US'/);
           assert.match(sql,/sms\.currency_code='USD'/);
           assert.ok(values.includes(4),"US market id must be scoped");
+          if(sql.includes("source_ms")) {
+            assert.match(sql,/sms\.salon_id=\$1/,"salon catalog must not leak other salons");
+            assert.equal(values[0],32);
+          }
           return {rows:[{master_id:46,service_pk:6,name:"Hair styling",
             duration_min:60}]};
         }
         if(sql.includes("FROM public.services svc WHERE svc.id=$1")) {
           assert.match(sql,/market\.code='US'/);
           assert.match(sql,/old\.currency_code='USD'/);
-          assert.deepEqual(values,[6,46,4]);
+          assert.deepEqual(values,[6,46,4,"salon",32]);
+          assert.match(sql,/\(\(\$4='salon' AND old\.salon_id=\$5\)/);
           return {rows:state.settings.source===false?[]:[{id:6}]};
         }
         if(sql.includes("SELECT sms.id FROM public.salon_master_services sms")&&
@@ -263,5 +268,6 @@ test("source list and attach SQL reject KG/other market contamination",async()=>
   assert.equal(bound.status,200);
   assert.ok(attachDb.calls.some(call=>call.sql.includes("old.service_pk=svc.id") &&
     call.sql.includes("market.id=$3") &&
-    call.sql.includes("old.currency_code='USD'")));
+    call.sql.includes("old.currency_code='USD'") &&
+    call.values[3]==="salon" && call.values[4]===32));
 });
