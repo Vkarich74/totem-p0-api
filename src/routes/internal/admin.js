@@ -1,9 +1,29 @@
 import express from "express";
 import { retryNotificationDelivery } from "../../services/push/pushDeliveryService.js";
+import { listAdminMarkets, readScopedAdminList, assertAdminOwnerActionMarket } from "./adminMarketsContract.js";
 
 function parsePositiveInt(value, fallback) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+
+async function serveScopedAdminList(pool, req, res, kind, limit, offset) {
+  try {
+    const data = await readScopedAdminList(pool, {
+      kind,
+      marketCode: req.query.market_code,
+      limit,
+      offset,
+    });
+    return res.json({ ok: true, data, meta: { market_code: data.market_code, scoped: true } });
+  } catch (error) {
+    if (error?.isAdminMarketError === true) {
+      return res.status(error.statusCode).json({ ok: false, error: error.code });
+    }
+    console.error("ADMIN_SCOPED_MARKET_READ_FAILED", { kind, code: error?.code });
+    return res.status(500).json({ ok: false, error: "ADMIN_SCOPED_MARKET_READ_FAILED" });
+  }
 }
 
 function normalizeAuditEntityType(value) {
@@ -310,9 +330,26 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
       next();
     });
 
+
+  // Server-authoritative catalog: KZ always operationally disabled in Admin.
+  r.get("/markets", readLimiter, async (_req, res) => {
+    try {
+      const markets = await listAdminMarkets(pool);
+      return res.json({ ok: true, data: { items: markets }, meta: { catalog: "admin-market-v1" } });
+    } catch (error) {
+      console.error("ADMIN_MARKETS_CATALOG_FAILED", error?.code);
+      return res.status(500).json({ ok: false, error: "ADMIN_MARKETS_CATALOG_FAILED" });
+    }
+  });
+
   r.get("/masters", readLimiter, async (req, res) => {
     const limit = Math.min(parsePositiveInt(req.query.limit, 50), 200);
     const offset = parsePositiveInt(req.query.offset, 0);
+
+    // Additive scoped mode. Calls without market_code are byte-for-byte legacy.
+    if (Object.prototype.hasOwnProperty.call(req.query, "market_code")) {
+      return serveScopedAdminList(pool, req, res, "masters", limit, offset);
+    }
 
     try {
       const data = await pool.query(
@@ -418,6 +455,11 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
     const limit = Math.min(parsePositiveInt(req.query.limit, 50), 200);
     const offset = parsePositiveInt(req.query.offset, 0);
 
+    // Additive scoped mode. Calls without market_code are byte-for-byte legacy.
+    if (Object.prototype.hasOwnProperty.call(req.query, "market_code")) {
+      return serveScopedAdminList(pool, req, res, "salons", limit, offset);
+    }
+
     try {
       const data = await pool.query(
         `
@@ -492,6 +534,11 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
     const limit = Math.min(parsePositiveInt(req.query.limit, 50), 200);
     const offset = parsePositiveInt(req.query.offset, 0);
 
+    // Additive scoped mode. Calls without market_code are byte-for-byte legacy.
+    if (Object.prototype.hasOwnProperty.call(req.query, "market_code")) {
+      return serveScopedAdminList(pool, req, res, "bookings", limit, offset);
+    }
+
     try {
       const data = await pool.query(
         `
@@ -542,6 +589,11 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
   r.get("/clients", readLimiter, async (req, res) => {
     const limit = Math.min(parsePositiveInt(req.query.limit, 50), 200);
     const offset = parsePositiveInt(req.query.offset, 0);
+
+    // Additive scoped mode. Calls without market_code are byte-for-byte legacy.
+    if (Object.prototype.hasOwnProperty.call(req.query, "market_code")) {
+      return serveScopedAdminList(pool, req, res, "clients", limit, offset);
+    }
 
     try {
       const data = await pool.query(
@@ -2173,6 +2225,14 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
         });
       }
 
+      // Bound US owners require explicit US intent; inactive KZ cannot be changed.
+      // Check under the owner lock, inside the existing action transaction.
+      await assertAdminOwnerActionMarket(db, {
+        ownerType: "salon",
+        ownerId: id,
+        requestedMarketCode: req.body?.market_code,
+      });
+
       const updateResult = await db.query(
         action === "suspend"
           ? `
@@ -2229,9 +2289,9 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
       } catch (rollbackError) {}
 
       console.error("ADMIN_SALON_ACTION_ERROR", error);
-      return res.status(500).json({
+      return res.status(error?.isAdminMarketError ? error.statusCode : 500).json({
         ok: false,
-        error: "ADMIN_SALON_ACTION_FAILED",
+        error: error?.isAdminMarketError ? error.code : "ADMIN_SALON_ACTION_FAILED",
       });
     } finally {
       db.release();
@@ -2279,6 +2339,14 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
           error: "ADMIN_MASTER_NOT_FOUND",
         });
       }
+
+      // Bound US owners require explicit US intent; inactive KZ cannot be changed.
+      // Check under the owner lock, inside the existing action transaction.
+      await assertAdminOwnerActionMarket(db, {
+        ownerType: "master",
+        ownerId: id,
+        requestedMarketCode: req.body?.market_code,
+      });
 
       const updateResult = await db.query(
         action === "suspend"
@@ -2336,9 +2404,9 @@ export default function buildAdminRouter(pool, internalReadRateLimit) {
       } catch (rollbackError) {}
 
       console.error("ADMIN_MASTER_ACTION_ERROR", error);
-      return res.status(500).json({
+      return res.status(error?.isAdminMarketError ? error.statusCode : 500).json({
         ok: false,
-        error: "ADMIN_MASTER_ACTION_FAILED",
+        error: error?.isAdminMarketError ? error.code : "ADMIN_MASTER_ACTION_FAILED",
       });
     } finally {
       db.release();
