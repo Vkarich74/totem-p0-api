@@ -1,0 +1,55 @@
+name: RELEASE stage 3 salon cabinet role isolation
+on:
+  push:
+    branches:
+      - release/salon-cabinet-role-isolation-20261119
+    paths:
+      - src/routes/internal/salons.js
+      - src/tests/salonCabinetRoleIsolation.test.mjs
+      - .github/workflows/salon-cabinet-role-isolation.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  salon-role-isolation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NODE_ENV: test
+      DATABASE_URL: ""
+      REDIS_URL: ""
+      RAILWAY_TOKEN: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Offline dependencies
+        run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Syntax
+        run: |
+          node --check src/routes/internal/salons.js
+          node --check src/tests/salonCabinetRoleIsolation.test.mjs
+      - name: Actual salon route handler rejects master-derived salon identity
+        run: |
+          set -euo pipefail
+          test -z "${DATABASE_URL:-}"
+          node --test src/tests/salonCabinetRoleIsolation.test.mjs
+          node --test src/tests/bookingOwnerAllMarketsRegression.test.mjs
+          node --test src/tests/usCabinetBookingBoundary.test.mjs
+          node --test src/tests/usRouterAuthIsolation.test.mjs
+      - name: KG KZ US market and booking slot regressions
+        run: |
+          set -euo pipefail
+          node --test src/tests/g07MarketContextTest.mjs
+          node --test src/tests/g10GeneralizationTest.mjs
+          node --test src/tests/usHoursServicesSlotsAvailability.test.mjs
+          node --test src/tests/usMasterScheduleTimezone.test.mjs
+      - name: No parallel cabinet/schema/users or Production writes
+        run: |
+          set -euo pipefail
+          test -z "${DATABASE_URL:-}"
+          ! git diff --name-only HEAD^ HEAD | grep -E '^(migrations/|db/|src/routes/internal\.js$|src/money-core/|src/payments/)'
+          grep -Fq 'role !== "salon_admin"' src/routes/internal/salons.js
+          echo 'SALON_ADMIN_OWNER_ONLY; MASTERS_USE_MASTER_CABINET; NO_DB_WRITES'
