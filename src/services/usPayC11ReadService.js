@@ -429,6 +429,15 @@ export async function readUsPayC11Booking(
     payment: verifiedPayment,
   });
 
+  // The signed payment record is independent of appointment lifecycle.
+  // An already-cancelled US appointment with a non-terminal Stripe attempt
+  // or verified funds requires human reconciliation; never hide received
+  // money or automatically refund it. Derived from existing joined rows.
+  const cancelled=["cancelled","canceled"].includes(projection.booking_status);
+  const liveAttemptPresent=sameId(row.us_live_attempt_booking_id,row.id);
+  const paymentConflict=cancelled && liveAttemptPresent &&
+    String(row.us_live_attempt_status||"")!=="canceled";
+
   const unavailable = [];
   if (!projection.price) unavailable.push("US_PRICE_SNAPSHOT_UNAVAILABLE");
   if (!tax) unavailable.push("US_TAX_QUOTE_UNAVAILABLE");
@@ -454,6 +463,8 @@ export async function readUsPayC11Booking(
         total_source:"us_booking_service_tax_snapshots",
       } : {}),
       payment_ready: false,
+      financial_consistency_status:paymentConflict?"manual_review":"consistent",
+      reconciliation_required:paymentConflict,
       unavailable_reason: unavailable.join(","),
     },
   };

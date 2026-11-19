@@ -1,0 +1,74 @@
+name: RELEASE US — booking Stripe payment coherence offline
+on:
+  push:
+    branches:
+      - release/us-stripe-booking-coherence-20261119
+    paths:
+      - src/routes/publicLifecycle.js
+      - src/services/usPayC11LiveDirectCharge.service.js
+      - src/services/usPayC11LivePaymentWebhook.service.js
+      - src/services/usPayC11ReadService.js
+      - src/services/usPayC11ReadService.test.js
+      - src/tests/usLifecycleAtomicConcurrency.test.mjs
+      - src/tests/usStripeBookingWebhookConsistency.test.mjs
+      - .github/workflows/us-stripe-booking-coherence.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  us-payment-booking-coherence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 16
+    env:
+      NODE_ENV: test
+      DATABASE_URL: ""
+      REDIS_URL: ""
+      RAILWAY_TOKEN: ""
+      US_PAY_C11_LIVE_STRIPE_SECRET_KEY: ""
+      US_PAY_C11_LIVE_PAYMENTS_ENABLED: "false"
+      US_PAY_C11_LIVE_PAYMENT_WEBHOOK_ENABLED: "false"
+      US_PAY_C11_LIVE_FINANCE_EVENTS_ENABLED: "false"
+      US_PAY_C11_LIVE_REFUNDS_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Deterministic offline installation
+        run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Source syntax
+        run: |
+          set -euo pipefail
+          for f in src/routes/publicLifecycle.js src/services/usPayC11LiveDirectCharge.service.js src/services/usPayC11LivePaymentWebhook.service.js src/services/usPayC11ReadService.js src/services/usPayC11ReadService.test.js src/tests/usLifecycleAtomicConcurrency.test.mjs src/tests/usStripeBookingWebhookConsistency.test.mjs; do
+            node --check "$f"
+          done
+      - name: US atomic lifecycle + signed Stripe event coherence + read model
+        run: |
+          set -euo pipefail
+          test -z "${DATABASE_URL:-}"
+          test -z "${US_PAY_C11_LIVE_STRIPE_SECRET_KEY:-}"
+          node --test \
+            src/tests/usLifecycleAtomicConcurrency.test.mjs \
+            src/tests/usStripeBookingWebhookConsistency.test.mjs \
+            src/services/usPayC11ReadService.test.js \
+            src/services/usPayC11ReadModel.test.js
+      - name: Existing US booking, prices, IANA and owner scope
+        run: |
+          set -euo pipefail
+          node --test \
+            src/tests/usCabinetBookingBoundary.test.mjs \
+            src/tests/usHoursServicesSlotsAvailability.test.mjs \
+            src/tests/usMasterScheduleTimezone.test.mjs \
+            src/tests/usPublicServicePriceCatalog.test.mjs \
+            src/tests/bookingOwnerAllMarketsRegression.test.mjs
+      - name: Safety no new DB schema, payments, user fixtures or route
+        run: |
+          set -euo pipefail
+          test -z "${DATABASE_URL:-}"
+          test -z "${REDIS_URL:-}"
+          ! git diff --name-only HEAD^ HEAD | grep -E '^(migrations/|db/|src/app\.js$|src/routes/public\.js$|src/routes/internal\.js$|src/payments/|src/money-core/|tests/sql/)'
+          grep -Fq "US_LIFECYCLE_STRIPE_RECONCILIATION_REQUIRED" src/routes/publicLifecycle.js
+          grep -Fq "US_C11_LIVE_BOOKING_CHANGED_RECONCILIATION_REQUIRED" src/services/usPayC11LiveDirectCharge.service.js
+          grep -Fq "FOR UPDATE OF b" src/services/usPayC11LivePaymentWebhook.service.js
+          echo 'ONLY_US; SIGNED_MONEY_PRESERVED; FAIL_CLOSED; NO_LIVE_TRANSACTIONS'

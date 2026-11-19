@@ -100,6 +100,20 @@ export async function acceptSignedUsC11LivePaymentEvent({
     if(earlier.rows.length){
       return {status:200,body:{ok:true,result:"duplicate",payment_ready:false}};
     }
+    // Lock the canonical US booking FIRST. The owner lifecycle and
+    // client direct-charge paths use the same booking -> intent order.
+    // A signed financial event is still evidence of actual money even if
+    // an older/manual process has already cancelled the appointment.
+    const lockedBooking=await db.query(
+      `SELECT b.id,b.status FROM public.bookings b
+         JOIN public.tenant_market_settings tm ON tm.salon_id=b.salon_id
+         JOIN public.markets m ON m.id=tm.market_id
+        WHERE b.id=$1 AND m.code='US'
+          AND m.default_currency='USD' AND m.active=true
+        FOR UPDATE OF b`,
+      [bookingId]
+    );
+    const booking=lockedBooking.rows?.[0]||null;
     const fetched=await db.query(
       `SELECT * FROM public.us_stripe_live_payment_intents
         WHERE booking_id=$1 LIMIT 1 FOR UPDATE`,
@@ -143,7 +157,7 @@ export async function acceptSignedUsC11LivePaymentEvent({
       quote.live_owner_type===quote.collector_owner_type &&
       String(quote.live_owner_id)===String(quote.collector_owner_id) &&
       String(quote.live_revision)===String(quote.collector_revision);
-    const matches=quoteMatches &&
+    const matches=Boolean(booking)&&quoteMatches &&
       String(attempt.reservation_token)===pi.metadata.totem_us_reservation &&
       attempt.stripe_account_id===e.account &&
       String(attempt.amount_minor)===String(pi.amount) &&
@@ -156,6 +170,13 @@ export async function acceptSignedUsC11LivePaymentEvent({
     let result=matches?"accepted":"ignored_unlinked";
     if(!matches&&attempt)result="rejected_mismatch";
     if(matches&&(isOlder||settled))result="stale";
+    // Preserve signed Stripe truth. The current DB receipt result enum has
+    // no "reconciliation" member; use existing 'accepted' and expose a
+    // fail-closed reconciliation signal without migrations/refund actions.
+    const bookingPaymentConflict=matches &&
+      !["reserved","confirmed","completed"].includes(
+        String(booking.status||"").toLowerCase()
+      );
 
     const inserted=await db.query(
       `INSERT INTO public.us_stripe_live_payment_receipts
@@ -194,6 +215,7 @@ export async function acceptSignedUsC11LivePaymentEvent({
     return {status:200,body:{
       ok:true,result,payment_ready:false,
       payment_status_updated:result==="accepted",
+      reconciliation_required:Boolean(bookingPaymentConflict),
     }};
   });
 }

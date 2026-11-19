@@ -284,6 +284,20 @@ export async function prepareUsC11LiveDirectCharge(pool,{
   const committed=await tx(pool,async db=>{
     const access=await verifyClientCabinetAccess(db,client,clientToken);
     if(!access.ok)return reject(access.status,access.error);
+    // Stripe REST happens between the reservation and this commit.
+    // A real owner may have changed the booking in the meantime. Always
+    // recheck under the booking row lock BEFORE the intent row lock and
+    // BEFORE returning any client_secret to the browser. The external
+    // Stripe intent, if already created, needs reconciliation, not retry.
+    const currentBooking=await db.query(
+      `SELECT id,status FROM public.bookings
+        WHERE id=$1 AND client_id=$2 FOR UPDATE`,
+      [booked,client]
+    );
+    if(currentBooking.rows?.length!==1 ||
+       !["reserved","confirmed"].includes(currentBooking.rows[0].status)){
+      return reject(409,"US_C11_LIVE_BOOKING_CHANGED_RECONCILIATION_REQUIRED");
+    }
     const locked=await db.query(
       `SELECT * FROM public.us_stripe_live_payment_intents
         WHERE booking_id=$1 LIMIT 1 FOR UPDATE`,

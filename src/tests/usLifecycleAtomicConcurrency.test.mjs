@@ -8,7 +8,7 @@ import {executeUsLifecycleTransaction} from "../routes/publicLifecycle.js";
 
 const auth={source:"session",session_id:"offline-only",role:"salon_admin",user_id:81};
 class OfflinePostgres {
-  constructor({status="reserved",pendingCash=false,owner=true,casConflict=false}={}){
+  constructor({status="reserved",pendingCash=false,owner=true,casConflict=false,liveIntent=null}={}){
     this.row={id:91,salon_id:734,salon_slug:"offline-us",master_id:46,
       master_slug:"offline-master",client_id:52,service_id:18,
       start_at:"2027-04-01T14:00:00.000Z",end_at:"2027-04-01T14:30:00.000Z",
@@ -17,6 +17,7 @@ class OfflinePostgres {
     this.payment={id:23,status:pendingCash?"pending":"confirmed",is_active:pendingCash};
     this.owner=owner;
     this.casConflict=casConflict;
+    this.liveIntent=liveIntent;
     this.events=[];this.lastLock=Promise.resolve();
   }
   async connect(){
@@ -46,6 +47,11 @@ class OfflinePostgres {
       }
       if(q.includes("FROM public.auth_users u")){
         return {rows:db.owner?[{granted:true}]:[],rowCount:db.owner?1:0};
+      }
+      if(q.includes("FROM public.us_stripe_live_payment_intents") && q.startsWith("SELECT")){
+        assert.equal(inTx,true,"Stripe intent check must share booking transaction");
+        assert.ok(q.includes("FOR UPDATE"),"Stripe intent check must lock row");
+        return {rows:db.liveIntent?[{...db.liveIntent}]:[],rowCount:db.liveIntent?1:0};
       }
       if(q.includes("FROM public.payments") && q.startsWith("SELECT")){
         return {rows:db.payment.status==="pending" && db.payment.is_active
@@ -214,4 +220,32 @@ test("only US branch calls new transaction; existing KG/KZ path remains inline",
   assert.match(route,/const ownership=isUsMarket/);
   assert.ok(route.includes('if (action === "complete")'));
   assert.ok(route.includes('if (action === "cancel")'));
+});
+
+
+test("US cancel fails closed for every LIVE Stripe attempt status",async()=>{
+  for(const status of ["creating","requires_payment_method","requires_action",
+    "processing","succeeded","refunded","disputed","canceled","failed",
+    "requires_review","unknown_future_state"]){
+    const db=new OfflinePostgres({status:"confirmed",liveIntent:{status,
+      stripe_payment_intent_id:status==="creating"?null:"pi_offline123456"}});
+    const res=await execute(db,"cancel");
+    assert.equal(res.http,409,status);
+    assert.equal(res.body.error,"US_LIFECYCLE_STRIPE_RECONCILIATION_REQUIRED",status);
+    assert.equal(db.row.status,"confirmed",status);
+    assert.equal(db.slot.status,"reserved",status);
+    assert.equal(db.events.filter(s=>s.startsWith("UPDATE")).length,0,status);
+    const bookingLock=db.events.findIndex(s=>s.includes("FOR UPDATE OF b"));
+    const stripeLock=db.events.findIndex(s=>s.includes("FROM public.us_stripe_live_payment_intents"));
+    assert.ok(bookingLock>=0 && stripeLock>bookingLock,status);
+  }
+});
+
+test("US cancel without LIVE intent keeps original atomic cash and slot semantics",async()=>{
+  const db=new OfflinePostgres({status:"confirmed",pendingCash:true,liveIntent:null});
+  const res=await execute(db,"cancel");
+  assert.equal(res.http,200);
+  assert.equal(db.row.status,"cancelled");
+  assert.equal(db.payment.status,"rejected");
+  assert.equal(db.slot.status,"cancelled");
 });
