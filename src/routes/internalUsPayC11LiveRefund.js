@@ -18,8 +18,8 @@ export function buildUsPayC11LiveRefundRouter(pool,{
     throw Error("US_C11_REFUND_DB_REQUIRED");
   }
   const router=express.Router();
-  router.use(requireAuth);
-  router.use((_req,res,next)=>{
+  const routeGuards = [requireAuth];
+  routeGuards.push((_req,res,next)=>{
     res.set("Cache-Control","no-store");
     res.set("Referrer-Policy","no-referrer");
     if(!enabled){
@@ -29,7 +29,7 @@ export function buildUsPayC11LiveRefundRouter(pool,{
   });
   router.get(
     "/us-pay-c11/live-connect/:ownerType/:ownerId/bookings/:bookingId/refund/quote",
-    async(req,res)=>{
+    ...routeGuards, async(req,res)=>{
       try {
         const answer=await quoteUsC11LiveRefund(pool,{
           auth:req.auth,ownerType:req.params.ownerType,
@@ -47,7 +47,7 @@ export function buildUsPayC11LiveRefundRouter(pool,{
   );
   router.post(
     "/us-pay-c11/live-connect/:ownerType/:ownerId/bookings/:bookingId/refund",
-    async(req,res)=>{
+    ...routeGuards, async(req,res)=>{
       try{
         const result=await authorizeUsC11LiveRefund(pool,{
           auth:req.auth,ownerType:req.params.ownerType,

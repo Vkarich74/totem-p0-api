@@ -14,14 +14,14 @@ export function buildUsServiceTaxQuoteRouter(pool) {
     throw new Error("US_TAX_QUOTE_DB_REQUIRED");
   }
   const router = express.Router();
-  router.use(requireAuth);
-  router.use((_req,res,next)=>{
+  const routeGuards = [requireAuth];
+  routeGuards.push((_req,res,next)=>{
     res.set("Cache-Control","no-store");
     next();
   });
 
   router.get("/us-pay-c11/bookings/:bookingId/service-tax-quote",
-    async (req,res)=>{
+    ...routeGuards, async(req,res)=>{
       try {
         const answer=await readUsBookingServiceTaxQuote(pool,{
           bookingId:req.params.bookingId,
@@ -36,7 +36,7 @@ export function buildUsServiceTaxQuoteRouter(pool) {
     }
   );
   router.post("/us-pay-c11/bookings/:bookingId/service-tax-quote",
-    async (req,res)=>{
+    ...routeGuards, async(req,res)=>{
       try {
         const answer=await createUsBookingServiceTaxQuote(pool,{
           bookingId:req.params.bookingId,

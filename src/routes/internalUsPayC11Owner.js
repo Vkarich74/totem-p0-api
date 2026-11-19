@@ -13,13 +13,13 @@ export function buildUsPayC11OwnerRouter(pool) {
   }
 
   const router = express.Router();
-  router.use(requireAuth);
-  router.use((_req, res, next) => {
+  const routeGuards = [requireAuth];
+  routeGuards.push((_req, res, next) => {
     res.set("Cache-Control", "no-store");
     next();
   });
 
-  router.get("/us-pay-c11/bookings/:bookingId/collector", async (req, res) => {
+  router.get("/us-pay-c11/bookings/:bookingId/collector", ...routeGuards, async(req, res) => {
     try {
       const answer = await readUsC11OwnerCollector(pool, {
         bookingId: req.params.bookingId,
@@ -32,7 +32,7 @@ export function buildUsPayC11OwnerRouter(pool) {
     }
   });
 
-  router.put("/us-pay-c11/bookings/:bookingId/collector", async (req, res) => {
+  router.put("/us-pay-c11/bookings/:bookingId/collector", ...routeGuards, async(req, res) => {
     try {
       const answer = await chooseUsC11OwnerCollector(pool, {
         bookingId: req.params.bookingId,

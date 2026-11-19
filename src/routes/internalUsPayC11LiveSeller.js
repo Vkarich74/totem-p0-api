@@ -24,8 +24,8 @@ export function buildUsPayC11LiveSellerRouter(pool,{
     throw new Error("US_CONNECT_DB_POOL_REQUIRED");
   }
   const router=express.Router();
-  router.use(requireAuth);
-  router.use((req,res,next)=>{
+  const routeGuards = [requireAuth];
+  routeGuards.push((req,res,next)=>{
     res.set("Cache-Control","no-store");
     res.set("Referrer-Policy","no-referrer");
     if (!enabled) {
@@ -34,7 +34,7 @@ export function buildUsPayC11LiveSellerRouter(pool,{
     return next();
   });
 
-  router.get("/us-pay-c11/live-connect/:ownerType/:ownerId",async(req,res)=>{
+  router.get("/us-pay-c11/live-connect/:ownerType/:ownerId",...routeGuards, async(req,res)=>{
     try{
       const result=await getLiveSellerConnection(pool,{
         auth:req.auth,ownerType:req.params.ownerType,ownerId:req.params.ownerId,
@@ -46,7 +46,7 @@ export function buildUsPayC11LiveSellerRouter(pool,{
     }
   });
 
-  router.post("/us-pay-c11/live-connect/:ownerType/:ownerId/start",async(req,res)=>{
+  router.post("/us-pay-c11/live-connect/:ownerType/:ownerId/start",...routeGuards, async(req,res)=>{
     const body=req.body;
     if(!body || typeof body!=="object" || Array.isArray(body) ||
        Object.keys(body).length!==1 || body.consent!==true) {
@@ -65,7 +65,7 @@ export function buildUsPayC11LiveSellerRouter(pool,{
     }
   });
 
-  router.post("/us-pay-c11/live-connect/:ownerType/:ownerId/refresh",async(req,res)=>{
+  router.post("/us-pay-c11/live-connect/:ownerType/:ownerId/refresh",...routeGuards, async(req,res)=>{
     if(req.body && Object.keys(req.body).length) {
       return res.status(400).json({ok:false,error:"US_CONNECT_REFRESH_BODY_FORBIDDEN"});
     }
@@ -83,7 +83,7 @@ export function buildUsPayC11LiveSellerRouter(pool,{
   // Connect a seller's EXISTING Stripe Standard account. Requires explicit
   // owner action and Stripe OAuth (never accepts a browser-provided acct_*).
   router.post("/us-pay-c11/live-connect/:ownerType/:ownerId/oauth/start",
-    async(req,res)=>{
+    ...routeGuards, async(req,res)=>{
       if(!oauthEnabled) {
         return res.status(404).json({ok:false,error:"US_CONNECT_OAUTH_NOT_ENABLED"});
       }

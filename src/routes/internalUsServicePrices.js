@@ -13,14 +13,14 @@ export function buildUsServicePricesRouter(pool) {
     throw new Error("US_SERVICE_PRICE_DB_REQUIRED");
   }
   const router = express.Router();
-  router.use(requireAuth);
-  router.use((_req,res,next) => {
+  const routeGuards = [requireAuth];
+  routeGuards.push((_req,res,next) => {
     res.set("Cache-Control", "no-store");
     next();
   });
 
   router.get("/us-service-prices/:ownerType/:ownerSlug/:serviceLinkId",
-    async (req,res) => {
+    ...routeGuards, async(req,res) => {
       try {
         const answer = await readUsOwnerServicePrice(pool, {
           ownerType: req.params.ownerType,
@@ -38,7 +38,7 @@ export function buildUsServicePricesRouter(pool) {
   );
 
   router.put("/us-service-prices/:ownerType/:ownerSlug/:serviceLinkId",
-    async (req,res) => {
+    ...routeGuards, async(req,res) => {
       try {
         const answer = await saveUsOwnerServicePrice(pool, {
           ownerType: req.params.ownerType,
