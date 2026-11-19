@@ -68,10 +68,15 @@ export function assertAdminOpeningMarketPolicy(source) {
 export async function requireActiveAdminMarket(db, rawCode) {
   const code = parseAdminMarketCode(rawCode);
   const result = await db.query(
-    "SELECT code, active FROM public.markets WHERE code=$1 LIMIT 1", [code]
+    "SELECT code, active, country_code, default_currency FROM public.markets WHERE code=$1 LIMIT 1", [code]
   );
   if (!result.rows?.length) throw fault("ADMIN_MARKET_NOT_FOUND", 404);
   if (result.rows[0].active !== true) throw fault("ADMIN_MARKET_INACTIVE");
+  const expectedCurrency = code === "US" ? "USD" : "KGS";
+  if (String(result.rows[0].country_code || "").toUpperCase() !== code ||
+      String(result.rows[0].default_currency || "").toUpperCase() !== expectedCurrency) {
+    throw fault("ADMIN_MARKET_CONFIGURATION_CONFLICT");
+  }
   return code;
 }
 
@@ -89,7 +94,7 @@ const SOURCES = Object.freeze({
     select: [
       "s.id,s.name,s.slug,s.enabled,s.status,s.created_at",
       "market.code AS market_code,market.active AS market_active",
-      "market.default_currency AS currency_code",
+      "COALESCE(tms.currency_override,market.default_currency) AS currency_code",
       "(SELECT COUNT(DISTINCT ms.master_id)::int FROM public.master_salon ms WHERE ms.salon_id=s.id) AS masters_total",
       "(SELECT COUNT(*)::int FROM public.clients c WHERE c.salon_id=s.id) AS clients_total",
       "(SELECT COUNT(*)::int FROM public.bookings b WHERE b.salon_id=s.id AND DATE(b.start_at)=CURRENT_DATE) AS bookings_today",
@@ -111,7 +116,7 @@ const SOURCES = Object.freeze({
       "ms.salon_id,ms.status AS relation_status",
       "s.slug AS salon_slug,s.name AS salon_name,s.enabled AS salon_enabled,s.status AS salon_status",
       "market.code AS market_code,market.active AS market_active",
-      "market.default_currency AS currency_code",
+      "COALESCE(tms.currency_override,market.default_currency) AS currency_code",
       ["(SELECT COUNT(DISTINCT linked_market.code)::int",
       "FROM public.master_salon link",
       "JOIN public.salons linked_salon ON linked_salon.id=link.salon_id",
@@ -134,7 +139,7 @@ const SOURCES = Object.freeze({
       "c.id,c.name,c.phone,c.salon_id",
       "s.slug AS salon_slug,s.name AS salon_name",
       "market.code AS market_code,market.active AS market_active",
-      "market.default_currency AS currency_code",
+      "COALESCE(tms.currency_override,market.default_currency) AS currency_code",
       "(SELECT COUNT(*)::int FROM public.bookings b WHERE b.client_id=c.id) AS bookings_total",
       "(SELECT MAX(b.start_at) FROM public.bookings b WHERE b.client_id=c.id) AS last_booking_at",
     ].join(", "),
@@ -157,7 +162,7 @@ const SOURCES = Object.freeze({
       "c.name AS client_name,c.phone AS client_phone",
       "b.start_at,b.status",
       "market.code AS market_code,market.active AS market_active",
-      "market.default_currency AS currency_code",
+      "COALESCE(tms.currency_override,market.default_currency) AS currency_code",
     ].join(", "),
     rank: "CASE WHEN b.status IN ('reserved','confirmed','pending') THEN 0 ELSE 1 END",
     time: "b.start_at",
@@ -190,7 +195,8 @@ export async function readScopedAdminList(db, { kind, marketCode, limit, offset 
   const row = result.rows?.[0] || {};
   const items = Array.isArray(row.items) ? row.items : [];
   // Never expose a row from a different tenant market even if a join drifts.
-  if (items.some(item => item.market_code !== code || item.market_active !== true)) {
+  if (items.some(item => item.market_code !== code || item.market_active !== true ||
+    item.currency_code !== (code === "US" ? "USD" : "KGS"))) {
     throw fault("ADMIN_MARKET_READBACK_MISMATCH");
   }
   return {
@@ -215,7 +221,8 @@ export async function assertAdminOwnerActionMarket(db, { ownerType, ownerId, req
   if (ownerType === "salon") {
     const result = await db.query([
       "SELECT market.code AS market_code,market.active AS market_active,",
-      "s.enabled AS salon_enabled,s.status AS salon_status",
+      "s.enabled AS salon_enabled,s.status AS salon_status,",
+      "COALESCE(tms.currency_override,market.default_currency) AS currency_code",
       "FROM public.salons s",
       "LEFT JOIN public.tenant_market_settings tms ON tms.salon_id=s.id",
       "LEFT JOIN public.markets market ON market.id=tms.market_id",
@@ -226,7 +233,8 @@ export async function assertAdminOwnerActionMarket(db, { ownerType, ownerId, req
     const result = await db.query([
       "SELECT ms.salon_id,ms.status AS relation_status,",
       "s.enabled AS salon_enabled,s.status AS salon_status,",
-      "market.code AS market_code,market.active AS market_active",
+      "market.code AS market_code,market.active AS market_active,",
+      "COALESCE(tms.currency_override,market.default_currency) AS currency_code",
       "FROM public.master_salon ms",
       "JOIN public.salons s ON s.id=ms.salon_id",
       "LEFT JOIN public.tenant_market_settings tms ON tms.salon_id=s.id",
@@ -245,6 +253,9 @@ export async function assertAdminOwnerActionMarket(db, { ownerType, ownerId, req
     throw fault("ADMIN_OWNER_MARKET_MISMATCH");
   }
   if (boundCode === "US") {
+    if (rows.some(row => row.currency_code !== "USD")) {
+      throw fault("ADMIN_OWNER_CURRENCY_MISMATCH");
+    }
     if (action === "unsuspend") throw fault("ADMIN_US_ACTIVATION_GATE_PENDING");
     if (requested !== "US") throw fault("ADMIN_US_EXPLICIT_MARKET_REQUIRED");
     const activeRows = rows.filter(row => ownerType === "salon" ||
