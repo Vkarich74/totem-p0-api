@@ -71,6 +71,59 @@ export function checkUsLifecycleSession(auth) {
   return {ok:true,user_id:Number(auth.user_id),role:auth.role};
 }
 
+// Shared owner-session guard. Public pages never authorize writes or
+// personal booking reads merely because a salon is publicly bookable.
+export function checkBookingOwnerSession(auth){
+  const result=checkUsLifecycleSession(auth);
+  if(result.ok)return result;
+  return {...result,error:result.error.replace(/^US_LIFECYCLE_/,"BOOKING_OWNER_")};
+}
+
+// Legacy direct salon binding applies ONLY when a numeric owner_salon
+// membership does not exist. Existing owners always require an ACTIVE row.
+async function activeSalonAdminRelation(db,userId,salonId){
+  return db.query(
+    `SELECT 1
+       FROM public.auth_users u
+       JOIN public.salons s ON s.id=$2
+      WHERE u.id=$1 AND u.enabled=true AND u.role='salon_admin'
+        AND (
+          EXISTS(
+            SELECT 1 FROM public.owner_salon os
+             WHERE os.owner_id=u.id::text
+               AND os.salon_id=s.id AND os.status='active'
+          ) OR (
+            NOT EXISTS(
+              SELECT 1 FROM public.owner_salon os
+               WHERE os.owner_id=u.id::text
+            )
+            AND (u.salon_id=s.id::text OR u.salon_slug=s.slug)
+          )
+        )
+      LIMIT 1`,
+    [userId,salonId]
+  );
+}
+
+// This resource contains real client names and booking prices; only a
+// signed-in owner of THIS salon can list it. Master uses his own cabinet.
+export async function authorizePublicSalonBookingReader(db,auth,salonId){
+  const session=checkBookingOwnerSession(auth);
+  if(!session.ok)return session;
+  if(session.role!=="salon_admin"){
+    return {ok:false,status:403,error:"BOOKING_OWNER_ROLE_FORBIDDEN"};
+  }
+  const salon=Number(salonId);
+  if(!Number.isSafeInteger(salon)||salon<1){
+    return {ok:false,status:403,error:"BOOKING_OWNER_SCOPE_INVALID"};
+  }
+  const relation=await activeSalonAdminRelation(db,session.user_id,salon);
+  if(relation.rows?.length!==1){
+    return {ok:false,status:403,error:"BOOKING_OWNER_FORBIDDEN"};
+  }
+  return {ok:true};
+}
+
 export async function authorizeUsLifecycleActor(db,auth,salonId,masterId) {
   const session=checkUsLifecycleSession(auth);
   if(!session.ok)return session;
@@ -81,13 +134,7 @@ export async function authorizeUsLifecycleActor(db,auth,salonId,masterId) {
     return {ok:false,status:403,error:"US_LIFECYCLE_SCOPE_INVALID"};
   }
   const relation=session.role==="salon_admin"
-    ? await db.query(
-      `SELECT 1 FROM public.auth_users u
-         JOIN public.owner_salon os ON os.owner_id=u.id::text
-        WHERE u.id=$1 AND u.enabled=true AND u.role='salon_admin'
-          AND os.salon_id=$2 AND os.status='active'
-        LIMIT 1`,
-      [session.user_id,salon])
+    ? await activeSalonAdminRelation(db,session.user_id,salon)
     : await db.query(
       `SELECT 1 FROM public.auth_users u
          JOIN public.masters m ON m.user_id=u.id
@@ -103,13 +150,23 @@ export async function authorizeUsLifecycleActor(db,auth,salonId,masterId) {
   return {ok:true};
 }
 
+export async function authorizeBookingLifecycleActor(db,auth,salonId,masterId){
+  const session=checkBookingOwnerSession(auth);
+  if(!session.ok)return session;
+  const result=await authorizeUsLifecycleActor(db,auth,salonId,masterId);
+  if(result.ok)return result;
+  return {...result,error:result.error==="US_LIFECYCLE_OWNER_FORBIDDEN"
+    ? "BOOKING_OWNER_FORBIDDEN"
+    : result.error.replace(/^US_LIFECYCLE_/,"BOOKING_OWNER_")};
+}
+
 export async function publicLifecycle(req, res) {
   try {
     const { salon_id } = req.tenant;
     const bookingId = Number(req.params.id);
     const { action } = req.body || {};
 
-    if (!Number.isFinite(bookingId) || bookingId <= 0) {
+    if (!Number.isSafeInteger(bookingId) || bookingId <= 0) {
       return res.status(400).json({ ok: false, error: "BOOKING_ID_INVALID" });
     }
 
@@ -117,12 +174,12 @@ export async function publicLifecycle(req, res) {
       return res.status(400).json({ ok: false, error: "INVALID_ACTION" });
     }
 
-    const requiresUsOwner=req.market_context?.market_code==="US";
-    if(requiresUsOwner) {
-      const session=checkUsLifecycleSession(req.auth);
-      if(!session.ok) {
-        return res.status(session.status).json({ok:false,error:session.error});
-      }
+    const isUsMarket=req.market_context?.market_code==="US";
+    const session=isUsMarket
+      ? checkUsLifecycleSession(req.auth)
+      : checkBookingOwnerSession(req.auth);
+    if(!session.ok){
+      return res.status(session.status).json({ok:false,error:session.error});
     }
 
     const { rows } = await pool.query(
@@ -151,12 +208,13 @@ export async function publicLifecycle(req, res) {
       return res.status(404).json({ ok: false, error: "BOOKING_NOT_FOUND" });
     }
 
-    if(requiresUsOwner) {
-      const ownership=await authorizeUsLifecycleActor(
-        pool,req.auth,salon_id,rows[0].master_id);
-      if(!ownership.ok) {
-        return res.status(ownership.status).json({ok:false,error:ownership.error});
-      }
+    // Both KG/KZ and US require an existing owner session scoped to this
+    // immutable booking salon+master relation before any state/payment write.
+    const ownership=isUsMarket
+      ? await authorizeUsLifecycleActor(pool,req.auth,salon_id,rows[0].master_id)
+      : await authorizeBookingLifecycleActor(pool,req.auth,salon_id,rows[0].master_id);
+    if(!ownership.ok){
+      return res.status(ownership.status).json({ok:false,error:ownership.error});
     }
 
     const currentStatus = rows[0].status;

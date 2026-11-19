@@ -1,0 +1,63 @@
+name: RELEASE stage 3 all-market owner auth and booking regression
+on:
+  push:
+    branches:
+      - release/booking-owner-regression-20261119
+    paths:
+      - src/routes/public.js
+      - src/routes/publicLifecycle.js
+      - src/tests/usCabinetBookingBoundary.test.mjs
+      - src/tests/bookingOwnerAllMarketsRegression.test.mjs
+      - .github/workflows/booking-owner-regression.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  booking-owner-auth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 17
+    env:
+      NODE_ENV: test
+      DATABASE_URL: ""
+      REDIS_URL: ""
+      RAILWAY_TOKEN: ""
+      ODOO_URL: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Offline dependency install
+        run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Syntax validation
+        run: |
+          set -euo pipefail
+          node --check src/routes/public.js
+          node --check src/routes/publicLifecycle.js
+          node --check src/tests/bookingOwnerAllMarketsRegression.test.mjs
+          node --check src/tests/usCabinetBookingBoundary.test.mjs
+      - name: Owner session and exact tenant scope for US KG KZ
+        run: |
+          set -euo pipefail
+          test -z "${DATABASE_URL:-}"
+          node --test src/tests/bookingOwnerAllMarketsRegression.test.mjs
+          node --test src/tests/usCabinetBookingBoundary.test.mjs
+          node --test src/tests/usRouterAuthIsolation.test.mjs
+      - name: Existing MarketContext IANA US slots and working hours
+        run: |
+          set -euo pipefail
+          node --test src/tests/g07MarketContextTest.mjs
+          node --test src/tests/g10GeneralizationTest.mjs
+          node --test src/tests/usHoursServicesSlotsAvailability.test.mjs
+          node --test src/tests/usMasterWorkingHours.test.mjs
+          node --test src/tests/usMasterScheduleTimezone.test.mjs
+      - name: No destructive change and no synthetic Production data
+        run: |
+          set -euo pipefail
+          test -z "${DATABASE_URL:-}"
+          test -z "${REDIS_URL:-}"
+          ! git diff --name-only HEAD^ HEAD | grep -E '^(migrations/|db/|src/routes/internal\.js$|src/money-core/|src/payments/)'
+          grep -Fq 'authorizePublicSalonBookingReader' src/routes/public.js
+          grep -Fq 'checkBookingOwnerSession(req.auth)' src/routes/publicLifecycle.js
+          echo 'ALL_MARKETS_OWNER_AUTH_GATED; NO_TEST_DB; NO_TEST_BOOKINGS_OR_USERS'

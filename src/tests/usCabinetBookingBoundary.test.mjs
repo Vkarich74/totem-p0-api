@@ -113,9 +113,10 @@ test("backend gates US manual create before legacy side effects",()=>{
   assert.ok(check<body.indexOf("INSERT INTO bookings"));
   assert.ok(body.includes('await db.query("ROLLBACK");'));
 });
-test("US-only lifecycle auth middleware; KG/KZ route preserved",()=>{
+test("owner lifecycle auth middleware now covers US, KG and KZ",()=>{
   const route=fs.readFileSync(new URL("../routes/public.js",import.meta.url),"utf8");
-  assert.match(route,/market_code === "US"\s*\? resolveAuth\(req,res,next\) : next\(\)/);
+  assert.match(route,/resolveAuth,\s*publicLifecycle/);
+  assert.match(route,/buildPublicAccessGuard\("booking_read"\),\s*resolveAuth/);
   const life=fs.readFileSync(new URL("../routes/publicLifecycle.js",import.meta.url),"utf8");
   const endpoint=life.slice(life.indexOf("export async function publicLifecycle("));
   assert.ok(endpoint.indexOf("checkUsLifecycleSession(req.auth)")<
