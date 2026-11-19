@@ -172,3 +172,20 @@ test("any USD mismatch blocks US response", async () => {
     assert.equal(result.body.error,"US_BOOKING_CURRENCY_MISMATCH");
   }
 });
+
+
+test("US signed payment on cancelled booking exposes manual review without rewriting paid truth",async()=>{
+  const result=await read({status:"cancelled",us_live_attempt_booking_id:500,
+    us_live_attempt_status:"succeeded"});
+  assert.equal(result.booking_status,"cancelled");
+  assert.equal(result.reconciliation_required,true);
+  assert.equal(result.financial_consistency_status,"manual_review");
+  assert.equal(result.payment_ready,false);
+});
+
+test("US cancelled booking without Stripe attempt does not fabricate financial conflict",async()=>{
+  const result=await read({status:"cancelled",us_live_attempt_booking_id:null,
+    us_live_attempt_status:null});
+  assert.equal(result.reconciliation_required,false);
+  assert.equal(result.financial_consistency_status,"consistent");
+});

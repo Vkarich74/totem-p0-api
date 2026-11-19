@@ -217,6 +217,25 @@ export async function executeUsLifecycleTransaction(db, {auth, salonId, bookingI
         ? "CANNOT_CANCEL_COMPLETED" : "INVALID_STATUS";
       return {http:409,body:{ok:false,error,status:booking.status}};
     }
+    if(action==="cancel"){
+      // A Stripe LIVE attempt has financial existence outside PostgreSQL.
+      // Never release a US slot while a corresponding intent may be active,
+      // settled, or still being created. Owner reconciliation is required;
+      // do NOT initiate a Stripe cancel/refund or alter the payment sidecar.
+      // Lock order for all US writers: bookings row -> LIVE intent row.
+      const live=await tx.query(
+        `SELECT status,stripe_payment_intent_id
+           FROM public.us_stripe_live_payment_intents
+          WHERE booking_id=$1 LIMIT 1 FOR UPDATE`,
+        [Number(bookingId)]
+      );
+      if(live.rows?.length){
+        await tx.query("ROLLBACK");opened=false;
+        return {http:409,body:{
+          ok:false,error:"US_LIFECYCLE_STRIPE_RECONCILIATION_REQUIRED",
+        }};
+      }
+    }
     if(action==="complete"){
       // Check pending cash while the booking row remains locked.
       const payment=await tx.query(
