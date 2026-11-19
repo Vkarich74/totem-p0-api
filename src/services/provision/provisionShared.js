@@ -406,6 +406,9 @@ export function resolveProvisionError(err){
     "PHONE_REQUIRED",
     "PHONE_INVALID_FORMAT",
     "PHONE_COUNTRY_CODE_REQUIRED",
+    "INVALID_US_PHONE",
+    "INVALID_US_STATE",
+    "INVALID_US_ZIP",
     "EMAIL_REQUIRED",
     "SALON_NAME_REQUIRED",
     "MASTER_NAME_REQUIRED",
@@ -427,6 +430,10 @@ export function resolveProvisionError(err){
     };
   }
 
+  if(code === "US_ADMIN_PROVISION_REQUIRED"){
+    return { status: 403, error: code };
+  }
+
   const notFoundCodes = new Set([
     "SALON_NOT_FOUND",
     "MASTER_NOT_FOUND",
@@ -444,7 +451,9 @@ export function resolveProvisionError(err){
     "AUTH_USER_ALREADY_EXISTS_WITHOUT_SALON",
     "AUTH_USER_ALREADY_EXISTS_WITHOUT_MASTER",
     "SLUG_NOT_AVAILABLE",
-    "SLUG_RESERVATION_NOT_FOUND"
+    "SLUG_RESERVATION_NOT_FOUND",
+    "US_ACTIVE_SALON_REQUIRED",
+    "US_MASTER_CROSS_MARKET_RELATION"
   ]);
 
   if(conflictCodes.has(code)){

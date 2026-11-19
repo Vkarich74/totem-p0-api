@@ -38,7 +38,7 @@ export async function listAdminMarkets(db) {
       country_code: row.country_code,
       database_active: databaseActive,
       admin_operation_enabled: operationEnabled,
-      owner_activation_enabled: databaseActive && code === "KG",
+      owner_activation_enabled: databaseActive && (code === "KG" || (code === "US" && process.env.TOTEM_US_ADMIN_MANUAL_ACTIVATION === "true")),
       admin_status: code === "KZ" ? "inactive_policy" :
         operationEnabled ? "active" : "inactive",
       currency_code: row.default_currency,
@@ -60,8 +60,10 @@ export function assertAdminOpeningMarketPolicy(source) {
     "";
   const code = String(raw || "").trim().toUpperCase();
   if (code === "KZ") throw fault("ADMIN_MARKET_INACTIVE");
-  if (code === "US") throw fault("ADMIN_US_OPEN_OWNER_PENDING");
-  if (code && code !== "KG") throw fault("ADMIN_MARKET_CODE_UNSUPPORTED", 400);
+  if (code === "US" && process.env.TOTEM_US_ADMIN_MANUAL_ACTIVATION !== "true") {
+    throw fault("ADMIN_US_OPEN_OWNER_PENDING");
+  }
+  if (code && code !== "KG" && code !== "US") throw fault("ADMIN_MARKET_CODE_UNSUPPORTED", 400);
   return code || null;
 }
 

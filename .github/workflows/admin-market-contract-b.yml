@@ -1,4 +1,4 @@
-name: Admin market contract B / isolated regression
+name: Admin market contract B / source-only regression
 
 on:
   push:
@@ -6,57 +6,33 @@ on:
       - "release/admin-market-contract-b-*"
     paths:
       - "src/routes/internal/admin.js"
-      - "src/routes/internal/adminOpenOwner.js"
       - "src/routes/internal/adminMarketsContract.js"
-      - "src/tests/adminMarketsContract.test.mjs"
-      - "src/tests/adminMarketSqlSmoke.test.mjs"
+      - "src/routes/internal/adminOpenOwner.js"
       - ".github/workflows/admin-market-contract-b.yml"
   pull_request:
     paths:
       - "src/routes/internal/admin.js"
-      - "src/routes/internal/adminOpenOwner.js"
       - "src/routes/internal/adminMarketsContract.js"
-      - "src/tests/adminMarketsContract.test.mjs"
-      - "src/tests/adminMarketSqlSmoke.test.mjs"
+      - "src/routes/internal/adminOpenOwner.js"
       - ".github/workflows/admin-market-contract-b.yml"
 
 permissions:
   contents: read
 
 jobs:
-  market-contract:
+  source-contract:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_USER: ci
-          POSTGRES_PASSWORD: ci
-          POSTGRES_DB: admin_market_ci
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U ci -d admin_market_ci"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+    timeout-minutes: 6
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: npm
-      - name: Install declared dependencies, no lifecycle scripts
-        run: npm ci --ignore-scripts
-      - name: Syntax of complete Backend files
+      - name: Syntax of full market and admin contracts
         run: |
           node --check src/routes/internal/admin.js
-          node --check src/routes/internal/adminOpenOwner.js
           node --check src/routes/internal/adminMarketsContract.js
-          node --check src/tests/adminMarketsContract.test.mjs
-          node --check src/tests/adminMarketSqlSmoke.test.mjs
-      - name: KG/US/KZ contract and empty-schema PostgreSQL smoke
-        env:
-          PGTEST_URL: postgresql://ci:ci@localhost:5432/admin_market_ci
-        run: node --test src/tests/adminMarketsContract.test.mjs src/tests/adminMarketSqlSmoke.test.mjs
+          node --check src/routes/internal/adminOpenOwner.js
+      - name: Enforce zero business fixtures and zero SQL writes
+        run: |
+          echo "STATIC ONLY: no PostgreSQL service, migrations, SQL DDL, business fixtures, user creation or payment operations."

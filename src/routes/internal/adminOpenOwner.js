@@ -8,6 +8,12 @@ import { createMasterCanonical } from "../../services/provision/createMasterCano
 import { bindMasterToSalonCanonical } from "../../services/provision/bindMasterToSalonCanonical.js";
 import { normalizeContactPhoneForBusiness } from "../../services/contactPhone.js";
 import { assertAdminOpeningMarketPolicy } from "./adminMarketsContract.js";
+import { requireActiveAdminMarket } from "./adminMarketsContract.js";
+import { US_COUNTRY_PACK } from "../../market-context/country-packs/US.js";
+import { requestMarketCode, readUsSalon, isUsSalonActive, assertUsOpenOwnerContract, assertUsActivationReady, assertUsSalonLocationReady, assertVerifiedUsGeo } from "../../services/provision/usOpenOwnerGuards.js";
+import { normalizeDraft, checkCatalogKeys } from "./usOwnerLocations.js";
+import { verifyUsLocationAddress } from "../../services/usAddressGeoVerification.service.js";
+import { persistVerifiedUsAdminPrimaryLocation } from "../../services/provision/usAdminPrimaryLocation.service.js";
 
 const GMAIL_CLIENT_ID = process.env.GMAIL_CLIENT_ID || "";
 const GMAIL_CLIENT_SECRET = process.env.GMAIL_CLIENT_SECRET || "";
@@ -257,26 +263,22 @@ export async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
   const email = normalizeEmail(body.email);
   const phoneRaw = normalizeText(body.phone || body.phone_raw || body.phone_normalized);
   const marketCode = normalizeText(body.market_code).toUpperCase();
-  // Legacy KG intake remains unchanged. Reject KZ and unready US before
-  // any owner-opening write, including Odoo bridge intake.
   try {
     assertAdminOpeningMarketPolicy(marketCode);
+    if (marketCode === "US") await requireActiveAdminMarket(pool, marketCode);
   } catch (policyError) {
-    return {
-      ok: true, valid: false, error: "PRECHECK_FAILED",
-      errors: [policyError.code],
-      normalized: { market_code: marketCode || null },
-      checks: [],
-    };
+    return { ok: true, valid: false, error: "PRECHECK_FAILED", errors: [policyError.code || "ADMIN_MARKET_UNAVAILABLE"], normalized: { market_code: marketCode || null }, checks: [] };
   }
-
-  const phoneResult = await normalizeContactPhoneForBusiness(pool, phoneRaw, {
-    marketCode,
-    required: !allowMissingPhone,
-  });
+  const phoneResult = marketCode === "US"
+    ? US_COUNTRY_PACK.normalizeBusinessPhone(phoneRaw)
+    : await normalizeContactPhoneForBusiness(pool, phoneRaw, {
+      marketCode,
+      required: !allowMissingPhone,
+    });
   const phoneNormalized = phoneResult.ok ? phoneResult.phone : null;
   const city = normalizeText(body.city);
-  const workMode = normalizeText(body.work_mode || (ownerType === "master" ? "independent" : ""));
+  const workMode = normalizeText(body.work_mode || (ownerType === "master" ?
+    (marketCode === "US" ? "attached_to_salon" : "independent") : ""));
   const salonSlug = normalizeSlug(body.salon_slug);
 
   addCheck(checks, "owner_type_valid", Boolean(ownerType), {
@@ -366,8 +368,19 @@ export async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
     errors.push("CITY_REQUIRED");
   }
 
+  if(marketCode === "US" && ownerType === "salon"){
+    const state = US_COUNTRY_PACK.normalizeStateCode(body.state_code);
+    const zip = US_COUNTRY_PACK.normalizeZipCode(body.postal_code);
+    addCheck(checks, "us_state_valid", state.ok);
+    addCheck(checks, "us_zip_valid", zip.ok);
+    if(!state.ok) errors.push(state.error);
+    if(!zip.ok) errors.push(zip.error);
+  }
+
   if(ownerType === "master"){
-    const workModeValid = ["independent", "attached_to_salon"].includes(workMode);
+    const workModeValid = marketCode === "US"
+      ? workMode === "attached_to_salon"
+      : ["independent", "attached_to_salon"].includes(workMode);
     addCheck(checks, "work_mode_valid", workModeValid, {
       work_mode: workMode || null,
     });
@@ -392,6 +405,14 @@ export async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
 
         if(!salonCheck.exists){
           errors.push("SALON_NOT_FOUND");
+        }else if(marketCode === "US"){
+          const usSalon = await readUsSalon(pool, salonSlug);
+          const ready = isUsSalonActive(usSalon);
+          addCheck(checks, "us_active_salon", ready, {
+            market_code: usSalon?.market_code || null,
+            salon_enabled: usSalon?.enabled === true,
+          });
+          if(!ready) errors.push("US_ACTIVE_SALON_REQUIRED");
         }
       }
     }
@@ -414,6 +435,8 @@ export async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
       phone_raw: phoneRaw || null,
       phone_normalized: phoneNormalized || null,
       city: city || null,
+      state_code: marketCode === "US" && ownerType === "salon" ? normalizeText(body.state_code).toUpperCase() : null,
+      postal_code: marketCode === "US" && ownerType === "salon" ? (US_COUNTRY_PACK.normalizeZipCode(body.postal_code).postal_code || null) : null,
       address: normalizeText(body.address),
       description: normalizeText(body.description),
       specialization: normalizeText(body.specialization),
@@ -914,15 +937,16 @@ function extractProvisionOwnerId(provisionResult){
 
 function buildOwnerOpeningLinks({ request, provisionResult, bindResult = null }){
   const ownerType = normalizeOwnerType(request.owner_type);
+  const us = requestMarketCode(request) === "US";
   const slug = normalizeText(provisionResult?.canonical_slug || request.slug_final);
 
   return {
     owner_type: ownerType || request.owner_type,
     slug,
-    public_url: provisionResult?.result?.urls?.public || provisionResult?.public_url || (ownerType && slug ? (ownerType === "salon" ? `/salon?slug=${encodeURIComponent(slug)}` : `/${ownerType}/${encodeURIComponent(slug)}`) : null),
-    cabinet_url: provisionResult?.cabinet_url || (ownerType && slug ? `#/${ownerType}/${slug}` : null),
+    public_url: us ? null : provisionResult?.result?.urls?.public || provisionResult?.public_url || (ownerType && slug ? (ownerType === "salon" ? `/salon?slug=${encodeURIComponent(slug)}` : `/${ownerType}/${encodeURIComponent(slug)}`) : null),
+    cabinet_url: us ? `https://app.totemv.com/#/${ownerType}/${encodeURIComponent(slug)}` : provisionResult?.cabinet_url || (ownerType && slug ? `#/${ownerType}/${slug}` : null),
     internal_url: ownerType && slug ? `/internal/${ownerType === "salon" ? "salons" : "masters"}/${slug}` : null,
-    provision_urls: provisionResult?.result?.urls || null,
+    provision_urls: us ? null : provisionResult?.result?.urls || null,
     bind_urls: bindResult?.result?.urls || null,
   };
 }
@@ -948,8 +972,8 @@ function buildOwnerOpeningEmailPreview(request, locale){
   const links = request.links_json || {};
   const ownerType = normalizeOwnerType(request.owner_type);
   const ownerLabel = ownerType === "master" ? "мастера" : "салона";
-  const publicUrl = links.public_url || (ownerType && request.slug_final ? (ownerType === "salon" ? `/salon?slug=${encodeURIComponent(request.slug_final)}` : `/${ownerType}/${encodeURIComponent(request.slug_final)}`) : null);
-  const cabinetUrl = links.cabinet_url || (ownerType && request.slug_final ? `#/${ownerType}/${request.slug_final}` : null);
+  const publicUrl = requestMarketCode(request) === "US" ? null : links.public_url || (ownerType && request.slug_final ? (ownerType === "salon" ? `/salon?slug=${encodeURIComponent(request.slug_final)}` : `/${ownerType}/${encodeURIComponent(request.slug_final)}`) : null);
+  const cabinetUrl = requestMarketCode(request) === "US" ? `https://app.totemv.com/#/${ownerType}/${encodeURIComponent(request.slug_final)}` : links.cabinet_url || (ownerType && request.slug_final ? `#/${ownerType}/${request.slug_final}` : null);
   const appBaseUrl = "https://app.totemv.com";
   const publicBaseUrl = "https://totemv.com";
   const publicLink = publicUrl && publicUrl.startsWith("http") ? publicUrl : publicUrl ? `${publicBaseUrl}${publicUrl.startsWith("/") ? "" : "/"}${publicUrl}` : null;
@@ -1266,6 +1290,11 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
+      // US uses one strictly validated CountryPack precheck; legacy KG follows unchanged below.
+      if (marketCode === "US") {
+        return res.status(200).json(await buildOpenOwnerPrecheck(pool, body));
+      }
+
       const phoneResult = await normalizeContactPhoneForBusiness(pool, phoneRaw, {
         marketCode,
         required: true,
@@ -1450,6 +1479,9 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
 
     // Backend-only activation policy; Odoo application is not modified.
     try {
+      if (normalizeText(intake.market_code).toUpperCase() === "US") {
+        return res.status(409).json({ok:false,error:"ADMIN_US_ODOO_INTAKE_HOLD"});
+      }
       assertAdminOpeningMarketPolicy(intake.market_code || "");
     } catch (policyError) {
       return res.status(policyError.statusCode).json({ ok: false, error: policyError.code });
@@ -1853,6 +1885,8 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
+      if (requestMarketCode(current) === "US") await assertUsOpenOwnerContract(db,current);
+
       const updatedResult = await db.query(
         `
           UPDATE public.owner_opening_requests
@@ -1883,9 +1917,9 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
     }catch(err){
       try{ await db.query("ROLLBACK"); }catch(e){}
       console.error("ADMIN_OPEN_OWNER_APPROVE_REQUEST_ERROR", err);
-      return res.status(500).json({
+      return res.status(resolveProvisionStatus(err)).json({
         ok: false,
-        error: "ADMIN_OPEN_OWNER_APPROVE_REQUEST_FAILED",
+        error: err?.status ? String(err.code) : "ADMIN_OPEN_OWNER_APPROVE_REQUEST_FAILED",
       });
     }finally{
       db.release();
@@ -1956,6 +1990,8 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
+      if (requestMarketCode(request) === "US") await assertUsOpenOwnerContract(markDb,request);
+
       const provisioningResult = await markDb.query(
         `
           UPDATE public.owner_opening_requests
@@ -1990,6 +2026,114 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
     try{
       let provisionResult = null;
       let bindResult = null;
+
+      if(requestMarketCode(request) === "US"){
+        // US owner creation, master-salon binding, state readback and
+        // audit must either all commit or all roll back together.
+        const usDb = await pool.connect();
+        try{
+          await usDb.query("BEGIN");
+          await assertUsOpenOwnerContract(usDb, request);
+
+          if(request.owner_type === "salon"){
+            provisionResult = await createSalonCanonical({
+              pool, dbClient: usDb,
+              payload: buildSalonProvisionPayload(request),
+            });
+            const proof = await usDb.query(
+              `SELECT s.id FROM public.salons s
+                 JOIN public.tenant_market_settings t ON t.salon_id=s.id
+                 JOIN public.markets m ON m.id=t.market_id
+                WHERE s.id=$1 AND m.code='US' AND m.active=true LIMIT 1`,
+              [extractProvisionOwnerId(provisionResult)]
+            );
+            if(proof.rows.length !== 1){
+              const err = new Error("US_MARKET_BINDING_INVALID");
+              err.code = "US_MARKET_BINDING_INVALID"; err.status = 409;
+              throw err;
+            }
+          }else if(request.owner_type === "master"){
+            provisionResult = await createMasterCanonical({
+              pool, dbClient: usDb,
+              payload: buildMasterProvisionPayload(request),
+            });
+            bindResult = await bindMasterToSalonCanonical({
+              pool, dbClient: usDb, verifiedUsAdminProvision: true,
+              payload: {
+                salon_slug: request.salon_slug,
+                master_slug: provisionResult?.canonical_slug || request.slug_final,
+                bind_mode: "active",
+                create_contract: false,
+                required_market_code: "US",
+              },
+            });
+
+            const proof = await usDb.query(
+              `SELECT ms.id FROM public.master_salon ms
+                 JOIN public.salons s ON s.id=ms.salon_id
+                 JOIN public.tenant_market_settings t ON t.salon_id=s.id
+                 JOIN public.markets m ON m.id=t.market_id
+                WHERE ms.master_id=$1 AND s.slug=$2 AND ms.status='active'
+                  AND s.enabled=true AND s.status='active'
+                  AND m.code='US' AND m.active=true LIMIT 1`,
+              [extractProvisionOwnerId(provisionResult), request.salon_slug]
+            );
+            if(proof.rows.length !== 1){
+              const err = new Error("US_MASTER_ACTIVE_SALON_REQUIRED");
+              err.code = "US_MASTER_ACTIVE_SALON_REQUIRED"; err.status = 409;
+              throw err;
+            }
+          }else{
+            const err=new Error("OWNER_TYPE_INVALID");
+            err.code="OWNER_TYPE_INVALID";err.status=400;throw err;
+          }
+
+          const ownerId=extractProvisionOwnerId(provisionResult);
+          const authUserId=extractProvisionAuthUserId(provisionResult);
+          if(!ownerId || !authUserId){
+            const err=new Error("US_OWNER_IDENTITY_NOT_READY");
+            err.code="US_OWNER_IDENTITY_NOT_READY";err.status=409;throw err;
+          }
+
+          const links=buildOwnerOpeningLinks({request,provisionResult,bindResult});
+          const resultJson={provision:provisionResult,bind:bindResult};
+          const done=await usDb.query(
+            `UPDATE public.owner_opening_requests
+                SET status='provisioned',created_owner_id=$2,
+                    created_auth_user_id=$3,provision_result_json=$4,
+                    links_json=$5,provisioned_at=NOW(),updated_at=NOW()
+              WHERE id=$1 AND status='provisioning'
+              RETURNING *`,
+            [requestId,ownerId,authUserId,JSON.stringify(resultJson),JSON.stringify(links)]
+          );
+          if(done.rows.length !== 1){
+            const err=new Error("US_PROVISION_REQUEST_STATE_CHANGED");
+            err.code="US_PROVISION_REQUEST_STATE_CHANGED";err.status=409;throw err;
+          }
+          const finalRequest=done.rows[0];
+          const auditEvent=await writeOwnerOpeningAuditEvent(usDb,{
+            request:finalRequest,
+            eventType:"owner_opening.provisioned",
+            admin,
+            data:{
+              created_owner_id:ownerId,created_auth_user_id:authUserId,
+              bind_created:Boolean(bindResult),market_code:"US",
+            },
+          });
+          await usDb.query("COMMIT");
+          return res.status(200).json({
+            ok:true,request:finalRequest,provision_result:provisionResult,
+            bind_result:bindResult,links,
+            audit_event_id:auditEvent?.id ? Number(auditEvent.id) : null,
+          });
+        }catch(err){
+          try{await usDb.query("ROLLBACK");}catch(_ignored){}
+          throw err;
+        }finally{
+          usDb.release();
+        }
+      }
+
 
       if(request.owner_type === "salon"){
         provisionResult = await createSalonCanonical({
@@ -2138,6 +2282,211 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
     }
   });
 
+  // Only a real provisioned US salon can receive an Admin-verified primary
+  // branch. No new owner identity, parallel location table or implicit access.
+
+  // Admin-only read-only geographic catalogs. US activation remains protected
+  // by the separate server feature gate and immutable owner-market checks.
+  r.get("/us-geo-catalog", async (_req,res)=>{
+    try {
+      await requireActiveAdminMarket(pool,"US");
+      const [states,zones] = await Promise.all([
+        pool.query("SELECT code,name_en,kind FROM public.us_states WHERE country_code='US' ORDER BY name_en"),
+        pool.query("SELECT name FROM public.us_timezones ORDER BY name"),
+      ]);
+      if (states.rows.length !== 51 || zones.rows.length !== 29) {
+        return res.status(503).json({ok:false,error:"US_LOCATION_CATALOG_INCOMPLETE"});
+      }
+      return res.json({
+        ok:true,market_code:"US",currency_code:"USD",
+        states:states.rows,timezones:zones.rows.map(row=>row.name),
+        owner_activation_enabled:process.env.TOTEM_US_ADMIN_MANUAL_ACTIVATION==="true",
+      });
+    }catch(error){
+      const status=Number(error?.statusCode || error?.status || 500);
+      return res.status(status>=400&&status<=499?status:500).json({
+        ok:false,error:status>=400&&status<=499?String(error.code):"US_GEO_CATALOG_FAILED",
+      });
+    }
+  });
+
+  // Read-only Admin readback for a SPECIFIC existing provisioned US salon.
+  // Never infer a market from phone, locale, city, or request URL.
+  r.get("/requests/:id/us-primary-location", async (req,res)=>{
+    const requestId=normalizeRequestId(req.params?.id);
+    if(!requestId) return res.status(400).json({ok:false,error:"REQUEST_ID_INVALID"});
+    try {
+      const found=await pool.query(
+        "SELECT * FROM public.owner_opening_requests WHERE id=$1 LIMIT 1",
+        [requestId]
+      );
+      const request=found.rows[0];
+      if(!request) return res.status(404).json({ok:false,error:"OWNER_OPENING_REQUEST_NOT_FOUND"});
+      if(requestMarketCode(request)!=="US" || request.owner_type!=="salon") {
+        return res.status(409).json({ok:false,error:"US_SALON_REQUIRED"});
+      }
+      const salon=await readUsSalon(pool,request.slug_final);
+      if(!salon || Number(salon.id)!==Number(request.created_owner_id) ||
+          salon.market_code!=="US" || salon.market_active!==true ||
+          salon.country_code!=="US" || salon.currency_code!=="USD") {
+        return res.status(409).json({ok:false,error:"US_OWNER_MARKET_BINDING_INVALID"});
+      }
+      const locations=await pool.query(
+        [
+          "SELECT l.location_code,l.state_code,l.city_name,l.street_line1,",
+          "l.street_line2,l.postal_code,l.timezone_name,l.is_primary,l.enabled,",
+          "g.status AS geo_status,g.reasons AS geo_reasons,",
+          "g.checked_at AS geo_checked_at,g.expires_at AS geo_expires_at",
+          "FROM public.us_salon_locations l",
+          "LEFT JOIN public.us_location_geo_verifications g ON g.location_id=l.id",
+          "WHERE l.salon_id=$1 ORDER BY l.is_primary DESC,l.location_code",
+        ].join(" "),
+        [salon.id]
+      );
+      let ready=false;
+      if(locations.rows.some(loc=>loc.is_primary===true&&loc.enabled===true)){
+        try{await assertUsSalonLocationReady(pool,Number(salon.id));ready=true;}catch(error){
+          if(error?.code!=="US_LOCATION_NOT_READY") throw error;
+        }
+      }
+      return res.json({
+        ok:true,request_id:requestId,market_code:"US",currency_code:"USD",
+        status:request.status,owner_id:Number(salon.id),
+        can_prepare:request.status==="provisioned" &&
+          process.env.TOTEM_US_ADMIN_MANUAL_ACTIVATION==="true",
+        location_ready:ready,locations:locations.rows,
+      });
+    }catch(error){
+      const status=Number(error?.statusCode || error?.status || 500);
+      return res.status(status>=400&&status<=499?status:500).json({
+        ok:false,error:status>=400&&status<=499?String(error.code):"US_PRIMARY_LOCATION_READ_FAILED",
+      });
+    }
+  });
+
+  r.post("/requests/:id/us-primary-location", async (req,res)=>{
+    const requestId = normalizeRequestId(req.params?.id);
+    if (!requestId) return res.status(400).json({ok:false,error:"REQUEST_ID_INVALID"});
+    let db = null;
+    let begun = false;
+    try {
+      assertAdminOpeningMarketPolicy("US");
+      const admin = getAdminActor(req);
+      const draft = normalizeDraft(req.body);
+      if (draft.is_primary !== true) {
+        return res.status(400).json({ok:false,error:"US_PRIMARY_LOCATION_REQUIRED"});
+      }
+
+      // Read-only authorization before initiating external Census requests.
+      const before = await pool.query(
+        "SELECT * FROM public.owner_opening_requests WHERE id=$1 LIMIT 1",
+        [requestId]
+      );
+      const current = before.rows[0] || null;
+      if (!current) return res.status(404).json({ok:false,error:"OWNER_OPENING_REQUEST_NOT_FOUND"});
+      if (requestMarketCode(current) !== "US" ||
+          current.owner_type !== "salon" || current.status !== "provisioned") {
+        return res.status(409).json({ok:false,error:"US_SALON_NOT_PROVISIONED"});
+      }
+
+      const normalized = current.precheck_result_json?.normalized || {};
+      if (draft.state_code !== normalized.state_code ||
+          draft.postal_code !== normalized.postal_code ||
+          draft.city_name.trim().toLowerCase() !== String(current.city || "").trim().toLowerCase()) {
+        return res.status(409).json({ok:false,error:"US_LOCATION_REQUEST_MISMATCH"});
+      }
+      const existingSalon = await readUsSalon(pool, current.slug_final);
+      if (Number(existingSalon?.id) !== Number(current.created_owner_id) ||
+          existingSalon?.market_code !== "US" || existingSalon?.market_active !== true ||
+          existingSalon?.currency_code !== "USD" || existingSalon?.country_code !== "US") {
+        return res.status(409).json({ok:false,error:"US_OWNER_MARKET_BINDING_INVALID"});
+      }
+      await checkCatalogKeys(pool, draft);
+      // No SQL transaction spans the external geocoding operation.
+      const geo = await verifyUsLocationAddress(draft);
+      assertVerifiedUsGeo(draft,geo);
+
+      db = await pool.connect();
+      await db.query("BEGIN");
+      begun = true;
+      const locked = await getOwnerOpeningRequestForUpdate(db,requestId);
+      if (!locked || locked.status !== "provisioned" ||
+          locked.owner_type !== "salon" || requestMarketCode(locked) !== "US" ||
+          Number(locked.created_owner_id) !== Number(current.created_owner_id) ||
+          Number(locked.created_auth_user_id) !== Number(current.created_auth_user_id)) {
+        const err = new Error("US_OWNER_REQUEST_CHANGED");
+        err.code = "US_OWNER_REQUEST_CHANGED";err.status=409;throw err;
+      }
+      await assertUsOpenOwnerContract(db,locked);
+      const lockedNormalized = locked.precheck_result_json?.normalized || {};
+      if (draft.state_code !== lockedNormalized.state_code ||
+          draft.postal_code !== lockedNormalized.postal_code ||
+          draft.city_name.trim().toLowerCase() !== String(locked.city || "").trim().toLowerCase()) {
+        const error = new Error("US_LOCATION_REQUEST_MISMATCH");
+        error.code = "US_LOCATION_REQUEST_MISMATCH"; error.status = 409;
+        throw error;
+      }
+      const owner = await readUsSalon(db,locked.slug_final);
+      if (Number(owner?.id) !== Number(locked.created_owner_id) ||
+          owner?.market_code !== "US" || owner?.market_active !== true ||
+          owner?.country_code !== "US" || owner?.currency_code !== "USD") {
+        const err = new Error("US_OWNER_MARKET_BINDING_INVALID");
+        err.code = "US_OWNER_MARKET_BINDING_INVALID";err.status=409;throw err;
+      }
+      const ownerLink = await db.query(
+        [
+          "SELECT 1 FROM public.owner_salon os",
+          "JOIN public.auth_users u ON u.id=$2",
+          "WHERE os.salon_id=$1 AND os.owner_id=$3 AND os.status='active'",
+          "AND u.enabled=false AND u.role='salon_admin' LIMIT 1",
+        ].join(" "),
+        [owner.id,locked.created_auth_user_id,String(locked.created_auth_user_id)]
+      );
+      if (ownerLink.rows.length !== 1) {
+        const err = new Error("US_OWNER_DIRECT_LINK_REQUIRED");
+        err.code = "US_OWNER_DIRECT_LINK_REQUIRED";err.status=409;throw err;
+      }
+      await db.query("SELECT id FROM public.salons WHERE id=$1 FOR UPDATE",[owner.id]);
+      await checkCatalogKeys(db,draft);
+      const saved = await persistVerifiedUsAdminPrimaryLocation(db,{
+        salonId:Number(owner.id),draft,geo,
+      });
+      let auditId = null;
+      if (!saved.idempotent) {
+        const auditEvent = await writeOwnerOpeningAuditEvent(db,{
+          request:locked,admin,eventType:"owner_opening.us_primary_location_ready",
+          data:{
+            market_code:"US",owner_id:Number(owner.id),
+            location_id:saved.id,location_code:draft.location_code,
+            state_code:draft.state_code,postal_code:draft.postal_code,
+            timezone_name:draft.timezone_name,geo_status:geo.status,
+            geo_source_version:geo.source_version,
+          },
+        });
+        auditId = auditEvent?.id || null;
+      }
+      await db.query("COMMIT");
+      begun = false;
+      return res.json({
+        ok:true,request_id:requestId,market_code:"US",currency_code:"USD",
+        idempotent:saved.idempotent,
+        location:{id:saved.id,location_code:draft.location_code,
+          state_code:draft.state_code,postal_code:draft.postal_code,
+          timezone_name:draft.timezone_name,enabled:true,is_primary:true,
+          geo_status:"VERIFIED_GEOMETRY"},
+        audit_event_id:auditId,
+      });
+    } catch(error) {
+      if (begun && db) try{await db.query("ROLLBACK");}catch(_ignored){}
+      const status = Number(error?.status || error?.statusCode || 500);
+      const expected = Number.isInteger(status) && status>=400 && status<=499;
+      if (!expected) console.error("US_ADMIN_PRIMARY_LOCATION_FAILED",error?.code||"UNKNOWN");
+      return res.status(expected?status:500).json({
+        ok:false,error:expected?String(error.code||"US_ADMIN_LOCATION_INVALID"):"US_ADMIN_PRIMARY_LOCATION_FAILED",
+      });
+    } finally {db?.release();}
+  });
+
   r.post("/requests/:id/activate", async (req,res)=>{
     const requestId = normalizeRequestId(req.params?.id);
 
@@ -2191,7 +2540,21 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
+      if (requestMarketCode(current) === "US") await assertUsActivationReady(db,current,Number(current.created_owner_id));
+
       const ownerActivation = await activateOwnerOpeningEntity(db, current);
+      if (requestMarketCode(current) === "US") {
+        // No US OTP/login until verified business activation; same transaction.
+        const userRole = current.owner_type === "salon" ? "salon_admin" : "master";
+        const unlocked = await db.query(
+          "UPDATE public.auth_users SET enabled=true WHERE id=$1 AND role=$2 AND enabled=false RETURNING id",
+          [current.created_auth_user_id,userRole]
+        );
+        if (unlocked.rows.length !== 1) {
+          const error = new Error("US_AUTH_ACTIVATION_READBACK_MISMATCH");
+          error.code = "US_AUTH_ACTIVATION_READBACK_MISMATCH";error.status=409;throw error;
+        }
+      }
 
       const updatedResult = await db.query(
         `
@@ -2228,7 +2591,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
     }catch(err){
       try{ await db.query("ROLLBACK"); }catch(e){}
       console.error("ADMIN_OPEN_OWNER_ACTIVATE_REQUEST_ERROR", err);
-      return res.status(500).json({
+      return res.status(resolveProvisionStatus(err)).json({
         ok: false,
         error: String(err?.code || err?.message || "ADMIN_OPEN_OWNER_ACTIVATE_REQUEST_FAILED"),
       });
@@ -2262,6 +2625,11 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
           ok: false,
           error: "OWNER_OPENING_REQUEST_NOT_FOUND",
         });
+      }
+
+      if (requestMarketCode(request) === "US") {
+        assertAdminOpeningMarketPolicy("US");
+        await assertUsActivationReady(db,request,Number(request.created_owner_id));
       }
 
       if(request.status !== "activated" && request.status !== "email_ready" && request.status !== "email_sent" && request.status !== "email_failed"){
@@ -2319,7 +2687,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
     }catch(err){
       try{ await db.query("ROLLBACK"); }catch(e){}
       console.error("ADMIN_OPEN_OWNER_EMAIL_PREVIEW_ERROR", err);
-      return res.status(500).json({
+      return res.status(resolveProvisionStatus(err)).json({
         ok: false,
         error: "ADMIN_OPEN_OWNER_EMAIL_PREVIEW_FAILED",
       });
@@ -2358,6 +2726,11 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
+      if (requestMarketCode(request) === "US") {
+        assertAdminOpeningMarketPolicy("US");
+        await assertUsActivationReady(prepareDb,request,Number(request.created_owner_id));
+      }
+
       if(request.status !== "email_ready" && request.status !== "email_failed"){
         await prepareDb.query("ROLLBACK");
         return res.status(409).json({
@@ -2367,7 +2740,10 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
-      if (request.email_preview_json && Object.keys(request.email_preview_json || {}).length) {
+      if (requestMarketCode(request) === "US") {
+        // Always re-render USA mail to omit unpublished public URL and stale preview.
+        preview = buildOwnerOpeningEmailPreview(request,"en-US");
+      } else if (request.email_preview_json && Object.keys(request.email_preview_json || {}).length) {
         preview = request.email_preview_json;
       } else {
         const { locale } = await resolveRecipientLocale(prepareDb, { userId: request.created_auth_user_id, ownerType: request.owner_type, ownerId: request.created_owner_id });
@@ -2413,9 +2789,9 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       try{ await prepareDb.query("ROLLBACK"); }catch(e){}
       prepareDb.release();
       console.error("ADMIN_OPEN_OWNER_EMAIL_PREPARE_ERROR", err);
-      return res.status(500).json({
+      return res.status(resolveProvisionStatus(err)).json({
         ok: false,
-        error: "ADMIN_OPEN_OWNER_EMAIL_PREPARE_FAILED",
+        error: err?.status ? String(err.code) : "ADMIN_OPEN_OWNER_EMAIL_PREPARE_FAILED",
       });
     }
 
@@ -2721,6 +3097,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
             work_mode,
             salon_slug,
             admin_notes,
+            COALESCE(precheck_result_json->'normalized'->>'market_code',precheck_result_json->>'market_code') AS market_code,
             created_owner_id,
             created_auth_user_id,
             moderation_case_id,
