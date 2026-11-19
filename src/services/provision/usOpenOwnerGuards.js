@@ -131,13 +131,14 @@ export async function assertUsActivationReady(db, request, ownerId) {
         "SELECT s.id FROM public.salons s",
         "JOIN public.tenant_market_settings t ON t.salon_id=s.id",
         "JOIN public.markets m ON m.id=t.market_id",
-        "JOIN public.owner_salon os ON os.salon_id=s.id AND os.status='active'",
-        "JOIN public.auth_users u ON u.id=os.owner_id",
-        "WHERE s.id=$1 AND u.id=$2 AND u.enabled=true AND u.role='salon_admin'",
+        "JOIN public.auth_users u ON u.id=$2",
+        "WHERE s.id=$1 AND u.enabled=true AND u.role='salon_admin'",
+        "AND EXISTS(SELECT 1 FROM public.owner_salon os",
+        "WHERE os.salon_id=s.id AND os.owner_id=$3 AND os.status='active')",
         "AND m.code='US' AND m.country_code='US' AND m.active=true",
         "AND COALESCE(t.currency_override,m.default_currency)='USD' LIMIT 1",
       ].join(" "),
-      [ownerId, request.created_auth_user_id]
+      [ownerId, request.created_auth_user_id, String(request.created_auth_user_id)]
     );
     if (owner.rows.length !== 1) throw problem("US_MARKET_BINDING_INVALID");
     await assertUsSalonLocationReady(db, Number(ownerId));
