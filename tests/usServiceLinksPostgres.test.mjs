@@ -31,7 +31,7 @@ test("PostgreSQL17: explicit-owner create/attach, USD, duplicated and foreign sc
   try {
     const read=await readUsServiceLinkOptions(pool,salon);
     assert.equal(read.status,200);
-    assert.equal(read.body.masters[0].id,46);
+    assert.deepEqual(read.body.masters.map(x=>x.id),[46,48]);
     assert.deepEqual(read.body.catalog_services.map(x=>x.service_pk),[1]);
     const masterOptions=await readUsServiceLinkOptions(pool,master);
     assert.equal(masterOptions.body.salons.length,2);
@@ -96,6 +96,27 @@ test("PostgreSQL17: explicit-owner create/attach, USD, duplicated and foreign sc
     assert.equal(attached.body.service.service_pk,1);
     assert.equal(attached.body.service.amount_minor,"2500");
     assert.equal(await count("services"),4); // Attachment does not create catalog row.
+
+    // Salon owner can attach an existing service from their OWN salon to
+    // another active master; this does not reveal any other US salon catalog.
+    const salonAttached=await saveUsServiceLink(pool,{...salon,body:{
+      operation:"attach",master_id:48,service_pk:1,
+      duration_min:60,amount_minor:3000,
+    }});
+    assert.equal(salonAttached.status,200);
+    assert.equal(salonAttached.body.service.salon_id,32);
+    assert.equal(salonAttached.body.service.master_id,48);
+    assert.equal(salonAttached.body.service.service_pk,1);
+    assert.equal(salonAttached.body.service.amount_minor,"3000");
+
+    const foreignUsSource=await saveUsServiceLink(pool,{...salon,body:{
+      operation:"attach",master_id:48,
+      service_pk:masterMade.body.service.service_pk,
+      duration_min:40,amount_minor:5000,
+    }});
+    assert.equal(foreignUsSource.status,404);
+    assert.equal(foreignUsSource.body.error,"US_SERVICE_LINK_SOURCE_NOT_FOUND");
+    assert.equal(await count("services"),4);
 
     const kgSourceRejected=await saveUsServiceLink(pool,{...master,body:{
       operation:"attach",salon_slug:"other-us-salon",service_pk:2,
