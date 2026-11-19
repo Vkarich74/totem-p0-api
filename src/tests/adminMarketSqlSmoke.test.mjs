@@ -30,7 +30,7 @@ test("real PostgreSQL parses all four scoped queries with zero business rows", a
       "CREATE TABLE public.salons (",
       "id integer PRIMARY KEY,name text,slug text,enabled boolean,status text,created_at timestamptz)",
     ].join(" "));
-    await client.query("CREATE TABLE public.tenant_market_settings (salon_id integer,market_id integer)");
+    await client.query("CREATE TABLE public.tenant_market_settings (salon_id integer,market_id integer,currency_override text)");
     await client.query("CREATE TABLE public.masters (id integer PRIMARY KEY,name text,slug text,active boolean,user_id integer)");
     await client.query("CREATE TABLE public.master_salon (master_id integer,salon_id integer,status text)");
     await client.query("CREATE TABLE public.clients (id integer PRIMARY KEY,name text,phone text,salon_id integer)");
