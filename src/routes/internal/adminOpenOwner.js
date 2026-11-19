@@ -13,6 +13,7 @@ import { US_COUNTRY_PACK } from "../../market-context/country-packs/US.js";
 import { requestMarketCode, readUsSalon, isUsSalonActive, assertUsOpenOwnerContract, assertUsActivationReady, assertUsSalonLocationReady, assertVerifiedUsGeo } from "../../services/provision/usOpenOwnerGuards.js";
 import { normalizeDraft, checkCatalogKeys } from "./usOwnerLocations.js";
 import { verifyUsLocationAddress } from "../../services/usAddressGeoVerification.service.js";
+import { persistVerifiedUsAdminPrimaryLocation } from "../../services/provision/usAdminPrimaryLocation.service.js";
 
 const GMAIL_CLIENT_ID = process.env.GMAIL_CLIENT_ID || "";
 const GMAIL_CLIENT_SECRET = process.env.GMAIL_CLIENT_SECRET || "";
@@ -2103,6 +2104,123 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         error: code,
       });
     }
+  });
+
+  // Only a real provisioned US salon can receive an Admin-verified primary
+  // branch. No new owner identity, parallel location table or implicit access.
+  r.post("/requests/:id/us-primary-location", async (req,res)=>{
+    const requestId = normalizeRequestId(req.params?.id);
+    if (!requestId) return res.status(400).json({ok:false,error:"REQUEST_ID_INVALID"});
+    let db = null;
+    let begun = false;
+    try {
+      assertAdminOpeningMarketPolicy("US");
+      const admin = getAdminActor(req);
+      const draft = normalizeDraft(req.body);
+      if (draft.is_primary !== true) {
+        return res.status(400).json({ok:false,error:"US_PRIMARY_LOCATION_REQUIRED"});
+      }
+
+      // Read-only authorization before initiating external Census requests.
+      const before = await pool.query(
+        "SELECT * FROM public.owner_opening_requests WHERE id=$1 LIMIT 1",
+        [requestId]
+      );
+      const current = before.rows[0] || null;
+      if (!current) return res.status(404).json({ok:false,error:"OWNER_OPENING_REQUEST_NOT_FOUND"});
+      if (requestMarketCode(current) !== "US" ||
+          current.owner_type !== "salon" || current.status !== "provisioned") {
+        return res.status(409).json({ok:false,error:"US_SALON_NOT_PROVISIONED"});
+      }
+
+      const normalized = current.precheck_result_json?.normalized || {};
+      if (draft.state_code !== normalized.state_code ||
+          draft.postal_code !== normalized.postal_code ||
+          draft.city_name.trim().toLowerCase() !== String(current.city || "").trim().toLowerCase()) {
+        return res.status(409).json({ok:false,error:"US_LOCATION_REQUEST_MISMATCH"});
+      }
+      const existingSalon = await readUsSalon(pool, current.slug_final);
+      if (Number(existingSalon?.id) !== Number(current.created_owner_id) ||
+          existingSalon?.market_code !== "US" || existingSalon?.market_active !== true ||
+          existingSalon?.currency_code !== "USD" || existingSalon?.country_code !== "US") {
+        return res.status(409).json({ok:false,error:"US_OWNER_MARKET_BINDING_INVALID"});
+      }
+      await checkCatalogKeys(pool, draft);
+      // No SQL transaction spans the external geocoding operation.
+      const geo = await verifyUsLocationAddress(draft);
+      assertVerifiedUsGeo(draft,geo);
+
+      db = await pool.connect();
+      await db.query("BEGIN");
+      begun = true;
+      const locked = await getOwnerOpeningRequestForUpdate(db,requestId);
+      if (!locked || locked.status !== "provisioned" ||
+          locked.owner_type !== "salon" || requestMarketCode(locked) !== "US" ||
+          Number(locked.created_owner_id) !== Number(current.created_owner_id) ||
+          Number(locked.created_auth_user_id) !== Number(current.created_auth_user_id)) {
+        const err = new Error("US_OWNER_REQUEST_CHANGED");
+        err.code = "US_OWNER_REQUEST_CHANGED";err.status=409;throw err;
+      }
+      await assertUsOpenOwnerContract(db,locked);
+      const owner = await readUsSalon(db,locked.slug_final);
+      if (Number(owner?.id) !== Number(locked.created_owner_id) ||
+          owner?.market_code !== "US" || owner?.market_active !== true ||
+          owner?.country_code !== "US" || owner?.currency_code !== "USD") {
+        const err = new Error("US_OWNER_MARKET_BINDING_INVALID");
+        err.code = "US_OWNER_MARKET_BINDING_INVALID";err.status=409;throw err;
+      }
+      const ownerLink = await db.query(
+        [
+          "SELECT 1 FROM public.owner_salon os",
+          "JOIN public.auth_users u ON u.id=$2",
+          "WHERE os.salon_id=$1 AND os.owner_id=$3 AND os.status='active'",
+          "AND u.enabled=true AND u.role='salon_admin' LIMIT 1",
+        ].join(" "),
+        [owner.id,locked.created_auth_user_id,String(locked.created_auth_user_id)]
+      );
+      if (ownerLink.rows.length !== 1) {
+        const err = new Error("US_OWNER_DIRECT_LINK_REQUIRED");
+        err.code = "US_OWNER_DIRECT_LINK_REQUIRED";err.status=409;throw err;
+      }
+      await db.query("SELECT id FROM public.salons WHERE id=$1 FOR UPDATE",[owner.id]);
+      await checkCatalogKeys(db,draft);
+      const saved = await persistVerifiedUsAdminPrimaryLocation(db,{
+        salonId:Number(owner.id),draft,geo,
+      });
+      let auditId = null;
+      if (!saved.idempotent) {
+        const auditEvent = await writeOwnerOpeningAuditEvent(db,{
+          request:locked,admin,eventType:"owner_opening.us_primary_location_ready",
+          data:{
+            market_code:"US",owner_id:Number(owner.id),
+            location_id:saved.id,location_code:draft.location_code,
+            state_code:draft.state_code,postal_code:draft.postal_code,
+            timezone_name:draft.timezone_name,geo_status:geo.status,
+            geo_source_version:geo.source_version,
+          },
+        });
+        auditId = auditEvent?.id || null;
+      }
+      await db.query("COMMIT");
+      begun = false;
+      return res.json({
+        ok:true,request_id:requestId,market_code:"US",currency_code:"USD",
+        idempotent:saved.idempotent,
+        location:{id:saved.id,location_code:draft.location_code,
+          state_code:draft.state_code,postal_code:draft.postal_code,
+          timezone_name:draft.timezone_name,enabled:true,is_primary:true,
+          geo_status:"VERIFIED_GEOMETRY"},
+        audit_event_id:auditId,
+      });
+    } catch(error) {
+      if (begun && db) try{await db.query("ROLLBACK");}catch(_ignored){}
+      const status = Number(error?.status || error?.statusCode || 500);
+      const expected = Number.isInteger(status) && status>=400 && status<=499;
+      if (!expected) console.error("US_ADMIN_PRIMARY_LOCATION_FAILED",error?.code||"UNKNOWN");
+      return res.status(expected?status:500).json({
+        ok:false,error:expected?String(error.code||"US_ADMIN_LOCATION_INVALID"):"US_ADMIN_PRIMARY_LOCATION_FAILED",
+      });
+    } finally {db?.release();}
   });
 
   r.post("/requests/:id/activate", async (req,res)=>{
