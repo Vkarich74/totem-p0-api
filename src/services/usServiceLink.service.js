@@ -118,10 +118,16 @@ export async function readUsServiceLinkOptions(pool,options={}) {
           "JOIN public.services svc ON svc.id=sms.service_pk",
           "JOIN public.master_salon ms ON ms.master_id=sms.master_id",
           "AND ms.salon_id=$1 AND ms.status='active'",
+          "JOIN public.master_salon source_ms ON source_ms.master_id=sms.master_id",
+          "AND source_ms.salon_id=sms.salon_id AND source_ms.status='active'",
+          "JOIN public.tenant_market_settings tm ON tm.salon_id=sms.salon_id",
+          "JOIN public.markets market ON market.id=tm.market_id",
           "JOIN public.masters m ON m.id=ms.master_id AND m.active IS TRUE",
-          "WHERE sms.active IS TRUE ORDER BY sms.master_id,sms.service_pk,svc.name,sms.duration_min",
-          "LIMIT 300",
-        ].join(" "),[scope.owner_id]);
+          "WHERE sms.active IS TRUE AND sms.currency_code='USD'",
+          "AND market.id=$2 AND market.code='US' AND market.country_code='US'",
+          "AND market.default_currency='USD' AND market.active IS TRUE",
+          "ORDER BY sms.master_id,sms.service_pk,svc.name,sms.duration_min LIMIT 300",
+        ].join(" "),[scope.owner_id,scope.market_id]);
       return {status:200,body:{
         ok:true,market_code:"US",currency_code:"USD",
         owner_type:"salon",owner_slug:options.ownerSlug,
@@ -151,9 +157,15 @@ export async function readUsServiceLinkOptions(pool,options={}) {
         "SELECT DISTINCT sms.master_id,sms.service_pk,svc.name,sms.duration_min",
         "FROM public.salon_master_services sms",
         "JOIN public.services svc ON svc.id=sms.service_pk",
-        "WHERE sms.master_id=$1 AND sms.active IS TRUE",
+        "JOIN public.master_salon ms ON ms.salon_id=sms.salon_id",
+        "AND ms.master_id=sms.master_id AND ms.status='active'",
+        "JOIN public.tenant_market_settings tm ON tm.salon_id=sms.salon_id",
+        "JOIN public.markets market ON market.id=tm.market_id",
+        "WHERE sms.master_id=$1 AND sms.active IS TRUE AND sms.currency_code='USD'",
+        "AND market.id=$2 AND market.code='US' AND market.country_code='US'",
+        "AND market.default_currency='USD' AND market.active IS TRUE",
         "ORDER BY sms.master_id,sms.service_pk,svc.name,sms.duration_min LIMIT 300",
-      ].join(" "),[scope.owner_id]);
+      ].join(" "),[scope.owner_id,scope.market_id]);
     return {status:200,body:{
       ok:true,market_code:"US",currency_code:"USD",
       owner_type:"master",owner_slug:options.ownerSlug,
@@ -194,9 +206,16 @@ export async function saveUsServiceLink(pool,options={}) {
         [
           "SELECT svc.id FROM public.services svc WHERE svc.id=$1",
           "AND EXISTS (SELECT 1 FROM public.salon_master_services old",
-          "WHERE old.master_id=$2 AND old.service_pk=svc.id)",
+          "JOIN public.master_salon source_ms ON source_ms.salon_id=old.salon_id",
+          "AND source_ms.master_id=old.master_id AND source_ms.status='active'",
+          "JOIN public.tenant_market_settings tm ON tm.salon_id=old.salon_id",
+          "JOIN public.markets market ON market.id=tm.market_id",
+          "WHERE old.master_id=$2 AND old.service_pk=svc.id",
+          "AND old.active IS TRUE AND old.currency_code='USD'",
+          "AND market.id=$3 AND market.code='US' AND market.country_code='US'",
+          "AND market.active IS TRUE AND market.default_currency='USD')",
           "LIMIT 1 FOR SHARE OF svc",
-        ].join(" "),[servicePk,Number(target.master_id)]);
+        ].join(" "),[servicePk,Number(target.master_id),Number(scope.market_id)]);
       if (source.rows.length!==1) return reply(404,"US_SERVICE_LINK_SOURCE_NOT_FOUND");
     }
 
@@ -314,6 +333,30 @@ export async function rejectLegacyUsServiceMutation(db,salonId) {
     return {status:409,error:"LEGACY_SERVICE_MARKET_UNRESOLVED"};
   }
   if (result.rows[0].code==="US") {
+    return {status:409,error:"US_SERVICE_LINK_ENDPOINT_REQUIRED"};
+  }
+  return null;
+}
+
+// A mixed-market master must never enter the legacy "latest salon" service
+// creation route. A last KG salon cannot authorize writes in an US cabinet.
+// The canonical US path always uses an explicit salon_slug instead.
+export async function rejectLegacyUsMasterServiceCreation(db,masterId) {
+  if (!positiveId(masterId)) {
+    return {status:409,error:"LEGACY_MASTER_SERVICE_SCOPE_UNRESOLVED"};
+  }
+  const result=await db.query(
+    [
+      "SELECT EXISTS (SELECT 1 FROM public.master_salon ms",
+      "JOIN public.tenant_market_settings tm ON tm.salon_id=ms.salon_id",
+      "JOIN public.markets market ON market.id=tm.market_id",
+      "WHERE ms.master_id=$1 AND ms.status='active'",
+      "AND market.code='US') AS has_us_scope",
+    ].join(" "),[masterId]);
+  if (result.rows.length!==1) {
+    return {status:409,error:"LEGACY_MASTER_SERVICE_SCOPE_UNRESOLVED"};
+  }
+  if (result.rows[0].has_us_scope===true) {
     return {status:409,error:"US_SERVICE_LINK_ENDPOINT_REQUIRED"};
   }
   return null;
