@@ -2351,6 +2351,11 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
+      if (requestMarketCode(request) === "US") {
+        assertAdminOpeningMarketPolicy("US");
+        await assertUsActivationReady(db,request,Number(request.created_owner_id));
+      }
+
       if(request.status !== "activated" && request.status !== "email_ready" && request.status !== "email_sent" && request.status !== "email_failed"){
         await db.query("ROLLBACK");
         return res.status(409).json({
@@ -2406,7 +2411,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
     }catch(err){
       try{ await db.query("ROLLBACK"); }catch(e){}
       console.error("ADMIN_OPEN_OWNER_EMAIL_PREVIEW_ERROR", err);
-      return res.status(500).json({
+      return res.status(resolveProvisionStatus(err)).json({
         ok: false,
         error: "ADMIN_OPEN_OWNER_EMAIL_PREVIEW_FAILED",
       });
@@ -2445,6 +2450,11 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
+      if (requestMarketCode(request) === "US") {
+        assertAdminOpeningMarketPolicy("US");
+        await assertUsActivationReady(prepareDb,request,Number(request.created_owner_id));
+      }
+
       if(request.status !== "email_ready" && request.status !== "email_failed"){
         await prepareDb.query("ROLLBACK");
         return res.status(409).json({
@@ -2454,7 +2464,10 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
-      if (request.email_preview_json && Object.keys(request.email_preview_json || {}).length) {
+      if (requestMarketCode(request) === "US") {
+        // Always re-render USA mail to omit unpublished public URL and stale preview.
+        preview = buildOwnerOpeningEmailPreview(request,"en-US");
+      } else if (request.email_preview_json && Object.keys(request.email_preview_json || {}).length) {
         preview = request.email_preview_json;
       } else {
         const { locale } = await resolveRecipientLocale(prepareDb, { userId: request.created_auth_user_id, ownerType: request.owner_type, ownerId: request.created_owner_id });
@@ -2500,9 +2513,9 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       try{ await prepareDb.query("ROLLBACK"); }catch(e){}
       prepareDb.release();
       console.error("ADMIN_OPEN_OWNER_EMAIL_PREPARE_ERROR", err);
-      return res.status(500).json({
+      return res.status(resolveProvisionStatus(err)).json({
         ok: false,
-        error: "ADMIN_OPEN_OWNER_EMAIL_PREPARE_FAILED",
+        error: err?.status ? String(err.code) : "ADMIN_OPEN_OWNER_EMAIL_PREPARE_FAILED",
       });
     }
 
@@ -2808,6 +2821,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
             work_mode,
             salon_slug,
             admin_notes,
+            COALESCE(precheck_result_json->'normalized'->>'market_code',precheck_result_json->>'market_code') AS market_code,
             created_owner_id,
             created_auth_user_id,
             moderation_case_id,
