@@ -57,6 +57,52 @@ function buildLifecycleActionUrl(booking, targetType) {
   return null;
 }
 
+// Public US booking lifecycle is an OWNER action, not a client booking action.
+// Only the existing valid owner session may act. Tenant and booking are
+// selected by the canonical route; authorization is verified in PostgreSQL.
+export function checkUsLifecycleSession(auth) {
+  if(auth?.source!=="session" || !auth?.session_id ||
+     !Number.isSafeInteger(Number(auth?.user_id)) || Number(auth.user_id)<1) {
+    return {ok:false,status:401,error:"US_LIFECYCLE_SESSION_REQUIRED"};
+  }
+  if(auth.role!=="salon_admin" && auth.role!=="master") {
+    return {ok:false,status:403,error:"US_LIFECYCLE_ROLE_FORBIDDEN"};
+  }
+  return {ok:true,user_id:Number(auth.user_id),role:auth.role};
+}
+
+export async function authorizeUsLifecycleActor(db,auth,salonId,masterId) {
+  const session=checkUsLifecycleSession(auth);
+  if(!session.ok)return session;
+  const salon=Number(salonId);
+  const master=Number(masterId);
+  if(!Number.isSafeInteger(salon)||salon<1 ||
+     !Number.isSafeInteger(master)||master<1) {
+    return {ok:false,status:403,error:"US_LIFECYCLE_SCOPE_INVALID"};
+  }
+  const relation=session.role==="salon_admin"
+    ? await db.query(
+      `SELECT 1 FROM public.auth_users u
+         JOIN public.owner_salon os ON os.owner_id=u.id::text
+        WHERE u.id=$1 AND u.enabled=true AND u.role='salon_admin'
+          AND os.salon_id=$2 AND os.status='active'
+        LIMIT 1`,
+      [session.user_id,salon])
+    : await db.query(
+      `SELECT 1 FROM public.auth_users u
+         JOIN public.masters m ON m.user_id=u.id
+         JOIN public.master_salon ms ON ms.master_id=m.id
+        WHERE u.id=$1 AND u.enabled=true AND u.role='master'
+          AND m.id=$3 AND m.active=true
+          AND ms.salon_id=$2 AND ms.status='active'
+        LIMIT 1`,
+      [session.user_id,salon,master]);
+  if(relation.rows?.length!==1) {
+    return {ok:false,status:403,error:"US_LIFECYCLE_OWNER_FORBIDDEN"};
+  }
+  return {ok:true};
+}
+
 export async function publicLifecycle(req, res) {
   try {
     const { salon_id } = req.tenant;
@@ -69,6 +115,14 @@ export async function publicLifecycle(req, res) {
 
     if (!["confirm", "complete", "cancel"].includes(action)) {
       return res.status(400).json({ ok: false, error: "INVALID_ACTION" });
+    }
+
+    const requiresUsOwner=req.market_context?.market_code==="US";
+    if(requiresUsOwner) {
+      const session=checkUsLifecycleSession(req.auth);
+      if(!session.ok) {
+        return res.status(session.status).json({ok:false,error:session.error});
+      }
     }
 
     const { rows } = await pool.query(
@@ -99,6 +153,14 @@ export async function publicLifecycle(req, res) {
 
     if (!rows.length) {
       return res.status(404).json({ ok: false, error: "BOOKING_NOT_FOUND" });
+    }
+
+    if(requiresUsOwner) {
+      const ownership=await authorizeUsLifecycleActor(
+        pool,req.auth,salon_id,rows[0].master_id);
+      if(!ownership.ok) {
+        return res.status(ownership.status).json({ok:false,error:ownership.error});
+      }
     }
 
     const currentStatus = rows[0].status;

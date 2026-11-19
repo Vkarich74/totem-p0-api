@@ -10,6 +10,7 @@ import { publicMasterAvailability } from "./publicAvailability.js";
 import { resolveUsPublicServicePriceCatalog } from "../services/usServicePrice.service.js";
 import { publicUsLocationCatalog } from "./publicUsLocationCatalog.js";
 import { publicLifecycle } from "./publicLifecycle.js";
+import { resolveAuth } from "../middleware/resolveAuth.js";
 import mobileRouter from "./publicMobile.js";
 import { buildPublicUsPayC11Router } from "./publicUsPayC11.js";
 
@@ -149,6 +150,10 @@ export function createPublicRouter(deps) {
     "/salons/:slug/bookings/:id/lifecycle",
     resolveTenant,
     buildPublicAccessGuard("booking_create"),
+    // US-only: verify the existing owner session for state-changing actions.
+    // KG/KZ keep their original middleware chain and request contract.
+    (req,res,next) => req.market_context?.market_code === "US"
+      ? resolveAuth(req,res,next) : next(),
     publicLifecycle
   );
 
