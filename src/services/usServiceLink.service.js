@@ -271,3 +271,21 @@ export function usServiceLinkErrorResponse(error) {
   console.error("US_SERVICE_LINK_STORAGE_FAILED",String(error?.code||"INTERNAL"));
   return reply(503,"US_SERVICE_LINK_STORAGE_UNAVAILABLE");
 }
+
+// Shared server-side guard: old routes may not mutate a US catalog/link.
+// Called only after legacy authentication and the exact link salon are known.
+export async function rejectLegacyUsServiceMutation(db,salonId) {
+  const result=await db.query(
+    [
+      "SELECT m.code,m.default_currency FROM public.tenant_market_settings tm",
+      "JOIN public.markets m ON m.id=tm.market_id",
+      "WHERE tm.salon_id=$1 AND m.active IS TRUE LIMIT 2",
+    ].join(" "),[Number(salonId)]);
+  if (result.rows.length!==1) {
+    return {status:409,error:"LEGACY_SERVICE_MARKET_UNRESOLVED"};
+  }
+  if (result.rows[0].code==="US") {
+    return {status:409,error:"US_SERVICE_LINK_ENDPOINT_REQUIRED"};
+  }
+  return null;
+}
