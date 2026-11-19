@@ -78,7 +78,7 @@ async function createProvisionSalonAuthUser(db, { input, salon }){
   const hasPasswordChangedAt = await authUsersHasColumn(db, "password_changed_at");
 
   const columns = ["email", "role", "enabled"];
-  const values = [input.email, "salon_admin", true];
+  const values = [input.email, "salon_admin", input.market_code !== "US"];
 
   if(hasSalonSlug){
     columns.push("salon_slug");
