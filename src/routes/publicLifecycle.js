@@ -141,12 +141,8 @@ export async function publicLifecycle(req, res) {
         b.price_snapshot
       FROM bookings b
       LEFT JOIN masters m ON m.id = b.master_id
-      LEFT JOIN master_salon ms
-        ON ms.master_id = b.master_id
-       AND ms.salon_id = $2
-       AND ms.status = 'active'
       WHERE b.id = $1
-        AND (b.salon_id = $2 OR ms.id IS NOT NULL)
+        AND b.salon_id = $2
       `,
       [bookingId, salon_id]
     );

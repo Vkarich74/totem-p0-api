@@ -124,4 +124,6 @@ test("US-only lifecycle auth middleware; KG/KZ route preserved",()=>{
     endpoint.indexOf("const currentStatus ="));
   assert.ok(endpoint.indexOf("authorizeUsLifecycleActor(")<
     endpoint.indexOf("UPDATE bookings"));
+  assert.match(endpoint, /WHERE b\.id = \$1\s+AND b\.salon_id = \$2/);
+  assert.doesNotMatch(endpoint, /OR ms\.id IS NOT NULL/);
 });
