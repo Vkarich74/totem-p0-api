@@ -120,6 +120,11 @@ export function assertVerifiedUsGeo(draft, geo) {
 export async function assertUsActivationReady(db, request, ownerId) {
   if (requestMarketCode(request) !== "US") return false;
   await assertUsOpenOwnerContract(db, request);
+  const emailReadyStatus = ["activated","email_ready","email_sent","email_failed"].includes(request.status);
+  if (request.status !== "provisioned" && !emailReadyStatus) {
+    throw problem("US_OWNER_STATUS_NOT_READY");
+  }
+  const expectedAuthEnabled = emailReadyStatus;
   if (!Number.isSafeInteger(Number(ownerId)) || Number(ownerId) <= 0 ||
       !Number.isSafeInteger(Number(request.created_auth_user_id))) {
     throw problem("US_OWNER_IDENTITY_NOT_READY");
@@ -132,13 +137,13 @@ export async function assertUsActivationReady(db, request, ownerId) {
         "JOIN public.tenant_market_settings t ON t.salon_id=s.id",
         "JOIN public.markets m ON m.id=t.market_id",
         "JOIN public.auth_users u ON u.id=$2",
-        "WHERE s.id=$1 AND u.enabled=false AND u.role='salon_admin'",
+        "WHERE s.id=$1 AND u.enabled=$4 AND u.role='salon_admin'",
         "AND EXISTS(SELECT 1 FROM public.owner_salon os",
         "WHERE os.salon_id=s.id AND os.owner_id=$3 AND os.status='active')",
         "AND m.code='US' AND m.country_code='US' AND m.active=true",
         "AND COALESCE(t.currency_override,m.default_currency)='USD' LIMIT 1",
       ].join(" "),
-      [ownerId, request.created_auth_user_id, String(request.created_auth_user_id)]
+      [ownerId, request.created_auth_user_id, String(request.created_auth_user_id), expectedAuthEnabled]
     );
     if (owner.rows.length !== 1) throw problem("US_MARKET_BINDING_INVALID");
     await assertUsSalonLocationReady(db, Number(ownerId));
@@ -157,13 +162,13 @@ export async function assertUsActivationReady(db, request, ownerId) {
       "JOIN public.salons s ON s.id=ms.salon_id",
       "JOIN public.tenant_market_settings t ON t.salon_id=s.id",
       "JOIN public.markets m ON m.id=t.market_id",
-      "WHERE master.id=$1 AND master.user_id=$2 AND u.enabled=false AND u.role='master'",
+      "WHERE master.id=$1 AND master.user_id=$2 AND u.enabled=$4 AND u.role='master'",
       "AND ms.status='active' AND s.slug=$3",
       "AND s.status='active' AND s.enabled=true",
       "AND m.code='US' AND m.country_code='US' AND m.active=true",
       "AND COALESCE(t.currency_override,m.default_currency)='USD'",
     ].join(" "),
-    [ownerId, request.created_auth_user_id, request.salon_slug]
+    [ownerId, request.created_auth_user_id, request.salon_slug, expectedAuthEnabled]
   );
   if (relation.rows.length !== 1) throw problem("US_MASTER_ACTIVE_SALON_REQUIRED");
   await assertUsSalonLocationReady(db, Number(relation.rows[0].salon_id));
