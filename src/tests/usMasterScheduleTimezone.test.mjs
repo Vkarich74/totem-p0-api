@@ -121,12 +121,19 @@ test("US opt-in rejects foreign master and non-owner sessions",async()=>{
 
 test("US opt-in cannot silently fetch KG, KZ, or mixed-market bookings",async()=>{
   const db=new BookingMockDB();
-  for(const markets of [["KG"],["KZ"],["KG","US"],[]]){
+  for(const markets of [["KG"],["KZ"],["KG","KZ"],["KG","US"],["US","KZ"],[]]){
     db.markets=markets;
     const r=await read(db,{scope:true});
     assert.equal(r.status,409,JSON.stringify(markets));
-    assert.equal(r.body.error,"MASTER_US_MARKET_SCOPE_REQUIRED");
+    assert.equal(r.body.error,markets.includes("US") && markets.length>1
+      ? "MASTER_US_MIXED_MARKETS"
+      : "MASTER_US_MARKET_SCOPE_REQUIRED");
   }
+  // US-only multi-state membership shares country=US but not one timezone;
+  // one market code still proves US eligibility without inventing a zone.
+  db.markets=["US"];
+  const verified=await read(db,{scope:true});
+  assert.equal(verified.status,200);
 });
 
 test("US missing location metadata fails closed with 409",async()=>{
