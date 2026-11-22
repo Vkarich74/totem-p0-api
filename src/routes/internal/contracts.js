@@ -193,8 +193,8 @@ return ids;
 }
 
 function hasSalonOwnership(req, salonId){
-if(req?.auth?.role === "system"){
-return true;
+if((req?.auth?.role !== "salon_admin" && req?.auth?.role !== "owner") || req?.auth?.source !== 'session'){
+return false;
 }
 
 const targetSalonId = safeInt(salonId);
@@ -248,8 +248,8 @@ return ids;
 }
 
 function hasMasterOwnership(req, masterId){
-if(req?.auth?.role === "system"){
-return true;
+if(req?.auth?.role !== "master" || req?.auth?.source !== 'session'){
+return false;
 }
 
 const targetMasterId = safeInt(masterId);

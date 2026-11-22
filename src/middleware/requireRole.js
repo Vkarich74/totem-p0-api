@@ -5,20 +5,24 @@ export function requireRole(roles){
 
   function isExpired(value){
     if(!value){
-      return false;
+      return true;
     }
 
     const ts = new Date(value).getTime();
     if(!Number.isFinite(ts)){
-      return false;
+      return true;
     }
 
-    return ts < Date.now();
+    return ts <= Date.now();
   }
 
   return (req,res,next)=>{
     if(!req.auth || !req.auth.user_id || !req.auth.role){
       return res.status(401).json({ ok:false, error:'UNAUTHORIZED' });
+    }
+
+    if(req.auth.source !== 'session' || !req.auth.session_id){
+      return res.status(401).json({ ok:false, error:'NO_SESSION' });
     }
 
     if(isExpired(req.auth.session_expires_at)){
