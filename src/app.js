@@ -21,6 +21,7 @@ import { createPublicRouter } from "./routes/public.js";
 import authRouter from "./routes/auth.js";
 import { createInternalRouter } from "./routes/internal.js";
 import { initializeSlugReservationLayer } from "./services/provision/slugReservation.js";
+import { refreshFinanceMaterializedViewsOnce } from "./jobs/financeMaterializedMaintenance.js";
 
 /* ================= REDIS ================= */
 
@@ -268,6 +269,34 @@ if (AUTO_FINANCE_LOOP_ENABLED) {
   setTimeout(runFinanceLoop, 15000);
 } else {
   console.log("FINANCE_LOOP_DISABLED");
+}
+
+/* ===== Finance materialized views: opt-in, guarded, at most every 15 min ===== */
+const FINANCE_MV_AUTO_REFRESH_ENABLED =
+  String(process.env.FINANCE_MV_AUTO_REFRESH_ENABLED || "").toLowerCase() === "true";
+
+if (FINANCE_MV_AUTO_REFRESH_ENABLED) {
+  let runningFinanceMaterialization = false;
+  const checkFinanceViews = async () => {
+    if (runningFinanceMaterialization) return;
+    runningFinanceMaterialization = true;
+    try {
+      const result = await refreshFinanceMaterializedViewsOnce(pool);
+      if (result.status !== "already_current") {
+        console.info("FINANCE_MV_MAINTENANCE", result.status);
+      }
+    } catch (err) {
+      console.error("FINANCE_MV_MAINTENANCE_FAILED", err?.code || err?.message || "UNKNOWN");
+    } finally {
+      runningFinanceMaterialization = false;
+    }
+  };
+  const interval = setInterval(checkFinanceViews, 15 * 60 * 1000);
+  interval.unref?.();
+  const firstCheck = setTimeout(checkFinanceViews, 30 * 1000);
+  firstCheck.unref?.();
+} else {
+  console.log("FINANCE_MV_AUTO_REFRESH_DISABLED");
 }
 
 /* ================= START ================= */
