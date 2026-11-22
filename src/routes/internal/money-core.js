@@ -197,9 +197,18 @@ async function resolveMoneyCoreOwnerBySlug(pool, ownerType, slug) {
   };
 }
 
+// Canonical primary keys only: parseInt('12other') would alias tenant 12.
+// Do not coerce resource IDs from URL, JSON or derived ownership grants.
+function canonicalMoneyCoreOwnerId(value) {
+  const text = String(value ?? '').trim();
+  if (!/^[1-9][0-9]*$/.test(text)) return null;
+  const id = Number(text);
+  return Number.isSafeInteger(id) ? id : null;
+}
+
 async function resolveMoneyCoreOwnerById(pool, ownerType, ownerId) {
   const normalizedOwnerType = String(ownerType || '').trim().toLowerCase();
-  const normalizedOwnerId = Number.parseInt(String(ownerId || '').trim(), 10);
+  const normalizedOwnerId = canonicalMoneyCoreOwnerId(ownerId);
 
   if (!normalizedOwnerType || !['salon', 'master', 'system'].includes(normalizedOwnerType)) {
     return {
@@ -288,7 +297,7 @@ function getIdentityOwnerIds(identity, ownerType) {
     }
 
     const rawId = item.owner_id ?? item.salon_id ?? item.master_id ?? item.id;
-    const parsedId = Number.parseInt(String(rawId || '').trim(), 10);
+    const parsedId = canonicalMoneyCoreOwnerId(rawId);
     if (Number.isInteger(parsedId) && parsedId > 0) {
       ids.add(parsedId);
     }
@@ -298,18 +307,27 @@ function getIdentityOwnerIds(identity, ownerType) {
 }
 
 function hasMoneyCoreOwnerAccess(req, ownerType, ownerId) {
-  if (req?.auth?.role === 'system') {
-    return true;
-  }
-
   const normalizedOwnerType = String(ownerType || '').trim().toLowerCase();
-  const normalizedOwnerId = Number.parseInt(String(ownerId || '').trim(), 10);
+  const normalizedOwnerId = canonicalMoneyCoreOwnerId(ownerId);
 
   if (!normalizedOwnerType || !Number.isInteger(normalizedOwnerId) || normalizedOwnerId <= 0) {
     return false;
   }
 
   if (normalizedOwnerType === 'system') {
+    return false;
+  }
+  const role = String(req?.auth?.role || '').trim();
+  if (req?.auth?.source !== 'session') {
+    return false;
+  }
+  if (normalizedOwnerType === 'salon' && role !== 'salon_admin' && role !== 'owner') {
+    return false;
+  }
+  if (normalizedOwnerType === 'master' && role !== 'master') {
+    return false;
+  }
+  if (normalizedOwnerType !== 'salon' && normalizedOwnerType !== 'master') {
     return false;
   }
 
@@ -321,11 +339,16 @@ function hasMoneyCoreOwnerAccess(req, ownerType, ownerId) {
 
 function hasMoneyCorePrivilegedAccess(req) {
   const role = String(req?.auth?.role || '').trim().toLowerCase();
-  return role === 'system' || role === 'owner';
+  // Explicit, verified system capability is mandatory. resolveAuth does not
+  // mint this capability today, so the default is fail-closed.
+  return role === 'system'
+    && req?.auth?.source === 'session'
+    && Boolean(req?.auth?.session_id)
+    && req?.auth?.service_capability === 'money-core:admin';
 }
 
 function requireMoneyCoreAuth(res, req) {
-  if (!req?.auth || !req.auth.user_id || !req.auth.role) {
+  if (!req?.auth || !req.auth.user_id || !req.auth.role || req.auth.source !== 'session' || !req.auth.session_id) {
     safeJson(res, 401, {
       ok: false,
       error: 'UNAUTHORIZED',
