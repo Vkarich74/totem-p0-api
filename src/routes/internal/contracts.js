@@ -193,8 +193,8 @@ return ids;
 }
 
 function hasSalonOwnership(req, salonId){
-if(req?.auth?.role === "system"){
-return true;
+if((req?.auth?.role !== "salon_admin" && req?.auth?.role !== "owner") || req?.auth?.source !== 'session'){
+return false;
 }
 
 const targetSalonId = safeInt(salonId);
@@ -248,8 +248,8 @@ return ids;
 }
 
 function hasMasterOwnership(req, masterId){
-if(req?.auth?.role === "system"){
-return true;
+if(req?.auth?.role !== "master" || req?.auth?.source !== 'session'){
+return false;
 }
 
 const targetMasterId = safeInt(masterId);
@@ -1211,6 +1211,71 @@ export default function buildContractsRouter(pool, internalReadRateLimit){
 
 const r = express.Router();
 
+// G2/P0: authorization at the actual contract business-router boundary.
+// These lookups are SELECT-only. All mutations remain in original handlers,
+// and cannot be reached by a foreign/anonymous actor.
+function contractSessionIsVerified(req) {
+  const auth = req?.auth || null;
+  const identity = req?.identity || null;
+  if (!auth || auth.source !== 'session' || !auth.session_id ||
+      !auth.user_id || !auth.role || !identity ||
+      String(identity.user_id) !== String(auth.user_id) ||
+      String(identity.role) !== String(auth.role)) return false;
+  const exp = new Date(auth.session_expires_at || '').getTime();
+  const idle = new Date(auth.idle_timeout_at || '').getTime();
+  if (!Number.isFinite(exp) || exp <= Date.now()) return false;
+  if (!Number.isFinite(idle) || idle <= Date.now()) return false;
+  return true;
+}
+r.use((req, res, next) => {
+  if (!contractSessionIsVerified(req)) {
+    return res.status(401).json({ok:false,error:'UNAUTHORIZED'});
+  }
+  return next();
+});
+
+// A real, active salon grant is required for every salon contract/rent endpoint.
+r.use('/salons/:slug', async (req, res, next) => {
+  try {
+    const salon = await pool.query('SELECT id FROM public.salons WHERE slug=$1 LIMIT 1', [req.params.slug]);
+    const salonId = salon.rows?.[0]?.id;
+    if (!salonId) return res.status(404).json({ok:false,error:'SALON_NOT_FOUND'});
+    if (!hasSalonOwnership(req, salonId)) {
+      return res.status(403).json({ok:false,error:'FORBIDDEN'});
+    }
+    return next();
+  } catch (err) { return next(err); }
+});
+
+// Master contracts are visible only to that master, never to another master.
+r.use('/contracts/master/:slug', async (req, res, next) => {
+  try {
+    const master = await pool.query('SELECT id FROM public.masters WHERE slug=$1 LIMIT 1', [req.params.slug]);
+    const masterId = master.rows?.[0]?.id;
+    if (!masterId) return res.status(404).json({ok:false,error:'MASTER_NOT_FOUND'});
+    if (!hasMasterOwnership(req, masterId)) {
+      return res.status(403).json({ok:false,error:'FORBIDDEN'});
+    }
+    return next();
+  } catch (err) { return next(err); }
+});
+
+// Exact contract party must be authorized BEFORE accept/archive can change money states.
+r.use('/contracts/:id', async (req, res, next) => {
+  if (req.params.id === 'master') return next();  // handled by the master-scoped middleware above
+  try {
+    const c = await pool.query('SELECT salon_id, master_id FROM public.contracts WHERE id=$1 LIMIT 1', [req.params.id]);
+    if (!c.rows?.length) return res.status(404).json({ok:false,error:'CONTRACT_NOT_FOUND'});
+    const contract = c.rows[0];
+    // Only an authorized salon administrator may archive an agreement.
+    const permitted = req.path.endsWith('/archive')
+      ? hasSalonOwnership(req, contract.salon_id)
+      : (req.path.endsWith('/accept') && hasMasterOwnership(req, contract.master_id));
+    if (!permitted) return res.status(403).json({ok:false,error:'FORBIDDEN'});
+    return next();
+  } catch (err) { return next(err); }
+});
+
 /* ============================= */
 /* CONTRACT ENGINE               */
 /* ============================= */
@@ -1219,6 +1284,23 @@ async function createContract({ db, salonId, master_id, terms_json, effective_fr
 
 if(!master_id){
 throw new Error("MASTER_ID_REQUIRED");
+}
+
+const targetMasterId = safeInt(master_id);
+const targetSalonId = safeInt(salonId);
+if(!targetMasterId || !targetSalonId){
+throw new Error("CONTRACT_PARTIES_INVALID");
+}
+const membership = await db.query(`
+SELECT 1 FROM public.master_salon ms
+JOIN public.masters m ON m.id=ms.master_id
+JOIN public.salons s ON s.id=ms.salon_id
+WHERE ms.salon_id=$1 AND ms.master_id=$2
+  AND ms.status='active' AND m.active IS TRUE
+  AND s.enabled IS TRUE AND s.status='active'
+LIMIT 1`,[targetSalonId,targetMasterId]);
+if(!membership.rows?.length){
+throw new Error("CONTRACT_MASTER_NOT_ACTIVE_IN_SALON");
 }
 
 const validatedTerms = validateTerms(terms_json || {});
@@ -1280,6 +1362,11 @@ if(!salon_id){
 return res.status(400).json({ok:false,error:"SALON_ID_REQUIRED"});
 }
 
+// Owner must have this exact active salon in the DB-built identity.
+if(!hasSalonOwnership(req, salon_id)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
+
 const contract = await createContract({
 db: pool,
 salonId: salon_id,
@@ -1300,7 +1387,10 @@ contract_id:err.contract_id
 });
 }
 
-if(err.message.startsWith("INVALID_") || err.message === "MASTER_ID_REQUIRED"){
+if(err.message === "CONTRACT_MASTER_NOT_ACTIVE_IN_SALON"){
+return res.status(403).json({ ok:false, error:err.message });
+}
+if(err.message.startsWith("INVALID_") || err.message === "MASTER_ID_REQUIRED" || err.message === "CONTRACT_PARTIES_INVALID"){
 return res.status(400).json({ ok:false, error:err.message });
 }
 
@@ -1396,7 +1486,10 @@ contract_id:err.contract_id
 });
 }
 
-if(err.message.startsWith("INVALID_") || err.message === "MASTER_ID_REQUIRED"){
+if(err.message === "CONTRACT_MASTER_NOT_ACTIVE_IN_SALON"){
+return res.status(403).json({ ok:false, error:err.message });
+}
+if(err.message.startsWith("INVALID_") || err.message === "MASTER_ID_REQUIRED" || err.message === "CONTRACT_PARTIES_INVALID"){
 return res.status(400).json({ ok:false, error:err.message });
 }
 
@@ -1853,7 +1946,10 @@ r.post("/salons/:slug/rent-payments/confirm", async (req,res)=>{
 const { slug } = req.params;
 const body = req.body || {};
 const obligationId = String(body.obligation_id ?? body.obligationId ?? "").trim();
-const amount = normalizePositiveInteger(body.amount, "RENT_PAYMENT_AMOUNT_INVALID");
+const amount = Number(body.amount);
+if (!Number.isSafeInteger(amount) || amount <= 0) {
+return res.status(400).json({ok:false,error:"RENT_PAYMENT_AMOUNT_INVALID"});}
+
 const rawCurrency = normalizeContractText(body.currency, "");
 const currency = String(rawCurrency || "").trim().toUpperCase();
 const provider = normalizeContractText(body.provider, "manual");
@@ -2100,7 +2196,10 @@ r.post("/salons/:slug/salary-obligations/confirm", async (req,res)=>{
 const { slug } = req.params;
 const body = req.body || {};
 const obligationId = String(body.obligation_id ?? body.obligationId ?? "").trim();
-const amount = normalizePositiveInteger(body.amount, "SALARY_PAYMENT_AMOUNT_INVALID");
+const amount = Number(body.amount);
+if (!Number.isSafeInteger(amount) || amount <= 0) {
+return res.status(400).json({ok:false,error:"SALARY_PAYMENT_AMOUNT_INVALID"});}
+
 const rawCurrency = normalizeContractText(body.currency, "");
 const currency = String(rawCurrency || "").trim().toUpperCase();
 const idempotencyKey = String(body.idempotency_key ?? body.idempotencyKey ?? "").trim();

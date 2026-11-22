@@ -1,4 +1,5 @@
 import express from "express";
+import { requireAuth } from "../../middleware/requireAuth.js";
 import {
 countUnread,
 listNotificationsForTarget,
@@ -88,13 +89,13 @@ return ids;
 }
 
 function hasSalonOwnership(req, salonId){
-if(req?.auth?.role === "system"){
-return true;
-}
 // resolveAuth includes master_salon membership in identity.salons for a
 // master's schedule. That relation must NEVER grant salon-admin cabinet
 // access to clients, financials, settings or another master's bookings.
 if(req?.auth?.role !== "salon_admin" && req?.auth?.role !== "owner"){
+return false;
+}
+if(req?.auth?.source !== 'session'){
 return false;
 }
 
@@ -1262,7 +1263,7 @@ return res.status(500).json({ok:false,error:"PUSH_SUBSCRIPTION_REVOKE_FAILED"});
 });
 
 /* SALON MASTERS */
-r.get('/salons/:slug/masters', internalReadRateLimit, async (req,res)=>{
+r.get('/salons/:slug/masters', requireAuth, internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -1278,6 +1279,10 @@ return res.status(404).json({ok:false,error:'SALON_NOT_FOUND'});
 }
 
 const salonId = salon.rows[0].id;
+
+if(!hasSalonOwnership(req, salonId)){
+return res.status(403).json({ok:false,error:'FORBIDDEN'});
+}
 
 const mastersSql = [
 'SELECT',
@@ -1527,7 +1532,7 @@ db.release();
 });
 
 /* SALON SERVICES */
-r.get('/salons/:slug/services', internalReadRateLimit, async (req,res)=>{
+r.get('/salons/:slug/services', requireAuth, internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -1543,6 +1548,10 @@ return res.status(404).json({ok:false,error:'SALON_NOT_FOUND'});
 }
 
 const salonId = salon.rows[0].id;
+
+if(!hasSalonOwnership(req, salonId)){
+return res.status(403).json({ok:false,error:'FORBIDDEN'});
+}
 
 const servicesSql = [
 'SELECT',

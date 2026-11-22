@@ -630,7 +630,7 @@ export async function publicCreateBooking(req, res) {
       master_id: Number(master_id),
       client_id: Number(finalClientId),
       service_id: Number(servicePk),
-      start_at: new Date(marketContext.market_code === "US" ? normalizedStartAt : start_at).toISOString(),
+      start_at: new Date(normalizedStartAt).toISOString(),
       end_at: new Date(end_at).toISOString(),
       price: Number(price),
       currency_code: bookingCurrency
