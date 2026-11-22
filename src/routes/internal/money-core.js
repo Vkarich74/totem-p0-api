@@ -318,7 +318,10 @@ function hasMoneyCoreOwnerAccess(req, ownerType, ownerId) {
     return false;
   }
   const role = String(req?.auth?.role || '').trim();
-  if (req?.auth?.source !== 'session') {
+  if (req?.auth?.source !== 'session' ||
+      !req?.auth?.session_id ||
+      !validMoneyCoreSessionTime(req?.auth?.session_expires_at) ||
+      !validMoneyCoreSessionTime(req?.auth?.idle_timeout_at)) {
     return false;
   }
   if (normalizedOwnerType === 'salon' && role !== 'salon_admin' && role !== 'owner') {
@@ -331,10 +334,17 @@ function hasMoneyCoreOwnerAccess(req, ownerType, ownerId) {
     return false;
   }
 
-  const identityOwnerIds = getIdentityOwnerIds(req?.identity, normalizedOwnerType);
-  const authOwnerIds = getIdentityOwnerIds(req?.auth, normalizedOwnerType);
-
-  return identityOwnerIds.has(normalizedOwnerId) || authOwnerIds.has(normalizedOwnerId);
+  // req.auth ownership hints are not trusted grants. resolveAuth builds the
+  // direct owner mapping in req.identity from active database relationships.
+  // Prevent a stale/mismatched principal from reusing a different owner's
+  // resolved identity or a master_salon membership as an owner grant.
+  if (!req?.identity ||
+      String(req.identity.user_id) !== String(req.auth?.user_id) ||
+      String(req.identity.role) !== String(req.auth?.role)) {
+    return false;
+  }
+  const identityOwnerIds = getIdentityOwnerIds(req.identity, normalizedOwnerType);
+  return identityOwnerIds.has(normalizedOwnerId);
 }
 
 function hasMoneyCorePrivilegedAccess(req) {
@@ -344,11 +354,22 @@ function hasMoneyCorePrivilegedAccess(req) {
   return role === 'system'
     && req?.auth?.source === 'session'
     && Boolean(req?.auth?.session_id)
-    && req?.auth?.service_capability === 'money-core:admin';
+    && req?.auth?.service_capability === 'money-core:admin'
+    && validMoneyCoreSessionTime(req?.auth?.session_expires_at)
+    && validMoneyCoreSessionTime(req?.auth?.idle_timeout_at);
+}
+
+function validMoneyCoreSessionTime(value){
+  if (!value) return false;
+  const millis = new Date(value).getTime();
+  return Number.isFinite(millis) && millis > Date.now();
 }
 
 function requireMoneyCoreAuth(res, req) {
-  if (!req?.auth || !req.auth.user_id || !req.auth.role || req.auth.source !== 'session' || !req.auth.session_id) {
+  if (!req?.auth || !req.auth.user_id || !req.auth.role ||
+      req.auth.source !== 'session' || !req.auth.session_id ||
+      !validMoneyCoreSessionTime(req.auth.session_expires_at) ||
+      !validMoneyCoreSessionTime(req.auth.idle_timeout_at)) {
     safeJson(res, 401, {
       ok: false,
       error: 'UNAUTHORIZED',
@@ -1242,6 +1263,10 @@ function buildMoneyCoreRouter(pool) {
 
     r.get(`${basePath}/money-core/owner-qr-destinations`, async (req, res, next) => {
       try {
+        if (!requireMoneyCoreAuth(res, req)) {
+          return;
+        }
+
         const owner = await resolveMoneyCoreOwnerBySlug(pool, ownerType, req.params.slug);
 
         if (!owner.ok) {
@@ -1251,7 +1276,15 @@ function buildMoneyCoreRouter(pool) {
           });
         }
 
-        const destinations = await listOwnerQrDestinations(pool, {
+                if (!hasMoneyCorePrivilegedAccess(req) &&
+            !hasMoneyCoreOwnerAccess(req, owner.owner_type, owner.owner_id)) {
+          return safeJson(res, 403, {
+            ok: false,
+            error: 'MONEY_CORE_OWNER_ACCESS_REQUIRED',
+          });
+        }
+
+const destinations = await listOwnerQrDestinations(pool, {
           ownerType: owner.owner_type,
           ownerId: owner.owner_id,
         });
@@ -1267,6 +1300,10 @@ function buildMoneyCoreRouter(pool) {
 
     r.get(`${basePath}/money-core/owner-qr-destinations/active`, async (req, res, next) => {
       try {
+        if (!requireMoneyCoreAuth(res, req)) {
+          return;
+        }
+
         const owner = await resolveMoneyCoreOwnerBySlug(pool, ownerType, req.params.slug);
 
         if (!owner.ok) {
@@ -1276,7 +1313,15 @@ function buildMoneyCoreRouter(pool) {
           });
         }
 
-        const destination = await getActiveOwnerQrDestination(pool, {
+                if (!hasMoneyCorePrivilegedAccess(req) &&
+            !hasMoneyCoreOwnerAccess(req, owner.owner_type, owner.owner_id)) {
+          return safeJson(res, 403, {
+            ok: false,
+            error: 'MONEY_CORE_OWNER_ACCESS_REQUIRED',
+          });
+        }
+
+const destination = await getActiveOwnerQrDestination(pool, {
           ownerType: owner.owner_type,
           ownerId: owner.owner_id,
         });
@@ -1543,6 +1588,10 @@ function buildMoneyCoreRouter(pool) {
 
   r.get('/money-core/diagnostics', async (req, res, next) => {
     try {
+      if (!requireMoneyCorePrivilegedAccess(res, req)) {
+        return;
+      }
+
       const flags = getMoneyCoreFlags();
 
       const tableMeta = await pool.query(
@@ -1583,6 +1632,9 @@ function buildMoneyCoreRouter(pool) {
 
   r.get('/money-core/legacy-map', async (req, res, next) => {
     try {
+      if (!requireMoneyCorePrivilegedAccess(res, req)) {
+        return;
+      }
       const flags = getMoneyCoreFlags();
 
       return safeJson(res, 200, {
@@ -1598,6 +1650,10 @@ function buildMoneyCoreRouter(pool) {
 
   r.get('/money-core/provider-events', async (req, res, next) => {
     try {
+      if (!requireMoneyCorePrivilegedAccess(res, req)) {
+        return;
+      }
+
       const events = await listProviderEvents(pool, {
         provider_code: req.query?.provider_code,
         payment_id: req.query?.payment_id,
@@ -1620,6 +1676,10 @@ function buildMoneyCoreRouter(pool) {
 
   r.get('/money-core/provider-events/:id', async (req, res, next) => {
     try {
+      if (!requireMoneyCorePrivilegedAccess(res, req)) {
+        return;
+      }
+
       const event = await getProviderEventById(pool, req.params.id);
 
       if (!event) {
@@ -1665,6 +1725,10 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/provider-events/:id/reprocess', async (req, res, next) => {
     try {
+      if (!requireMoneyCorePrivilegedAccess(res, req)) {
+        return;
+      }
+
       const event = await getProviderEventById(pool, req.params.id);
 
       if (!event) {
@@ -1907,6 +1971,10 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/settlements/:id/split/preview', async (req, res, next) => {
     try {
+      if (!requireMoneyCorePrivilegedAccess(res, req)) {
+        return;
+      }
+
       const preview = await previewSettlementSplit(pool, req.params.id, req.body || {});
 
       if (!preview) {
@@ -2097,6 +2165,10 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/owners/:ownerType/:ownerId/balance/rebuild', async (req, res, next) => {
     try {
+      if (!requireMoneyCorePrivilegedWriteAccess(res, req)) {
+        return;
+      }
+
       const currency = await resolveOwnerCurrencyCode(pool, {
         ownerType: req.params.ownerType,
         ownerId: req.params.ownerId,
@@ -2380,6 +2452,10 @@ function buildMoneyCoreRouter(pool) {
 
   r.get('/money-core/owners/:ownerType/:ownerId/withdraw-settings', async (req, res, next) => {
     try {
+      if (!requireMoneyCoreOwnerAccess(res, req, req.params.ownerType, req.params.ownerId)) {
+        return;
+      }
+
       const settings = await getWithdrawSettings(pool, req.params.ownerType, req.params.ownerId);
 
       return safeJson(res, 200, {
@@ -2737,6 +2813,10 @@ function buildMoneyCoreRouter(pool) {
 
   r.get('/money-core/reconciliation', async (req, res, next) => {
     try {
+      if (!requireMoneyCorePrivilegedAccess(res, req)) {
+        return;
+      }
+
       const runs = await listReconciliationRuns(pool, {
         run_type: req.query?.run_type,
         status: req.query?.status,
@@ -2780,6 +2860,10 @@ function buildMoneyCoreRouter(pool) {
 
   r.get('/money-core/reconciliation-mismatches', async (req, res, next) => {
     try {
+      if (!requireMoneyCorePrivilegedAccess(res, req)) {
+        return;
+      }
+
       const mismatches = await listReconciliationMismatches(pool, {
         run_id: req.query?.run_id,
         severity: req.query?.severity,
@@ -3541,6 +3625,10 @@ RETURNING
 
   r.get('/salons/:slug/money-core/withdraw-settings', async (req, res, next) => {
     try {
+      if (!requireMoneyCoreAuth(res, req)) {
+        return;
+      }
+
       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'salon', req.params.slug);
 
       if (!owner.ok) {
@@ -3550,7 +3638,15 @@ RETURNING
         });
       }
 
-      const settings = await getWithdrawSettings(pool, owner.owner_type, owner.owner_id);
+            if (!hasMoneyCorePrivilegedAccess(req) &&
+          !hasMoneyCoreOwnerAccess(req, owner.owner_type, owner.owner_id)) {
+        return safeJson(res, 403, {
+          ok: false,
+          error: 'MONEY_CORE_OWNER_ACCESS_REQUIRED',
+        });
+      }
+
+const settings = await getWithdrawSettings(pool, owner.owner_type, owner.owner_id);
 
       return safeJson(res, 200, {
         ok: true,
@@ -3606,6 +3702,10 @@ RETURNING
 
   r.get('/salons/:slug/money-core/withdraw-requests', async (req, res, next) => {
     try {
+      if (!requireMoneyCoreAuth(res, req)) {
+        return;
+      }
+
       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'salon', req.params.slug);
 
       if (!owner.ok) {
@@ -3615,7 +3715,15 @@ RETURNING
         });
       }
 
-      const requests = await listWithdrawRequests(pool, owner.owner_type, owner.owner_id, {
+            if (!hasMoneyCorePrivilegedAccess(req) &&
+          !hasMoneyCoreOwnerAccess(req, owner.owner_type, owner.owner_id)) {
+        return safeJson(res, 403, {
+          ok: false,
+          error: 'MONEY_CORE_OWNER_ACCESS_REQUIRED',
+        });
+      }
+
+const requests = await listWithdrawRequests(pool, owner.owner_type, owner.owner_id, {
         status: req.query?.status,
         destination_id: req.query?.destination_id,
         limit: req.query?.limit,
@@ -3766,6 +3874,10 @@ RETURNING
 
   r.get('/masters/:slug/money-core/withdraw-settings', async (req, res, next) => {
     try {
+      if (!requireMoneyCoreAuth(res, req)) {
+        return;
+      }
+
       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'master', req.params.slug);
 
       if (!owner.ok) {
@@ -3775,7 +3887,15 @@ RETURNING
         });
       }
 
-      const settings = await getWithdrawSettings(pool, owner.owner_type, owner.owner_id);
+            if (!hasMoneyCorePrivilegedAccess(req) &&
+          !hasMoneyCoreOwnerAccess(req, owner.owner_type, owner.owner_id)) {
+        return safeJson(res, 403, {
+          ok: false,
+          error: 'MONEY_CORE_OWNER_ACCESS_REQUIRED',
+        });
+      }
+
+const settings = await getWithdrawSettings(pool, owner.owner_type, owner.owner_id);
 
       return safeJson(res, 200, {
         ok: true,
@@ -3831,6 +3951,10 @@ RETURNING
 
   r.get('/masters/:slug/money-core/withdraw-requests', async (req, res, next) => {
     try {
+      if (!requireMoneyCoreAuth(res, req)) {
+        return;
+      }
+
       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'master', req.params.slug);
 
       if (!owner.ok) {
@@ -3840,7 +3964,15 @@ RETURNING
         });
       }
 
-      const requests = await listWithdrawRequests(pool, owner.owner_type, owner.owner_id, {
+            if (!hasMoneyCorePrivilegedAccess(req) &&
+          !hasMoneyCoreOwnerAccess(req, owner.owner_type, owner.owner_id)) {
+        return safeJson(res, 403, {
+          ok: false,
+          error: 'MONEY_CORE_OWNER_ACCESS_REQUIRED',
+        });
+      }
+
+const requests = await listWithdrawRequests(pool, owner.owner_type, owner.owner_id, {
         status: req.query?.status,
         destination_id: req.query?.destination_id,
         limit: req.query?.limit,

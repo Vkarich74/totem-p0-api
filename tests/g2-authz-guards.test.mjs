@@ -34,14 +34,17 @@ function guards(file,names){
 const salons=guards('salons.js',['safeInt','getIdentitySalonIds','hasSalonOwnership']);
 const masters=guards('masters.js',['safeInt','getIdentityMasterIds','hasMasterOwnership']);
 const contracts=guards('contracts.js',['safeInt','getIdentitySalonIds','hasSalonOwnership','getIdentityMasterIds','hasMasterOwnership']);
-const money=guards('money-core.js',['canonicalMoneyCoreOwnerId','getIdentityOwnerIds','hasMoneyCoreOwnerAccess','hasMoneyCorePrivilegedAccess']);
+const money=guards('money-core.js',['canonicalMoneyCoreOwnerId','getIdentityOwnerIds','validMoneyCoreSessionTime','hasMoneyCoreOwnerAccess','hasMoneyCorePrivilegedAccess']);
 
-const salonOwner={auth:{role:'salon_admin',source:'session',session_id:'test-owner-session',user_id:20},identity:{salons:[12],masters:[],ownership:[{owner_type:'salon',owner_id:12}]}};
-const master={auth:{role:'master',source:'session',session_id:'test-master-session',user_id:32},identity:{salons:[12],masters:[8],ownership:[{owner_type:'master',owner_id:8}]}};
-const legacyOwner={auth:{role:'owner',source:'jwt_legacy',user_id:20},identity:salonOwner.identity};
-const legacySystem={auth:{role:'system',source:'jwt_legacy',user_id:1},identity:{salons:[],masters:[],ownership:[]}};
-const validSystem={auth:{role:'system',source:'session',session_id:'test-system-session',user_id:1},identity:{salons:[],masters:[],ownership:[]}};
+// A direct grant is valid only if the server-built identity matches the
+// verified, unexpired session principal. The old synthetic fixtures omitted
+// identity.user_id / identity.role; those are now mandatory runtime contracts.
 const demoTime={session_expires_at:new Date(Date.now()+600000).toISOString(),idle_timeout_at:new Date(Date.now()+600000).toISOString()};
+const salonOwner={auth:{role:'salon_admin',source:'session',session_id:'test-owner-session',user_id:20,...demoTime},identity:{user_id:20,role:'salon_admin',salons:[12],masters:[],ownership:[{owner_type:'salon',owner_id:12}]}};
+const master={auth:{role:'master',source:'session',session_id:'test-master-session',user_id:32,...demoTime},identity:{user_id:32,role:'master',salons:[12],masters:[8],ownership:[{owner_type:'master',owner_id:8}]}};
+const legacyOwner={auth:{role:'owner',source:'jwt_legacy',user_id:20},identity:salonOwner.identity};
+const legacySystem={auth:{role:'system',source:'jwt_legacy',user_id:1},identity:{user_id:1,role:'system',salons:[],masters:[],ownership:[]}};
+const validSystem={auth:{role:'system',source:'session',session_id:'test-system-session',user_id:1,...demoTime},identity:{user_id:1,role:'system',salons:[],masters:[],ownership:[]}};
 function middlewareResponse(){
  const res={code:0,payload:null,status(n){this.code=n;return this},json(p){this.payload=p;return this}};
  let passed=0;
