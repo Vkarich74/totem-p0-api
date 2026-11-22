@@ -1,8 +1,34 @@
 import express from "express";
+import { requireAuth } from "../../middleware/requireAuth.js";
 
 export default function buildWithdrawsRouter(pool, internalReadRateLimit){
 
 const r = express.Router();
+
+// Only direct, active owner grants built by resolveAuth authorize historical
+// withdrawal financial reads. Membership in master_salon is not ownership.
+function canonicalWithdrawOwnerId(value){
+  const text=String(value ?? "").trim();
+  if(!/^[1-9][0-9]*$/.test(text))return null;
+  const number=Number(text);
+  return Number.isSafeInteger(number) ? number : null;
+}
+
+function hasDirectWithdrawOwnership(req, ownerType, ownerId){
+  const auth=req?.auth || null;
+  const identity=req?.identity || null;
+  if(!auth || auth.source!=="session" || !identity) return false;
+  if(String(identity.user_id)!==String(auth.user_id)
+     || String(identity.role)!==String(auth.role)) return false;
+  const type=String(ownerType || "").trim();
+  const id=canonicalWithdrawOwnerId(ownerId);
+  if(!id || !["salon","master"].includes(type))return false;
+  if(type==="salon" && !["salon_admin","owner"].includes(String(auth.role)))return false;
+  if(type==="master" && auth.role!=="master")return false;
+  const ownership=Array.isArray(identity.ownership)?identity.ownership:[];
+  return ownership.some(grant=>grant?.owner_type===type
+       && canonicalWithdrawOwnerId(grant?.owner_id)===id);
+}
 
 /*
 SALON BILLING ACCESS HELPER
@@ -76,15 +102,22 @@ use:"/salons/:slug/money-core/withdraw-requests"
 });
 
 /* WITHDRAW TIMELINE (AUDIT) */
-r.get("/withdraws/:id/timeline", internalReadRateLimit, async (req,res)=>{
+r.get("/withdraws/:id/timeline", requireAuth, internalReadRateLimit, async (req,res)=>{
 
 const { id } = req.params;
+
+// public.withdraws.id is UUID; reject malformed IDs before any SQL.
+if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(id || ""))){
+return res.status(400).json({ok:false,error:"INVALID_WITHDRAW_ID"});
+}
 
 try{
 
 const withdraw = await pool.query(`
 SELECT
 id,
+owner_type,
+owner_id,
 status,
 amount,
 external_ref,
@@ -100,6 +133,9 @@ return res.status(404).json({ok:false,error:"WITHDRAW_NOT_FOUND"});
 }
 
 const w = withdraw.rows[0];
+if(!hasDirectWithdrawOwnership(req,w.owner_type,w.owner_id)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
 
 const timeline = [];
 
@@ -168,7 +204,7 @@ error:"WITHDRAW_TIMELINE_FAILED"
 });
 
 /* WITHDRAW DASHBOARD (AGGREGATES) */
-r.get("/salons/:slug/withdraws/summary", internalReadRateLimit, async (req,res)=>{
+r.get("/salons/:slug/withdraws/summary", requireAuth, internalReadRateLimit, async (req,res)=>{
 
 const { slug } = req.params;
 
@@ -184,6 +220,9 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 }
 
 const salonId = salon.rows[0].id;
+if(!hasDirectWithdrawOwnership(req,"salon",salonId)){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
 
 const summary = await pool.query(`
 SELECT
