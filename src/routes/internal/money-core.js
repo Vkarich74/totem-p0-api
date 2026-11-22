@@ -197,9 +197,18 @@ async function resolveMoneyCoreOwnerBySlug(pool, ownerType, slug) {
   };
 }
 
+// Canonical primary keys only: parseInt('12other') would alias tenant 12.
+// Do not coerce resource IDs from URL, JSON or derived ownership grants.
+function canonicalMoneyCoreOwnerId(value) {
+  const text = String(value ?? '').trim();
+  if (!/^[1-9][0-9]*$/.test(text)) return null;
+  const id = Number(text);
+  return Number.isSafeInteger(id) ? id : null;
+}
+
 async function resolveMoneyCoreOwnerById(pool, ownerType, ownerId) {
   const normalizedOwnerType = String(ownerType || '').trim().toLowerCase();
-  const normalizedOwnerId = Number.parseInt(String(ownerId || '').trim(), 10);
+  const normalizedOwnerId = canonicalMoneyCoreOwnerId(ownerId);
 
   if (!normalizedOwnerType || !['salon', 'master', 'system'].includes(normalizedOwnerType)) {
     return {
@@ -288,7 +297,7 @@ function getIdentityOwnerIds(identity, ownerType) {
     }
 
     const rawId = item.owner_id ?? item.salon_id ?? item.master_id ?? item.id;
-    const parsedId = Number.parseInt(String(rawId || '').trim(), 10);
+    const parsedId = canonicalMoneyCoreOwnerId(rawId);
     if (Number.isInteger(parsedId) && parsedId > 0) {
       ids.add(parsedId);
     }
@@ -299,7 +308,7 @@ function getIdentityOwnerIds(identity, ownerType) {
 
 function hasMoneyCoreOwnerAccess(req, ownerType, ownerId) {
   const normalizedOwnerType = String(ownerType || '').trim().toLowerCase();
-  const normalizedOwnerId = Number.parseInt(String(ownerId || '').trim(), 10);
+  const normalizedOwnerId = canonicalMoneyCoreOwnerId(ownerId);
 
   if (!normalizedOwnerType || !Number.isInteger(normalizedOwnerId) || normalizedOwnerId <= 0) {
     return false;
