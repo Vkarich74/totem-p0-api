@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { hashClientCabinetToken } from "../../services/clientCabinetTokenAccess.js";
 import { requireAuth } from "../../middleware/requireAuth.js";
 import { requireCurrencyCode } from "../../market-context/BusinessContext.js";
 import { createNotification } from "../../services/notifications/notificationService.js";
@@ -556,63 +557,105 @@ created_at
   }
 
   r.post("/payments/direct/pending", async (req, res) => {
-    const { booking_id, service_price } = req.body || {};
-    const amount = parsePositiveAmount(service_price);
+    // KG public booking deliberately remains unauthenticated: possession of a
+    // *booking-scoped* cabinet token is the only customer capability needed.
+    // The token is issued by publicCreateBooking in the same transaction as
+    // the immutable price snapshot. It is NOT a salon owner/session JWT.
+    const bookingId = Number(req.body?.booking_id);
+    const bookingToken = String(req.body?.booking_token || "").trim();
 
-    if (!booking_id || amount == null) {
-      return res.status(400).json({ ok: false, error: "INVALID_INPUT" });
+    if (!Number.isSafeInteger(bookingId) || bookingId <= 0) {
+      return res.status(400).json({ ok: false, error: "INVALID_BOOKING_ID" });
+    }
+    if (!bookingToken) {
+      return res.status(401).json({ ok: false, error: "BOOKING_PAYMENT_TOKEN_REQUIRED" });
+    }
+    if (!/^[a-f0-9]{64}$/i.test(bookingToken)) {
+      return res.status(403).json({ ok: false, error: "BOOKING_PAYMENT_TOKEN_INVALID" });
     }
 
+    // Never log or forward bookingToken; only its SHA-256 reaches PostgreSQL.
+    const tokenHash = hashClientCabinetToken(bookingToken);
     const db = await pool.connect();
 
     try {
       await db.query("BEGIN");
 
-      const bookingCheck = await db.query(
-        `
-SELECT
-b.id,
-b.salon_id,
-b.status,
-b.currency_code
-FROM bookings b
-WHERE b.id=$1
-FOR UPDATE
-LIMIT 1
-`,
-        [booking_id]
+      // Lock the real booking first; no payment rows are read before proof.
+      const bookingResult = await db.query(
+        `SELECT b.id, b.client_id, b.salon_id, b.status,
+                b.price_snapshot, b.currency_code
+           FROM public.bookings b
+           WHERE b.id=$1
+           FOR UPDATE`,
+        [bookingId]
       );
 
-      if (!bookingCheck.rows.length) {
+      if (!bookingResult.rows.length) {
         await db.query("ROLLBACK");
         return res.status(404).json({ ok: false, error: "BOOKING_NOT_FOUND" });
       }
+      const booking = bookingResult.rows[0];
 
-      const bookingRow = bookingCheck.rows[0];
-
-      if (!bookingRow.salon_id) {
+      const proof = await db.query(
+        `SELECT id
+           FROM public.client_access_tokens
+           WHERE booking_id=$1
+             AND client_id=$2
+             AND token_hash=$3
+             AND purpose='cabinet'
+             AND revoked_at IS NULL
+           LIMIT 1
+           FOR SHARE`,
+        [bookingId, booking.client_id, tokenHash]
+      );
+      if (!proof.rows.length) {
         await db.query("ROLLBACK");
-        return res.status(400).json({ ok: false, error: "BOOKING_NOT_READY" });
+        return res.status(403).json({ ok: false, error: "BOOKING_PAYMENT_FORBIDDEN" });
       }
 
-      const currency = requireCurrencyCode(bookingRow.currency_code, "PAYMENT_CURRENCY_REQUIRED");
+      if (!booking.salon_id || !["reserved", "confirmed"].includes(String(booking.status))) {
+        await db.query("ROLLBACK");
+        return res.status(409).json({ ok: false, error: "BOOKING_NOT_PAYABLE" });
+      }
 
-      const activePayment = await findActivePaymentForBooking(db, booking_id);
+      const currency = requireCurrencyCode(booking.currency_code, "PAYMENT_CURRENCY_REQUIRED");
+      // US payments must use the immutable US cents/tax sidecar + C11, not
+      // the legacy integer booking.price_snapshot and KG cash endpoint.
+      if (currency === "USD") {
+        await db.query("ROLLBACK");
+        return res.status(409).json({ ok: false, error: "DIRECT_PENDING_UNSUPPORTED_CURRENCY" });
+      }
+      const amount = Number(booking.price_snapshot);
+      if (!Number.isSafeInteger(amount) || amount <= 0) {
+        await db.query("ROLLBACK");
+        return res.status(409).json({ ok: false, error: "BOOKING_PRICE_SNAPSHOT_INVALID" });
+      }
 
+      // Legacy callers may still send a displayed service_price, but cannot
+      // alter the canonical frozen booking price or the resulting payment.
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, "service_price")) {
+        const hinted = Number(req.body.service_price);
+        if (!Number.isSafeInteger(hinted) || hinted !== amount) {
+          await db.query("ROLLBACK");
+          return res.status(409).json({ ok: false, error: "BOOKING_PRICE_MISMATCH" });
+        }
+      }
+
+      const activePayment = await findActivePaymentForBooking(db, bookingId);
       if (activePayment.rows.length) {
         const active = activePayment.rows[0];
-        const activeStatus = String(active.status || "").toLowerCase();
-        const activeProvider = String(active.provider || "").toLowerCase();
-
-        if (activeProvider === "direct" && ["pending", "confirmed"].includes(activeStatus)) {
+        if (String(active.provider).toLowerCase() === "direct"
+            && ["pending", "confirmed"].includes(String(active.status).toLowerCase())) {
+          // Older pending records cannot be trusted if their amount was
+          // created through the historical client-price path.
+          if (Number(active.amount) !== amount || String(active.currency_code) !== currency) {
+            await db.query("ROLLBACK");
+            return res.status(409).json({ ok: false, error: "EXISTING_PAYMENT_PRICE_MISMATCH" });
+          }
           await db.query("ROLLBACK");
-          return res.json({
-            ok: true,
-            reused: true,
-            payment: normalizePaymentRow(active)
-          });
+          return res.json({ ok: true, reused: true, payment: normalizePaymentRow(active) });
         }
-
         await db.query("ROLLBACK");
         return res.status(409).json({
           ok: false,
@@ -623,39 +666,23 @@ LIMIT 1
       }
 
       const payment = await db.query(
-        `
-INSERT INTO payments(
-booking_id,
-provider,
-amount,
-currency_code,
-status,
-is_active
-)
-VALUES($1,'direct',$2,$3,'pending',true)
-RETURNING id,booking_id,amount,currency_code,status,provider,created_at
-`,
-        [booking_id, amount, currency]
+        `INSERT INTO public.payments(
+           booking_id, provider, amount, currency_code, status, is_active
+         ) VALUES($1,'direct',$2,$3,'pending',true)
+         RETURNING id,booking_id,amount,currency_code,status,provider,created_at`,
+        [bookingId, amount, currency]
       );
-
       await db.query("COMMIT");
-
-      return res.json({
-        ok: true,
-        payment: normalizePaymentRow(payment.rows[0])
-      });
+      return res.json({ ok: true, payment: normalizePaymentRow(payment.rows[0]) });
     } catch (err) {
       try {
         await db.query("ROLLBACK");
       } catch (rollbackErr) {
         console.error("DIRECT_PAYMENT_PENDING_ROLLBACK_ERROR", rollbackErr);
       }
-
-      console.error("DIRECT_PAYMENT_PENDING_ERROR", err);
-      return res.status(500).json({
-        ok: false,
-        error: "DIRECT_PAYMENT_PENDING_FAILED"
-      });
+      // Keep the booking capability out of logs.
+      console.error("DIRECT_PAYMENT_PENDING_ERROR", { code: err?.code || "UNKNOWN" });
+      return res.status(500).json({ ok: false, error: "DIRECT_PAYMENT_PENDING_FAILED" });
     } finally {
       db.release();
     }

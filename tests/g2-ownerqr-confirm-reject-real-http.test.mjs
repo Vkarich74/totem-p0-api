@@ -26,7 +26,8 @@ const imports={
    getOwnerQrPaymentOptions:async(input)=>{calls.push(["options",input]);return {booking_id:77,destinations:[{id:5}]}},
  },
  "directCashObligations.service.js":{createDirectCashObligationsForConfirmedPayment:async()=>({status:"skipped"})},
- "paymentCollectionAnchors.service.js":{upsertPaymentCollectionAnchorForPayment:async()=>null}
+ "paymentCollectionAnchors.service.js":{upsertPaymentCollectionAnchorForPayment:async()=>null},
+ "clientCabinetTokenAccess.js":{hashClientCabinetToken:(token)=>String(token||"")}
 };
 const moduleCache=new Map();
 function getDep(specifier){
