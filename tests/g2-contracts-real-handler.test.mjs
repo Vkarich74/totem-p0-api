@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import vm from 'node:vm';
 import express from 'express';
 
@@ -29,7 +29,8 @@ const cases={
  'master39':{auth:auth('master',13),identity:{user_id:13,role:'master',salons:[81],masters:[39],ownership:[{owner_type:'master',owner_id:39,relation:'masters.user_id_direct'}]}},
  'legacy':{auth:{...auth('salon_admin',10,'jwt_legacy')},identity:{salons:[81],ownership:[{owner_type:'salon',owner_id:81}]}},
  'expired':{auth:{...auth('salon_admin',10),session_expires_at:past},identity:{salons:[81]}},
- 'idle':{auth:{...auth('salon_admin',10),idle_timeout_at:past},identity:{salons:[81]}}
+ 'idle':{auth:{...auth('salon_admin',10),idle_timeout_at:past},identity:{salons:[81]}},
+ 'identityMismatch':{auth:auth('salon_admin',10),identity:{user_id:999,role:'salon_admin',salons:[81],masters:[],ownership:[{owner_type:'salon',owner_id:81}]}}
 };
 const UUID='a0b1c2d3-1111-4444-8888-0123456789ab';
 function mkPool(){
@@ -53,19 +54,32 @@ function mkPool(){
  };
  return {pool,statements};
 }
+// One isolated HTTP router instance for the entire 13-route matrix. SQL is
+// still reset per request and remains fully stubbed; no real database.
+let currentPool=null;
+const poolProxy={
+ query:(...args)=>currentPool.query(...args),
+ connect:(...args)=>currentPool.connect(...args)
+};
+const realRouter=builder(poolProxy,(_req,_res,next)=>next());
+assert.equal(realRouter.stack.filter(x=>x.route).length,13,'full original 13 business routes registered');
+const realApp=express();realApp.use(express.json());
+realApp.use('/internal',(req,_res,next)=>{
+ const item=cases[req.headers['x-local-fixture']];
+ req.auth=item?.auth||null;req.identity=item?.identity||null;next();
+},realRouter);
+realApp.use((e,_req,res,_next)=>res.status(599).json({error:e.message}));
+const realServer=await new Promise(resolve=>{const srv=realApp.listen(0,'127.0.0.1',()=>resolve(srv))});
+after(()=>new Promise(resolve=>realServer.close(resolve)));
 async function callRoute(principal,path,method='GET',body) {
  const {pool,statements}=mkPool();
- const router=builder(pool,(_req,_res,next)=>next());
- const count=router.stack.filter(x=>x.route).length;
- assert.equal(count,13,'full original 13 business routes registered');
- const app=express();app.use(express.json());
- app.use('/internal',(req,_res,next)=>{const item=cases[req.headers['x-local-fixture']];req.auth=item?.auth||null;req.identity=item?.identity||null;next()},router);
- app.use((e,_req,res,_next)=>res.status(599).json({error:e.message}));
- const server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s))});
- try{
-  const r=await fetch(`http://127.0.0.1:${server.address().port}/internal${path}`,{method,headers:{'content-type':'application/json',...(principal?{'x-local-fixture':principal}:{})},...(method==='GET'?{}:{body:JSON.stringify(body||{})})});
-  return {status:r.status,body:await r.json(),sql:statements};
- }finally{await new Promise(resolve=>server.close(resolve))}
+ currentPool=pool;
+ const r=await fetch(`http://127.0.0.1:${realServer.address().port}/internal${path}`,{
+  method,
+  headers:{'content-type':'application/json',...(principal?{'x-local-fixture':principal}:{})},
+  ...(method==='GET'?{}:{body:JSON.stringify(body||{})})
+ });
+ return {status:r.status,body:await r.json(),sql:statements};
 }
 const mutation=/\b(UPDATE|INSERT|DELETE|TRUNCATE|ALTER|DROP|CREATE)\b/i;
 function assertDeny(result,status){assert.equal(result.status,status,JSON.stringify(result.body));assert.ok(result.sql.every(sql=>!mutation.test(sql)), 'no mutation SQL routed on denied request');assert.notEqual(result.body?.ok,true);}
@@ -91,3 +105,42 @@ test('P0-18 owner cannot accept master-signature action',async()=>{const x=await
 test('P0-19 no-session master JWT cannot accept contract',async()=>{const x=await callRoute(null,`/contracts/${UUID}/accept`,'POST');assertDeny(x,401);assert.equal(x.sql.length,0)});
 test('P0-20 owner salon creation endpoint denies foreign owner',async()=>{const x=await callRoute('owner82','/salons/salon81/contracts','POST',{master_id:29});assertDeny(x,403);assert.equal(x.sql.length,1)});
 console.log('REAL_FULL_BUSINESS_HANDLERS=13; TESTED_DENY_AND_ALLOW_WITH_FAKE_SQL; PROD_AND_LOCAL_DB_WRITES=0');
+
+
+// Full 13-route matrix: reject empty, legacy, expired, idle and mismatched
+// principal BEFORE any SQL, even for endpoints that normally mutate money.
+const fullContractMatrix=[
+ ['POST','/contracts'],
+ ['GET','/salons/salon81/contracts'],
+ ['POST','/salons/salon81/contracts'],
+ ['POST',`/contracts/${UUID}/accept`],
+ ['POST',`/contracts/${UUID}/archive`],
+ ['GET','/salons/salon81/rent-obligations'],
+ ['GET','/masters/m29/rent-obligations'],
+ ['GET','/salons/salon81/salary-obligations'],
+ ['GET','/masters/m29/salary-obligations'],
+ ['POST','/salons/salon81/rent-payments/confirm'],
+ ['POST','/salons/salon81/salary-obligations/confirm'],
+ ['GET','/contracts/master/m29/active'],
+ ['GET','/contracts/master/m29/history']
+];
+for(const [method,path] of fullContractMatrix){
+ for(const who of [null,'legacy','expired','idle','identityMismatch']){
+  test('G2 all contracts '+method+' '+path+' denies '+String(who)+' before SQL',async()=>{
+   const r=await callRoute(who,path,method);
+   assertDeny(r,401);
+   assert.equal(r.sql.length,0);
+  });
+ }
+}
+
+test('G2 rent confirmation rejects invalid amount without unhandled async failure or write',async()=>{
+ const r=await callRoute('owner81','/salons/salon81/rent-payments/confirm','POST',{amount:'not-a-number'});
+ assertDeny(r,400);
+ assert.ok(r.sql.every(sql=>!mutation.test(sql)));
+});
+test('G2 salary confirmation rejects invalid amount without unhandled async failure or write',async()=>{
+ const r=await callRoute('owner81','/salons/salon81/salary-obligations/confirm','POST',{amount:'not-a-number'});
+ assertDeny(r,400);
+ assert.ok(r.sql.every(sql=>!mutation.test(sql)));
+});

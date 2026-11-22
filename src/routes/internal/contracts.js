@@ -1215,9 +1215,14 @@ const r = express.Router();
 // These lookups are SELECT-only. All mutations remain in original handlers,
 // and cannot be reached by a foreign/anonymous actor.
 function contractSessionIsVerified(req) {
-  if (req?.auth?.source !== 'session' || !req?.auth?.session_id) return false;
-  const exp = new Date(req.auth.session_expires_at || '').getTime();
-  const idle = new Date(req.auth.idle_timeout_at || '').getTime();
+  const auth = req?.auth || null;
+  const identity = req?.identity || null;
+  if (!auth || auth.source !== 'session' || !auth.session_id ||
+      !auth.user_id || !auth.role || !identity ||
+      String(identity.user_id) !== String(auth.user_id) ||
+      String(identity.role) !== String(auth.role)) return false;
+  const exp = new Date(auth.session_expires_at || '').getTime();
+  const idle = new Date(auth.idle_timeout_at || '').getTime();
   if (!Number.isFinite(exp) || exp <= Date.now()) return false;
   if (!Number.isFinite(idle) || idle <= Date.now()) return false;
   return true;
@@ -1941,7 +1946,10 @@ r.post("/salons/:slug/rent-payments/confirm", async (req,res)=>{
 const { slug } = req.params;
 const body = req.body || {};
 const obligationId = String(body.obligation_id ?? body.obligationId ?? "").trim();
-const amount = normalizePositiveInteger(body.amount, "RENT_PAYMENT_AMOUNT_INVALID");
+const amount = Number(body.amount);
+if (!Number.isSafeInteger(amount) || amount <= 0) {
+return res.status(400).json({ok:false,error:"RENT_PAYMENT_AMOUNT_INVALID"});}
+
 const rawCurrency = normalizeContractText(body.currency, "");
 const currency = String(rawCurrency || "").trim().toUpperCase();
 const provider = normalizeContractText(body.provider, "manual");
@@ -2188,7 +2196,10 @@ r.post("/salons/:slug/salary-obligations/confirm", async (req,res)=>{
 const { slug } = req.params;
 const body = req.body || {};
 const obligationId = String(body.obligation_id ?? body.obligationId ?? "").trim();
-const amount = normalizePositiveInteger(body.amount, "SALARY_PAYMENT_AMOUNT_INVALID");
+const amount = Number(body.amount);
+if (!Number.isSafeInteger(amount) || amount <= 0) {
+return res.status(400).json({ok:false,error:"SALARY_PAYMENT_AMOUNT_INVALID"});}
+
 const rawCurrency = normalizeContractText(body.currency, "");
 const currency = String(rawCurrency || "").trim().toUpperCase();
 const idempotencyKey = String(body.idempotency_key ?? body.idempotencyKey ?? "").trim();
