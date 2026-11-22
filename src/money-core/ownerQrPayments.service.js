@@ -322,56 +322,44 @@ function normalizeActorContext(actorContext = {}) {
 }
 
 function actorHasOwnership(actorContext, ownerType, ownerId) {
-  const ownership = [
-    ...(Array.isArray(actorContext?.identity?.ownership) ? actorContext.identity.ownership : []),
-    ...(Array.isArray(actorContext?.auth?.ownership) ? actorContext.auth.ownership : []),
-  ];
-
-  const resolvedOwnerType = normalizeText(ownerType);
-  const resolvedOwnerId = normalizePositiveInt(ownerId);
-
-  if (!resolvedOwnerType || !resolvedOwnerId) {
-    return false;
-  }
-
-  return ownership.some((item) => {
-    if (!item) {
-      return false;
-    }
-
-    return (
-      String(item.owner_type || '').trim() === resolvedOwnerType
-      && normalizePositiveInt(item.owner_id) === resolvedOwnerId
-    );
-  });
+  // Only the direct, active owner_salon / masters.user_id grants built by resolveAuth
+  // may authorize money actions. JWT claims, slug hints and auth_users legacy slugs
+  // are not financial ownership evidence.
+  const ownership = Array.isArray(actorContext?.identity?.ownership)
+    ? actorContext.identity.ownership : [];
+  const targetType = normalizeText(ownerType);
+  const targetId = normalizePositiveInt(ownerId);
+  if (!targetType || !targetId) return false;
+  return ownership.some((entry) =>
+    String(entry?.owner_type || '').trim() === targetType
+    && normalizePositiveInt(entry?.owner_id) === targetId
+  );
 }
 
 function actorCanManageOwnerQrPayment(actorContext, payment, booking) {
-  if (actorHasOwnership(actorContext, payment.collector_owner_type, payment.collector_owner_id)) {
-    return true;
+  const auth = actorContext?.auth || null;
+  const identity = actorContext?.identity || null;
+  if (auth?.source !== 'session' || !auth?.session_id || !auth?.user_id
+      || !identity || String(identity.user_id) !== String(auth.user_id)
+      || String(identity.role) !== String(auth.role)) return false;
+
+  const expiresAt = new Date(auth.session_expires_at || '').getTime();
+  const idleAt = new Date(auth.idle_timeout_at || '').getTime();
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()
+      || !Number.isFinite(idleAt) || idleAt <= Date.now()) return false;
+
+  const ownerType = normalizeText(payment?.collector_owner_type);
+  const ownerId = normalizePositiveInt(payment?.collector_owner_id);
+  if (!ownerId || !['salon', 'master'].includes(ownerType)) return false;
+
+  if (ownerType === 'salon') {
+    if (!['owner', 'salon_admin'].includes(String(auth.role))) return false;
+    if (normalizePositiveInt(booking?.salon_id) !== ownerId) return false;
+  } else {
+    if (auth.role !== 'master') return false;
+    if (normalizePositiveInt(booking?.master_id) !== ownerId) return false;
   }
-
-  const resolvedOwnerType = normalizeText(payment.collector_owner_type);
-  const actorOwnerType = normalizeText(actorContext?.auth?.owner_type);
-  const actorOwnerSlug = normalizeText(
-    actorContext?.auth?.owner_slug
-      || actorContext?.auth?.salon_slug
-      || actorContext?.auth?.master_slug
-  );
-
-  if (!resolvedOwnerType || !actorOwnerType || !actorOwnerSlug) {
-    return false;
-  }
-
-  if (resolvedOwnerType === 'salon') {
-    return actorOwnerType === 'salon' && actorOwnerSlug === normalizeText(booking?.salon_slug);
-  }
-
-  if (resolvedOwnerType === 'master') {
-    return actorOwnerType === 'master' && actorOwnerSlug === normalizeText(booking?.master_slug);
-  }
-
-  return false;
+  return actorHasOwnership(actorContext, ownerType, ownerId);
 }
 
 function assertConfirmWriteAllowed() {
@@ -972,6 +960,13 @@ async function confirmOwnerQrPayment({
     const expectedSourceUid = `owner_qr:payment:${payment.id}`;
 
     if (normalizedStatus === 'confirmed') {
+      // Idempotency must never bypass caller authorization. The original
+      // early return disclosed full payment/obligations and refreshed an anchor
+      // before checking the caller. Lock and verify the booking ownership first.
+      const confirmedBooking = await loadBookingForUpdate(client, payment.booking_id);
+      if (!confirmedBooking || !actorCanManageOwnerQrPayment(actor, payment, confirmedBooking)) {
+        throw createError('OWNER_QR_FORBIDDEN', 'Forbidden', 403);
+      }
       if (normalizeText(payment.money_core_source_uid) === expectedSourceUid) {
         try {
           await upsertPaymentCollectionAnchorForPayment(client, {
