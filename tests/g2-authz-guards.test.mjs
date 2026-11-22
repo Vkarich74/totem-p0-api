@@ -34,7 +34,7 @@ function guards(file,names){
 const salons=guards('salons.js',['safeInt','getIdentitySalonIds','hasSalonOwnership']);
 const masters=guards('masters.js',['safeInt','getIdentityMasterIds','hasMasterOwnership']);
 const contracts=guards('contracts.js',['safeInt','getIdentitySalonIds','hasSalonOwnership','getIdentityMasterIds','hasMasterOwnership']);
-const money=guards('money-core.js',['getIdentityOwnerIds','hasMoneyCoreOwnerAccess','hasMoneyCorePrivilegedAccess']);
+const money=guards('money-core.js',['canonicalMoneyCoreOwnerId','getIdentityOwnerIds','hasMoneyCoreOwnerAccess','hasMoneyCorePrivilegedAccess']);
 
 const salonOwner={auth:{role:'salon_admin',source:'session',session_id:'test-owner-session',user_id:20},identity:{salons:[12],masters:[],ownership:[{owner_type:'salon',owner_id:12}]}};
 const master={auth:{role:'master',source:'session',session_id:'test-master-session',user_id:32},identity:{salons:[12],masters:[8],ownership:[{owner_type:'master',owner_id:8}]}};
