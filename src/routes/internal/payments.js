@@ -242,6 +242,80 @@ export default function buildPaymentsRouter({
     }
   });
 
+  // G2: only a verified direct owner grant can authorize a money mutation.
+  // Never infer cash confirmation rights from master_salon memberships, URL
+  // slugs, client booking tokens or legacy auth_users hints.
+  function canonicalCashConfirmId(value){
+    const text=String(value ?? "").trim();
+    if(!/^[1-9][0-9]*$/.test(text))return null;
+    const id=Number(text);
+    return Number.isSafeInteger(id)?id:null;
+  }
+
+  function hasCashConfirmOwnerGrant(req, ownerType, ownerId){
+    const auth=req?.auth || null;
+    const identity=req?.identity || null;
+    if(!auth || auth.source!=="session" || !identity
+       || String(identity.user_id)!==String(auth.user_id)
+       || String(identity.role)!==String(auth.role))return false;
+    const id=canonicalCashConfirmId(ownerId);
+    if(!id)return false;
+    if(ownerType==="salon" && !["owner","salon_admin"].includes(String(auth.role)))return false;
+    if(ownerType==="master" && String(auth.role)!=="master")return false;
+    if(!["salon","master"].includes(ownerType))return false;
+    return Array.isArray(identity.ownership) && identity.ownership.some(
+      entry=>entry?.owner_type===ownerType && canonicalCashConfirmId(entry?.owner_id)===id
+    );
+  }
+
+  async function authorizeDirectCashConfirmation(db, req, ownerType, body){
+    const rawBooking=body?.booking_id ?? body?.bookingId;
+    const rawPayment=body?.payment_id ?? body?.paymentId;
+    const bookingId=canonicalCashConfirmId(rawBooking);
+    const paymentId=canonicalCashConfirmId(rawPayment);
+    if((rawBooking!=null && !bookingId)||(rawPayment!=null && !paymentId)){
+      return {ok:false,status:400,error:"INVALID_PAYMENT_OR_BOOKING_ID"};
+    }
+    if(!bookingId && !paymentId){
+      return {ok:false,status:400,error:"BOOKING_ID_REQUIRED"};
+    }
+    // If booking id exists, check direct owner first, before reading payment
+    // rows or deriving settlement details.
+    const booking=bookingId
+      ? await db.query(
+          `SELECT b.id,b.salon_id,b.master_id
+           FROM public.bookings b WHERE b.id=$1 FOR UPDATE`,
+          [bookingId]
+        )
+      : await db.query(
+          `SELECT b.id,b.salon_id,b.master_id
+           FROM public.bookings b JOIN public.payments p ON p.booking_id=b.id
+           WHERE p.id=$1 FOR UPDATE OF b`,
+          [paymentId]
+        );
+    if(!booking.rows.length){
+      return {ok:false,status:404,error:"DIRECT_PENDING_PAYMENT_NOT_FOUND"};
+    }
+    const row=booking.rows[0];
+    const ownerId=ownerType==="salon"?row.salon_id:row.master_id;
+    if(!hasCashConfirmOwnerGrant(req,ownerType,ownerId)){
+      return {ok:false,status:403,error:"FORBIDDEN"};
+    }
+    // Reject nested-ID tampering: owning booking 77 does not authorize payment
+    // 81 unless that payment's stored booking_id is exactly 77.
+    if(paymentId && bookingId){
+      const link=await db.query(
+        "SELECT booking_id FROM public.payments WHERE id=$1 LIMIT 1",
+        [paymentId]
+      );
+      if(!link.rows.length ||
+         canonicalCashConfirmId(link.rows[0].booking_id)!==canonicalCashConfirmId(row.id)){
+        return {ok:false,status:403,error:"PAYMENT_BOOKING_MISMATCH"};
+      }
+    }
+    return {ok:true,booking_id:row.id};
+  }
+
   async function confirmDirectPendingCashPayment(db, input = {}) {
     const bookingId = Number(input.booking_id ?? input.bookingId ?? null);
     const paymentId = Number(input.payment_id ?? input.paymentId ?? null);
@@ -791,7 +865,7 @@ created_at
     }
   });
 
-  r.post("/payments/direct/salon/confirm-cash", async (req, res) => {
+  r.post("/payments/direct/salon/confirm-cash", requireAuth, async (req, res) => {
     const db = await pool.connect();
     let diagnosticStage = "start";
 
@@ -800,6 +874,12 @@ created_at
       await db.query("BEGIN");
 
       const body = req.body || {};
+      diagnosticStage = "verify_direct_owner_before_money_write";
+      const grant = await authorizeDirectCashConfirmation(db,req,"salon",body);
+      if(!grant.ok){
+        await db.query("ROLLBACK");
+        return res.status(grant.status).json({ok:false,error:grant.error});
+      }
       diagnosticStage = "load_payment_or_booking_context";
       const result = await confirmDirectPendingCashPayment(db, {
         ...body,
@@ -948,7 +1028,7 @@ LIMIT 1
     }
   });
 
-  r.post("/payments/direct/master/confirm-cash", async (req, res) => {
+  r.post("/payments/direct/master/confirm-cash", requireAuth, async (req, res) => {
     const db = await pool.connect();
     let diagnosticStage = "start";
 
@@ -957,6 +1037,12 @@ LIMIT 1
       await db.query("BEGIN");
 
       const body = req.body || {};
+      diagnosticStage = "verify_direct_owner_before_money_write";
+      const grant = await authorizeDirectCashConfirmation(db,req,"master",body);
+      if(!grant.ok){
+        await db.query("ROLLBACK");
+        return res.status(grant.status).json({ok:false,error:grant.error});
+      }
       diagnosticStage = "load_payment_or_booking_context";
       const result = await confirmDirectPendingCashPayment(db, {
         ...body,
