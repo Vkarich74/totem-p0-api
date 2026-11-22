@@ -4,7 +4,6 @@ import pkg from 'pg';
 const { Pool } = pkg;
 
 const ALLOWED_ROLES = new Set(['owner', 'salon_admin', 'master', 'system']);
-const LEGACY_TOKEN_ROLES = new Set(['system', 'owner']);
 const IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const AUTH_RESOLVE_TIMEOUT_MS = 8000;
 
@@ -13,7 +12,7 @@ function getPool(){
   if(_pool) return _pool;
   _pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false },
+    ssl: process.env.G2_LOCAL_NO_SSL === '1' ? false : { rejectUnauthorized: false },
     connectionTimeoutMillis: AUTH_RESOLVE_TIMEOUT_MS
   });
   return _pool;
@@ -113,205 +112,86 @@ function emptyIdentity(userId, role){
 }
 
 async function buildIdentityWithClient(client, userId, requestedMasterSlug = ''){
-  const hasMasterId = await authUsersHasColumn(client, 'master_id');
-
-  const authUserFields = ['role', 'master_slug'];
-  if(hasMasterId){
-    authUserFields.push('master_id');
+  // Identity discovery is intentionally NOT an authorization grant by itself.
+  // Only a verified principal and direct, currently-active relationships are exposed.
+  // requestedMasterSlug is untrusted request data; it must never grant another master.
+  const principalId = safeInt(userId);
+  if(!principalId){
+    return { salons: [], masters: [], ownership: [] };
   }
 
-  const authUserRes = await client.query(
-    `SELECT ${authUserFields.join(', ')}
-     FROM public.auth_users
-     WHERE id = $1
-     LIMIT 1`,
-    [userId]
+  const principalResult = await client.query(
+    `SELECT role, enabled FROM public.auth_users WHERE id = $1 LIMIT 1`,
+    [principalId]
   );
-
-  const authUser = authUserRes.rows[0] || null;
-  const authUserRole = String(authUser?.role || '').trim();
-  const authUserMasterSlug = String(authUser?.master_slug || '').trim();
-  const authUserMasterId = safeInt(authUser?.master_id);
-
-  const masterRes = await client.query(
-    `SELECT id
-     FROM masters
-     WHERE user_id = $1
-     ORDER BY id ASC`,
-    [userId]
-  );
-
-  const masterIdsFromUserId = uniqueNumberList(masterRes.rows.map((row) => row.id));
-  let masterIdsFromAuthUserMasterId = [];
-  let masterIdsFromSlug = [];
-
-  if(authUserRole === 'master' && authUserMasterId){
-    const masterByIdRes = await client.query(
-      `SELECT id
-       FROM masters
-       WHERE id = $1
-       ORDER BY id ASC`,
-      [authUserMasterId]
-    );
-
-    masterIdsFromAuthUserMasterId = uniqueNumberList(
-      masterByIdRes.rows.map((row) => row.id)
-    );
+  const principal = principalResult.rows[0] || null;
+  if(!principal || principal.enabled !== true){
+    return { salons: [], masters: [], ownership: [] };
   }
 
-  if(authUserRole === 'master' && authUserMasterSlug){
-    const masterBySlugRes = await client.query(
-      `SELECT id
-       FROM masters
-       WHERE slug = $1
-       ORDER BY id ASC`,
-      [authUserMasterSlug]
+  const role = String(principal.role || '').trim();
+  if(role === 'salon_admin' || role === 'owner'){
+    // owner_salon.owner_id is TEXT in the actual Railway production schema.
+    const ownerResult = await client.query(
+      `SELECT DISTINCT s.id AS salon_id
+         FROM public.owner_salon os
+         JOIN public.salons s ON s.id = os.salon_id
+        WHERE os.owner_id = $1
+          AND os.status = 'active'
+          AND s.status = 'active'
+          AND s.enabled IS TRUE
+        ORDER BY s.id`,
+      [String(principalId)]
     );
-
-    masterIdsFromSlug = uniqueNumberList(
-      masterBySlugRes.rows.map((row) => row.id)
-    );
+    const salonIds = uniqueNumberList(ownerResult.rows.map(row => row.salon_id));
+    return {
+      salons: salonIds,
+      masters: [],
+      ownership: salonIds.map(id => ({
+        owner_type: 'salon', owner_id: id,
+        relation: 'active_owner_salon_direct'
+      }))
+    };
   }
 
-  const masterIds = uniqueNumberList([
-    ...masterIdsFromUserId,
-    ...masterIdsFromAuthUserMasterId,
-    ...masterIdsFromSlug
-  ]);
-
-  const safeRequestedMasterSlug = String(requestedMasterSlug || '').trim();
-  let requestedMasterId = null;
-  let requestedMasterRelation = '';
-
-  if(safeRequestedMasterSlug){
-    const requestedMasterRes = await client.query(
-      `SELECT id, slug, user_id
-       FROM masters
-       WHERE slug = $1
-       LIMIT 1`,
-      [safeRequestedMasterSlug]
+  if(role === 'master'){
+    // A salon owner never inherits another person's master cabinet or wallet.
+    // Master identity is linked ONLY through masters.user_id (not slug or auth_users.master_id).
+    const mastersResult = await client.query(
+      `SELECT id AS master_id FROM public.masters
+        WHERE user_id = $1 AND active IS TRUE
+        ORDER BY id`,
+      [principalId]
     );
-
-    const requestedMaster = requestedMasterRes.rows[0] || null;
-    const requestedMasterUserId = safeInt(requestedMaster?.user_id);
-    const requestedMasterIdRaw = safeInt(requestedMaster?.id);
-
-    if(requestedMasterIdRaw){
-      if(requestedMasterUserId === safeInt(userId)){
-        requestedMasterId = requestedMasterIdRaw;
-        requestedMasterRelation = 'requested_slug -> masters.user_id';
-      }else if(authUserMasterId && authUserMasterId === requestedMasterIdRaw){
-        requestedMasterId = requestedMasterIdRaw;
-        requestedMasterRelation = 'requested_slug -> auth_users.master_id';
-      }else if(
-        authUserRole === 'master' &&
-        authUserMasterSlug &&
-        authUserMasterSlug === safeRequestedMasterSlug
-      ){
-        requestedMasterId = requestedMasterIdRaw;
-        requestedMasterRelation = 'requested_slug -> auth_users.master_slug';
-      }
+    const masterIds = uniqueNumberList(mastersResult.rows.map(row => row.master_id));
+    if(masterIds.length === 0){
+      return { salons: [], masters: [], ownership: [] };
     }
-  }
-
-  const ownerSalonRes = await client.query(
-    `SELECT salon_id
-     FROM owner_salon
-     WHERE owner_id = $1
-     ORDER BY salon_id ASC`,
-    [String(userId)]
-  );
-
-  const salonIdsFromOwner = uniqueNumberList(
-    ownerSalonRes.rows.map((row) => row.salon_id)
-  );
-
-  let masterIdsFromOwnerSalon = [];
-
-  if(salonIdsFromOwner.length > 0){
-    const ownerSalonMasterRes = await client.query(
-      `SELECT DISTINCT ms.master_id
-       FROM master_salon ms
-       WHERE ms.salon_id = ANY($1::int[])
-       ORDER BY ms.master_id ASC`,
-      [salonIdsFromOwner]
+    const membershipResult = await client.query(
+      `SELECT DISTINCT s.id AS salon_id
+         FROM public.master_salon ms
+         JOIN public.salons s ON s.id = ms.salon_id
+        WHERE ms.master_id = ANY($1::int[])
+          AND ms.status = 'active'
+          AND s.status = 'active'
+          AND s.enabled IS TRUE
+        ORDER BY s.id`,
+      [masterIds]
     );
-
-    masterIdsFromOwnerSalon = uniqueNumberList(
-      ownerSalonMasterRes.rows.map((row) => row.master_id)
-    );
+    const salonIds = uniqueNumberList(membershipResult.rows.map(row => row.salon_id));
+    return {
+      salons: salonIds,
+      masters: masterIds,
+      ownership: masterIds.map(id => ({
+        owner_type: 'master', owner_id: id,
+        relation: 'masters.user_id_direct'
+      }))
+    };
   }
 
-  const mergedMasterIds = uniqueNumberList([
-    ...masterIds,
-    ...masterIdsFromOwnerSalon,
-    requestedMasterId
-  ]);
-
-  let salonIdsFromMaster = [];
-
-  if(mergedMasterIds.length > 0){
-    const masterSalonRes = await client.query(
-      `SELECT DISTINCT ms.salon_id
-       FROM master_salon ms
-       WHERE ms.master_id = ANY($1::int[])
-       ORDER BY ms.salon_id ASC`,
-      [mergedMasterIds]
-    );
-
-    salonIdsFromMaster = uniqueNumberList(
-      masterSalonRes.rows.map((row) => row.salon_id)
-    );
-  }
-
-  const salonIds = uniqueNumberList([
-    ...salonIdsFromOwner,
-    ...salonIdsFromMaster
-  ]);
-
-  const ownership = [];
-
-  for(const salonId of salonIdsFromOwner){
-    ownership.push({
-      owner_type: 'salon',
-      owner_id: salonId,
-      relation: 'owner_salon.owner_id'
-    });
-  }
-
-  for(const salonId of salonIdsFromMaster){
-    ownership.push({
-      owner_type: 'salon',
-      owner_id: salonId,
-      relation: 'master_salon'
-    });
-  }
-
-  for(const masterId of mergedMasterIds){
-    let relation = 'auth_users.master_slug -> masters.slug';
-
-    if(masterIdsFromUserId.includes(masterId)){
-      relation = 'masters.user_id';
-    }else if(masterIdsFromAuthUserMasterId.includes(masterId)){
-      relation = 'auth_users.master_id -> masters.id';
-    }else if(masterIdsFromOwnerSalon.includes(masterId)){
-      relation = 'owner_salon -> master_salon';
-    }else if(requestedMasterId && masterId === requestedMasterId && requestedMasterRelation){
-      relation = requestedMasterRelation;
-    }
-
-    ownership.push({
-      owner_type: 'master',
-      owner_id: masterId,
-      relation
-    });
-  }
-
-  return {
-    salons: salonIds,
-    masters: mergedMasterIds,
-    ownership
-  };
+  // system/service identities must use their own narrow service capability.
+  // Never synthesize salon/master ownership for unrelated roles.
+  return { salons: [], masters: [], ownership: [] };
 }
 
 async function buildIdentity(userId, requestedMasterSlug = '', client = null){
@@ -371,30 +251,9 @@ export async function resolveAuth(req,res,next){
       return next();
     }
 
-    // Legacy tokens are allowed only for internal roles.
-    // Cabinet-facing roles must resolve through auth_sessions.
+    // G2: no role, including 'system', is trusted without an active DB session.
+    // Finance engine service calls use their independent INTERNAL_API_TOKEN guard.
     if(!session_id){
-      if(!LEGACY_TOKEN_ROLES.has(roleRaw)){
-        return next();
-      }
-
-      req.auth = { user_id, role: roleRaw, source: 'jwt_legacy' };
-
-      const requestedMasterSlug = extractRequestedMasterSlug(req);
-
-      try{
-        const identityData = await buildIdentity(user_id, requestedMasterSlug);
-        req.identity = {
-          user_id,
-          role: roleRaw,
-          salons: identityData.salons,
-          masters: identityData.masters,
-          ownership: identityData.ownership
-        };
-      }catch(e){
-        req.identity = emptyIdentity(user_id, roleRaw);
-      }
-
       return next();
     }
 
@@ -494,3 +353,6 @@ export async function resolveAuth(req,res,next){
     return next();
   }
 }
+
+// Used by the local G2 DB-backed regression suite; not an HTTP endpoint.
+export { buildIdentityWithClient };

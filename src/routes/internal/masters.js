@@ -115,8 +115,8 @@ return ids;
 }
 
 function hasMasterOwnership(req, masterId){
-if(req?.auth?.role === "system"){
-return true;
+if(req?.auth?.role !== "master" || req?.auth?.source !== 'session'){
+return false;
 }
 
 const targetMasterId = safeInt(masterId);
@@ -2897,6 +2897,15 @@ error:"MASTER_CLIENTS_FETCH_FAILED"
 MASTER QUICK BOOKING CREATE
 */
 r.post("/masters/:slug/bookings", async (req,res)=>{
+
+// Reject unverified callers before leasing a PostgreSQL connection or
+// starting a transaction. The direct master ownership check below remains.
+if(!req?.auth || req.auth.source !== "session" || !req.auth.session_id){
+return res.status(401).json({ok:false,error:"UNAUTHORIZED"});
+}
+if(req.auth.role !== "master"){
+return res.status(403).json({ok:false,error:"FORBIDDEN"});
+}
 
 const { slug } = req.params;
 const { client_name, phone, start_at, service_id } = req.body;

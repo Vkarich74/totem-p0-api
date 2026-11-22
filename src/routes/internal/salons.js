@@ -88,13 +88,13 @@ return ids;
 }
 
 function hasSalonOwnership(req, salonId){
-if(req?.auth?.role === "system"){
-return true;
-}
 // resolveAuth includes master_salon membership in identity.salons for a
 // master's schedule. That relation must NEVER grant salon-admin cabinet
 // access to clients, financials, settings or another master's bookings.
 if(req?.auth?.role !== "salon_admin" && req?.auth?.role !== "owner"){
+return false;
+}
+if(req?.auth?.source !== 'session'){
 return false;
 }
 

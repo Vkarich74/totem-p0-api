@@ -1,18 +1,14 @@
 function isPast(value){
   if(!value){
-    return false;
+    return true;
   }
 
   const time = new Date(value).getTime();
-  if(Number.isNaN(time)){
-    return false;
+  if(!Number.isFinite(time)){
+    return true;
   }
 
-  return time < Date.now();
-}
-
-function isLegacyAuth(auth){
-  return auth?.source === 'jwt_legacy';
+  return time <= Date.now();
 }
 
 export function requireAuth(req,res,next){
@@ -26,11 +22,7 @@ export function requireAuth(req,res,next){
     });
   }
 
-  if(isLegacyAuth(auth)){
-    return next();
-  }
-
-  if(!auth.session_id){
+  if(auth.source !== 'session' || !auth.session_id){
     return res.status(401).json({
       ok:false,
       error:'UNAUTHORIZED',
