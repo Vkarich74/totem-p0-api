@@ -1,4 +1,6 @@
 import { Router } from "express";
+import { hashClientCabinetToken } from "../../services/clientCabinetTokenAccess.js";
+import { requireAuth } from "../../middleware/requireAuth.js";
 import { requireCurrencyCode } from "../../market-context/BusinessContext.js";
 import { createNotification } from "../../services/notifications/notificationService.js";
 import { buildCashConfirmNotificationTemplate } from "../../services/notifications/notificationTemplates.js";
@@ -182,93 +184,6 @@ export default function buildPaymentsRouter({
       actorContext: {
         auth: req.auth || null,
         identity: req.identity || null
-      }
-    };
-  }
-
-  async function resolveOwnerQrActorWithFallback(req) {
-    const resolved = resolveOwnerQrActor(req);
-    const actorUserId = resolved.actorUserId;
-    const identity = resolved.actorContext.identity || {};
-    const auth = resolved.actorContext.auth || {};
-
-    const hasOwnership = Array.isArray(identity.ownership) && identity.ownership.length > 0;
-    if (hasOwnership) {
-      return resolved;
-    }
-
-    if (!Number.isInteger(actorUserId) || actorUserId <= 0) {
-      return resolved;
-    }
-
-    const authUserResult = await pool.query(
-      `
-SELECT id, role, salon_slug, master_slug
-FROM public.auth_users
-WHERE id = $1
-LIMIT 1
-`,
-      [actorUserId]
-    );
-
-    const authUser = authUserResult.rows[0] || null;
-    if (!authUser) {
-      return resolved;
-    }
-
-    const fallbackIdentity = {
-      user_id: actorUserId,
-      role: String(authUser.role || auth.role || '').trim() || null,
-      salons: [],
-      masters: [],
-      ownership: [],
-    };
-
-    if (String(authUser.role || '').trim() === 'salon_admin' && String(authUser.salon_slug || '').trim()) {
-      const salonResult = await pool.query(
-        `
-SELECT id, slug
-FROM public.salons
-WHERE slug = $1
-LIMIT 1
-`,
-        [String(authUser.salon_slug).trim()]
-      );
-      const salon = salonResult.rows[0] || null;
-      if (salon) {
-        fallbackIdentity.salons.push(Number(salon.id));
-        fallbackIdentity.ownership.push({
-          owner_type: 'salon',
-          owner_id: Number(salon.id)
-        });
-      }
-    }
-
-    if (String(authUser.role || '').trim() === 'master' && String(authUser.master_slug || '').trim()) {
-      const masterResult = await pool.query(
-        `
-SELECT id, slug
-FROM public.masters
-WHERE slug = $1
-LIMIT 1
-`,
-        [String(authUser.master_slug).trim()]
-      );
-      const master = masterResult.rows[0] || null;
-      if (master) {
-        fallbackIdentity.masters.push(Number(master.id));
-        fallbackIdentity.ownership.push({
-          owner_type: 'master',
-          owner_id: Number(master.id)
-        });
-      }
-    }
-
-    return {
-      actorUserId,
-      actorContext: {
-        auth,
-        identity: fallbackIdentity
       }
     };
   }
@@ -642,63 +557,105 @@ created_at
   }
 
   r.post("/payments/direct/pending", async (req, res) => {
-    const { booking_id, service_price } = req.body || {};
-    const amount = parsePositiveAmount(service_price);
+    // KG public booking deliberately remains unauthenticated: possession of a
+    // *booking-scoped* cabinet token is the only customer capability needed.
+    // The token is issued by publicCreateBooking in the same transaction as
+    // the immutable price snapshot. It is NOT a salon owner/session JWT.
+    const bookingId = Number(req.body?.booking_id);
+    const bookingToken = String(req.body?.booking_token || "").trim();
 
-    if (!booking_id || amount == null) {
-      return res.status(400).json({ ok: false, error: "INVALID_INPUT" });
+    if (!Number.isSafeInteger(bookingId) || bookingId <= 0) {
+      return res.status(400).json({ ok: false, error: "INVALID_BOOKING_ID" });
+    }
+    if (!bookingToken) {
+      return res.status(401).json({ ok: false, error: "BOOKING_PAYMENT_TOKEN_REQUIRED" });
+    }
+    if (!/^[a-f0-9]{64}$/i.test(bookingToken)) {
+      return res.status(403).json({ ok: false, error: "BOOKING_PAYMENT_TOKEN_INVALID" });
     }
 
+    // Never log or forward bookingToken; only its SHA-256 reaches PostgreSQL.
+    const tokenHash = hashClientCabinetToken(bookingToken);
     const db = await pool.connect();
 
     try {
       await db.query("BEGIN");
 
-      const bookingCheck = await db.query(
-        `
-SELECT
-b.id,
-b.salon_id,
-b.status,
-b.currency_code
-FROM bookings b
-WHERE b.id=$1
-FOR UPDATE
-LIMIT 1
-`,
-        [booking_id]
+      // Lock the real booking first; no payment rows are read before proof.
+      const bookingResult = await db.query(
+        `SELECT b.id, b.client_id, b.salon_id, b.status,
+                b.price_snapshot, b.currency_code
+           FROM public.bookings b
+           WHERE b.id=$1
+           FOR UPDATE`,
+        [bookingId]
       );
 
-      if (!bookingCheck.rows.length) {
+      if (!bookingResult.rows.length) {
         await db.query("ROLLBACK");
         return res.status(404).json({ ok: false, error: "BOOKING_NOT_FOUND" });
       }
+      const booking = bookingResult.rows[0];
 
-      const bookingRow = bookingCheck.rows[0];
-
-      if (!bookingRow.salon_id) {
+      const proof = await db.query(
+        `SELECT id
+           FROM public.client_access_tokens
+           WHERE booking_id=$1
+             AND client_id=$2
+             AND token_hash=$3
+             AND purpose='cabinet'
+             AND revoked_at IS NULL
+           LIMIT 1
+           FOR SHARE`,
+        [bookingId, booking.client_id, tokenHash]
+      );
+      if (!proof.rows.length) {
         await db.query("ROLLBACK");
-        return res.status(400).json({ ok: false, error: "BOOKING_NOT_READY" });
+        return res.status(403).json({ ok: false, error: "BOOKING_PAYMENT_FORBIDDEN" });
       }
 
-      const currency = requireCurrencyCode(bookingRow.currency_code, "PAYMENT_CURRENCY_REQUIRED");
+      if (!booking.salon_id || !["reserved", "confirmed"].includes(String(booking.status))) {
+        await db.query("ROLLBACK");
+        return res.status(409).json({ ok: false, error: "BOOKING_NOT_PAYABLE" });
+      }
 
-      const activePayment = await findActivePaymentForBooking(db, booking_id);
+      const currency = requireCurrencyCode(booking.currency_code, "PAYMENT_CURRENCY_REQUIRED");
+      // US payments must use the immutable US cents/tax sidecar + C11, not
+      // the legacy integer booking.price_snapshot and KG cash endpoint.
+      if (currency === "USD") {
+        await db.query("ROLLBACK");
+        return res.status(409).json({ ok: false, error: "DIRECT_PENDING_UNSUPPORTED_CURRENCY" });
+      }
+      const amount = Number(booking.price_snapshot);
+      if (!Number.isSafeInteger(amount) || amount <= 0) {
+        await db.query("ROLLBACK");
+        return res.status(409).json({ ok: false, error: "BOOKING_PRICE_SNAPSHOT_INVALID" });
+      }
 
+      // Legacy callers may still send a displayed service_price, but cannot
+      // alter the canonical frozen booking price or the resulting payment.
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, "service_price")) {
+        const hinted = Number(req.body.service_price);
+        if (!Number.isSafeInteger(hinted) || hinted !== amount) {
+          await db.query("ROLLBACK");
+          return res.status(409).json({ ok: false, error: "BOOKING_PRICE_MISMATCH" });
+        }
+      }
+
+      const activePayment = await findActivePaymentForBooking(db, bookingId);
       if (activePayment.rows.length) {
         const active = activePayment.rows[0];
-        const activeStatus = String(active.status || "").toLowerCase();
-        const activeProvider = String(active.provider || "").toLowerCase();
-
-        if (activeProvider === "direct" && ["pending", "confirmed"].includes(activeStatus)) {
+        if (String(active.provider).toLowerCase() === "direct"
+            && ["pending", "confirmed"].includes(String(active.status).toLowerCase())) {
+          // Older pending records cannot be trusted if their amount was
+          // created through the historical client-price path.
+          if (Number(active.amount) !== amount || String(active.currency_code) !== currency) {
+            await db.query("ROLLBACK");
+            return res.status(409).json({ ok: false, error: "EXISTING_PAYMENT_PRICE_MISMATCH" });
+          }
           await db.query("ROLLBACK");
-          return res.json({
-            ok: true,
-            reused: true,
-            payment: normalizePaymentRow(active)
-          });
+          return res.json({ ok: true, reused: true, payment: normalizePaymentRow(active) });
         }
-
         await db.query("ROLLBACK");
         return res.status(409).json({
           ok: false,
@@ -709,39 +666,23 @@ LIMIT 1
       }
 
       const payment = await db.query(
-        `
-INSERT INTO payments(
-booking_id,
-provider,
-amount,
-currency_code,
-status,
-is_active
-)
-VALUES($1,'direct',$2,$3,'pending',true)
-RETURNING id,booking_id,amount,currency_code,status,provider,created_at
-`,
-        [booking_id, amount, currency]
+        `INSERT INTO public.payments(
+           booking_id, provider, amount, currency_code, status, is_active
+         ) VALUES($1,'direct',$2,$3,'pending',true)
+         RETURNING id,booking_id,amount,currency_code,status,provider,created_at`,
+        [bookingId, amount, currency]
       );
-
       await db.query("COMMIT");
-
-      return res.json({
-        ok: true,
-        payment: normalizePaymentRow(payment.rows[0])
-      });
+      return res.json({ ok: true, payment: normalizePaymentRow(payment.rows[0]) });
     } catch (err) {
       try {
         await db.query("ROLLBACK");
       } catch (rollbackErr) {
         console.error("DIRECT_PAYMENT_PENDING_ROLLBACK_ERROR", rollbackErr);
       }
-
-      console.error("DIRECT_PAYMENT_PENDING_ERROR", err);
-      return res.status(500).json({
-        ok: false,
-        error: "DIRECT_PAYMENT_PENDING_FAILED"
-      });
+      // Keep the booking capability out of logs.
+      console.error("DIRECT_PAYMENT_PENDING_ERROR", { code: err?.code || "UNKNOWN" });
+      return res.status(500).json({ ok: false, error: "DIRECT_PAYMENT_PENDING_FAILED" });
     } finally {
       db.release();
     }
@@ -784,9 +725,9 @@ RETURNING id,booking_id,amount,currency_code,status,provider,created_at
     }
   });
 
-  r.post("/payments/owner-qr/:id/confirm", async (req, res) => {
+  r.post("/payments/owner-qr/:id/confirm", requireAuth, async (req, res) => {
     const paymentId = Number(req.params.id ?? req.params.payment_id ?? null);
-    const { actorUserId, actorContext } = await resolveOwnerQrActorWithFallback(req);
+    const { actorUserId, actorContext } = resolveOwnerQrActor(req);
 
     if (!Number.isInteger(paymentId) || paymentId <= 0) {
       return res.status(404).json({ ok: false, error: "OWNER_QR_PAYMENT_NOT_FOUND" });
@@ -816,9 +757,9 @@ RETURNING id,booking_id,amount,currency_code,status,provider,created_at
     }
   });
 
-  r.post("/payments/owner-qr/:id/reject", async (req, res) => {
+  r.post("/payments/owner-qr/:id/reject", requireAuth, async (req, res) => {
     const paymentId = Number(req.params.id ?? req.params.payment_id ?? null);
-    const { actorUserId, actorContext } = await resolveOwnerQrActorWithFallback(req);
+    const { actorUserId, actorContext } = resolveOwnerQrActor(req);
     const rejectionReason = req.body?.rejection_reason ?? req.body?.rejectionReason ?? null;
 
     if (!Number.isInteger(paymentId) || paymentId <= 0) {
