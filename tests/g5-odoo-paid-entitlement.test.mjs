@@ -49,7 +49,7 @@ function fixture() {
     "account.move.line": [{
       id: 501, move_id: rel(401), company_id: rel(4),
       product_id: rel(301), subscription_id: rel(101),
-      sale_line_ids: [201], deferred_start_date: "2026-11-01",
+      sale_line_ids: [201], price_subtotal: 100, deferred_start_date: "2026-11-01",
       deferred_end_date: "2026-11-30",
     }],
     "account.payment": [{
@@ -274,4 +274,13 @@ test("insecure HTTP URL or missing server credentials is prohibited", () => {
   assert.throws(()=>createUsOdooReadOnlyClient({
     baseUrl:"https://odoo.example.com",database:"db",username:"",apiKey:"key",
   }), /CREDENTIALS_REQUIRED/);
+});
+
+test("unrelated paid invoice total does not validate zero-value SaaS invoice line", async () => {
+  const d = fixture();
+  d["account.move.line"][0].price_subtotal = 0;
+  await denied(await check(d), "ODOO_PAYMENT_OR_PERIOD_UNVERIFIED");
+  const e = fixture();
+  e["sale.order.line"][0].price_unit = 0;
+  await denied(await check(e), "ODOO_SUBSCRIPTION_PRODUCT_UNVERIFIED");
 });

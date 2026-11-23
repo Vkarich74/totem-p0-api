@@ -127,7 +127,7 @@ export async function verifyUsOdooPaidEntitlement({
       orderLineIds.includes(id(line.id)) &&
       id(line.company_id) === COMPANY_ID && id(line.order_id) === orderId &&
       id(line.product_id) > 0 && line.recurring_invoice === true &&
-      Number.isFinite(Number(line.price_unit)) && Number(line.price_unit) >= 0);
+      Number.isFinite(Number(line.price_unit)) && Number(line.price_unit) > 0);
     if (!recurring.length) return WAIT("ODOO_SUBSCRIPTION_PRODUCT_UNVERIFIED");
 
     const variantIds = [...new Set(recurring.map(line => id(line.product_id)))];
@@ -192,12 +192,13 @@ export async function verifyUsOdooPaidEntitlement({
         ["id", "in", lineIds],
       ], ["id", "move_id", "company_id", "product_id",
           "subscription_id", "sale_line_ids",
-          "deferred_start_date", "deferred_end_date"], MAX_LINKS);
+          "deferred_start_date", "deferred_end_date", "price_subtotal"], MAX_LINKS);
       if (lines.length !== lineIds.length) return WAIT("ODOO_INVOICE_LINES_INCOMPLETE");
       const linked = lines.filter(line =>
         lineIds.includes(id(line.id)) &&
         id(line.move_id) === invoiceId && id(line.company_id) === COMPANY_ID &&
         validVariants.has(id(line.product_id)) &&
+        Number.isFinite(Number(line.price_subtotal)) && Number(line.price_subtotal) > 0 &&
         id(line.subscription_id) === orderId &&
         manyIds(line.sale_line_ids)?.some(item => validOrderLines.has(item)));
       if (!linked.length) continue;
