@@ -70,6 +70,8 @@ export function createUsOdooReadOnlyClient({
   }
 
   return Object.freeze({
+    // Establish authentication before starting the evidence observation clock.
+    async authenticate() { await userId(); return true; },
     async searchRead(model, domain, fields, limit = 100) {
       if (!MODELS.has(model)) throw new Error("US_ODOO_MODEL_NOT_ALLOWED");
       if (!Array.isArray(domain) || !Array.isArray(fields) || fields.length < 1 ||

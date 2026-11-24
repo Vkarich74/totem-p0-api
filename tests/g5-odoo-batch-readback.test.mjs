@@ -20,7 +20,7 @@ test("50 owners manual paid proof identical; one auth and <=11 object reads",asy
  const r=await parity({n:50});
  assert.ok(r.actual.every(x=>x.status==="PAID_VERIFIED"));
  assert.equal(r.single.auth,50);assert.equal(r.single.reads,500);
- assert.equal(r.batch.auth,1);assert.equal(r.batch.reads,10);assert.equal(r.batch.peak,1);
+ assert.equal(r.batch.auth,1);assert.equal(r.batch.reads,10);assert.ok(r.batch.peak<=4);
  console.log("G5_T6F_RPC_REDUCTION",JSON.stringify({owners:50,single:r.single.reads+r.single.auth,batch:r.batch.reads+r.batch.auth}));
 });
 test("online paid proof parity including shared product and exact invoice linkage",async()=>{
@@ -134,4 +134,32 @@ test("multiple current invoices are ambiguous, older valid invoice can coexist",
  assert.equal(a.actual[0].reason,"ODOO_MULTIPLE_CURRENT_PAID_INVOICES");
  const b=await parity({change:f=>addSecondInvoice(f,{old:true})});
  assert.equal(b.actual[0].status,"PAID_VERIFIED");assert.equal(b.actual[0].invoiceId,40001);
+});
+
+test("authentication happens before observation, not counted as billing data freshness",async()=>{
+ const f=fixtureData(2,NOW),t=fixtureTransport(f.data);
+ let clock=0;
+ const result=await prepareUsPaidActivationEvidenceBatch(f.requests,{...opts(t),monotonic:()=>clock,
+  createClient:o=>{
+   const c=createUsOdooReadOnlyClient({...o,fetchImpl:t.fetchImpl});
+   return {...c,authenticate:async()=>{clock+=7275;return c.authenticate();}};
+  }});
+ assert.ok(result.every(x=>x.status==="PAID_VERIFIED"));
+});
+test("three paid invoice periods per owner coalesce into bounded independent groups",async()=>{
+ const r=await parity({n:50,change:f=>{
+   for(let i=0;i<50;i++){
+     for(let j=1;j<=2;j++){
+       const inv=100000+i*10+j,ln=200000+i*10+j,pay=300000+i*10+j;
+       const start=j===1?"2026-10-01":"2026-09-01",end=j===1?"2026-10-31":"2026-09-30";
+       f.data["sale.order"][i].start_date="2026-09-01";f.data["sale.order"][i].invoice_ids.push(inv);
+       f.data["account.move"].push({...f.data["account.move"][i],id:inv,invoice_line_ids:[ln],payment_ids:[pay]});
+       f.data["account.move.line"].push({...f.data["account.move.line"][i],id:ln,move_id:[inv,"fixture"],deferred_start_date:start,deferred_end_date:end});
+       f.data["account.payment"].push({...f.data["account.payment"][i],id:pay,invoice_ids:[inv]});
+     }
+   }
+ }});
+ assert.ok(r.actual.every(x=>x.status==="PAID_VERIFIED"));
+ assert.ok(r.batch.reads<=15,JSON.stringify(r.batch.models));assert.ok(r.batch.peak<=4);
+ console.log("G5_T6F_HISTORY_RPC",JSON.stringify({owners:50,invoices:150,single:r.single.reads+r.single.auth,batch:r.batch.reads+r.batch.auth,peak:r.batch.peak}));
 });

@@ -159,6 +159,13 @@ export async function verifyUsOdooPaidEntitlement({
     let settled = false;
     let covered = false;
     const currentProofs = new Map();
+    const candidates=[];
+    // Validate every invoice scope first. Then coalesce independent reads
+    // across all qualifying invoices; the ordinary client remains sequential.
+    const readMany=async queries=>{
+      if(typeof client.searchReadMany==="function")return client.searchReadMany(queries);
+      const results=[];for(const q of queries)results.push(await read(...q));return results;
+    };
     for (const invoice of invoices) {
       const invoiceId = id(invoice.id);
       if (!invoiceIds.includes(invoiceId)) return WAIT("ODOO_INVOICE_READBACK_MISMATCH");
@@ -173,80 +180,65 @@ export async function verifyUsOdooPaidEntitlement({
           !Number.isFinite(Number(invoice.amount_residual)) ||
           Math.abs(Number(invoice.amount_residual)) > 0.0001) continue;
       settled = true;
-      if (!manyIds(invoice.reversal_move_ids)) {
-        return WAIT("ODOO_REVERSAL_LINKS_INVALID");
-      }
-      if (manyIds(invoice.reversal_move_ids).length) {
-        return WAIT("ODOO_INVOICE_REVERSED");
-      }
-      const refunds = await read("account.move", [
-        ["reversed_entry_id", "=", invoiceId],
-        ["move_type", "=", "out_refund"],
-        ["state", "=", "posted"],
-        ["company_id", "=", COMPANY_ID],
-      ], ["id", "company_id", "reversed_entry_id", "state"], MAX_LINKS);
-      if (refunds.length) return WAIT("ODOO_INVOICE_REVERSED");
-
-      const lineIds = manyIds(invoice.invoice_line_ids);
-      if (!lineIds?.length || lineIds.length > MAX_LINKS) continue;
-      const lines = await read("account.move.line", [
-        ["id", "in", lineIds],
-      ], ["id", "move_id", "company_id", "product_id",
-          "subscription_id", "sale_line_ids",
-          "deferred_start_date", "deferred_end_date", "price_subtotal"], MAX_LINKS);
-      if (lines.length !== lineIds.length) return WAIT("ODOO_INVOICE_LINES_INCOMPLETE");
-      const linked = lines.filter(line =>
-        lineIds.includes(id(line.id)) &&
-        id(line.move_id) === invoiceId && id(line.company_id) === COMPANY_ID &&
-        validVariants.has(id(line.product_id)) &&
-        Number.isFinite(Number(line.price_subtotal)) && Number(line.price_subtotal) > 0 &&
-        id(line.subscription_id) === orderId &&
-        manyIds(line.sale_line_ids)?.some(item => validOrderLines.has(item)));
-      if (!linked.length) continue;
-
-      let validPayment = false;
-      if (policy.paymentChannel === "manual") {
-        const paymentIds = manyIds(invoice.payment_ids);
-        if (!paymentIds?.length || paymentIds.length > MAX_LINKS) continue;
-        const payments = await read("account.payment", [
-          ["id", "in", paymentIds],
-        ], ["id", "state", "company_id", "partner_id", "currency_id",
-            "payment_type", "invoice_ids"], MAX_LINKS);
-        validPayment = payments.some(p =>
-          paymentIds.includes(id(p.id)) &&
-          ["paid", "reconciled"].includes(p.state) &&
-          p.payment_type === "inbound" &&
-          id(p.company_id) === COMPANY_ID && id(p.partner_id) === partnerId &&
-          id(p.currency_id) === policy.currencyId &&
-          manyIds(p.invoice_ids)?.includes(invoiceId));
-      } else {
-        const transactions = await read("payment.transaction", [
-          ["invoice_ids", "in", [invoiceId]],
-        ], ["id", "state", "company_id", "partner_id",
-            "currency_id", "invoice_ids"], MAX_LINKS);
-        validPayment = transactions.some(tx =>
-          tx.state === "done" && id(tx.company_id) === COMPANY_ID &&
-          id(tx.partner_id) === partnerId &&
-          id(tx.currency_id) === policy.currencyId &&
-          manyIds(tx.invoice_ids)?.includes(invoiceId));
-      }
-      if (!validPayment) continue;
-
-      for (const line of linked) {
-        const interval = signedAndCurrentPeriod(line, order, clock);
-        if (!interval) continue;
-        covered = true;
-        if (!interval.current) continue;
-        const proof = Object.freeze({
-          status: "PAID_VERIFIED", canActivate: true,
-          companyId: COMPANY_ID, websiteId: WEBSITE_ID, partnerId,
-          subscriptionOrderId: orderId, invoiceId,
-          periodStartUtc: interval.start.toISOString(),
-          periodEndExclusiveUtc: interval.end.toISOString(),
-          commercialPolicyVersion: policy.version,
-          evidence: "posted_paid_invoice_linked_line_approved_deferred_period",
-        });
-        currentProofs.set(invoiceId,proof);
+      const reversals=manyIds(invoice.reversal_move_ids);
+      if(!reversals)return WAIT("ODOO_REVERSAL_LINKS_INVALID");
+      if(reversals.length)return WAIT("ODOO_INVOICE_REVERSED");
+      candidates.push({invoice,invoiceId,lineIds:manyIds(invoice.invoice_line_ids)});
+    }
+    const refundQueries=candidates.map(({invoiceId})=>["account.move",[
+        ["reversed_entry_id","=",invoiceId],["move_type","=","out_refund"],
+        ["state","=","posted"],["company_id","=",COMPANY_ID],
+      ],["id","company_id","reversed_entry_id","state"],MAX_LINKS]);
+    const withLines=candidates.filter(x=>x.lineIds?.length&&x.lineIds.length<=MAX_LINKS);
+    const lineQueries=withLines.map(({lineIds})=>["account.move.line",[
+        ["id","in",lineIds],
+      ],["id","move_id","company_id","product_id","subscription_id","sale_line_ids",
+        "deferred_start_date","deferred_end_date","price_subtotal"],MAX_LINKS]);
+    const dependencies=await readMany([...refundQueries,...lineQueries]);
+    if(dependencies.slice(0,refundQueries.length).some(rows=>rows.length))return WAIT("ODOO_INVOICE_REVERSED");
+    const payable=[];
+    for(let i=0;i<withLines.length;i++){
+      const {invoice,invoiceId,lineIds}=withLines[i];
+      const lines=dependencies[refundQueries.length+i];
+      if(lines.length!==lineIds.length)return WAIT("ODOO_INVOICE_LINES_INCOMPLETE");
+      const linked=lines.filter(line=>
+        lineIds.includes(id(line.id))&&id(line.move_id)===invoiceId&&
+        id(line.company_id)===COMPANY_ID&&validVariants.has(id(line.product_id))&&
+        Number.isFinite(Number(line.price_subtotal))&&Number(line.price_subtotal)>0&&
+        id(line.subscription_id)===orderId&&
+        manyIds(line.sale_line_ids)?.some(item=>validOrderLines.has(item)));
+      if(!linked.length)continue;
+      // Historical paid invoices still require refund and scope checks above,
+      // but cannot prove today's access. Payment confirmation is needed to
+      // distinguish a valid expired period from unverified payment.
+      const paymentIds=manyIds(invoice.payment_ids);
+      if(policy.paymentChannel==="manual"&&(!paymentIds?.length||paymentIds.length>MAX_LINKS))continue;
+      payable.push({invoiceId,linked,paymentIds});
+    }
+    const paymentQueries=payable.map(({invoiceId,paymentIds})=>policy.paymentChannel==="manual"?
+      ["account.payment",[["id","in",paymentIds]],["id","state","company_id","partner_id","currency_id","payment_type","invoice_ids"],MAX_LINKS]:
+      ["payment.transaction",[["invoice_ids","in",[invoiceId]]],["id","state","company_id","partner_id","currency_id","invoice_ids"],MAX_LINKS]);
+    const paymentResults=await readMany(paymentQueries);
+    for(let i=0;i<payable.length;i++){
+      const {invoiceId,linked,paymentIds}=payable[i],rows=paymentResults[i];
+      const validPayment=rows.some(p=>
+        (policy.paymentChannel==="manual"?
+          paymentIds.includes(id(p.id))&&["paid","reconciled"].includes(p.state)&&p.payment_type==="inbound":
+          p.state==="done")&&
+        id(p.company_id)===COMPANY_ID&&id(p.partner_id)===partnerId&&
+        id(p.currency_id)===policy.currencyId&&manyIds(p.invoice_ids)?.includes(invoiceId));
+      if(!validPayment)continue;
+      for(const line of linked){
+        const interval=signedAndCurrentPeriod(line,order,clock);
+        if(!interval)continue;
+        covered=true;if(!interval.current)continue;
+        currentProofs.set(invoiceId,Object.freeze({
+          status:"PAID_VERIFIED",canActivate:true,companyId:COMPANY_ID,websiteId:WEBSITE_ID,
+          partnerId,subscriptionOrderId:orderId,invoiceId,
+          periodStartUtc:interval.start.toISOString(),periodEndExclusiveUtc:interval.end.toISOString(),
+          commercialPolicyVersion:policy.version,
+          evidence:"posted_paid_invoice_linked_line_approved_deferred_period",
+        }));
       }
     }
     // Do not let the ordering of invoices hide a later linked reversal,

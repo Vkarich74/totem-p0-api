@@ -62,70 +62,97 @@ function matches(row,field,ids){
  }
  return ids.has(num(row[field]));
 }
-function makeCoalescer(client,started,clock){
- let pending=[],scheduled=false,broken=false,rpc=0;
- const check=()=>{if(broken||clock()-started>MAX_MS)throw fail();};
+// All groups share one batch and at most four provider calls in flight.
+// Authentication is not a billing observation: authenticate once before the
+// first object read, then start the existing evidence receipt clock.
+function makeCoalescer(client,now,clock){
+ let pending=[],scheduled=false,broken=false,rpc=0,started=null,observed=null;
+ const check=()=>{if(broken||started!==null&&clock()-started>MAX_MS)throw fail();};
+ async function fetchChunk(sample,ids){
+   const set=new Set(ids),collected=new Map();let cursor=0;
+   for(let page=0;page<MAX_PAGES;page++){
+     check();if(++rpc>MAX_RPC)throw fail();
+     const rows=await client.searchRead(sample.model,
+       [[sample.field,"in",ids],...sample.fixed,["id",">",cursor]],sample.expanded,PAGE);
+     check();
+     if(!Array.isArray(rows)||rows.length>PAGE)throw fail();
+     for(const row of rows){
+       if(!row||!positive(row.id)||row.id<=cursor||
+          !sample.expanded.every(f=>Object.hasOwn(row,f))||
+          !matches(row,sample.field,set)||
+          !sample.fixed.every(([f,,v])=>num(row[f])===v))throw fail();
+       cursor=row.id;collected.set(row.id,row);
+     }
+     // Exact primary-key lookup is complete once all requested IDs arrived.
+     if(rows.length<PAGE||sample.field==="id"&&collected.size===ids.length)return collected;
+   }
+   throw fail();
+ }
  async function flush(){
    scheduled=false;const items=pending;pending=[];
    const groups=new Map();
    for(const item of items){const g=groups.get(item.key)||[];g.push(item);groups.set(item.key,g);}
    try{
-     const outputs=[];
-     // Serial groups; one provider request in flight, no unbounded parallel fanout.
-     for(const group of groups.values()){
+     check();
+     if(started===null){
+       if(typeof client.authenticate!=="function"||await client.authenticate()!==true)throw fail();
+       observed=new Date(now());if(!Number.isFinite(observed.getTime()))throw fail();
+       started=clock();
+     }
+     const tasks=[],collections=new Map();
+     for(const [key,group] of groups){
        const sample=group[0],allIds=[...new Set(group.flatMap(x=>[...x.ids]))].sort((a,b)=>a-b);
-       const collected=new Map();
-       for(let offset=0;offset<allIds.length;offset+=PAGE){
-         const ids=allIds.slice(offset,offset+PAGE),set=new Set(ids);
-         let cursor=0,complete=false;
-         for(let page=0;page<MAX_PAGES;page++){
-           check();if(++rpc>MAX_RPC)throw fail();
-           const domain=[[sample.field,"in",ids],...sample.fixed,["id",">",cursor]];
-           const rows=await client.searchRead(sample.model,domain,sample.expanded,PAGE);
-           check();
-           if(!Array.isArray(rows)||rows.length>PAGE)throw fail();
-           for(const row of rows){
-             if(!row||!positive(row.id)||row.id<=cursor||
-                !sample.expanded.every(f=>Object.hasOwn(row,f))||
-                !matches(row,sample.field,set)||
-                !sample.fixed.every(([f,,v])=>num(row[f])===v))throw fail();
-             cursor=row.id;
-             const old=collected.get(row.id);
+       collections.set(key,new Map());
+       for(let offset=0;offset<allIds.length;offset+=PAGE)
+         tasks.push({key,sample,ids:allIds.slice(offset,offset+PAGE)});
+     }
+     // No unbounded fanout, no next round until all in-flight calls settle.
+     let next=0;
+     await Promise.all(Array.from({length:Math.min(4,tasks.length)},async()=>{
+       while(!broken&&next<tasks.length){
+         const task=tasks[next++];
+         try{
+           const part=await fetchChunk(task.sample,task.ids),collected=collections.get(task.key);
+           for(const [id,row] of part){
+             const old=collected.get(id);
              if(old&&JSON.stringify(old)!==JSON.stringify(row))throw fail();
-             collected.set(row.id,row);
+             collected.set(id,row);
            }
-           if(rows.length<PAGE){complete=true;break;}
-         }
-         if(!complete)throw fail();
+         }catch{broken=true;}
        }
-       const rows=[...collected.values()].sort((a,b)=>a.id-b.id);
+     }));
+     check();
+     const outputs=[];
+     for(const [key,group] of groups){
+       const rows=[...collections.get(key).values()].sort((a,b)=>a.id-b.id);
        for(const item of group){
          const exact=rows.filter(row=>matches(row,item.field,item.ids));
-         // Match the original single-read limit, except a saturated result is
-         // uncertain and never a paid proof or a definitive revoke.
          if(exact.length>=item.limit&&item.limit===PAGE)throw fail();
          outputs.push([item,exact.slice(0,item.limit).map(row=>
            Object.fromEntries(item.fields.map(f=>[f,structuredClone(row[f])])))]);
        }
      }
-     check();
-     for(const [item,result] of outputs)item.resolve(result);
+     check();for(const [item,result] of outputs)item.resolve(result);
    }catch{
      broken=true;for(const item of items)item.reject(fail());
      for(const item of pending)item.reject(fail());pending=[];
    }
  }
- return {
+ const api={
    searchRead(model,domain,fields,limit=PAGE){
-     try{check();const s=shape(model,domain,fields,limit);
+     try{check();if(pending.length>=10000)throw fail();
+       const s=shape(model,domain,fields,limit);
        return new Promise((resolve,reject)=>{
          pending.push({...s,resolve,reject});
          if(!scheduled){scheduled=true;setImmediate(flush);}
        });
      }catch(e){broken=true;return Promise.reject(e);}
    },
-   healthy(){return !broken&&clock()-started<=MAX_MS;},
+   searchReadMany(queries){return Promise.all(queries.map(q=>api.searchRead(...q)));},
+   healthy(){return !broken&&(started===null||clock()-started<=MAX_MS);},
+   observedAt(){return observed;},
  };
+ return api;
 }
 export async function prepareUsPaidActivationEvidenceBatch(requests,{
  env=process.env,createClient=createUsOdooReadOnlyClient,now=()=>new Date(),
@@ -134,17 +161,18 @@ export async function prepareUsPaidActivationEvidenceBatch(requests,{
  if(!Array.isArray(requests)||requests.length<1||requests.length>US_ODOO_BATCH_MAX)
    throw Error("US_ODOO_BATCH_SIZE_INVALID");
  // Snapshot configuration so a single batch cannot mix commercial policies.
- const config={...env};const start=new Date(now()),started=monotonic();
- if(!Number.isFinite(start.getTime()))return requests.map(()=>wait("US_ODOO_CLOCK_INVALID"));
+ const config={...env};
  let coalescer=null;
  const factory=options=>{
-   if(!coalescer)coalescer=makeCoalescer(createClient(options),started,monotonic);
+   if(!coalescer)coalescer=makeCoalescer(createClient(options),now,monotonic);
    return coalescer;
  };
  const results=await Promise.all(requests.map(request=>prepareUsPaidActivationEvidence(request,{
    env:config,createClient:factory,now,
  })));
  if(coalescer&&!coalescer.healthy())return requests.map(()=>wait("US_ODOO_BATCH_INCOMPLETE"));
+ const start=coalescer?.observedAt();
+ if(!start)return results;
  const end=new Date(now());
  if(!Number.isFinite(end.getTime())||end<start||end-start>MAX_MS)
    return requests.map(()=>wait("US_ODOO_BATCH_INCOMPLETE"));

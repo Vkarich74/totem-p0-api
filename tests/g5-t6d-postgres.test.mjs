@@ -202,7 +202,7 @@ test("T6-F real PostgreSQL queue batch: two naturally due cycles of 1000 populat
    assert.equal(await count("SELECT count(*) AS n FROM public.billing_subscriptions WHERE owner_id=999999 AND wallet_only AND provider_namespace IS NULL"),1);
    const sample={cycle,owners:n,elapsedMs:Date.now()-started,objectReads:transport.metrics.reads-beforeReads,
     auth:transport.metrics.auth-beforeAuth,maxEvidenceAgeSeconds:maxAge,peakProviderConcurrency:transport.metrics.peak};
-   assert.equal(sample.objectReads,200);assert.equal(sample.auth,20);samples.push(sample);
+   assert.equal(sample.objectReads,200);assert.equal(sample.auth,20);assert.ok(sample.peakProviderConcurrency<=4);samples.push(sample);
    console.log("G5_T6F_LOAD "+JSON.stringify(sample));
 
  }

@@ -186,7 +186,13 @@ export async function reconcileUsSaasOpeningsBatch({pool,jobs,env=process.env,
    const p=prepared[i];
    if(p instanceof Error||p.status==="WAIT")return p;
    if(!byIndex.has(i)||j.signal?.aborted)return {status:"WAIT",reason:"US_SAAS_BATCH_LEASE_LOST"};
-   return applyReconciliationResult({pool,requestId:j.requestId,...p,result:byIndex.get(i),
+   const result=byIndex.get(i);
+   if((result?.status==="PAID_VERIFIED"||REVOKED.has(result?.reason))&&
+      (typeof result.batchObservedAtUtc!=="string"||
+       !Number.isFinite(new Date(result.batchObservedAtUtc).getTime())||
+       result.status==="PAID_VERIFIED"&&result.verifiedAtUtc!==result.batchObservedAtUtc))
+     return {status:"WAIT",reason:"US_SAAS_BATCH_RECEIPT_INVALID"};
+   return applyReconciliationResult({pool,requestId:j.requestId,...p,result,
      writeAudit,operator,assertLease:j.assertLease,signal:j.signal});
  });
 }
