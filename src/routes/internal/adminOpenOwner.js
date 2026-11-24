@@ -1,3 +1,4 @@
+import {prepareUsImportedMasterReceipt} from "../../services/provision/usImportedMasterProvision.js";
 import {isUsOdooIntakeHint,registerApprovedUsOdooSalon} from "../../services/provision/usApprovedOdooSalonIntake.js";
 import { activateOwnerOpeningCanonical } from "../../services/provision/ownerOpeningCanonicalActivation.js";
 import { prepareUsPaidActivationEvidence } from "../../services/provision/usPaidOwnerOpeningGate.js";
@@ -1844,6 +1845,9 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       });
     }
 
+    let masterReceipt;
+    try{masterReceipt=await prepareUsImportedMasterReceipt(pool,requestId);}
+    catch(err){return res.status(resolveProvisionStatus(err)).json({ok:false,error:err.code||"US_MASTER_SOURCE_UNAVAILABLE"});}
     const db = await pool.connect();
 
     try{
@@ -1898,7 +1902,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
-      if (requestMarketCode(current) === "US") await assertUsOpenOwnerContract(db,current);
+      if (requestMarketCode(current) === "US") await assertUsOpenOwnerContract(db,current,{masterReceipt});
 
       const updatedResult = await db.query(
         `
@@ -1949,6 +1953,9 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       });
     }
 
+    let masterReceipt;
+    try{masterReceipt=await prepareUsImportedMasterReceipt(pool,requestId);}
+    catch(err){return res.status(resolveProvisionStatus(err)).json({ok:false,error:err.code||"US_MASTER_SOURCE_UNAVAILABLE"});}
     let request = null;
     const admin = getAdminActor(req);
     const markDb = await pool.connect();
@@ -2003,7 +2010,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
-      if (requestMarketCode(request) === "US") await assertUsOpenOwnerContract(markDb,request);
+      if (requestMarketCode(request) === "US") await assertUsOpenOwnerContract(markDb,request,{masterReceipt});
 
       const provisioningResult = await markDb.query(
         `
@@ -2046,7 +2053,10 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         const usDb = await pool.connect();
         try{
           await usDb.query("BEGIN");
-          await assertUsOpenOwnerContract(usDb, request);
+          const locked=await usDb.query("SELECT * FROM public.owner_opening_requests WHERE id=$1 AND status='provisioning' FOR UPDATE",[requestId]);
+          if(locked.rows.length!==1)throw Object.assign(Error("US_PROVISION_REQUEST_STATE_CHANGED"),{code:"US_PROVISION_REQUEST_STATE_CHANGED",status:409});
+          request=locked.rows[0];
+          await assertUsOpenOwnerContract(usDb, request,{masterReceipt});
 
           if(request.owner_type === "salon"){
             provisionResult = await createSalonCanonical({
@@ -2067,11 +2077,11 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
             }
           }else if(request.owner_type === "master"){
             provisionResult = await createMasterCanonical({
-              pool, dbClient: usDb,
+              pool, dbClient: usDb, masterReceipt,
               payload: buildMasterProvisionPayload(request),
             });
             bindResult = await bindMasterToSalonCanonical({
-              pool, dbClient: usDb, verifiedUsAdminProvision: true,
+              pool, dbClient: usDb, verifiedUsAdminProvision: true, masterReceipt,
               payload: {
                 salon_slug: request.salon_slug,
                 master_slug: provisionResult?.canonical_slug || request.slug_final,

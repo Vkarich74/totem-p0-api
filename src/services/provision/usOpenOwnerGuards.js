@@ -1,3 +1,4 @@
+import {assertUsImportedMasterProvision} from "./usImportedMasterProvision.js";
 import { US_COUNTRY_PACK } from "../../market-context/country-packs/US.js";
 import { US_GEO_VERSION, US_GEO_RUNTIME_SHA256, US_GEO_BORDER_REVIEW_METERS } from "../usAddressGeoVerification.service.js";
 
@@ -41,16 +42,13 @@ export async function readUsSalon(db, salonSlug) {
 
 // Validate from the immutable stored precheck JSON again at approve AND
 // immediately before provisioning. US never derives market from browser locale.
-export async function assertUsOpenOwnerContract(db, request) {
+export async function assertUsOpenOwnerContract(db, request, {masterReceipt=null}={}) {
   if (requestMarketCode(request) !== "US") return false;
 
   // A role-scoped request is not consent, a second identity or a second paid right.
   // Do not enter the legacy create/bind path for these newly imported roles.
   if(request.source_namespace==="odoo_online"&&request.owner_type==="master"){
-    const mode=request.precheck_result_json?.odoo_source_proof?.entry_mode;
-    if(mode==="existing_salon")throw problem("US_ODOO_SALON_OWNER_CONSENT_REQUIRED");
-    if(mode==="own_salon")throw problem("US_ODOO_SHARED_IDENTITY_COMMERCIAL_CONTRACT_HOLD");
-    throw problem("US_ODOO_MASTER_ROLE_CONTRACT_HOLD");
+    await assertUsImportedMasterProvision(db,request,masterReceipt);
   }
   const normalized = request?.precheck_result_json?.normalized || {};
   const rawPhone = String(request.phone_normalized || request.phone_raw || "").trim();

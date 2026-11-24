@@ -1,3 +1,4 @@
+import {assertCanonicalImportedMasterBind} from "./usImportedMasterProvision.js";
 import {
   buildCanonicalProvisionResponse,
   buildProvisionMeta,
@@ -339,7 +340,7 @@ function buildBindResult({ salon, master, relationState, contractState }){
   });
 }
 
-export async function bindMasterToSalonCanonical({ pool, payload, dbClient = null, verifiedUsAdminProvision = false }){
+export async function bindMasterToSalonCanonical({ pool, payload, dbClient = null, verifiedUsAdminProvision = false, masterReceipt=null }){
   const input = validateBindInput(payload || {});
   const ownsTransaction = !dbClient;
   const db = dbClient || await pool.connect();
@@ -377,6 +378,7 @@ export async function bindMasterToSalonCanonical({ pool, payload, dbClient = nul
         error.status = 409;
         throw error;
       }
+      await assertCanonicalImportedMasterBind(db,{salon,master,receipt:masterReceipt});
       // An existing active KG/KZ (or unresolved) relationship must never be
       // repurposed as a US owner identity by cross-market binding.
       const conflict = await db.query(
@@ -411,7 +413,7 @@ export async function bindMasterToSalonCanonical({ pool, payload, dbClient = nul
   }catch(err){
     if (ownsTransaction) { try{ await db.query("ROLLBACK"); }catch(e){} }
 
-    const resolved = resolveProvisionError(err);
+    const resolved = err?.status&&/^US_MASTER_|^US_ODOO_/.test(err?.code||'')?{status:err.status,error:err.code}:resolveProvisionError(err);
     const wrapped = new Error(resolved.error);
     wrapped.code = resolved.error;
     wrapped.status = resolved.status;
