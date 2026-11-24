@@ -1,3 +1,4 @@
+import {isKgSharedMasterCandidate,readKgSharedMasterCandidate,kgSharedMasterProof,assertKgSharedMasterPending,assertKgSharedMasterActivation} from "../../services/provision/kgSharedMasterIdentity.js";
 import { buildOwnerOpeningEmail, buildEmailMime } from "../../services/notifications/emailTemplates.js";
 import { resolveRecipientLocale } from "../../services/notifications/recipientLocale.js";
 import express from "express";
@@ -280,6 +281,7 @@ export async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
   const workMode = normalizeText(body.work_mode || (ownerType === "master" ?
     (marketCode === "US" ? "attached_to_salon" : "independent") : ""));
   const salonSlug = normalizeSlug(body.salon_slug);
+  let kgSharedOwner=null;
 
   addCheck(checks, "owner_type_valid", Boolean(ownerType), {
     owner_type: ownerType || null,
@@ -343,14 +345,14 @@ export async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
 
   if(emailValid){
     const emailAvailability = await checkEmailAvailability(pool, email);
-    addCheck(checks, "email_available", emailAvailability.available, {
-      email,
-      conflicts: emailAvailability.conflicts,
-    });
-
-    if(!emailAvailability.available){
-      errors.push("EMAIL_ALREADY_EXISTS");
+    if(!emailAvailability.available&&options.allowKgSharedOwner===true){
+      kgSharedOwner=await readKgSharedMasterCandidate(pool,{marketCode,ownerType,workMode,
+        salonSlug,masterSlug:slugFinal,email,phone:phoneNormalized},{lock:options.lockKgSharedOwner===true});
     }
+    addCheck(checks, "email_available", emailAvailability.available||Boolean(kgSharedOwner), {
+      email,conflicts:kgSharedOwner?[]:emailAvailability.conflicts,
+    });
+    if(!emailAvailability.available&&!kgSharedOwner)errors.push("EMAIL_ALREADY_EXISTS");
   }
 
   addCheck(checks, "phone_valid", phoneResult.ok && (allowMissingPhone || Boolean(phoneNormalized)), {
@@ -425,13 +427,14 @@ export async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
     valid,
     error: valid ? null : "PRECHECK_FAILED",
     errors,
+    ...(kgSharedOwner?{kg_shared_owner:kgSharedOwner}:{}),
     normalized: {
       owner_type: ownerType || null,
       name,
       slug_requested: slugSource,
       slug_final: slugFinal || null,
       email,
-      market_code: marketCode || null,
+      market_code: kgSharedOwner?"KG":marketCode || null,
       phone_raw: phoneRaw || null,
       phone_normalized: phoneNormalized || null,
       city: city || null,
@@ -1290,6 +1293,15 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
+      // Shared owner path uses the SAME canonical precheck as request creation.
+      // Ordinary KG/US/KZ paths keep their existing behavior.
+      if(ownerType==="master"&&["","KG"].includes(marketCode)&&body.work_mode==="attached_to_salon"){
+        const normalizedPhone=await normalizeContactPhoneForBusiness(pool,phoneRaw,{marketCode,required:true});
+        if(normalizedPhone.ok&&isKgSharedMasterCandidate({marketCode,ownerType,workMode:body.work_mode,
+          salonSlug:normalizeSlug(body.salon_slug),email,phone:normalizedPhone.phone})){
+          return res.status(200).json(await buildOpenOwnerPrecheck(pool,body,{allowKgSharedOwner:true}));
+        }
+      }
       // US uses one strictly validated CountryPack precheck; legacy KG follows unchanged below.
       if (marketCode === "US") {
         return res.status(200).json(await buildOpenOwnerPrecheck(pool, body));
@@ -1685,9 +1697,11 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
     const db = await pool.connect();
 
     try{
-      const precheck = await buildOpenOwnerPrecheck(pool, req.body || {});
+      await db.query("BEGIN");
+      const precheck = await buildOpenOwnerPrecheck(db, req.body || {},{allowKgSharedOwner:true,lockKgSharedOwner:true});
 
       if(!precheck.valid){
+        await db.query("ROLLBACK");
         return res.status(400).json({
           ok: false,
           error: "PRECHECK_FAILED",
@@ -1697,8 +1711,6 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
 
       const admin = getAdminActor(req);
       const normalized = precheck.normalized;
-
-      await db.query("BEGIN");
 
       const createdRequest = await db.query(
         `
@@ -1885,6 +1897,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
+      if(kgSharedMasterProof(current))await assertKgSharedMasterPending(db,current);
       if (requestMarketCode(current) === "US") await assertUsOpenOwnerContract(db,current);
 
       const updatedResult = await db.query(
@@ -1990,6 +2003,27 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
+      if(kgSharedMasterProof(request)){
+        // One transaction, including the existing canonical create and bind.
+        await assertKgSharedMasterPending(markDb,request);
+        request=(await markDb.query("UPDATE public.owner_opening_requests SET status='provisioning',updated_at=NOW() WHERE id=$1 RETURNING *",[requestId])).rows[0];
+        await writeOwnerOpeningAuditEvent(markDb,{request,eventType:"owner_opening.provision_started",admin});
+        const provisionResult=await createMasterCanonical({pool,dbClient:markDb,kgSharedRequestId:requestId,payload:buildMasterProvisionPayload(request)});
+        const ownerId=extractProvisionOwnerId(provisionResult),authUserId=extractProvisionAuthUserId(provisionResult);
+        if(!ownerId||authUserId!==Number(kgSharedMasterProof(request).principal_auth_user_id))throw Object.assign(Error("KG_SHARED_MASTER_PROVISION_MISMATCH"),{code:"KG_SHARED_MASTER_PROVISION_MISMATCH",status:409});
+        const bindResult=await bindMasterToSalonCanonical({pool,dbClient:markDb,payload:{
+          salon_slug:request.salon_slug,master_slug:request.slug_final,bind_mode:"active",create_contract:false}});
+        const links=buildOwnerOpeningLinks({request,provisionResult,bindResult});
+        const done=await markDb.query("UPDATE public.owner_opening_requests SET status='provisioned',created_owner_id=$2,created_auth_user_id=$3,provision_result_json=$4,links_json=$5,provisioned_at=NOW(),updated_at=NOW() WHERE id=$1 AND status='provisioning' RETURNING *",
+          [requestId,ownerId,authUserId,JSON.stringify({provision:provisionResult,bind:bindResult}),JSON.stringify(links)]);
+        if(done.rows.length!==1)throw Object.assign(Error("KG_SHARED_MASTER_PROVISION_STATE_CHANGED"),{code:"KG_SHARED_MASTER_PROVISION_STATE_CHANGED",status:409});
+        const finalRequest=done.rows[0];
+        const auditEvent=await writeOwnerOpeningAuditEvent(markDb,{request:finalRequest,eventType:"owner_opening.provisioned",admin,
+          data:{created_owner_id:ownerId,created_auth_user_id:authUserId,shared_principal:true,bind_created:true,market_code:"KG"}});
+        if(!auditEvent?.id)throw Object.assign(Error("KG_SHARED_MASTER_AUDIT_REQUIRED"),{code:"KG_SHARED_MASTER_AUDIT_REQUIRED",status:409});
+        await markDb.query("COMMIT");
+        return res.status(200).json({ok:true,request:finalRequest,provision_result:provisionResult,bind_result:bindResult,links,audit_event_id:Number(auditEvent.id)});
+      }
       if (requestMarketCode(request) === "US") await assertUsOpenOwnerContract(markDb,request);
 
       const provisioningResult = await markDb.query(
@@ -2014,6 +2048,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       await markDb.query("COMMIT");
     }catch(err){
       try{ await markDb.query("ROLLBACK"); }catch(e){}
+      if(kgSharedMasterProof(request)&&err?.code)return res.status(resolveProvisionStatus(err)).json({ok:false,error:String(err.code)});
       console.error("ADMIN_OPEN_OWNER_MARK_PROVISIONING_ERROR", err);
       return res.status(500).json({
         ok: false,
@@ -2540,6 +2575,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
+      if(kgSharedMasterProof(current))await assertKgSharedMasterActivation(db,current);
       if (requestMarketCode(current) === "US") await assertUsActivationReady(db,current,Number(current.created_owner_id));
 
       const ownerActivation = await activateOwnerOpeningEntity(db, current);
