@@ -491,7 +491,7 @@ test("shared Master service links and existing USD price HTTP: scope, transactio
    const denyPrice=async()=>{const r=await call(pricePath,"PUT",next);assert.equal(r.status,403,JSON.stringify(r.body));await checkPrice(1550,2);};
    await q("UPDATE public.billing_subscriptions SET subscription_status='blocked',provider_revoked_at=now()");await denyPrice();await restore();
    beforeHandler=()=>q("UPDATE public.billing_subscriptions SET current_period_end=clock_timestamp()");await denyPrice();assert.equal(beforeHandler,null);await restore();
-   await q("CREATE FUNCTION public.fixture_expire_price_proof() RETURNS trigger LANGUAGE plpgsql AS $ BEGIN UPDATE public.billing_subscriptions SET current_period_end=clock_timestamp(); RETURN NEW; END; $; CREATE TRIGGER fixture_expire_price_proof AFTER UPDATE ON public.us_service_price_amounts FOR EACH ROW EXECUTE FUNCTION public.fixture_expire_price_proof()");
+   await q("CREATE FUNCTION public.fixture_expire_price_proof() RETURNS trigger LANGUAGE plpgsql AS $price_fixture$ BEGIN UPDATE public.billing_subscriptions SET current_period_end=clock_timestamp(); RETURN NEW; END; $price_fixture$; CREATE TRIGGER fixture_expire_price_proof AFTER UPDATE ON public.us_service_price_amounts FOR EACH ROW EXECUTE FUNCTION public.fixture_expire_price_proof()");
    await denyPrice();
    await q("DROP TRIGGER fixture_expire_price_proof ON public.us_service_price_amounts; DROP FUNCTION public.fixture_expire_price_proof()");
    beforeHandler=()=>q("UPDATE public.auth_sessions SET revoked_at=now()");await denyPrice();assert.equal(beforeHandler,null);
