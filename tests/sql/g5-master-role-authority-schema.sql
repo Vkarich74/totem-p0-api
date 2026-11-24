@@ -113,3 +113,14 @@ CREATE TABLE public.tenant_market_settings (
 );
 ALTER TABLE ONLY public.tenant_market_settings
     ADD CONSTRAINT tenant_market_settings_pkey PRIMARY KEY (salon_id);
+
+-- Exact selected onboarding transition DDL, same hash-verified snapshot.
+CREATE TABLE public.onboarding_state_transitions (
+ id bigint NOT NULL, core_user_id bigint NOT NULL, from_state text NOT NULL,
+ to_state text NOT NULL, reason text DEFAULT ''::text NOT NULL,
+ created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+CREATE SEQUENCE public.onboarding_state_transitions_id_seq START WITH 1 INCREMENT BY 1 NO MINVALUE NO MAXVALUE CACHE 1;
+ALTER SEQUENCE public.onboarding_state_transitions_id_seq OWNED BY public.onboarding_state_transitions.id;
+ALTER TABLE ONLY public.onboarding_state_transitions ALTER COLUMN id SET DEFAULT nextval('public.onboarding_state_transitions_id_seq'::regclass);
+ALTER TABLE ONLY public.onboarding_state_transitions ADD CONSTRAINT onboarding_state_transitions_pkey PRIMARY KEY(id);

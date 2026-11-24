@@ -42,7 +42,7 @@ before(async()=>{
 });
 beforeEach(async()=>{
  await q("DROP TABLE IF EXISTS public.slug_reservations");
- await q("TRUNCATE public.owner_opening_requests,public.audit_events,public.auth_users,public.auth_sessions,public.owner_salon,public.salons,public.masters,public.master_salon,public.markets,public.tenant_market_settings,public.billing_subscriptions RESTART IDENTITY");
+ await q("TRUNCATE public.owner_opening_requests,public.audit_events,public.auth_users,public.auth_sessions,public.owner_salon,public.salons,public.masters,public.master_salon,public.markets,public.tenant_market_settings,public.billing_subscriptions,public.onboarding_state_transitions RESTART IDENTITY");
  await q(`INSERT INTO public.markets(id,code,country_code,default_locale,supported_locales,default_currency,supported_currencies,default_timezone,country_pack_code,country_pack_version,active)
  VALUES(4,'US','US','en',ARRAY['en'],'USD',ARRAY['USD'],'America/New_York','US','1',true);
  INSERT INTO public.salons(id,slug,name,status,enabled) VALUES(32,'fixture-salon','Fixture','active',true);

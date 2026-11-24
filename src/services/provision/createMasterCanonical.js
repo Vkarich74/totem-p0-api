@@ -250,6 +250,11 @@ export async function createMasterCanonical({ pool, payload, dbClient = null, ma
     }
     input.phone = phoneResult.phone;
 
+    // A US verified intake must not be bypassed by the generic create route.
+    if(input.market_code==="US"&&!masterReceipt){
+      const imported=await db.query("SELECT id FROM public.owner_opening_requests WHERE owner_type='master' AND source_namespace='odoo_online' AND (slug_final=$1 OR lower(email)=lower($2) OR phone_normalized=$3) LIMIT 1",[input.master_slug,input.email,input.phone]);
+      if(imported.rows.length)throw Object.assign(Error("US_MASTER_FRESH_SOURCE_REQUIRED"),{code:"US_MASTER_FRESH_SOURCE_REQUIRED",status:409});
+    }
     // Only trusted internal receipt, never a request-body principal ID.
     if(masterReceipt){
       if(!dbClient||input.market_code!=="US")throw Error("US_MASTER_PROVISION_TRANSACTION_REQUIRED");
@@ -434,7 +439,7 @@ export async function createMasterCanonical({ pool, payload, dbClient = null, ma
       try{ await db.query("ROLLBACK"); }catch(_error){}
     }
 
-    const resolved = resolveProvisionError(err);
+    const resolved = err?.status&&/^US_MASTER_|^US_ODOO_/.test(err?.code||'')?{status:err.status,error:err.code}:resolveProvisionError(err);
     const wrapped = new Error(resolved.error);
     wrapped.code = resolved.error;
     wrapped.status = resolved.status;
