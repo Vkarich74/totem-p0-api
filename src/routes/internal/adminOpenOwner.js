@@ -748,7 +748,7 @@ function normalizeRequestId(value){
 }
 
 function getAdminActor(req){
-  const userId = Number(req.auth?.user_id || req.identity?.user_id || 0);
+  const userId = Number(req.admin?.user_id || req.auth?.user_id || req.identity?.user_id || 0);
 
   return {
     id: Number.isInteger(userId) && userId > 0 ? userId : null,

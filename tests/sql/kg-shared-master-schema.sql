@@ -329,3 +329,42 @@ ALTER TABLE ONLY public.slug_reservations ALTER COLUMN id SET DEFAULT nextval('p
 ALTER TABLE ONLY public.slug_reservations
     ADD CONSTRAINT slug_reservations_pkey PRIMARY KEY (id);
 CREATE UNIQUE INDEX slug_reservations_active_slug_idx ON public.slug_reservations USING btree (owner_type, lower(slug)) WHERE (status = ANY (ARRAY['reserved'::text, 'activated'::text]));
+
+CREATE TABLE public.billing_subscriptions (
+    id bigint NOT NULL,
+    owner_type text NOT NULL,
+    owner_id bigint NOT NULL,
+    billing_model text DEFAULT 'subscription'::text NOT NULL,
+    subscription_status text DEFAULT 'active'::text NOT NULL,
+    subscription_period_days integer DEFAULT 30 NOT NULL,
+    amount integer NOT NULL,
+    currency text NOT NULL,
+    wallet_only boolean DEFAULT true NOT NULL,
+    current_period_start timestamp with time zone,
+    current_period_end timestamp with time zone,
+    grace_period_days integer DEFAULT 3 NOT NULL,
+    grace_until timestamp with time zone,
+    last_charge_at timestamp with time zone,
+    next_charge_at timestamp with time zone,
+    last_charge_status text,
+    blocked_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT billing_subscriptions_amount_check CHECK ((amount >= 0)),
+    CONSTRAINT billing_subscriptions_grace_period_days_check CHECK ((grace_period_days >= 0)),
+    CONSTRAINT billing_subscriptions_owner_type_check CHECK ((owner_type = ANY (ARRAY['salon'::text, 'master'::text]))),
+    CONSTRAINT billing_subscriptions_subscription_period_days_check CHECK ((subscription_period_days > 0)),
+    CONSTRAINT billing_subscriptions_subscription_status_check CHECK ((subscription_status = ANY (ARRAY['active'::text, 'grace'::text, 'blocked'::text, 'cancelled'::text])))
+);
+CREATE SEQUENCE public.billing_subscriptions_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+ALTER SEQUENCE public.billing_subscriptions_id_seq OWNED BY public.billing_subscriptions.id;
+ALTER TABLE ONLY public.billing_subscriptions ALTER COLUMN id SET DEFAULT nextval('public.billing_subscriptions_id_seq'::regclass);
+ALTER TABLE ONLY public.billing_subscriptions
+    ADD CONSTRAINT billing_subscriptions_owner_unique UNIQUE (owner_type, owner_id);
+ALTER TABLE ONLY public.billing_subscriptions
+    ADD CONSTRAINT billing_subscriptions_pkey PRIMARY KEY (id);

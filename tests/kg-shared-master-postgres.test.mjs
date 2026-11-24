@@ -22,6 +22,7 @@ const body={owner_type:"master",name:"Fixture master",slug:"fixture-own-master",
 const count=async table=>(await q("SELECT count(*)::int AS n FROM public."+table)).rows[0].n;
 let server,origin;
 const app=express();app.use(express.json());
+let canonicalPool,realServer,realOrigin;
 // Admin actor is a fixture; production AdminRuntimeGuard is unchanged here.
 app.use("/admin", (req,res,next)=>{req.auth={user_id:900,role:"admin",email:"admin@example.invalid"};next();},buildAdminOpenOwnerRouter(db));
 app.use("/internal",(req,res,next)=>resolveAuth(req,res,next,{withClient:async fn=>{
@@ -39,7 +40,7 @@ before(async()=>{
 });
 beforeEach(async()=>{
  Object.assign(process.env,env);
- await q("TRUNCATE public.auth_users,public.auth_sessions,public.auth_otps,public.salons,public.masters,public.owner_salon,public.master_salon,public.markets,public.tenant_market_settings,public.owner_opening_requests,public.moderation_cases,public.audit_events,public.slug_reservations RESTART IDENTITY");
+ await q("TRUNCATE public.auth_users,public.auth_sessions,public.auth_otps,public.salons,public.masters,public.owner_salon,public.master_salon,public.markets,public.tenant_market_settings,public.owner_opening_requests,public.moderation_cases,public.audit_events,public.slug_reservations,public.billing_subscriptions RESTART IDENTITY");
  await q(`INSERT INTO public.markets(id,code,country_code,default_locale,supported_locales,default_currency,supported_currencies,default_timezone,country_pack_code,country_pack_version,active)
  VALUES(1,'KG','KG','ru',ARRAY['ru'],'KGS',ARRAY['KGS'],'Asia/Bishkek','KG','1',true),
  (4,'US','US','en',ARRAY['en'],'USD',ARRAY['USD'],'America/New_York','US','1',true);
@@ -49,7 +50,12 @@ beforeEach(async()=>{
  await q("INSERT INTO public.auth_users(id,email,role,salon_slug,salon_id,phone,enabled,password_hash,email_verified_at) VALUES(100,$1,'salon_admin','fixture-salon','32',$2,true,$3,now())",[email,phone,hash]);
  await q("INSERT INTO public.auth_sessions(id,user_id,expires_at,last_seen_at) VALUES('fixture-session',100,now()+interval '1 hour',now())");
 });
-after(async()=>{if(server)await new Promise(r=>server.close(r));await db.end();});
+after(async()=>{
+ if(server)await new Promise(r=>server.close(r));
+ if(realServer)await new Promise(r=>realServer.close(r));
+ if(canonicalPool)await canonicalPool.end();
+ await db.end();
+});
 async function post(path,data={}){
  const r=await fetch(origin+"/admin"+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});
  return {status:r.status,body:await r.json()};
@@ -117,4 +123,78 @@ test("canonical bind failure rolls back master, reservation and request state",a
  await q("ALTER TABLE public.master_salon ADD CONSTRAINT fixture_no_bind CHECK(status<>'active')");
  try{const a=await post("/requests/"+id+"/provision");assert.ok(a.status>=400);assert.equal(await count("masters"),0);assert.equal(await count("master_salon"),0);assert.equal(await count("slug_reservations"),0);assert.equal((await q("SELECT status FROM public.owner_opening_requests WHERE id=$1",[id])).rows[0].status,"approved");}
  finally{await q("ALTER TABLE public.master_salon DROP CONSTRAINT fixture_no_bind");}
+});
+
+async function realApp(){
+ if(realServer)return;
+ // All real router modules share the existing pool. Replace only in this
+ // isolated test process, after the non-production DB gate above.
+ ({pool:canonicalPool}=await import("../src/db.js"));
+ canonicalPool.query=db.query.bind(db);canonicalPool.connect=db.connect.bind(db);
+ const {createInternalRouter}=await import("../src/routes/internal.js");
+ const {default:legacy}=await import("../src/routes/auth.js");
+ const app=express();app.use(express.json());app.use("/auth",legacy);
+ app.use("/internal",(req,res,next)=>resolveAuth(req,res,next,{withClient:async fn=>{
+  const c=await db.connect();try{return await fn(c);}finally{c.release();}
+ }}),createInternalRouter({rlInternal:(_req,_res,next)=>next()}));
+ realServer=app.listen(0,"127.0.0.1");await new Promise(r=>realServer.once("listening",r));realOrigin="http://127.0.0.1:"+realServer.address().port;
+}
+async function http(path,{method="GET",data,token}={}){
+ const r=await fetch(realOrigin+path,{method,headers:{...(data?{"Content-Type":"application/json"}:{}),...(token?{Authorization:"Bearer "+token}:{})},...(data?{body:JSON.stringify(data)}:{})});
+ return {status:r.status,body:await r.json()};
+}
+const login=(role,slug,pwd=password,token)=>http("/internal/auth/login",{method:"POST",data:{login:email,password:pwd,role,slug},token});
+test("real internal password login, session resolution and Master profile use one principal; old token rejected",async()=>{
+ await realApp();
+ const id=await open();await provision(id);assert.equal((await post("/requests/"+id+"/activate")).status,200);
+ const old=jwt.sign({user_id:100,role:"salon_admin",session_id:"fixture-session"},process.env.JWT_SECRET);
+ assert.equal((await http("/internal/auth/session/resolve",{token:old})).status,401);
+ const salon=await login("salon_admin","fixture-salon",password,old);assert.equal(salon.status,200,JSON.stringify(salon.body));
+ const denied=await login("master",body.slug,"wrong-password");assert.equal(denied.status,401);
+ const foreign=await login("master","foreign-master");assert.equal(foreign.status,401);
+ const master=await login("master",body.slug);assert.equal(master.status,200,JSON.stringify(master.body));
+ const payload=jwt.verify(master.body.access_token,process.env.JWT_SECRET);
+ assert.equal(payload.user_id,100);assert.equal(payload.role,"master");assert.equal(payload.auth_session_version,2);assert.equal(payload.kg_shared_master_request_id,id);
+ const resolved=await http("/internal/auth/session/resolve",{token:master.body.access_token});
+ assert.equal(resolved.status,200,JSON.stringify(resolved.body));assert.equal(resolved.body.authenticated,true);assert.equal(resolved.body.role,"master");assert.equal(resolved.body.auth.master_slug,body.slug);assert.deepEqual(resolved.body.identity.salons,[]);
+ const profile=await http("/internal/masters/"+body.slug,{token:master.body.access_token});
+ assert.equal(profile.status,200,JSON.stringify(profile.body));assert.equal(profile.body.master.user_id,100);
+ assert.equal((await http("/internal/salons/fixture-salon",{token:master.body.access_token})).status,403);
+ assert.equal((await http("/internal/masters/foreign-master",{token:master.body.access_token})).status,403);
+ const original=await http("/internal/auth/session/resolve",{token:salon.body.access_token});assert.equal(original.body.authenticated,true);assert.equal(original.body.role,"salon_admin");
+ assert.equal(await count("auth_users"),1);
+ assert.equal(await count("billing_subscriptions"),0);
+});
+test("actual owner OTP verification and password recovery share the principal; no external email or SMS",async()=>{
+ await realApp();const id=await open();await provision(id);assert.equal((await post("/requests/"+id+"/activate")).status,200);
+ const code="123456",otpHash=await bcrypt.hash(code,4);
+ const issue=purpose=>q("INSERT INTO public.auth_otps(user_id,channel,target,purpose,code_hash,expires_at,resend_available_at) VALUES(100,'email',$1,$2,$3,now()+interval '10 minutes',now())",[email,purpose,otpHash]);
+ const context={login:email,role:"master",slug:body.slug,channel:"email"};
+ await issue("login_verify");
+ const wrong=await http("/internal/auth/verify",{method:"POST",data:{...context,purpose:"login",code:"999999"}});assert.equal(wrong.status,401);
+ const v=await http("/internal/auth/verify",{method:"POST",data:{...context,purpose:"login",code}});
+ assert.equal(v.status,200,JSON.stringify(v.body));assert.equal(jwt.verify(v.body.access_token,process.env.JWT_SECRET).kg_shared_master_request_id,id);
+ const replay=await http("/internal/auth/verify",{method:"POST",data:{...context,purpose:"login",code}});assert.equal(replay.status,401);
+ await issue("password_reset");
+ const nextPassword="fixture-new-password";
+ const reset=await http("/internal/auth/password/reset/finish",{method:"POST",data:{...context,code,password:nextPassword}});
+ assert.equal(reset.status,200,JSON.stringify(reset.body));
+ assert.equal((await http("/internal/auth/session/resolve",{token:v.body.access_token})).status,403);
+ assert.equal((await login("salon_admin","fixture-salon")).status,401);
+ assert.equal((await login("salon_admin","fixture-salon",nextPassword)).status,200);
+ assert.equal((await login("master",body.slug,nextPassword)).status,200);
+ assert.equal(await count("auth_users"),1);
+});
+test("actual Admin password session and protected precheck authorize the request, not a master token",async()=>{
+ await realApp();
+ await q("INSERT INTO public.auth_users(id,email,role,enabled,password_hash) VALUES(900,'admin@example.invalid','admin',true,$1)",[hash]);
+ const path="/internal/admin/open-owner/precheck";
+ assert.equal((await http(path,{method:"POST",data:body})).status,401);
+ const a=await http("/internal/admin/auth/login",{method:"POST",data:{email:"admin@example.invalid",password}});
+ assert.equal(a.status,200,JSON.stringify(a.body));assert.equal(jwt.verify(a.body.access_token,process.env.JWT_SECRET).auth_session_version,2);
+ const check=await http(path,{method:"POST",data:body,token:a.body.access_token});assert.equal(check.status,200,JSON.stringify(check.body));assert.equal(check.body.valid,true);
+ const created=await http("/internal/admin/open-owner/requests",{method:"POST",data:body,token:a.body.access_token});
+ assert.equal(created.status,201,JSON.stringify(created.body));assert.equal(Number(created.body.request.created_by_admin_id),900);
+ const old=jwt.sign({user_id:900,role:"admin",session_id:a.body.auth.session_id},process.env.JWT_SECRET);
+ assert.equal((await http(path,{method:"POST",data:body,token:old})).status,401);
 });
