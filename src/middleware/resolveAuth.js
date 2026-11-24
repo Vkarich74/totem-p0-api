@@ -1,3 +1,4 @@
+import {isUsRoleContextClaim} from "../auth/usOwnSalonRoleContext.js";
 import {isKgSharedMasterClaim,readKgSharedMasterBindings,isKgSharedMasterRouteAllowed} from "../services/provision/kgSharedMasterIdentity.js";
 import {rejectUnprovenSession} from "../auth/verifiedSessionContract.js";
 import jwt from 'jsonwebtoken';
@@ -362,7 +363,11 @@ export async function resolveAuth(req,res,next,{withClient=withAuthClient}={}){
     return next();
   }
 
-  const sharedClaim=isKgSharedMasterClaim(jwt.decode(token));
+  // Never downgrade an unsupported USA role claim to a normal/KG session.
+  const decoded=jwt.decode(token);
+  if(isUsRoleContextClaim(decoded))
+    return res.status(403).json({ok:false,error:"US_ROLE_CONTEXT_HOLD"});
+  const sharedClaim=isKgSharedMasterClaim(decoded);
   try{
     const payload = jwt.verify(token, process.env.JWT_SECRET);
     const shared=isKgSharedMasterClaim(payload);

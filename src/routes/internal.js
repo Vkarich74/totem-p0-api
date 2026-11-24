@@ -1,3 +1,4 @@
+import {usRoleContextRelease} from "../auth/usOwnSalonRoleContext.js";
 import {readKgSharedMasterBindings,kgSharedMasterClaim} from "../services/provision/kgSharedMasterIdentity.js";
 import {VERIFIED_SESSION_VERSION} from "../auth/verifiedSessionContract.js";
 import { buildOtpEmail, buildPasswordResetEmail, buildEmailMime } from "../services/notifications/emailTemplates.js";
@@ -1014,6 +1015,18 @@ error:"auth_session_resolve_failed"
 }
 });
 
+// Existing authenticated session only. The current release exposes readiness,
+ // never issues context tokens or consumes a password.
+r.get("/auth/role/options",internalReadRateLimit,(req,res)=>{
+  res.set("Cache-Control","private, no-store");
+  if(req.auth?.source!=="session"||req.auth?.role!=="salon_admin"||!req.auth?.user_id||!req.auth?.session_id)
+    return res.status(403).json({ok:false,error:"US_ROLE_CONTEXT_INVALID"});
+  return res.json({ok:true,...usRoleContextRelease()});
+});
+r.post("/auth/role/switch",internalReadRateLimit,(req,res)=>{
+  res.set("Cache-Control","no-store");
+  return res.status(409).json({ok:false,error:"US_ROLE_CONTEXT_HOLD",...usRoleContextRelease()});
+});
 r.post("/auth/login", async (req,res)=>{
 const db = await pool.connect();
 
