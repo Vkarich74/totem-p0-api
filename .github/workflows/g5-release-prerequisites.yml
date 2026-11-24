@@ -1,0 +1,66 @@
+name: G5 missing T1-T4 SQL and Admin queue prerequisites (no deploy)
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '.github/workflows/g5-release-prerequisites.yml'
+      - 'tests/g5-queue-postgres.test.mjs'
+      - 'tests/g5-us-odoo-source.test.mjs'
+      - 'tests/g5-owner-opening-paid-activation*.mjs'
+      - 'tests/g5-welcome*.mjs'
+      - 'tests/g5-admin-queue-pagination.test.mjs'
+      - 'tests/setup-g5-release-isolated.mjs'
+      - 'tests/sql/g5-release-identity-message-schema.sql'
+      - 'src/services/provision/**'
+      - 'src/services/notifications/**'
+      - 'src/services/billing/**'
+      - 'migrations/g5_*.sql'
+permissions:
+  contents: read
+jobs:
+  release-qa:
+    if: github.head_ref == 'g5-t1-existing-queue-lease-20261124'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: g5_fixture
+          POSTGRES_PASSWORD: g5_fixture_only
+          POSTGRES_DB: g5_queue_test
+        ports:
+          - 55434:5432
+        options: >-
+          --health-cmd "pg_isready -U g5_fixture -d g5_queue_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      NODE_ENV: test
+      DB_MODE: POSTGRES
+      DATABASE_URL: ""
+      G5_RELEASE_ISOLATED: "YES"
+      G5_TEST_DATABASE_URL: postgresql://g5_fixture:g5_fixture_only@127.0.0.1:55434/g5_queue_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Prepare exact isolated schema
+        run: node tests/setup-g5-release-isolated.mjs
+      - name: Previously unverified exact-head T1/T3/T4/T6 contracts
+        run: |
+          set -euo pipefail
+          test -z "${DATABASE_URL:-}"
+          node --test tests/g5-owner-opening-paid-activation.unit.test.mjs tests/g5-welcome-once.unit.test.mjs tests/g5-admin-queue-pagination.test.mjs
+          node --test tests/g5-queue-postgres.test.mjs
+          node --test tests/g5-us-odoo-source.test.mjs
+          node --test tests/g5-owner-opening-paid-activation.test.mjs
+          node --test tests/g5-welcome-postgres.test.mjs

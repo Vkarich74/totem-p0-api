@@ -36,8 +36,8 @@ let createdCount = 0;
 async function createNormal(dbClient, proof) {
   createdCount++;
   const r = await dbClient.query(
-    `INSERT INTO public.owner_opening_requests (owner_type, status)
-     VALUES ($1, 'validated') RETURNING id, status`,
+    `INSERT INTO public.owner_opening_requests (owner_type, status,name,email)
+     VALUES ($1, 'validated','fixture','fixture@example.invalid') RETURNING id, status`,
     [proof.owner_type],
   );
   return r.rows[0];
@@ -61,9 +61,9 @@ test("same approved Odoo source + role is one Core request", async () => {
   assert.equal(count.rows[0].n, 1);
 });
 
-test("24 concurrent repeated Odoo notifications create one request", async () => {
+test("50 concurrent repeated Odoo notifications create one request", async () => {
   createdCount = 0;
-  const results = await Promise.all(Array.from({ length: 24 },
+  const results = await Promise.all(Array.from({ length: 50 },
     () => register(verified("3010"))));
   assert.equal(new Set(results.map(x => x.request_id)).size, 1);
   assert.equal(results.filter(x => !x.duplicate).length, 1);
@@ -134,8 +134,8 @@ test("failed source readback performs no local DB registration", async () => {
 
 test("legacy un-attributed Odoo request is untouched by source uniqueness", async () => {
   const historical = await db.query(
-    `INSERT INTO public.owner_opening_requests(owner_type,status,precheck_result_json)
-     VALUES ('salon','validated',$1::jsonb) RETURNING id`,
+    `INSERT INTO public.owner_opening_requests(owner_type,status,precheck_result_json,name,email)
+     VALUES ('salon','validated',$1::jsonb,'fixture','fixture@example.invalid') RETURNING id`,
     [JSON.stringify({ source: "odoo_core_form", odoo_request_id: "3070" })],
   );
   const newer = await register(verified("3070"));
@@ -154,8 +154,8 @@ test("database unique index protects against uncoordinated same-source inserts",
     () => db.query(
       `INSERT INTO public.owner_opening_requests
        (owner_type,status,source_namespace,source_company_id,source_website_id,
-        source_partner_id,source_request_id)
-       VALUES ('salon','validated','odoo_online',4,5,41,'3080')`,
+        source_partner_id,source_request_id,name,email)
+       VALUES ('salon','validated','odoo_online',4,5,41,'3080','fixture','fixture@example.invalid')`,
     ),
     error => error.code === "23505",
   );
@@ -165,8 +165,8 @@ test("migration cannot store incomplete source tuple", async () => {
   await assert.rejects(
     () => db.query(
       `INSERT INTO public.owner_opening_requests
-       (owner_type,status,source_namespace,source_request_id)
-       VALUES ('master','validated','odoo_online','3090')`,
+       (owner_type,status,source_namespace,source_request_id,name,email)
+       VALUES ('master','validated','odoo_online','3090','fixture','fixture@example.invalid')`,
     ),
     error => error.code === "23514",
   );
