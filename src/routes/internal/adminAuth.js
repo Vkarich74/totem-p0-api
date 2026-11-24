@@ -1,3 +1,4 @@
+import {VERIFIED_SESSION_VERSION,isVerifiedSessionClaim} from "../../auth/verifiedSessionContract.js";
 import express from "express";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
@@ -26,12 +27,13 @@ function getJwtSecret() {
 }
 
 function signAdminJwt(payload) {
-  return jwt.sign(payload, getJwtSecret());
+  return jwt.sign({...payload,auth_session_version:VERIFIED_SESSION_VERSION}, getJwtSecret());
 }
 
 function verifyAdminJwt(token) {
   try {
-    return jwt.verify(token, getJwtSecret());
+    const payload=jwt.verify(token,getJwtSecret());
+    return isVerifiedSessionClaim(payload)?payload:null;
   } catch {
     return null;
   }

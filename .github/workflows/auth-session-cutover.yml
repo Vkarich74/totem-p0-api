@@ -1,0 +1,35 @@
+name: Auth session provenance cutover (no deploy)
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/auth/**'
+      - 'src/routes/auth.js'
+      - 'src/routes/internal.js'
+      - 'src/routes/internal/adminAuth.js'
+      - 'src/middleware/resolveAuth.js'
+      - 'src/middleware/AdminRuntimeGuard.js'
+      - 'tests/auth-session-cutover.test.mjs'
+      - '.github/workflows/auth-session-cutover.yml'
+permissions:
+  contents: read
+jobs:
+  auth-cutover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - run: |
+          node --check src/routes/internal.js
+          node --check src/middleware/resolveAuth.js
+          node --check src/routes/internal/adminAuth.js
+          node --check src/middleware/AdminRuntimeGuard.js
+          node --test tests/auth-session-cutover.test.mjs
