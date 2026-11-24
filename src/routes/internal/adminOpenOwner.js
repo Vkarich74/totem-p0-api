@@ -1,6 +1,10 @@
 import { activateOwnerOpeningCanonical } from "../../services/provision/ownerOpeningCanonicalActivation.js";
 import { prepareUsPaidActivationEvidence } from "../../services/provision/usPaidOwnerOpeningGate.js";
 import { buildOwnerOpeningEmail, buildEmailMime } from "../../services/notifications/emailTemplates.js";
+import {
+  claimOwnerOpeningWelcome, finalizeOwnerOpeningWelcomeSent,
+  markOwnerOpeningWelcomeUncertain, reconcileOwnerOpeningWelcomeSent,
+} from "../../services/notifications/ownerOpeningWelcomeIntent.js";
 import { resolveRecipientLocale } from "../../services/notifications/recipientLocale.js";
 import express from "express";
 import { mapOdooBridgeCrmForm } from "../../services/odooBridgeCrmForm.js";
@@ -999,11 +1003,11 @@ function buildOwnerOpeningEmailPreview(request, locale){
   };
 }
 
-async function sendOwnerOpeningEmail(preview){
+async function sendOwnerOpeningEmail(preview, rfcMessageId){
   assertGmailConfig();
 
   const gmail = google.gmail({ version: "v1", auth: gmailClient });
-  const message = buildEmailMime({ to: preview.to, from: `Totem <${GMAIL_SENDER_EMAIL}>`, subject: preview.subject, html: preview.html, text: preview.text, locale: preview.locale });
+  const message = buildEmailMime({ to: preview.to, from: `Totem <${GMAIL_SENDER_EMAIL}>`, subject: preview.subject, html: preview.html, text: preview.text, locale: preview.locale, messageId: rfcMessageId });
 
   const raw = Buffer.from(message)
     .toString("base64")
@@ -1015,53 +1019,6 @@ async function sendOwnerOpeningEmail(preview){
     userId: "me",
     requestBody: { raw },
   });
-}
-
-async function createOwnerOpeningMessage(db, { request, preview, status }){
-  const data = {
-    entity_type: "owner_opening_request",
-    entity_id: Number(request.id),
-    owner_type: request.owner_type,
-    slug: request.slug_final,
-    to: preview.to,
-    subject: preview.subject,
-    text: preview.text,
-    html: preview.html,
-    links: preview.links,
-    status,
-  };
-
-  const message = await db.query(
-    `
-      INSERT INTO public.messages(
-        lead_id,
-        moderation_case_id,
-        status,
-        idempotency_key,
-        data,
-        created_at,
-        updated_at
-      )
-      VALUES(
-        NULL,
-        $1,
-        $2,
-        $3,
-        $4,
-        NOW(),
-        NOW()
-      )
-      RETURNING *
-    `,
-    [
-      request.moderation_case_id ? Number(request.moderation_case_id) : null,
-      status,
-      `owner_opening:${request.id}:${status}:${Date.now()}`,
-      JSON.stringify(data),
-    ]
-  );
-
-  return message.rows[0] || null;
 }
 
 async function createOwnerOpeningTrace(db, { messageId, attempt, status, data }){
@@ -2650,269 +2607,168 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
     }
   });
 
-  r.post("/requests/:id/send-email", async (req,res)=>{
+  // Same canonical welcome claim for Admin's SEND and RESEND operations.
+  // Any previous durable intent blocks replay, including after Gmail timeout.
+  async function sendWelcomeOnce(req, res){
     const requestId = normalizeRequestId(req.params?.id);
-
     if(!requestId){
-      return res.status(400).json({
-        ok: false,
-        error: "REQUEST_ID_INVALID",
-      });
+      return res.status(400).json({ok:false,error:"REQUEST_ID_INVALID"});
     }
-
     const admin = getAdminActor(req);
-    let request = null;
-    let preview = null;
-    let message = null;
-
-    const prepareDb = await pool.connect();
-
+    let claim;
     try{
-      await prepareDb.query("BEGIN");
-
-      request = await getOwnerOpeningRequestForUpdate(prepareDb, requestId);
-
-      if(!request){
-        await prepareDb.query("ROLLBACK");
-        return res.status(404).json({
-          ok: false,
-          error: "OWNER_OPENING_REQUEST_NOT_FOUND",
-        });
-      }
-
-      if (requestMarketCode(request) === "US") {
-        assertAdminOpeningMarketPolicy("US");
-        await assertUsActivationReady(prepareDb,request,Number(request.created_owner_id));
-      }
-
-      if(request.status !== "email_ready" && request.status !== "email_failed"){
-        await prepareDb.query("ROLLBACK");
-        return res.status(409).json({
-          ok: false,
-          error: "OWNER_OPENING_REQUEST_STATUS_INVALID",
-          status: request.status,
-        });
-      }
-
-      if (requestMarketCode(request) === "US") {
-        // Always re-render USA mail to omit unpublished public URL and stale preview.
-        preview = buildOwnerOpeningEmailPreview(request,"en-US");
-      } else if (request.email_preview_json && Object.keys(request.email_preview_json || {}).length) {
-        preview = request.email_preview_json;
-      } else {
-        const { locale } = await resolveRecipientLocale(prepareDb, { userId: request.created_auth_user_id, ownerType: request.owner_type, ownerId: request.created_owner_id });
-        preview = buildOwnerOpeningEmailPreview(request, locale);
-      }
-
-      message = await createOwnerOpeningMessage(prepareDb, {
-        request,
-        preview,
-        status: "pending",
-      });
-
-      await createOwnerOpeningTrace(prepareDb, {
-        messageId: message.id,
-        attempt: 1,
-        status: "pending",
-        data: {
-          event: "owner_opening_email_send_started",
-          to: preview.to,
-          subject: preview.subject,
+      claim = await claimOwnerOpeningWelcome({
+        pool,requestId,admin,
+        getMarketCode:requestMarketCode,
+        assertMarketPolicy:assertAdminOpeningMarketPolicy,
+        assertUsActivationReady,
+        preparePaidEvidence:prepareUsPaidActivationEvidence,
+        createPreview:async (db,request,market)=>{
+          if(market === "US"){
+            return buildOwnerOpeningEmailPreview(request,"en-US");
+          }
+          if(request.email_preview_json &&
+              Object.keys(request.email_preview_json).length){
+            return request.email_preview_json;
+          }
+          const {locale} = await resolveRecipientLocale(db,{
+            userId:request.created_auth_user_id,
+            ownerType:request.owner_type,ownerId:request.created_owner_id,
+          });
+          return buildOwnerOpeningEmailPreview(request,locale);
         },
+        createTrace:createOwnerOpeningTrace,
+        writeAudit:writeOwnerOpeningAuditEvent,
       });
-
-      await prepareDb.query(
-        `
-          UPDATE public.owner_opening_requests
-          SET message_id=$2,
-              email_preview_json=$3,
-              email_status='ready',
-              email_error=NULL,
-              updated_at=NOW()
-          WHERE id=$1
-        `,
-        [
-          requestId,
-          Number(message.id),
-          JSON.stringify(preview),
-        ]
-      );
-
-      await prepareDb.query("COMMIT");
     }catch(err){
-      try{ await prepareDb.query("ROLLBACK"); }catch(e){}
-      prepareDb.release();
-      console.error("ADMIN_OPEN_OWNER_EMAIL_PREPARE_ERROR", err);
-      return res.status(resolveProvisionStatus(err)).json({
-        ok: false,
-        error: err?.status ? String(err.code) : "ADMIN_OPEN_OWNER_EMAIL_PREPARE_FAILED",
+      const status = Number(err?.status || 500);
+      const http = Number.isInteger(status) && status >= 400 && status <= 599 ?
+        status : 500;
+      return res.status(http).json({
+        ok:false,
+        error:typeof err?.code === "string" ? err.code :
+          "OWNER_OPENING_WELCOME_CLAIM_FAILED",
+        ...(http === 409 ? {requires_reconciliation:
+          err?.code === "OWNER_OPENING_WELCOME_RECONCILIATION_REQUIRED"} : {}),
+      });
+    }
+    if(claim.kind === "already_sent"){
+      return res.status(200).json({
+        ok:true,request:claim.request,idempotent:true,
       });
     }
 
-    prepareDb.release();
-
+    // Gmail is called only AFTER the existing PostgreSQL message claim COMMIT.
+    // Neither a second Admin click nor a separate worker can send the same key.
+    let gmailMessageId = null;
     try{
-      const sent = await sendOwnerOpeningEmail(preview);
-      const doneDb = await pool.connect();
-
-      try{
-        await doneDb.query("BEGIN");
-
-        await doneDb.query(
-          `
-            UPDATE public.messages
-            SET status='sent',
-                updated_at=NOW(),
-                data = data || $2::jsonb
-            WHERE id=$1
-          `,
-          [
-            Number(message.id),
-            JSON.stringify({
-              gmail_message_id: sent?.data?.id || null,
-              sent_at: new Date().toISOString(),
-            }),
-          ]
-        );
-
-        await createOwnerOpeningTrace(doneDb, {
-          messageId: message.id,
-          attempt: 1,
-          status: "sent",
-          data: {
-            event: "owner_opening_email_sent",
-            gmail_message_id: sent?.data?.id || null,
-          },
-        });
-
-        const updatedResult = await doneDb.query(
-          `
-            UPDATE public.owner_opening_requests
-            SET status='email_sent',
-                email_status='sent',
-                email_sent_at=NOW(),
-                email_error=NULL,
-                updated_at=NOW()
-            WHERE id=$1
-            RETURNING *
-          `,
-          [requestId]
-        );
-
-        const updatedRequest = updatedResult.rows[0] || request;
-
-        const auditEvent = await writeOwnerOpeningAuditEvent(doneDb, {
-          request: updatedRequest,
-          eventType: "owner_opening.email_sent",
-          admin,
-          data: {
-            message_id: Number(message.id),
-            gmail_message_id: sent?.data?.id || null,
-          },
-        });
-
-        await doneDb.query("COMMIT");
-
-        return res.status(200).json({
-          ok: true,
-          request: updatedRequest,
-          message_id: Number(message.id),
-          gmail_message_id: sent?.data?.id || null,
-          audit_event_id: auditEvent?.id ? Number(auditEvent.id) : null,
-        });
-      }catch(err){
-        try{ await doneDb.query("ROLLBACK"); }catch(e){}
-        throw err;
-      }finally{
-        doneDb.release();
+      const accepted = await sendOwnerOpeningEmail(claim.preview,claim.rfcMessageId);
+      gmailMessageId = accepted?.data?.id || null;
+      if(!gmailMessageId){
+        const error = new Error("GMAIL_ACKNOWLEDGEMENT_MISSING");
+        error.code = "GMAIL_ACKNOWLEDGEMENT_MISSING";
+        throw error;
       }
+      const sent = await finalizeOwnerOpeningWelcomeSent({
+        pool,requestId,messageId:claim.messageId,gmailMessageId,admin,
+        createTrace:createOwnerOpeningTrace,writeAudit:writeOwnerOpeningAuditEvent,
+      });
+      return res.status(200).json({
+        ok:true,request:sent.request,message_id:claim.messageId,
+        gmail_message_id:gmailMessageId,
+        audit_event_id:sent.audit_event_id || null,
+      });
+    }catch(_err){
+      // The Gmail request may have been accepted even when its outcome or
+      // the following SQL COMMIT is lost. Never retry without provider proof.
+      try{
+        await markOwnerOpeningWelcomeUncertain({
+          pool,requestId,messageId:claim.messageId,gmailMessageId,admin,
+          createTrace:createOwnerOpeningTrace,
+          writeAudit:writeOwnerOpeningAuditEvent,
+        });
+      }catch(_markErr){
+        // Previously committed UNIQUE intent still blocks another send.
+        console.error("OWNER_OPENING_WELCOME_UNCERTAIN_MARKER_UNAVAILABLE");
+      }
+      return res.status(503).json({
+        ok:false,error:"OWNER_OPENING_GMAIL_DELIVERY_UNCERTAIN",
+        message_id:claim.messageId,
+        requires_reconciliation:true,
+      });
+    }
+  }
+
+  r.post("/requests/:id/send-email",sendWelcomeOnce);
+  r.post("/requests/:id/resend-email",sendWelcomeOnce);
+
+  async function verifySentWelcomeInGmail(gmailMessageId,rfcMessageId,recipient){
+    assertGmailConfig();
+    const gmail = google.gmail({version:"v1",auth:gmailClient});
+    // Requires an already-authorized Gmail READ scope. Send-only scope
+    // cannot reconcile; in that case fail closed, no second email.
+    let found;
+    try{
+      found = await gmail.users.messages.get({
+        userId:"me",id:gmailMessageId,format:"metadata",
+        metadataHeaders:["Message-ID","From","To"],
+      });
+    }catch(_err){
+      return false;
+    }
+    const payload = found?.data || {};
+    if(!Array.isArray(payload.labelIds) ||
+        !payload.labelIds.includes("SENT")) return false;
+    const headers = payload.payload?.headers || [];
+    const read = name => String(headers.find(h =>
+      String(h.name || "").toLowerCase() === name)?.value || "");
+    const from = read("from");
+    const to = read("to");
+    const recipientMatch = to.match(/<([^<>\s]+@[^<>\s]+)>/);
+    const mailbox = (recipientMatch ? recipientMatch[1] : to).trim().toLowerCase();
+    const fromMatch = from.match(/<([^<>\s]+@[^<>\s]+)>/);
+    const sender = (fromMatch ? fromMatch[1] : from).trim().toLowerCase();
+    return read("message-id") === rfcMessageId &&
+      mailbox === String(recipient || "").trim().toLowerCase() &&
+      sender === GMAIL_SENDER_EMAIL.toLowerCase();
+  }
+
+  // Reconciliation is READ-ONLY against Gmail and commits the PREVIOUS
+  // intent as sent only when Gmail positively confirms that same message.
+  // It never sends mail and cannot create a second welcome intent.
+  r.post("/requests/:id/email-reconcile", async(req,res)=>{
+    const requestId = normalizeRequestId(req.params?.id);
+    const providerId = String(req.body?.gmail_message_id || "");
+    if(!requestId || !/^[a-zA-Z0-9_-]{1,200}$/.test(providerId)){
+      return res.status(400).json({
+        ok:false,error:"OWNER_OPENING_WELCOME_RECONCILE_INPUT_INVALID",
+      });
+    }
+    try{
+      const result = await reconcileOwnerOpeningWelcomeSent({
+        pool,requestId,gmailMessageId:providerId,admin:getAdminActor(req),
+        verifyGmailSent:verifySentWelcomeInGmail,
+        createTrace:createOwnerOpeningTrace,
+        writeAudit:writeOwnerOpeningAuditEvent,
+      });
+      return res.status(200).json({
+        ok:true,request:result.request,
+        message_id:result.messageId,
+        gmail_message_id:result.gmailMessageId,
+        audit_event_id:result.audit_event_id || null,
+        idempotent:Boolean(result.idempotent),
+      });
     }catch(err){
-      const failedDb = await pool.connect();
-      const code = String(err?.code || err?.message || "OWNER_OPENING_EMAIL_SEND_FAILED");
-
-      try{
-        await failedDb.query("BEGIN");
-
-        await failedDb.query(
-          `
-            UPDATE public.messages
-            SET status='failed',
-                updated_at=NOW(),
-                data = data || $2::jsonb
-            WHERE id=$1
-          `,
-          [
-            Number(message.id),
-            JSON.stringify({
-              error: code,
-              failed_at: new Date().toISOString(),
-            }),
-          ]
-        );
-
-        await createOwnerOpeningTrace(failedDb, {
-          messageId: message.id,
-          attempt: 1,
-          status: "failed",
-          data: {
-            event: "owner_opening_email_failed",
-            error: code,
-          },
-        });
-
-        const failedResult = await failedDb.query(
-          `
-            UPDATE public.owner_opening_requests
-            SET status='email_failed',
-                email_status='failed',
-                email_error=$2,
-                updated_at=NOW()
-            WHERE id=$1
-            RETURNING *
-          `,
-          [
-            requestId,
-            code,
-          ]
-        );
-
-        const failedRequest = failedResult.rows[0] || request;
-
-        await writeOwnerOpeningAuditEvent(failedDb, {
-          request: failedRequest,
-          eventType: "owner_opening.email_failed",
-          admin,
-          data: {
-            message_id: Number(message.id),
-            error: code,
-          },
-        });
-
-        await failedDb.query("COMMIT");
-      }catch(updateErr){
-        try{ await failedDb.query("ROLLBACK"); }catch(e){}
-        console.error("ADMIN_OPEN_OWNER_EMAIL_FAILED_UPDATE_ERROR", updateErr);
-      }finally{
-        failedDb.release();
-      }
-
-      console.error("ADMIN_OPEN_OWNER_SEND_EMAIL_ERROR", err);
-      return res.status(500).json({
-        ok: false,
-        error: code,
+      const raw = Number(err?.status || 409);
+      const status = Number.isInteger(raw) && raw >= 400 && raw <= 599 ?
+        raw : 500;
+      return res.status(status).json({
+        ok:false,
+        error:typeof err?.code === "string" ? err.code :
+          "OWNER_OPENING_GMAIL_RECONCILIATION_UNAVAILABLE",
       });
     }
   });
-
-  r.post("/requests/:id/resend-email", async (req,res)=>{
-    return r.handle({
-      ...req,
-      method: "POST",
-      url: `/requests/${req.params.id}/send-email`,
-      originalUrl: req.originalUrl,
-    }, res);
-  });
-
 
   r.get("/requests/:id/audit", async (req,res)=>{
     try{
