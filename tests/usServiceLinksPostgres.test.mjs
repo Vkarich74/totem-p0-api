@@ -3,6 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
+import {readFile} from "node:fs/promises";
 import {
   readUsServiceLinkOptions,saveUsServiceLink,
   rejectLegacyUsServiceMutation,rejectLegacyUsMasterServiceCreation,
@@ -28,7 +29,33 @@ async function count(table) {
 }
 
 test("PostgreSQL17: explicit-owner create/attach, USD, duplicated and foreign scope",async()=>{
+  const accessKey="TOTEM_US_ODOO_SAAS_ACCESS_ENABLED";
+  const policyKey="TOTEM_US_ODOO_SAAS_COMMERCIAL_POLICY_JSON";
+  const oldAccess=process.env[accessKey],oldPolicy=process.env[policyKey];
   try {
+    const db=await pool.query("SELECT current_database() AS name,version() AS version");
+    assert.equal(db.rows[0].name,"us_services_01_test");
+    assert.match(db.rows[0].version,/PostgreSQL 17\./);
+    assert.equal((await pool.query("SELECT to_regclass('public.billing_subscriptions') AS tbl")).rows[0].tbl,null);
+    await pool.query(await readFile(new URL("./sql/g5-t6d-prod-schema-fixture.sql",import.meta.url),"utf8"));
+    for(const migration of ["g5_us_odoo_source_identity_v1.sql","g5_us_odoo_billing_projection_v1.sql"]){
+      await pool.query(await readFile(new URL("../migrations/"+migration,import.meta.url),"utf8"));
+    }
+    // Explicit paid synthetic evidence. Real G5 migration and constraints,
+    // no network call or actual payment, no fallback to legacy wallet.
+    process.env[accessKey]="true";
+    process.env[policyKey]=JSON.stringify({approved:true,version:"qa_us_service_v1"});
+    await pool.query(`INSERT INTO public.owner_opening_requests
+      (owner_type,status,name,email,created_owner_id,created_auth_user_id,precheck_result_json,
+       source_namespace,source_company_id,source_website_id,source_partner_id,source_request_id)
+      VALUES ('salon','activated','fixture salon','salon@example.invalid',32,81,'{"market_code":"US"}','odoo_online',4,5,410,'service-salon'),
+      ('master','activated','fixture master','master@example.invalid',46,82,'{"market_code":"US"}','odoo_online',4,5,411,'service-master')`);
+    await pool.query(`INSERT INTO public.billing_subscriptions
+      (owner_type,owner_id,amount,currency,wallet_only,current_period_start,current_period_end,grace_period_days,
+       provider_namespace,provider_company_id,provider_website_id,provider_partner_id,provider_source_request_id,
+       provider_subscription_order_id,provider_invoice_id,provider_policy_version,provider_verified_at)
+      VALUES ('salon',32,0,'USD',false,now()-interval '1 day',now()+interval '30 days',0,'odoo_online',4,5,410,'service-salon',501,601,'qa_us_service_v1',clock_timestamp()),
+      ('master',46,0,'USD',false,now()-interval '1 day',now()+interval '30 days',0,'odoo_online',4,5,411,'service-master',502,602,'qa_us_service_v1',clock_timestamp())`);
     const read=await readUsServiceLinkOptions(pool,salon);
     assert.equal(read.status,200);
     assert.deepEqual(read.body.masters.map(x=>x.id),[46,48]);
@@ -126,9 +153,11 @@ test("PostgreSQL17: explicit-owner create/attach, USD, duplicated and foreign sc
     assert.equal(kgSourceRejected.body.error,"US_SERVICE_LINK_SOURCE_NOT_FOUND");
     assert.equal(await count("services"),4);
 
-    await pool.query("INSERT INTO public.billing_subscriptions"+
-      "(owner_type,owner_id,subscription_status,blocked_at) "+
-      "VALUES('salon',32,'blocked',now())");
+    await pool.query("UPDATE public.billing_subscriptions SET provider_verified_at=clock_timestamp()-interval '6 minutes' WHERE owner_type='salon' AND owner_id=32");
+    const stale=await saveUsServiceLink(pool,{...salon,body:{...body,name:"STALE should never appear"}});
+    assert.equal(stale.status,403);
+    assert.equal(await count("services"),4);
+    await pool.query("UPDATE public.billing_subscriptions SET provider_verified_at=clock_timestamp(),subscription_status='blocked',blocked_at=now() WHERE owner_type='salon' AND owner_id=32");
     const blocked=await saveUsServiceLink(pool,{...salon,body:{
       ...body,name:"BLOCKED should never appear",
     }});
@@ -151,6 +180,8 @@ test("PostgreSQL17: explicit-owner create/attach, USD, duplicated and foreign sc
       "WHERE salon_id=34 AND currency_code='USD'");
     assert.equal(verification.rows[0].total,0);
   } finally {
+    if(oldAccess===undefined)delete process.env[accessKey];else process.env[accessKey]=oldAccess;
+    if(oldPolicy===undefined)delete process.env[policyKey];else process.env[policyKey]=oldPolicy;
     await pool.end();
   }
 });
