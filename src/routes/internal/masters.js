@@ -1,4 +1,5 @@
 import express from "express";
+import { getUsSaasAccess,readUsSaasProjectionPolicy } from "../../services/billing/usSaasEntitlementProjection.js";
 import crypto from "crypto";
 import {
 countUnread,
@@ -156,6 +157,8 @@ return Number.isFinite(numeric) ? numeric : 0;
 }
 
 async function getMasterBillingAccess(dbOrPool, masterId){
+const us=await getUsSaasAccess(dbOrPool,{ownerType:"master",ownerId:masterId,
+  policy:readUsSaasProjectionPolicy()});
 const billing = await dbOrPool.query(`
 SELECT
 id,
@@ -183,6 +186,10 @@ AND owner_id=$1
 LIMIT 1
 `,[masterId]);
 
+if(us.managed)return {exists:Boolean(billing.rows.length),
+  subscription_status:us.subscription_status,access_state:us.access_state,
+  can_write:us.can_write,can_withdraw:us.can_withdraw,
+  billing:billing.rows[0]||null};
 if(!billing.rows.length){
 return {
 exists:false,

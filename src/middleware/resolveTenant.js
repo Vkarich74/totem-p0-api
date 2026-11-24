@@ -1,5 +1,6 @@
 import pkg from "pg";
 import { resolveMarketContext } from "../market-context/index.js";
+import { getUsSaasAccess,readUsSaasProjectionPolicy } from "../services/billing/usSaasEntitlementProjection.js";
 
 const { Pool } = pkg;
 
@@ -207,7 +208,15 @@ export async function resolveTenant(req, res, next) {
       });
     }
 
-    const { billing_access, billing_state } = await findBillingAccess(pool, tenantRow.salon_id);
+    let { billing_access, billing_state } = await findBillingAccess(pool, tenantRow.salon_id);
+    const saas=await getUsSaasAccess(pool,{ownerType:"salon",ownerId:tenantRow.salon_id,
+      policy:readUsSaasProjectionPolicy()});
+    if(saas.managed){
+      billing_state=saas.can_book?"active":"blocked";
+      billing_access={...billing_access,subscription_status:billing_state,
+        access_state:billing_state,can_write:saas.can_write,
+        can_book:saas.can_book};
+    }
 
     const lifecycleFallback = buildLifecycleFallbackFromSalon(tenantRow);
     const lifecycleState = normalizeLifecycleState(

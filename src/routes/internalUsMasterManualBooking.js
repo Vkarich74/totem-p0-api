@@ -2,6 +2,7 @@
 // Reuses the existing publicCreateBooking transaction; no parallel writer,
 // inferred salon, legacy timezone, conversion, Stripe or payment operation.
 import express from "express";
+import { getUsSaasAccess,readUsSaasProjectionPolicy } from "../services/billing/usSaasEntitlementProjection.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { publicCreateBooking } from "./publicCreateBooking.js";
 import { resolveBusinessMarketContext } from "../market-context/BusinessContext.js";
@@ -84,6 +85,13 @@ async function authorize(pool,{auth,identity,masterSlug,body}) {
     ]);
     if(target.rows.length!==1)
       return deny(404,"US_MANUAL_SERVICE_SCOPE_NOT_FOUND");
+    // T5: both verified master and paid host salon must allow new US booking.
+    // Missing old billing row or grace cannot grant an Odoo-managed account.
+    const policy=readUsSaasProjectionPolicy();
+    const masterPaid=await getUsSaasAccess(db,{ownerType:"master",ownerId:Number(owner.owner_id),policy});
+    const salonPaid=await getUsSaasAccess(db,{ownerType:"salon",ownerId:Number(target.rows[0].salon_id),policy});
+    if(!masterPaid.managed||!masterPaid.can_book||!salonPaid.managed||!salonPaid.can_book)
+      return deny(403,"US_SAAS_BOOKING_DISABLED");
     const billing=await db.query(
       "SELECT subscription_status,blocked_at,next_charge_at,grace_until "+
       "FROM public.billing_subscriptions "+

@@ -20,6 +20,7 @@ import buildContractAliasRouter from "./internal/contract-alias.js";
 import buildPayoutsProcessorRouter from "./internal/payouts-processor.js";
 import buildFinanceEngineRouter from "./internal/finance-engine.js";
 import buildWithdrawsProcessorRouter from "./internal/withdraws-processor.js";
+import { buildUsSaasCommercialGuard } from "../middleware/usSaasCommercialGuard.js";
 import buildMastersRouter from "./internal/masters.js";
 import buildSalonsRouter from "./internal/salons.js";
 import leadsRouter from "./admin.leads.js";
@@ -49,6 +50,8 @@ import { buildUsPayC11LiveRefundRouter } from "./internalUsPayC11LiveRefund.js";
 export function createInternalRouter({ rlInternal } = {}){
 
 const r = express.Router();
+// G5-T5 scope owner writes before US routes; KG, auth, renew remain available.
+r.use(buildUsSaasCommercialGuard(pool));
 const adminContainer = express.Router();
 const adminProtectedContainer = express.Router();
 
@@ -1362,6 +1365,7 @@ WHERE owner_type IN ('salon','master')
 AND billing_model='subscription'
 AND subscription_status='active'
 AND wallet_only=true
+AND provider_namespace IS NULL
 AND next_charge_at IS NOT NULL
 AND next_charge_at <= NOW()
 FOR UPDATE

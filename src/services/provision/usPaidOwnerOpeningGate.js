@@ -80,6 +80,25 @@ export async function prepareUsPaidActivationEvidence(request, {
     if (result?.status !== "PAID_VERIFIED" || result.canActivate !== true) {
       return WAIT(result?.reason || "US_ODOO_PAID_ENTITLEMENT_NOT_VERIFIED");
     }
+    // T5 renewal: a new active Odoo order may continue existing owner access
+    // only if Odoo itself attests the subscription_id parent relationship.
+    // Never trust an event.body renewable parent pointer.
+    const lineage = await client.searchRead("sale.order", [
+      ["id", "=", Number(partnersOrders[0].id)],
+    ], ["id", "company_id", "website_id", "partner_id", "subscription_id"], 2);
+    if (lineage.length !== 1 ||
+        Number(lineage[0].id) !== Number(partnersOrders[0].id) ||
+        Number(Array.isArray(lineage[0].company_id) ?
+          lineage[0].company_id[0] : lineage[0].company_id) !== 4 ||
+        Number(Array.isArray(lineage[0].website_id) ?
+          lineage[0].website_id[0] : lineage[0].website_id) !== 5 ||
+        Number(Array.isArray(lineage[0].partner_id) ?
+          lineage[0].partner_id[0] : lineage[0].partner_id) !== Number(request.source_partner_id)) {
+      return WAIT("US_ODOO_RENEWAL_LINEAGE_READBACK_UNVERIFIED");
+    }
+    const linkedParent = lineage[0].subscription_id;
+    const parentId = Array.isArray(linkedParent) ?
+      positive(linkedParent[0]) : positive(linkedParent);
     // This is a short-lived result, rechecked against FOR UPDATE request.
     const readbackCompletedAt = new Date(now());
     if (!Number.isFinite(readbackCompletedAt.getTime())) {
@@ -93,6 +112,7 @@ export async function prepareUsPaidActivationEvidence(request, {
       createdAuthUserId: Number(request.created_auth_user_id),
       sourceRequestId: request.source_request_id,
       ownerType: request.owner_type,
+      renewedFromOrderId: parentId || null,
     });
   } catch {
     return WAIT("US_ODOO_PAID_READBACK_UNAVAILABLE");

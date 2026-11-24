@@ -62,6 +62,7 @@ export default function buildFinanceEngineRouter(pool){
       SELECT *
       FROM public.billing_subscriptions
       WHERE subscription_status IN ('active','grace','blocked')
+      AND provider_namespace IS NULL
       FOR UPDATE
     `);
 

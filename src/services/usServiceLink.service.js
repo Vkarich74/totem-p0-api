@@ -4,6 +4,7 @@
 import {
   actorFor, checkSession, ownerContext, transact,
 } from "./usServiceTaxSettings.service.js";
+import { getUsSaasAccess,readUsSaasProjectionPolicy } from "./billing/usSaasEntitlementProjection.js";
 
 const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$/;
 const MAX_MINOR = 99_999_999;
@@ -50,6 +51,9 @@ function validatePayload(ownerType, body) {
 }
 
 async function writeAllowed(db,ownerType,ownerId) {
+  const us=await getUsSaasAccess(db,{ownerType,ownerId,
+    policy:readUsSaasProjectionPolicy()});
+  if(us.managed)return us.can_write;
   const result=await db.query(
     "SELECT subscription_status,blocked_at,next_charge_at,grace_until "+
     "FROM public.billing_subscriptions WHERE owner_type=$1 AND owner_id=$2 LIMIT 1",

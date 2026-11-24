@@ -1,4 +1,5 @@
 import express from "express";
+import { getUsSaasAccess,readUsSaasProjectionPolicy } from "../../services/billing/usSaasEntitlementProjection.js";
 import {
 countUnread,
 listNotificationsForTarget,
@@ -331,6 +332,11 @@ duplicate_weekdays: [...duplicateWeekdays].sort((a, b) => a - b)
 
 async function getSalonBillingAccess(db, salonId){
 const billing = await getSalonBillingRow(db, salonId, false);
+const us=await getUsSaasAccess(db,{ownerType:"salon",ownerId:salonId,
+  policy:readUsSaasProjectionPolicy()});
+if(us.managed)return {exists:Boolean(billing),subscription_status:us.subscription_status,
+  access_state:us.access_state,can_write:us.can_write,
+  can_withdraw:us.can_withdraw,billing};
 return buildBillingAccessPayload(billing);
 }
 

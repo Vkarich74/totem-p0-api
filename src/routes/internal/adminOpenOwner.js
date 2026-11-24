@@ -1,5 +1,6 @@
 import { activateOwnerOpeningCanonical } from "../../services/provision/ownerOpeningCanonicalActivation.js";
 import { prepareUsPaidActivationEvidence } from "../../services/provision/usPaidOwnerOpeningGate.js";
+import { reconcileUsSaasOpening } from "../../services/billing/usSaasReconciliation.js";
 import { buildOwnerOpeningEmail, buildEmailMime } from "../../services/notifications/emailTemplates.js";
 import {
   claimOwnerOpeningWelcome, finalizeOwnerOpeningWelcomeSent,
@@ -2766,6 +2767,39 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         ok:false,
         error:typeof err?.code === "string" ? err.code :
           "OWNER_OPENING_GMAIL_RECONCILIATION_UNAVAILABLE",
+      });
+    }
+  });
+
+  // G5-T5: protected Admin readback of existing Odoo SaaS entitlement.
+  // No payment capture, no new owner, no Core wallet, no new welcome.
+  // This remains disabled until commercial approval and end-to-end QA.
+  r.post("/requests/:id/billing-reconcile", async(req,res)=>{
+    const requestId=normalizeRequestId(req.params?.id);
+    if(!requestId){
+      return res.status(400).json({ok:false,error:"REQUEST_ID_INVALID"});
+    }
+    if(process.env.TOTEM_US_ODOO_SAAS_ACCESS_ENABLED!=="true" ||
+       process.env.TOTEM_US_ODOO_SAAS_ACTIVATION_ENABLED!=="true"){
+      return res.status(409).json({
+        ok:false,error:"US_SAAS_BILLING_RECONCILIATION_HOLD",
+      });
+    }
+    try{
+      const result=await reconcileUsSaasOpening({
+        pool,requestId,operator:getAdminActor(req),
+        writeAudit:writeOwnerOpeningAuditEvent,
+      });
+      return res.status(result.status==="WAIT"?409:200).json({
+        ok:result.status!=="WAIT",result,
+      });
+    }catch(err){
+      const status=Number(err?.status||500);
+      return res.status(Number.isInteger(status)&&status>=400&&status<=599?
+        status:500).json({
+        ok:false,
+        error:typeof err?.code==="string"?err.code:
+          "US_SAAS_BILLING_RECONCILIATION_FAILED",
       });
     }
   });

@@ -1,3 +1,4 @@
+import { persistUsSaasPaidProjection } from "../billing/usSaasEntitlementProjection.js";
 // G5-T3: one transactional Core Owner Opening activation for Admin and
 // future authenticated reconciliation workers. This is NOT an HTTP endpoint.
 // Existing Core canonical entity activation and audit callbacks are reused.
@@ -103,6 +104,9 @@ export async function activateOwnerOpeningCanonical({
         current, paidEvidence, nowRow.rows[0]?.now,
       );
       await assertUsActivationReady(db, current, positive(current.created_owner_id));
+      // Odoo-paid entitlement projection is committed atomically with owner/auth.
+      await persistUsSaasPaidProjection(db,current,paidEvidence,nowRow.rows[0]?.now,
+        assertUsPaidEvidenceForLockedRequest);
     }
 
     const ownerActivation = await activateEntity(db, current);

@@ -52,6 +52,12 @@ function mockPool(r) {
       if (sql.includes("SELECT clock_timestamp()")) {
         return {rows:[{now:new Date()}]};
       }
+      if (sql.includes("FROM public.billing_subscriptions") && sql.includes("FOR UPDATE")) {
+        return {rows:[]};
+      }
+      if (sql.includes("INSERT INTO public.billing_subscriptions")) {
+        return {rows:[{id:999,provider_namespace:"odoo_online",owner_type:"salon",owner_id:301}]};
+      }
       if (sql.includes("UPDATE public.auth_users SET enabled=true")) {
         return {rows:[{id:args[0]}]};
       }
