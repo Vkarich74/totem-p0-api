@@ -1,3 +1,4 @@
+import {getUsSaasAccess,readUsSaasProjectionPolicy} from "./billing/usSaasEntitlementProjection.js";
 // TOTEM USA — TAX-04: an immutable tax-inclusive quote for a VERIFIED
 // US beauty-service booking collector. No Stripe calls or payment writes.
 // TAX-05 must enforce that every charged amount matches this exact snapshot.
@@ -295,6 +296,8 @@ export async function createUsBookingServiceTaxQuote(pool, options = {}) {
     }
     const booking=await ownerBooking(db,input.booking,input.actor,true);
     if(!booking)return fail(404,"US_TAX_QUOTE_BOOKING_NOT_FOUND");
+    const paid=()=>getUsSaasAccess(db,{ownerType:"salon",ownerId:Number(booking.salon_id),policy:readUsSaasProjectionPolicy(),lock:true});
+    if(!(await paid()).can_write)return fail(403,"US_TAX_QUOTE_BILLING_BLOCKED");
     if(!["reserved","confirmed"].includes(booking.status)){
       return fail(409,"US_TAX_QUOTE_BOOKING_NOT_ELIGIBLE");
     }
@@ -343,6 +346,8 @@ export async function createUsBookingServiceTaxQuote(pool, options = {}) {
     if(inserted.rows.length!==1){
       return fail(409,"US_TAX_QUOTE_SNAPSHOT_NOT_CREATED");
     }
+    if(!await ownerSession(db,input.actor,true)||!(await paid()).can_write)
+      return fail(403,"US_TAX_QUOTE_BILLING_BLOCKED");
     return {status:201,body:{
       ok:true,quote:quotePayload(inserted.rows[0]),created:true,
       payment_ready:false,

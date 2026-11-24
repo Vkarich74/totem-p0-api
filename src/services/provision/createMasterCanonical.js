@@ -1,4 +1,5 @@
 import {assertKgSharedMasterPending} from "./kgSharedMasterIdentity.js";
+import {assertUsImportedMasterProvision} from "./usImportedMasterProvision.js";
 
 import {
   activateReservedSlug,
@@ -229,7 +230,7 @@ async function resolveMasterSlugForReservation(db, requestedSlug){
   return ensureUniqueMasterSlug(db, requested);
 }
 
-export async function createMasterCanonical({ pool, payload, dbClient = null, kgSharedRequestId=null }){
+export async function createMasterCanonical({ pool, payload, dbClient = null, kgSharedRequestId=null, masterReceipt=null }){
   const input = validateMasterProvisionInput(payload || {});
   const ownsTransaction = !dbClient;
   const db = dbClient || await pool.connect();
@@ -266,6 +267,36 @@ export async function createMasterCanonical({ pool, payload, dbClient = null, kg
       const activatedReservation=await activateReservedSlug(db,{owner_type:"master",slug:master.slug,owner_id:Number(master.id),reservation_id:reservation?.reservation?.id||reservation?.id||null});
       return buildProvisionResult({user,master,onboardingIdentity:null,onboardingTransition:null,reservation:activatedReservation?.reservation||activatedReservation,
         meta:buildProvisionMeta({created:true})});
+    }
+    // A US verified intake must not be bypassed by the generic create route.
+    if(input.market_code==="US"&&!masterReceipt){
+      const imported=await db.query("SELECT id FROM public.owner_opening_requests WHERE owner_type='master' AND source_namespace='odoo_online' AND (slug_final=$1 OR lower(email)=lower($2) OR phone_normalized=$3) LIMIT 1",[input.master_slug,input.email,input.phone]);
+      if(imported.rows.length)throw Object.assign(Error("US_MASTER_FRESH_SOURCE_REQUIRED"),{code:"US_MASTER_FRESH_SOURCE_REQUIRED",status:409});
+    }
+    // Only trusted internal receipt, never a request-body principal ID.
+    if(masterReceipt){
+      if(!dbClient||input.market_code!=="US")throw Error("US_MASTER_PROVISION_TRANSACTION_REQUIRED");
+      const source=(await db.query("SELECT * FROM public.owner_opening_requests WHERE id=$1 AND status='provisioning' FOR UPDATE",[masterReceipt.requestId])).rows[0];
+      const authority=await assertUsImportedMasterProvision(db,source,masterReceipt);
+      if(source.slug_final!==input.master_slug||source.name!==input.name||source.email!==input.email||source.phone_normalized!==input.phone)
+        throw Error("US_MASTER_PROVISION_INPUT_CHANGED");
+      const conflicts=await db.query("SELECT id FROM public.auth_users WHERE lower(email)=lower($1) OR phone=$2 FOR UPDATE",[input.email,input.phone]);
+      if(authority.mode==="own_salon"){
+        if(conflicts.rows.length!==1||Number(conflicts.rows[0].id)!==authority.principalId)
+          throw Error("US_MASTER_SHARED_IDENTITY_REQUIRED");
+        const existing=await db.query("SELECT id FROM public.masters WHERE user_id=$1 OR slug=$2 FOR UPDATE",[authority.principalId,input.master_slug]);
+        if(existing.rows.length)throw Error("US_MASTER_SHARED_ENTITY_CONFLICT");
+        const availability=await checkSlugAvailability(db,"master",input.master_slug);
+        if(!availability.available||availability.slug!==input.master_slug)throw Error("SLUG_NOT_AVAILABLE");
+        const reservation=await reserveSlug(db,{owner_type:"master",slug:input.master_slug,meta:{source:"create_master",email:input.email}});
+        const master=(await db.query("INSERT INTO public.masters(slug,name,active,created_at,user_id) VALUES($1,$2,false,NOW(),$3) RETURNING *",[input.master_slug,input.name,authority.principalId])).rows[0];
+        const user=(await db.query("SELECT id,email,role,master_slug,master_id,enabled,must_set_password,phone FROM public.auth_users WHERE id=$1",[authority.principalId])).rows[0];
+        const activatedReservation=await activateReservedSlug(db,{owner_type:"master",slug:input.master_slug,owner_id:Number(master.id),reservation_id:reservation?.reservation?.id||reservation?.id||null});
+        // No second credential row or mutation of the salon_admin binding.
+        return buildProvisionResult({user,master,onboardingIdentity:null,onboardingTransition:null,
+          reservation:activatedReservation?.reservation||activatedReservation,meta:buildProvisionMeta({created:true})});
+      }
+      if(conflicts.rows.length)throw Error("US_MASTER_EXISTING_IDENTITY_CONFLICT");
     }
     const existingUser = await findExistingAuthUser(db, input.email, "master");
 
@@ -426,7 +457,7 @@ export async function createMasterCanonical({ pool, payload, dbClient = null, kg
       try{ await db.query("ROLLBACK"); }catch(_error){}
     }
 
-    const resolved = err?.status&&String(err.code||"").startsWith("KG_SHARED_MASTER_")?{status:err.status,error:err.code}:resolveProvisionError(err);
+    const resolved = err?.status&&/^(KG_SHARED_MASTER_|US_MASTER_|US_ODOO_)/.test(err?.code||"")?{status:err.status,error:err.code}:resolveProvisionError(err);
     const wrapped = new Error(resolved.error);
     wrapped.code = resolved.error;
     wrapped.status = resolved.status;

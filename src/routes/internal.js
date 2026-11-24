@@ -1,5 +1,6 @@
 import {readKgSharedMasterBindings,kgSharedMasterClaim} from "../services/provision/kgSharedMasterIdentity.js";
 import {VERIFIED_SESSION_VERSION} from "../auth/verifiedSessionContract.js";
+import {switchUsOwnSalonRole,listUsOwnSalonRoleOptions} from "../auth/usOwnSalonRoleContext.js";
 import { buildOtpEmail, buildPasswordResetEmail, buildEmailMime } from "../services/notifications/emailTemplates.js";
 import { resolveRecipientLocale } from "../services/notifications/recipientLocale.js";
 import express from "express";
@@ -22,6 +23,7 @@ import buildContractAliasRouter from "./internal/contract-alias.js";
 import buildPayoutsProcessorRouter from "./internal/payouts-processor.js";
 import buildFinanceEngineRouter from "./internal/finance-engine.js";
 import buildWithdrawsProcessorRouter from "./internal/withdraws-processor.js";
+import { buildUsSaasCommercialGuard } from "../middleware/usSaasCommercialGuard.js";
 import buildMastersRouter from "./internal/masters.js";
 import buildSalonsRouter from "./internal/salons.js";
 import leadsRouter from "./admin.leads.js";
@@ -39,6 +41,7 @@ import mobileRouter from "./internal/mobile.js";
 import buildTemplatesRouter from "./internal/templates.js";
 import buildMoneyCoreRouter from "./internal/money-core.js";
 import buildLocalePreferencesRouter from "./internal/localePreferences.js";
+import { buildUsMasterConsentRouter } from "./internalUsMasterConsent.js";
 import { buildUsPayC11OwnerRouter } from "./internalUsPayC11Owner.js";
 import { buildUsServiceTaxSettingsRouter } from "./internalUsServiceTaxSettings.js";
 import { buildUsServicePricesRouter } from "./internalUsServicePrices.js";
@@ -51,6 +54,8 @@ import { buildUsPayC11LiveRefundRouter } from "./internalUsPayC11LiveRefund.js";
 export function createInternalRouter({ rlInternal } = {}){
 
 const r = express.Router();
+// G5-T5 scope owner writes before US routes; KG, auth, renew remain available.
+r.use(buildUsSaasCommercialGuard(pool));
 const adminContainer = express.Router();
 const adminProtectedContainer = express.Router();
 
@@ -80,6 +85,8 @@ r.use("/admin", adminContainer);
 r.use(buildLocalePreferencesRouter(pool, internalReadRateLimit));
 // Owner-authenticated US-only recipient choice; read model remains separate.
 r.use(buildUsPayC11OwnerRouter(pool));
+// G5 pending master consent, not a membership or commercial grant.
+r.use(buildUsMasterConsentRouter(pool,internalReadRateLimit));
 // US-only service-tax settings: no booking/payment mutation.
 r.use(buildUsServiceTaxSettingsRouter(pool));
 // US-only explicit USD-cents prices; never infer from legacy KGS price.
@@ -991,6 +998,7 @@ source:auth?.source || null,
 session_id:auth?.session_id || null,
 session_source:auth?.session_source || null,
 ...(auth?.kg_shared_master_request_id?{master_slug:auth.master_slug}:{}),
+...(auth?.us_role_context==="own_salon_master_v1"?{master_slug:auth.master_slug,us_role_context:auth.us_role_context,master_request_id:auth.master_request_id}:{}),
 session_expires_at:auth?.session_expires_at || null,
 last_seen_at:auth?.last_seen_at || null,
 idle_timeout_at:auth?.idle_timeout_at || null
@@ -1012,6 +1020,29 @@ error:"auth_session_resolve_failed"
 }
 });
 
+// Existing auth namespace, explicit password reauthentication of the same principal.
+// No role or principal selected from arbitrary body fields.
+r.get("/auth/role/options",internalReadRateLimit,async(req,res)=>{
+  res.set("Cache-Control","private, no-store");
+  if(req.auth?.source!=="session"||req.auth?.role!=="salon_admin")
+    return res.status(403).json({ok:false,error:"US_ROLE_CONTEXT_INVALID"});
+  try{return res.json({ok:true,options:await listUsOwnSalonRoleOptions(pool,{auth:req.auth})});}
+  catch(e){return res.status(503).json({ok:false,error:"US_ROLE_CONTEXT_UNAVAILABLE"});}
+});
+r.post("/auth/role/switch", internalReadRateLimit, async(req,res)=>{
+  res.set("Cache-Control","no-store");
+  const b=req.body||{};
+  if(Object.keys(b).some(k=>!["role","master_request_id","password"].includes(k)))
+    return res.status(400).json({ok:false,error:"US_ROLE_CONTEXT_BODY_INVALID"});
+  try{
+    const result=await switchUsOwnSalonRole({pool,auth:req.auth,role:b.role,
+      masterRequestId:b.master_request_id,password:b.password});
+    return res.json({ok:true,...result});
+  }catch(e){
+    return res.status([403,409].includes(e?.status)?e.status:503).json({ok:false,error:
+      typeof e?.code==="string"&&/^US_(ROLE_CONTEXT|OWNER_REAUTH)_[A-Z0-9_]+$/.test(e.code)?e.code:"US_ROLE_CONTEXT_UNAVAILABLE"});
+  }
+});
 r.post("/auth/login", async (req,res)=>{
 const db = await pool.connect();
 
@@ -1373,6 +1404,7 @@ WHERE owner_type IN ('salon','master')
 AND billing_model='subscription'
 AND subscription_status='active'
 AND wallet_only=true
+AND provider_namespace IS NULL
 AND next_charge_at IS NOT NULL
 AND next_charge_at <= NOW()
 FOR UPDATE

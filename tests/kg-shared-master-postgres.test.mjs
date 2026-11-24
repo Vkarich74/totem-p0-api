@@ -36,6 +36,12 @@ before(async()=>{
  assert.equal((await q("SELECT current_database() AS db")).rows[0].db,"kg_shared_master_test");
  assert.equal((await q("SELECT to_regclass('public.auth_users') AS t")).rows[0].t,null);
  await q(await readFile(new URL("./sql/kg-shared-master-schema.sql",import.meta.url),"utf8"));
+ // This G5 branch includes additive schema changes absent from the
+ // original KG-only production snapshot. Apply actual release migrations,
+ // never mock the new columns or use a production database.
+ for(const migration of ["g5_us_odoo_source_identity_v1.sql","g5_us_odoo_billing_projection_v1.sql"])
+   await q(await readFile(new URL("../migrations/"+migration,import.meta.url),"utf8"));
+
  server=app.listen(0,"127.0.0.1");await new Promise(r=>server.once("listening",r));origin="http://127.0.0.1:"+server.address().port;
 });
 beforeEach(async()=>{
@@ -197,4 +203,23 @@ test("actual Admin password session and protected precheck authorize the request
  assert.equal(created.status,201,JSON.stringify(created.body));assert.equal(Number(created.body.request.created_by_admin_id),900);
  const old=jwt.sign({user_id:900,role:"admin",session_id:a.body.auth.session_id},process.env.JWT_SECRET);
  assert.equal((await http(path,{method:"POST",data:body,token:old})).status,401);
+});
+
+test("KG activation rechecks direct ownership after provisioning, including unified canonical activation",async()=>{
+ const id=await open();await provision(id);
+ await q("UPDATE public.owner_salon SET status='inactive'");
+ const a=await post("/requests/"+id+"/activate");assert.equal(a.status,409,JSON.stringify(a.body));
+ assert.equal((await q("SELECT active FROM public.masters")).rows[0].active,false);
+ assert.equal((await q("SELECT status FROM public.owner_opening_requests WHERE id=$1",[id])).rows[0].status,"provisioned");
+ assert.equal(await count("auth_users"),1);
+});
+test("KG and USA role claims cannot be combined; KG opening never creates US source or payment",async()=>{
+ await realApp();const id=await open();await provision(id);assert.equal((await post("/requests/"+id+"/activate")).status,200);
+ const master=await login("master",body.slug);assert.equal(master.status,200);
+ const claim=jwt.verify(master.body.access_token,process.env.JWT_SECRET);
+ const conflict=jwt.sign({...claim,us_role_context:"own_salon_master_v1",us_master_request_id:id},process.env.JWT_SECRET);
+ const r=await http("/internal/auth/session/resolve",{token:conflict});assert.equal(r.status,403);assert.equal(r.body.error,"ROLE_CONTEXT_CONFLICT");
+ const source=(await q("SELECT source_namespace,source_company_id,source_partner_id FROM public.owner_opening_requests WHERE id=$1",[id])).rows[0];
+ assert.deepEqual(source,{source_namespace:null,source_company_id:null,source_partner_id:null});
+ assert.equal(await count("billing_subscriptions"),0);
 });

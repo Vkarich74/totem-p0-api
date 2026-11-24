@@ -1,4 +1,7 @@
+import {readUsOwnSalonMasterAuthority} from "../../services/provision/usMasterRoleAuthority.js";
+import {readUsOwnSalonProfileAccess,usSharedMasterProfileEnabled,readUsOwnSalonHoursAccess,readUsOwnSalonServicesAccess,usSharedMasterServicesEnabled,usSharedMasterPriceEnabled,usSharedMasterHoursEnabled,usSharedMasterBookingEnabled} from "../../auth/usOwnSalonRoleContext.js";
 import express from "express";
+import { getUsSaasAccess,readUsSaasProjectionPolicy } from "../../services/billing/usSaasEntitlementProjection.js";
 import crypto from "crypto";
 import {
 countUnread,
@@ -156,6 +159,8 @@ return Number.isFinite(numeric) ? numeric : 0;
 }
 
 async function getMasterBillingAccess(dbOrPool, masterId){
+const us=await getUsSaasAccess(dbOrPool,{ownerType:"master",ownerId:masterId,
+  policy:readUsSaasProjectionPolicy()});
 const billing = await dbOrPool.query(`
 SELECT
 id,
@@ -183,6 +188,10 @@ AND owner_id=$1
 LIMIT 1
 `,[masterId]);
 
+if(us.managed)return {exists:Boolean(billing.rows.length),
+  subscription_status:us.subscription_status,access_state:us.access_state,
+  can_write:us.can_write,can_withdraw:us.can_withdraw,
+  billing:billing.rows[0]||null};
 if(!billing.rows.length){
 return {
 exists:false,
@@ -858,7 +867,26 @@ r.get("/masters/:slug", internalReadRateLimit, async (req,res)=>{
     if(!hasMasterOwnership(req,master.id)){
       return res.status(403).json({ok:false,error:"FORBIDDEN"});
     }
-    const billing_access=await getMasterBillingAccess(pool,master.id);
+    let shared=null;
+    if(req.auth?.us_role_context==="own_salon_master_v1"){
+      shared=await readUsOwnSalonMasterAuthority(pool,req.auth.master_request_id);
+      if(shared.masterId!==Number(master.id)||shared.principalAuthUserId!==Number(req.auth.user_id))
+        return res.status(403).json({ok:false,error:"US_ROLE_CONTEXT_SCOPE_MISMATCH"});
+    }
+    let sharedProfileWrite=false;
+    if(shared&&usSharedMasterProfileEnabled()){
+      const access=await readUsOwnSalonProfileAccess(pool,{auth:req.auth,slug});
+      sharedProfileWrite=access.masterId===Number(master.id);
+    }
+    // Paid shared subscription readback does not unlock unaudited legacy
+    // commercial/master write routes. Existing limited context is read-only.
+    const billing_access=shared?{exists:true,subscription_status:"active",access_state:"active",
+      can_write:false,can_withdraw:false,billing:null,shared_salon_subscription:true,
+      salon_owner_id:shared.salonId,paid_until:shared.paidUntil,role_context_limited:true,
+      shared_operations:{profile:sharedProfileWrite,services:usSharedMasterServicesEnabled(),
+        price:usSharedMasterPriceEnabled(),hours:usSharedMasterHoursEnabled(),
+        booking:usSharedMasterBookingEnabled(),finance:false}}
+      :await getMasterBillingAccess(pool,master.id);
     const masterSalon=await pool.query(
       `SELECT ms.salon_id,s.slug AS salon_slug
          FROM public.master_salon ms
@@ -874,11 +902,11 @@ r.get("/masters/:slug", internalReadRateLimit, async (req,res)=>{
       const auth=await pool.query(
         `SELECT email FROM public.auth_users
           WHERE id=$1 AND role=$2 AND enabled=true LIMIT 1`,
-        [master.user_id,req.auth.kg_shared_master_request_id?"salon_admin":"master"]
+        [master.user_id,(shared||req.auth.kg_shared_master_request_id)?"salon_admin":"master"]
       );
       if(auth.rows.length){
         profile=ownerProfilePayload("master",slug,master,auth.rows[0].email,
-          billing_access.can_write);
+          shared?sharedProfileWrite:billing_access.can_write);
       }
     }
     return res.json({
@@ -917,6 +945,8 @@ const US_MASTER_LOCATION_ROWS = `
 `;
 
 function usHoursHttpError(res,err){
+  if([403,409].includes(err?.status)&&/^US_(ROLE_CONTEXT|MASTER_|SAAS_)/.test(String(err?.code||err?.message||"")))
+    return res.status(403).json({ok:false,error:"US_HOURS_BILLING_BLOCKED"});
   const known=Number.isInteger(err?.statusCode) && err?.code?.startsWith("US_");
   if (known) return res.status(err.statusCode).json({ok:false,error:err.code});
   if(err?.code==="BILLING_BLOCKED")
@@ -944,7 +974,7 @@ function parseUsHoursScope(query={},requireScope=false){
   return {salon_slug:salonSlug,location_code:code};
 }
 
-async function checkedUsMasterHoursActor(db,req){
+async function checkedUsMasterHoursActor(db,req,lock=false){
   if(req.auth?.source!=="session" || req.auth?.role!=="master" ||
      !Number.isSafeInteger(Number(req.auth.user_id)) ||
      Number(req.auth.user_id)<1) {
@@ -960,6 +990,12 @@ async function checkedUsMasterHoursActor(db,req){
      String(row.user_id)!==String(req.auth.user_id) ||
      !hasMasterOwnership(req,row.id)){
     throw usHoursProblem("US_HOURS_MASTER_FORBIDDEN",403);
+  }
+  if(req.auth.us_role_context==="own_salon_master_v1"){
+    const shared=await readUsOwnSalonHoursAccess(db,{auth:req.auth,slug:req.params.slug,lock});
+    if(shared.masterId!==Number(row.id))
+      throw usHoursProblem("US_HOURS_MASTER_FORBIDDEN",403);
+    return {master_id:shared.masterId,master_slug:String(req.params.slug),shared_salon_id:shared.salonId};
   }
   const validAuth=await db.query(
     "SELECT 1 FROM public.auth_users WHERE id=$1 AND enabled=true AND role='master' LIMIT 1",
@@ -993,23 +1029,25 @@ function validateUsLocationHoursRow(row){
   };
 }
 
-async function listUsMasterHoursLocations(db,masterId){
+async function listUsMasterHoursLocations(db,masterId,sharedSalonId=null){
   const found=await db.query(
     US_MASTER_LOCATION_ROWS+
+    (sharedSalonId?" AND s.id=$2":"")+
     " ORDER BY s.slug,l.is_primary DESC,l.location_code LIMIT 101",
-    [masterId]
+    [masterId,...(sharedSalonId?[sharedSalonId]:[])]
   );
   if(found.rows.length>100)
     throw usHoursProblem("US_HOURS_TOO_MANY_LOCATIONS",409);
   return found.rows.map(validateUsLocationHoursRow);
 }
 
-async function selectLockedUsHoursLocation(db,masterId,scope){
+async function selectLockedUsHoursLocation(db,masterId,scope,sharedSalonId=null){
   const result=await db.query(
     US_MASTER_LOCATION_ROWS+
-    " AND s.slug=$2 AND l.location_code=$3 LIMIT 1"+
+    " AND s.slug=$2 AND l.location_code=$3"+
+    (sharedSalonId?" AND s.id=$4":"")+" LIMIT 1"+
     " FOR UPDATE OF l FOR SHARE OF ms,s",
-    [masterId,scope.salon_slug,scope.location_code]
+    [masterId,scope.salon_slug,scope.location_code,...(sharedSalonId?[sharedSalonId]:[])]
   );
   if(result.rows.length!==1){
     throw usHoursProblem("US_HOURS_LOCATION_RELATION_NOT_FOUND",404);
@@ -1037,13 +1075,13 @@ r.get("/masters/:slug/us-working-hours",internalReadRateLimit,async(req,res)=>{
     const scope=parseUsHoursScope(req.query,false);
     const actor=await checkedUsMasterHoursActor(pool,req);
     if(!scope){
-      const locations=await listUsMasterHoursLocations(pool,actor.master_id);
+      const locations=await listUsMasterHoursLocations(pool,actor.master_id,actor.shared_salon_id);
       return res.json({
         ok:true,market_code:"US",owner_type:"master",
         owner_slug:actor.master_slug,locations,
       });
     }
-    const locations=await listUsMasterHoursLocations(pool,actor.master_id);
+    const locations=await listUsMasterHoursLocations(pool,actor.master_id,actor.shared_salon_id);
     const location=locations.find(item=>
       item.salon_slug===scope.salon_slug &&
       item.location_code===scope.location_code);
@@ -1071,8 +1109,10 @@ r.put("/masters/:slug/us-working-hours",async(req,res)=>{
     started=true;
     await client.query("SET LOCAL statement_timeout = '5000ms'");
     await client.query("SET LOCAL lock_timeout = '2000ms'");
-    const actor=await checkedUsMasterHoursActor(client,req);
-    await ensureMasterWriteAllowed(client,actor.master_id);
+    // Shared authority locks master/membership/market rows BEFORE the
+    // advisory lock: public booking already holds SHARE on these rows
+    // when acquiring 973103. Inverting this order risks a deadlock.
+    const actor=await checkedUsMasterHoursActor(client,req,true);
     // Reuse the EXACT US public-booking transaction advisory lock (master
     // key 973103); acquire before location row locks for consistent order.
     // No KG/KZ endpoint acquires this lock.
@@ -1081,12 +1121,25 @@ r.put("/masters/:slug/us-working-hours",async(req,res)=>{
       [973103,actor.master_id]
     );
     const location=await selectLockedUsHoursLocation(
-      client,actor.master_id,scope);
+      client,actor.master_id,scope,actor.shared_salon_id);
+    // Explicit US-only location: never fall back to legacy wallet/missing=active.
+    if(!actor.shared_salon_id){
+      const entitlement=await getUsSaasAccess(client,{ownerType:"master",ownerId:actor.master_id,
+        policy:readUsSaasProjectionPolicy()});
+      if(entitlement.managed!==true||entitlement.can_write!==true){
+        const error=new Error("BILLING_BLOCKED");error.code="BILLING_BLOCKED";throw error;
+      }
+    }
     const saved=await replaceUsMasterWeeklyHours(client,{
       locationId:location.location_id,masterId:actor.master_id,
       revision:desired.revision,hours:desired.hours,
       timezone:location.timezone,
     });
+    if(actor.shared_salon_id){
+      const final=await readUsOwnSalonHoursAccess(client,{auth:req.auth,slug:req.params.slug,lock:true});
+      if(final.masterId!==actor.master_id||final.salonId!==actor.shared_salon_id)
+        throw usHoursProblem("US_HOURS_MASTER_FORBIDDEN",403);
+    }
     await client.query("COMMIT");
     started=false;
     return res.json(usMasterHoursPayload(actor,location,saved,true));
@@ -1112,6 +1165,8 @@ r.patch("/masters/:slug", async(req,res)=>{
     await db.query("BEGIN");
     await db.query("SET LOCAL statement_timeout = '5000ms'");
     await db.query("SET LOCAL lock_timeout = '2000ms'");
+    const sharedContext=req.auth.us_role_context==="own_salon_master_v1";
+    const shared=sharedContext?await readUsOwnSalonProfileAccess(db,{auth:req.auth,slug:req.params.slug,lock:true}):null;
     const before=await db.query(
       `SELECT id,name,slug,user_id FROM public.masters
         WHERE slug=$1 LIMIT 1 FOR UPDATE`,
@@ -1123,20 +1178,20 @@ r.patch("/masters/:slug", async(req,res)=>{
     }
     const master=before.rows[0];
     if(!hasMasterOwnership(req,master.id) ||
-       String(req.auth.user_id)!==String(master.user_id)){
+       String(req.auth.user_id)!==String(master.user_id)||shared&&shared.masterId!==Number(master.id)){
       await db.query("ROLLBACK");
       return res.status(403).json({ok:false,error:"FORBIDDEN"});
     }
     const auth=await db.query(
       `SELECT email FROM public.auth_users WHERE id=$1 AND enabled=true
           AND role=$2 LIMIT 1`,
-      [master.user_id,req.auth.kg_shared_master_request_id?"salon_admin":"master"]
+      [master.user_id,(shared||req.auth.kg_shared_master_request_id)?"salon_admin":"master"]
     );
     if(auth.rows.length!==1){
       await db.query("ROLLBACK");
       return res.status(403).json({ok:false,error:"PROFILE_SESSION_INVALID"});
     }
-    await ensureMasterWriteAllowed(db,master.id);
+    if(!shared)await ensureMasterWriteAllowed(db,master.id);
     if(ownerProfileRevision("master",master)!==input.revision){
       await db.query("ROLLBACK");
       return res.status(409).json({ok:false,error:"PROFILE_REVISION_CONFLICT"});
@@ -1151,13 +1206,15 @@ r.patch("/masters/:slug", async(req,res)=>{
       await db.query("ROLLBACK");
       return res.status(409).json({ok:false,error:"PROFILE_STORAGE_READBACK_MISMATCH"});
     }
+    // Recheck paid period and session immediately before commit.
+    if(shared)await readUsOwnSalonProfileAccess(db,{auth:req.auth,slug:req.params.slug,lock:true});
     const profile=ownerProfilePayload("master",req.params.slug,after.rows[0],
       auth.rows[0].email,true,true);
     await db.query("COMMIT");
     return res.json({ok:true,master:after.rows[0],...profile});
   }catch(err){
     try{await db.query("ROLLBACK");}catch(_ignored){}
-    if(err.code==="BILLING_BLOCKED"){
+    if(err.code==="BILLING_BLOCKED"||req.auth?.us_role_context==="own_salon_master_v1"&&[403,409].includes(err?.status)){
       return res.status(403).json({ok:false,error:"PROFILE_BILLING_BLOCKED"});
     }
     console.error("MASTER_PROFILE_UPDATE_FAILED",err);
@@ -1515,6 +1572,27 @@ if(!hasMasterOwnership(req, masterId)){
 return res.status(403).json({ok:false,error:"FORBIDDEN"});
 }
 
+if(req.auth?.us_role_context==="own_salon_master_v1"){
+  try{
+    const shared=await readUsOwnSalonServicesAccess(pool,{auth:req.auth,slug});
+    if(shared.masterId!==Number(masterId))return res.status(403).json({ok:false,error:"FORBIDDEN"});
+    const scoped=await pool.query(`
+      SELECT sms.id,sms.service_pk,sms.salon_id,sms.master_id,
+        salon.slug AS salon_slug,sms.currency_code,'US' AS market_code,
+        s.service_id AS catalog_service_id,s.name,sms.duration_min,sms.active
+      FROM public.salon_master_services sms JOIN public.services s ON s.id=sms.service_pk
+      JOIN public.salons salon ON salon.id=sms.salon_id
+      JOIN public.tenant_market_settings tm ON tm.salon_id=sms.salon_id
+      JOIN public.markets mk ON mk.id=tm.market_id
+      WHERE sms.master_id=$1 AND sms.salon_id=$2 AND sms.active=true AND sms.currency_code='USD'
+      AND mk.code='US' AND mk.active=true AND mk.default_currency='USD'
+      ORDER BY sms.id DESC LIMIT 300`,[shared.masterId,shared.salonId]);
+    return res.json({ok:true,services:scoped.rows,billing_access:{can_write:false,can_withdraw:false,role_context_limited:true}});
+  }catch(e){
+    if([403,409].includes(e?.status))return res.status(403).json({ok:false,error:"US_ROLE_CONTEXT_OPERATION_HOLD"});
+    throw e;
+  }
+}
 const services = await pool.query(`
 SELECT
 sms.id,

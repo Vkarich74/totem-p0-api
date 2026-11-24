@@ -1,3 +1,4 @@
+import {getUsSaasAccess,readUsSaasProjectionPolicy} from "./billing/usSaasEntitlementProjection.js";
 // TOTEM USA / TAX-02 — owner-scoped tax SETTINGS ONLY.
 // Never calculates/charges a payment or applies tax outside US beauty services.
 // Missing setting means 0.00% (rate_bps=0, revision=0) until the owner saves.
@@ -181,6 +182,10 @@ export async function readUsOwnerServiceTax(pool, options = {}) {
   });
 }
 
+async function taxWritePaid(db,ownerType,ownerId){
+  const access=await getUsSaasAccess(db,{ownerType,ownerId,policy:readUsSaasProjectionPolicy(),lock:true});
+  return access.managed===true&&access.can_write===true;
+}
 export async function saveUsOwnerServiceTax(pool, options = {}) {
   const { ownerType, ownerSlug, auth, identity, body } = options;
   const request = validateRequest({ ownerType, ownerSlug, auth, identity, body, write: true });
@@ -193,6 +198,7 @@ export async function saveUsOwnerServiceTax(pool, options = {}) {
       db, ownerType, ownerSlug, request.actor.userId, true
     );
     if (!scope) return fail(404, "US_TAX_OWNER_NOT_FOUND");
+    if(!await taxWritePaid(db,ownerType,scope.owner_id))return fail(403,"US_TAX_BILLING_BLOCKED");
     const prior = await db.query(
       `SELECT rate_bps, revision FROM public.us_owner_service_tax_settings
         WHERE owner_type=$1 AND owner_id=$2 AND market_id=$3
@@ -224,6 +230,8 @@ export async function saveUsOwnerServiceTax(pool, options = {}) {
     if (updated.rows.length !== 1) {
       return fail(409, "US_TAX_SETTING_REVISION_CONFLICT");
     }
+    if(!await checkSession(db,request.actor,true)||!await taxWritePaid(db,ownerType,scope.owner_id))
+      return fail(403,"US_TAX_BILLING_BLOCKED");
     return success(ownerType,ownerSlug,scope.owner_id,updated.rows[0],scope.market_id);
   });
 }

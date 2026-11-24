@@ -1,10 +1,21 @@
 // US-SERVICES-01: deterministic in-memory transaction/security tests.
 // No real DB, network, bookings, user, payment, Stripe or Odoo writes.
-import test from "node:test";
+import test, {before,after} from "node:test";
 import assert from "node:assert/strict";
 import {readUsServiceLinkOptions,saveUsServiceLink,
   rejectLegacyUsServiceMutation,rejectLegacyUsMasterServiceCreation} from "../services/usServiceLink.service.js";
 
+const POLICY_KEY="TOTEM_US_ODOO_SAAS_COMMERCIAL_POLICY_JSON";
+const ACCESS_KEY="TOTEM_US_ODOO_SAAS_ACCESS_ENABLED";
+const oldPolicy=process.env[POLICY_KEY],oldAccess=process.env[ACCESS_KEY];
+before(()=>{
+  process.env[POLICY_KEY]=JSON.stringify({approved:true,version:"qa_us_service_v1"});
+  process.env[ACCESS_KEY]="true";
+});
+after(()=>{
+  if(oldPolicy===undefined)delete process.env[POLICY_KEY];else process.env[POLICY_KEY]=oldPolicy;
+  if(oldAccess===undefined)delete process.env[ACCESS_KEY];else process.env[ACCESS_KEY]=oldAccess;
+});
 const SESSION="11111111-2222-4333-8444-555555555555";
 const salonAuth={source:"session",role:"salon_admin",user_id:81,session_id:SESSION};
 const masterAuth={...salonAuth,role:"master"};
@@ -20,6 +31,7 @@ const attach={operation:"attach",master_id:46,service_pk:6,
 class MemoryPool {
   constructor(settings={}) {
     this.settings=settings;
+    this.now=new Date();
     this.calls=[];this.writes=0;this.commits=0;this.rollbacks=0;
     this.link=null;this.price=null;this.created=null;
   }
@@ -51,10 +63,32 @@ class MemoryPool {
            sql.includes("master.slug=$1")) {
           return {rows:state.settings.owner===false?[]:[{owner_id:46,market_id:4}]};
         }
-        if(sql.includes("FROM public.billing_subscriptions")) {
-          return {rows:state.settings.billingBlocked?
-            [{subscription_status:"blocked",blocked_at:new Date().toISOString()}]:[]};
+        if(sql.includes("FROM public.owner_opening_requests")&&sql.includes("source_namespace='odoo_online'")){
+          assert.ok(["salon","master"].includes(values[0]));
+          assert.ok([32,46].includes(values[1]));
+          return {rows:state.settings.sourceMissing?[]:[{id:101,status:"activated",
+            source_namespace:"odoo_online",source_company_id:4,source_website_id:5,
+            source_partner_id:41,source_request_id:"service-owner-"+values[1]}]};
         }
+        if(sql.includes("AS us")&&sql.includes("mk.code='US'")){
+          assert.ok([32,46].includes(values[0]));
+          return {rows:[{us:!state.settings.marketUnresolved}]};
+        }
+        if(sql.startsWith("SELECT * FROM public.billing_subscriptions")){
+          if(state.settings.billingMissing)return {rows:[]};
+          const now=state.now.getTime();
+          return {rows:[{owner_type:values[0],owner_id:values[1],provider_namespace:"odoo_online",
+            provider_company_id:4,provider_website_id:5,provider_partner_id:state.settings.foreignPartner?99:41,
+            provider_source_request_id:"service-owner-"+values[1],provider_subscription_order_id:51,
+            provider_invoice_id:61,provider_policy_version:"qa_us_service_v1",
+            provider_verified_at:new Date(now-(state.settings.stale?301000:1000)),
+            current_period_start:new Date(now-86400000),
+            current_period_end:new Date(now+(state.settings.expired?-1000:86400000)),
+            subscription_status:state.settings.billingBlocked?"blocked":"active",
+            blocked_at:state.settings.billingBlocked?state.now:null,provider_revoked_at:null,
+            wallet_only:false,currency:"USD"}]};
+        }
+        if(sql.includes("clock_timestamp() AS now"))return {rows:[{now:state.now}]};
         if(sql.includes("SELECT s.id AS salon_id,s.slug AS salon_slug")) {
           if(state.settings.target===false||values[4]!==4||
              (values[0]==="salon"&&(values[1]!==32||values[2]!==46))||
@@ -270,4 +304,23 @@ test("source list and attach SQL reject KG/other market contamination",async()=>
     call.sql.includes("market.id=$3") &&
     call.sql.includes("old.currency_code='USD'") &&
     call.values[3]==="salon" && call.values[4]===32));
+});
+
+// G5 entitlement remains fail-closed on the explicitly US-only write route.
+test("missing, stale, expired, foreign or unresolved entitlement never writes US services",async()=>{
+  for(const settings of [{sourceMissing:true},{billingMissing:true},{stale:true},
+    {expired:true},{foreignPartner:true},{sourceMissing:true,billingMissing:true,marketUnresolved:true}]){
+    const db=new MemoryPool(settings);
+    const result=await saveUsServiceLink(db,{...salonReq,body:create});
+    assert.equal(result.status,403);assert.equal(result.body.error,"US_SERVICE_LINK_BILLING_BLOCKED");
+    assert.equal(db.writes,0);assert.equal(db.commits,0);assert.equal(db.rollbacks,1);
+  }
+});
+test("US service write denied when commercial feature is OFF even with a paid fixture",async()=>{
+  const old=process.env[ACCESS_KEY];delete process.env[ACCESS_KEY];
+  try{
+    const db=new MemoryPool();
+    const result=await saveUsServiceLink(db,{...salonReq,body:create});
+    assert.equal(result.status,403);assert.equal(db.writes,0);assert.equal(db.rollbacks,1);
+  }finally{if(old===undefined)delete process.env[ACCESS_KEY];else process.env[ACCESS_KEY]=old;}
 });

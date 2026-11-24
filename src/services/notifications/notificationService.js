@@ -109,7 +109,7 @@ function buildNotificationSelectSql() {
   `;
 }
 
-export async function createNotification(pool, input = {}) {
+export async function createNotification(pool, input = {}, {dispatchPush=true}={}) {
   if (!pool || typeof pool.query !== "function") {
     throw new Error("POOL_REQUIRED");
   }
@@ -236,7 +236,7 @@ export async function createNotification(pool, input = {}) {
   const result = await pool.query(query, params);
   const notification = result.rows[0] || null;
 
-  if (notification) {
+  if (notification && dispatchPush) {
     try {
       console.info("PUSH_DELIVERY_DISPATCH_START", {
         notification_id: notification.id || null,

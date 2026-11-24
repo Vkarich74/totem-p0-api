@@ -5,6 +5,7 @@ import {
   validateOwnerType,
   validateCanonicalSlug
 } from "./entryContract.js";
+import { getUsSaasAccess,readUsSaasProjectionPolicy } from "../billing/usSaasEntitlementProjection.js";
 
 function normalizeText(value){
   return String(value || "").trim();
@@ -245,6 +246,9 @@ async function findMasterEntryCore(db, slug) {
 }
 
 async function findBillingState(db, ownerType, ownerId) {
+  const us=await getUsSaasAccess(db,{ownerType,ownerId,
+    policy:readUsSaasProjectionPolicy()});
+  if(us.managed)return us.can_book?"active":"blocked";
   const result = await db.query(
     `SELECT
        subscription_status,

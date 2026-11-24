@@ -1,5 +1,5 @@
 // Only in-memory SQL stubs, no real PostgreSQL or test salon creation.
-import test from "node:test";
+import test,{before,after} from "node:test";
 import assert from "node:assert/strict";
 import buildMastersRouter from "../routes/internal/masters.js";
 import {
@@ -11,6 +11,16 @@ import {
   getUsLocalDate,resolveUsLocalToUtc,
 } from "../services/usTime.service.js";
 
+const ACCESS_KEY="TOTEM_US_ODOO_SAAS_ACCESS_ENABLED",POLICY_KEY="TOTEM_US_ODOO_SAAS_COMMERCIAL_POLICY_JSON";
+const oldAccess=process.env[ACCESS_KEY],oldPolicy=process.env[POLICY_KEY];
+before(()=>{
+  process.env[ACCESS_KEY]="true";
+  process.env[POLICY_KEY]=JSON.stringify({approved:true,version:"qa_us_hours_v1"});
+});
+after(()=>{
+  if(oldAccess===undefined)delete process.env[ACCESS_KEY];else process.env[ACCESS_KEY]=oldAccess;
+  if(oldPolicy===undefined)delete process.env[POLICY_KEY];else process.env[POLICY_KEY]=oldPolicy;
+});
 const SAMPLE=[
   {weekday:1,start_time:"09:00",end_time:"17:00",
     break_start:"12:00",break_end:"13:00"},
@@ -53,6 +63,7 @@ class MemoryPool {
     this.hasUsRelation=true;
     this.futureBookings=[];
     this.blocked=false;this.corruptReadback=false;
+    this.now=new Date();this.sourceMissing=false;this.billingMissing=false;this.stale=false;this.marketUnresolved=false;
     this.calls=[];this.writes=0;this.rollbacks=0;
   }
   async query(sql,params=[]){return this.run(sql,params)}
@@ -95,11 +106,28 @@ class MemoryPool {
         : all;
       return {rows:selected};
     }
-    if(q.includes("FROM public.billing_subscriptions")){
-      return {rows:this.blocked
-        ? [{subscription_status:"blocked",blocked_at:"2026-01-01"}]
-        : []};
+    if(q.includes("FROM public.owner_opening_requests")&&q.includes("source_namespace='odoo_online'")){
+      assert.deepEqual(params,["master",41]);
+      return {rows:this.sourceMissing||!this.hasUsRelation?[]:[{id:101,status:"activated",
+        source_namespace:"odoo_online",source_company_id:4,source_website_id:5,
+        source_partner_id:410,source_request_id:"hours-master-41"}]};
     }
+    if(q.includes("AS us")&&q.includes("mk.code='US'")){
+      assert.deepEqual(params,[41]);return {rows:[{us:this.hasUsRelation&&!this.marketUnresolved}]};
+    }
+    if(q.startsWith("SELECT * FROM public.billing_subscriptions")){
+      if(this.billingMissing||!this.hasUsRelation)return {rows:[]};
+      const now=this.now.getTime();
+      return {rows:[{owner_type:"master",owner_id:41,provider_namespace:"odoo_online",
+        provider_company_id:4,provider_website_id:5,provider_partner_id:410,
+        provider_source_request_id:"hours-master-41",provider_subscription_order_id:51,
+        provider_invoice_id:61,provider_policy_version:"qa_us_hours_v1",
+        provider_verified_at:new Date(now-(this.stale?301000:1000)),
+        current_period_start:new Date(now-86400000),current_period_end:new Date(now+86400000),
+        subscription_status:this.blocked?"blocked":"active",blocked_at:this.blocked?this.now:null,
+        provider_revoked_at:null,wallet_only:false,currency:"USD"}]};
+    }
+    if(q.includes("clock_timestamp() AS now"))return {rows:[{now:this.now}]};
     if(q.includes("FROM public.us_location_master_working_hours") &&
        q.startsWith("SELECT")){
       const data=this.corruptReadback&&this.writes
@@ -444,4 +472,23 @@ test("forced SQL mismatch is rolled back and never reported saved",async()=>{
   assert.equal(db.writes,0);
   assert.deepEqual(db.rows,SAMPLE);
   assert.ok(db.rollbacks>0);
+});
+
+test("US working hours cannot use missing, stale or unmanaged billing; read remains available",async()=>{
+  for(const setup of [
+    db=>{db.sourceMissing=true;},db=>{db.billingMissing=true;},db=>{db.stale=true;},
+    db=>{db.sourceMissing=true;db.billingMissing=true;db.marketUnresolved=true;},
+  ]){
+    const db=new MemoryPool();setup(db);
+    const before=await dispatch(db,{scope:true});assert.equal(before.status,200);
+    const result=await dispatch(db,{scope:true,method:"PUT",body:writeBody(before.body.revision)});
+    assert.equal(result.status,403);assert.equal(result.body.error,"BILLING_BLOCKED");
+    assert.equal(db.writes,0);assert.ok(db.rollbacks>0);
+  }
+  const prev=process.env[ACCESS_KEY];delete process.env[ACCESS_KEY];
+  try{
+    const db=new MemoryPool();const before=await dispatch(db,{scope:true});
+    const result=await dispatch(db,{scope:true,method:"PUT",body:writeBody(before.body.revision)});
+    assert.equal(result.status,403);assert.equal(db.writes,0);
+  }finally{if(prev===undefined)delete process.env[ACCESS_KEY];else process.env[ACCESS_KEY]=prev;}
 });

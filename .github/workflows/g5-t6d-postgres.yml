@@ -1,0 +1,61 @@
+name: G5 T6-D/F isolated PostgreSQL 17 (no deploy)
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '.github/workflows/g5-t6d-postgres.yml'
+      - 'tests/g5-t6d-postgres.test.mjs'
+      - 'tests/g5-odoo-batch-readback.test.mjs'
+      - 'tests/fixtures/g5-odoo-batch-fixture.mjs'
+      - 'tests/sql/g5-t6d-prod-schema-fixture.sql'
+      - 'tests/g5-us-saas-reconciliation-tick.test.mjs'
+      - 'jobs/usSaasReconciliationTick.js'
+      - 'src/services/billing/**'
+      - 'migrations/g5_*.sql'
+permissions:
+  contents: read
+jobs:
+  postgres:
+    if: github.head_ref == 'g5-t1-existing-queue-lease-20261124'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: g5_fixture
+          POSTGRES_PASSWORD: g5_fixture_only
+          POSTGRES_DB: g5_t6d_test
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U g5_fixture -d g5_t6d_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      NODE_ENV: test
+      DB_MODE: POSTGRES
+      DATABASE_URL: ""
+      G5_T6D_ISOLATED: "YES"
+      G5_TEST_DATABASE_URL: postgresql://g5_fixture:g5_fixture_only@127.0.0.1:55432/g5_t6d_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - name: T6 unit and exact SQL integration
+        run: |
+          set -euo pipefail
+          test -z "${DATABASE_URL:-}"
+          node --check jobs/usSaasReconciliationTick.js
+          node --check src/services/billing/usSaasReconciliationAudit.js
+          node --test tests/g5-us-saas-reconciliation-tick.test.mjs
+          node --test tests/g5-odoo-paid-entitlement.test.mjs tests/g5-odoo-batch-readback.test.mjs tests/g5-us-saas-expiry-legacy.test.mjs
+          node --test tests/g5-t6d-postgres.test.mjs

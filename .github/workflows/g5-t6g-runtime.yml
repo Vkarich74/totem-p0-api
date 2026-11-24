@@ -1,0 +1,63 @@
+name: G5 T6-G runtime and monitoring isolated PostgreSQL (no deploy)
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '.github/workflows/g5-t6g-runtime.yml'
+      - 'src/app.js'
+      - 'src/services/billing/**'
+      - 'jobs/usSaasReconciliationTick.js'
+      - 'jobs/queueWorker.js'
+      - 'jobs/usSaasRuntimeWatchdog.js'
+      - 'tests/g5-us-saas-runtime.test.mjs'
+      - 'tests/g5-t6g-postgres.test.mjs'
+      - 'tests/fixtures/g5-odoo-batch-fixture.mjs'
+      - 'tests/sql/g5-t6d-prod-schema-fixture.sql'
+      - 'migrations/g5_*.sql'
+permissions:
+  contents: read
+jobs:
+  runtime:
+    if: github.head_ref == 'g5-t1-existing-queue-lease-20261124'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: g5_fixture
+          POSTGRES_PASSWORD: g5_fixture_only
+          POSTGRES_DB: g5_t6g_test
+        ports:
+          - 55433:5432
+        options: >-
+          --health-cmd "pg_isready -U g5_fixture -d g5_t6g_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      NODE_ENV: test
+      DB_MODE: POSTGRES
+      DATABASE_URL: ""
+      G5_T6G_ISOLATED: "YES"
+      G5_TEST_DATABASE_URL: postgresql://g5_fixture:g5_fixture_only@127.0.0.1:55433/g5_t6g_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Runtime gate, transport, exact SQL and recovery
+        run: |
+          set -euo pipefail
+          test -z "${DATABASE_URL:-}"
+          node --check src/app.js
+          node --check jobs/usSaasRuntimeWatchdog.js
+          node jobs/usSaasRuntimeWatchdog.js
+          node --test tests/g5-us-saas-runtime.test.mjs
+          node --test tests/g5-t6g-postgres.test.mjs

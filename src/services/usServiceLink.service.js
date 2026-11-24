@@ -4,6 +4,9 @@
 import {
   actorFor, checkSession, ownerContext, transact,
 } from "./usServiceTaxSettings.service.js";
+import { getUsSaasAccess,readUsSaasProjectionPolicy } from "./billing/usSaasEntitlementProjection.js";
+
+import {readUsOwnSalonServicesAccess} from "../auth/usOwnSalonRoleContext.js";
 
 const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$/;
 const MAX_MINOR = 99_999_999;
@@ -20,7 +23,9 @@ function validateOwner(options) {
     return {error:reply(400,"US_SERVICE_LINK_OWNER_INVALID")};
   }
   const actor = actorFor(auth,identity,ownerType);
-  return actor ? {actor} : {error:reply(403,"US_SERVICE_LINK_SESSION_REQUIRED")};
+  const shared=auth?.us_role_context==="own_salon_master_v1";
+  return actor&&(!shared||ownerType==="master")
+    ? {actor,shared} : {error:reply(403,"US_SERVICE_LINK_SESSION_REQUIRED")};
 }
 
 function validatePayload(ownerType, body) {
@@ -49,22 +54,24 @@ function validatePayload(ownerType, body) {
     servicePk:operation==="attach"?body.service_pk:null};
 }
 
+// Only service links consume shared authority; do not change generic tax,
+// price or booking actor/session behavior. Canonical proof locks on writes.
+async function sharedAccess(db,options,checked,lock){
+  if(!checked.shared)return null;
+  const access=await readUsOwnSalonServicesAccess(db,{
+    auth:options.auth,slug:options.ownerSlug,lock,
+  });
+  if(!Number.isSafeInteger(access.masterId)||!Number.isSafeInteger(access.salonId))
+    throw Object.assign(Error("US_SERVICE_LINK_SHARED_SCOPE"),{status:403});
+  return access;
+}
+
 async function writeAllowed(db,ownerType,ownerId) {
-  const result=await db.query(
-    "SELECT subscription_status,blocked_at,next_charge_at,grace_until "+
-    "FROM public.billing_subscriptions WHERE owner_type=$1 AND owner_id=$2 LIMIT 1",
-    [ownerType,ownerId]
-  );
-  const billing=result.rows[0];
-  if (!billing) return true; // Existing owner billing contract: missing = active.
-  if (billing.blocked_at) return false;
-  const now=Date.now();
-  const next=billing.next_charge_at?new Date(billing.next_charge_at).getTime():null;
-  const grace=billing.grace_until?new Date(billing.grace_until).getTime():null;
-  if (next && (!Number.isFinite(next) || next<now)) {
-    return Boolean(grace && Number.isFinite(grace) && grace>=now);
-  }
-  return ["active","grace"].includes(String(billing.subscription_status||"active"));
+  // This route is US-only (ownerContext already verifies the exact US market).
+  // An unresolved projection must NEVER fall back to KG wallet/missing=active.
+  const us=await getUsSaasAccess(db,{ownerType,ownerId,
+    policy:readUsSaasProjectionPolicy(),lock:true});
+  return us.managed===true && us.can_write===true;
 }
 
 async function exactTarget(db,ownerType,scope,input) {
@@ -97,12 +104,14 @@ export async function readUsServiceLinkOptions(pool,options={}) {
   const checked=validateOwner(options);
   if (checked.error) return checked.error;
   return transact(pool,false,async db=>{
-    if (!await checkSession(db,checked.actor,false)) {
+    const shared=await sharedAccess(db,options,checked,false);
+    if (!shared&&!await checkSession(db,checked.actor,false)) {
       return reply(403,"US_SERVICE_LINK_SESSION_INVALID");
     }
     const scope=await ownerContext(
       db,options.ownerType,options.ownerSlug,checked.actor.userId,false);
-    if (!scope) return reply(404,"US_SERVICE_LINK_OWNER_NOT_FOUND");
+    if (!scope||shared&&Number(scope.owner_id)!==shared.masterId)
+      return reply(404,"US_SERVICE_LINK_OWNER_NOT_FOUND");
     if (options.ownerType==="salon") {
       const result=await db.query(
         [
@@ -150,8 +159,9 @@ export async function readUsServiceLinkOptions(pool,options={}) {
         "AND s.status='active' AND s.enabled IS TRUE",
         "AND m.id=$2 AND m.code='US' AND m.country_code='US'",
         "AND m.active IS TRUE AND m.default_currency='USD'",
+        ...(shared?["AND s.id=$3"]:[]),
         "ORDER BY s.name,s.id",
-      ].join(" "),[scope.owner_id,scope.market_id]);
+      ].join(" "),[scope.owner_id,scope.market_id,...(shared?[shared.salonId]:[])]);
     const catalog=await db.query(
       [
         "SELECT DISTINCT sms.master_id,sms.service_pk,svc.name,svc.duration_min",
@@ -164,8 +174,9 @@ export async function readUsServiceLinkOptions(pool,options={}) {
         "WHERE sms.master_id=$1 AND sms.active IS TRUE AND sms.currency_code='USD'",
         "AND market.id=$2 AND market.code='US' AND market.country_code='US'",
         "AND market.default_currency='USD' AND market.active IS TRUE",
+        ...(shared?["AND sms.salon_id=$3"]:[]),
         "ORDER BY sms.master_id,sms.service_pk,svc.name,svc.duration_min LIMIT 300",
-      ].join(" "),[scope.owner_id,scope.market_id]);
+      ].join(" "),[scope.owner_id,scope.market_id,...(shared?[shared.salonId]:[])]);
     return {status:200,body:{
       ok:true,market_code:"US",currency_code:"USD",
       owner_type:"master",owner_slug:options.ownerSlug,
@@ -186,17 +197,21 @@ export async function saveUsServiceLink(pool,options={}) {
   const input=validatePayload(options.ownerType,options.body);
   if (!input) return reply(400,"US_SERVICE_LINK_INPUT_INVALID");
   return transact(pool,true,async db=>{
-    if (!await checkSession(db,checked.actor,true)) {
+    const shared=await sharedAccess(db,options,checked,true);
+    if (!shared&&!await checkSession(db,checked.actor,true)) {
       return reply(403,"US_SERVICE_LINK_SESSION_INVALID");
     }
     const scope=await ownerContext(
       db,options.ownerType,options.ownerSlug,checked.actor.userId,true);
-    if (!scope) return reply(404,"US_SERVICE_LINK_OWNER_NOT_FOUND");
-    if (!await writeAllowed(db,options.ownerType,scope.owner_id)) {
+    if (!scope||shared&&Number(scope.owner_id)!==shared.masterId)
+      return reply(404,"US_SERVICE_LINK_OWNER_NOT_FOUND");
+    if (!shared&&!await writeAllowed(db,options.ownerType,scope.owner_id)) {
       return reply(403,"US_SERVICE_LINK_BILLING_BLOCKED");
     }
     const target=await exactTarget(db,options.ownerType,scope,input);
-    if (!target) return reply(404,"US_SERVICE_LINK_TARGET_NOT_FOUND");
+    if (!target||shared&&(Number(target.salon_id)!==shared.salonId||
+       Number(target.master_id)!==shared.masterId))
+      return reply(404,"US_SERVICE_LINK_TARGET_NOT_FOUND");
 
     // Serialize creation within one salon, and never reopen a disabled link.
 // An owner attaches only services already used inside THAT salon.
@@ -217,7 +232,9 @@ export async function saveUsServiceLink(pool,options={}) {
           "OR ($4='master' AND old.master_id=$2))",
           "AND old.active IS TRUE AND old.currency_code='USD'",
           "AND market.id=$3 AND market.code='US' AND market.country_code='US'",
-          "AND market.active IS TRUE AND market.default_currency='USD')",
+          "AND market.active IS TRUE AND market.default_currency='USD'",
+          ...(shared?["AND old.salon_id=$5"]:[]),
+          ")",
           "LIMIT 1 FOR SHARE OF svc",
         ].join(" "),[
           servicePk,Number(target.master_id),Number(scope.market_id),
@@ -297,6 +314,15 @@ export async function saveUsServiceLink(pool,options={}) {
         Number(row.price_version)!==1) {
       throw Error("US_SERVICE_LINK_READBACK_MISMATCH");
     }
+    // Re-evaluate the same paid projection and live session immediately
+    // before committing the catalog, link and cents together.
+    if(shared){
+      const final=await sharedAccess(db,options,checked,true);
+      if(final.masterId!==shared.masterId||final.salonId!==shared.salonId)
+        return reply(403,"US_SERVICE_LINK_SHARED_SCOPE");
+    }else if(!await checkSession(db,checked.actor,true)||!await writeAllowed(db,options.ownerType,scope.owner_id)){
+      return reply(403,"US_SERVICE_LINK_BILLING_BLOCKED");
+    }
     return {status:200,body:{
       ok:true,contract_version:"US-SERVICES-01-v1",
       market_code:"US",currency_code:"USD",
@@ -317,6 +343,8 @@ export async function saveUsServiceLink(pool,options={}) {
 }
 
 export function usServiceLinkErrorResponse(error) {
+  if([403,409].includes(error?.status)&&/^US_(ROLE_CONTEXT|MASTER_|SAAS_|SERVICE_LINK_SHARED)/.test(String(error?.code||error?.message||"")))
+    return reply(403,"US_SERVICE_LINK_BILLING_BLOCKED");
   if (["23505","40001","40P01"].includes(error?.code)) {
     return reply(409,"US_SERVICE_LINK_CONFLICT");
   }
