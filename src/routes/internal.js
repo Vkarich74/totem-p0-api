@@ -38,6 +38,7 @@ import mobileRouter from "./internal/mobile.js";
 import buildTemplatesRouter from "./internal/templates.js";
 import buildMoneyCoreRouter from "./internal/money-core.js";
 import buildLocalePreferencesRouter from "./internal/localePreferences.js";
+import { buildUsMasterConsentRouter } from "./internalUsMasterConsent.js";
 import { buildUsPayC11OwnerRouter } from "./internalUsPayC11Owner.js";
 import { buildUsServiceTaxSettingsRouter } from "./internalUsServiceTaxSettings.js";
 import { buildUsServicePricesRouter } from "./internalUsServicePrices.js";
@@ -81,6 +82,8 @@ r.use("/admin", adminContainer);
 r.use(buildLocalePreferencesRouter(pool, internalReadRateLimit));
 // Owner-authenticated US-only recipient choice; read model remains separate.
 r.use(buildUsPayC11OwnerRouter(pool));
+// G5 pending master consent, not a membership or commercial grant.
+r.use(buildUsMasterConsentRouter(pool));
 // US-only service-tax settings: no booking/payment mutation.
 r.use(buildUsServiceTaxSettingsRouter(pool));
 // US-only explicit USD-cents prices; never infer from legacy KGS price.
