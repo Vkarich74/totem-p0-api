@@ -9,7 +9,7 @@ function fixture({acquired=true,result={status:"PAID_VERIFIED"}}={}){
   if(sql.includes("pg_try_advisory"))return {rows:[{acquired}]};
   if(sql.includes("pg_advisory_unlock"))return {rows:[{released:true}]};
   if(sql.includes("clock_timestamp() AS now"))return {rows:[{now:"2026-11-24T01:00:00Z"}]};
-  if(sql.includes("WITH last_job"))return {rows:[{request_id:"11"},{request_id:"12"}]};
+  if(sql.includes("LEFT JOIN LATERAL"))return {rows:[{request_id:"11"},{request_id:"12"}]};
   return {rows:[]};
  },release(){calls.push("release");}};
  const opts={db:{connect:async()=>client},env,operator,writeAudit:async()=>{},

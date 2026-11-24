@@ -42,7 +42,9 @@ export function createUsSaasProviderGuard({fetchImpl=globalThis.fetch,signal,
  function retryAfter(value){
    if(typeof value!=="string")return 60000;
    const ms=/^\d+$/.test(value)?Number(value)*1000:Date.parse(value)-wall();
-   return Number.isFinite(ms)?Math.max(60000,ms):60000;
+   // Extremely long/overflowing values are an operator-review hold, not a rapid retry.
+   if(/^\d+$/.test(value)&&(!Number.isSafeInteger(ms)||ms>365*86400000))return 365*86400000;
+   return Number.isFinite(ms)?Math.max(60000,Math.min(ms,365*86400000)):60000;
  }
  async function guarded(url,options){
    if(signal?.aborted||options.signal?.aborted||stopped)throw err();
@@ -110,10 +112,11 @@ export async function runUsSaasRuntimeOnce({db,env=process.env,tick,logger=defau
    // Persist outcome/backoff before a different replica can acquire the lock.
    const metrics={...stats,rpc:report.requests,peak:report.peak,provider_codes:report.codes,
       elapsed_ms:Math.max(0,Math.round(monotonic()-started)),cooldown_ms:wait};
-   await client.query(`UPDATE public.us_saas_runtime_control SET
+   const persisted=await client.query(`UPDATE public.us_saas_runtime_control SET
     not_before=clock_timestamp()+($1::double precision*interval '1 millisecond'),
     consecutive_failures=$2,last_finished_at=clock_timestamp(),last_outcome=$3,last_metrics=$4::jsonb
-    WHERE singleton=true`,[wait,consecutive,code,JSON.stringify(metrics)]);
+    WHERE singleton=true RETURNING singleton`,[wait,consecutive,code,JSON.stringify(metrics)]);
+   if(persisted.rows.length!==1)throw Error("US_SAAS_RUNTIME_STATE_MISSING");
    safeLog(logger,"US_SAAS_RUNTIME_OUTCOME",{outcome:code,...metrics});
    // Failure of monitoring never becomes fabricated zero or healthy.
    try{health=await readUsSaasRuntimeHealth(client);safeLog(logger,"US_SAAS_RUNTIME_HEALTH",health);}
@@ -132,11 +135,16 @@ export async function runUsSaasRuntimeOnce({db,env=process.env,tick,logger=defau
      if(usSaasRuntimeGate(env)!=="READY")return {status:"HOLD"};
      // Crash guard survives process termination. No provider I/O until this
      // durable write succeeds. Existing job leases recover abandoned work.
-     await client.query(`UPDATE public.us_saas_runtime_control SET
+     const backlog=await client.query("SELECT count(*)::int AS n FROM public.async_jobs WHERE job_type='us_saas_reconcile' AND status IN ('pending','processing')");
+     const outstanding=Number(backlog.rows[0]?.n);
+     if(!Number.isSafeInteger(outstanding)||outstanding<0)throw Error("US_SAAS_RUNTIME_QUEUE_COUNT_INVALID");
+     const saved=await client.query(`UPDATE public.us_saas_runtime_control SET
        not_before=clock_timestamp()+interval '60 seconds',last_started_at=clock_timestamp(),
-       last_outcome='RUNNING' WHERE singleton=true`);
+       last_outcome='RUNNING' WHERE singleton=true RETURNING singleton`);
+     if(saved.rows.length!==1)throw Error("US_SAAS_RUNTIME_STATE_MISSING");
      started=monotonic();guard=createUsSaasProviderGuard({fetchImpl,signal,monotonic});
-     return {status:"READY"};
+     // If the backlog is full, drain existing work; never enqueue more.
+     return {status:"READY",enqueueLimit:Math.max(0,Math.min(50,100-outstanding))};
    },
    observeResults,
    async after(client,result){

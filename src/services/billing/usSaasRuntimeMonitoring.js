@@ -30,13 +30,13 @@ scope AS (
  FROM scope CROSS JOIN clock
 ), queue AS (
  SELECT count(*) FILTER (WHERE status='pending') AS pending,
- count(*) FILTER (WHERE status='pending' AND run_at<=t AT TIME ZONE 'UTC') AS runnable,
+ count(*) FILTER (WHERE status='pending' AND run_at<=(t AT TIME ZONE 'UTC')) AS runnable,
  count(*) FILTER (WHERE status='processing') AS processing,
  count(*) FILTER (WHERE status='processing' AND (lease_until IS NULL OR lease_until<=t)) AS lease_expired,
  count(*) FILTER (WHERE status='failed' AND updated_at>= (t AT TIME ZONE 'UTC')-interval '15 minutes') AS recent_failed,
  count(*) FILTER (WHERE status='done' AND updated_at>= (t AT TIME ZONE 'UTC')-interval '15 minutes') AS recent_done,
  max(extract(epoch FROM (t AT TIME ZONE 'UTC')-run_at)) FILTER
- (WHERE status='pending' AND run_at<=t AT TIME ZONE 'UTC') AS oldest_runnable_s
+ (WHERE status='pending' AND run_at<=(t AT TIME ZONE 'UTC')) AS oldest_runnable_s
  FROM public.async_jobs CROSS JOIN clock WHERE job_type='us_saas_reconcile'
 )
 SELECT clock.t AS sampled_at,projection.*,queue.* FROM clock CROSS JOIN projection CROSS JOIN queue

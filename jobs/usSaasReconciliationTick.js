@@ -8,13 +8,6 @@ import { US_SAAS_SYSTEM_ACTOR, writeSystemUsSaasReconciliationAudit } from "../s
 
 export const US_SAAS_RECONCILE_JOB = "us_saas_reconcile";
 const CANDIDATES_SQL = `
-  WITH last_job AS (
-    SELECT payload->>'request_id' AS request_id, MAX(created_at) AS last_queued,
-           BOOL_OR(status IN ('pending','processing')) AS outstanding
-    FROM public.async_jobs
-    WHERE job_type = 'us_saas_reconcile'
-    GROUP BY payload->>'request_id'
-  )
   SELECT req.id::text AS request_id
   FROM public.billing_subscriptions b
   JOIN public.owner_opening_requests req
@@ -23,13 +16,21 @@ const CANDIDATES_SQL = `
     AND req.source_company_id=4 AND req.source_website_id=5
     AND req.source_partner_id=b.provider_partner_id
     AND req.source_request_id=b.provider_source_request_id
-  LEFT JOIN last_job j ON j.request_id=req.id::text
+  LEFT JOIN LATERAL (
+    SELECT created_at AS last_queued FROM public.async_jobs
+    WHERE job_type='us_saas_reconcile' AND payload->>'request_id'=req.id::text
+    ORDER BY created_at DESC LIMIT 1
+  ) j ON true
   WHERE b.provider_namespace='odoo_online'
     AND b.provider_company_id=4 AND b.provider_website_id=5
     AND req.status IN ('activated','email_ready','email_failed','email_sent')
     AND (b.provider_verified_at IS NULL OR
          b.provider_verified_at < clock_timestamp() - interval '1 minute')
-    AND COALESCE(j.outstanding,false)=false
+    AND NOT EXISTS (
+      SELECT 1 FROM public.async_jobs
+      WHERE job_type='us_saas_reconcile' AND payload->>'request_id'=req.id::text
+        AND status IN ('pending','processing')
+    )
   ORDER BY j.last_queued NULLS FIRST,b.provider_verified_at NULLS FIRST,b.id
   LIMIT $1
 `;
@@ -60,7 +61,7 @@ export async function runUsSaasReconciliationTick({
      typeof lifecycle.before!=="function"||typeof lifecycle.after!=="function"||
      typeof lifecycle.failed!=="function"))
     throw error("US_SAAS_RUNTIME_LIFECYCLE_INVALID");
-  let enqueued=0,locked=false,begun=false,destroy=false,started=false;
+  let enqueued=0,locked=false,begun=false,destroy=false,started=false,enqueueLimit=limit;
   const fence=new AbortController();
   // A session lock fences the entire tick across replicas, not only enqueue.
   // The connection stays reserved, but NO transaction spans Odoo HTTP.
@@ -75,13 +76,16 @@ export async function runUsSaasReconciliationTick({
       const gate=await lifecycle.before(client,{signal:fence.signal});
       if(gate?.status!=="READY")return {status:gate?.status||"HOLD",enqueued:0,workers:[]};
       started=true;
+      if(!Number.isInteger(gate.enqueueLimit)||gate.enqueueLimit<0||gate.enqueueLimit>limit)
+        throw error("US_SAAS_RUNTIME_QUEUE_LIMIT_INVALID");
+      enqueueLimit=gate.enqueueLimit;
       if(fence.signal.aborted)throw error("US_SAAS_RUNTIME_LOCK_LOST");
     }
     await client.query("BEGIN");begun=true;
     const clock=await client.query("SELECT clock_timestamp() AS now");
     const now=new Date(clock.rows[0]?.now);
     if(!Number.isFinite(now.getTime()))throw error("US_SAAS_SCHEDULER_CLOCK_INVALID");
-    const candidates=await client.query(CANDIDATES_SQL,[limit]);
+    const candidates=enqueueLimit?await client.query(CANDIDATES_SQL,[enqueueLimit]):{rows:[]};
     const bucket=Math.floor(now.getTime()/60000);
     for(const row of candidates.rows){
       if(!validId(row.request_id))throw error("US_SAAS_SCHEDULER_REQUEST_INVALID");
