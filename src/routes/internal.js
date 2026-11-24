@@ -1,3 +1,5 @@
+import {readKgSharedMasterBindings,kgSharedMasterClaim} from "../services/provision/kgSharedMasterIdentity.js";
+import {VERIFIED_SESSION_VERSION} from "../auth/verifiedSessionContract.js";
 import { buildOtpEmail, buildPasswordResetEmail, buildEmailMime } from "../services/notifications/emailTemplates.js";
 import { resolveRecipientLocale } from "../services/notifications/recipientLocale.js";
 import express from "express";
@@ -578,7 +580,10 @@ LIMIT 1
 FOR UPDATE
 `,[target.value, safeRole, safeOwnerSlug]);
 
-return userRes.rows[0] || null;
+if(userRes.rows.length)return userRes.rows[0];
+if(safeRole!=="master")return null;
+const shared=await readKgSharedMasterBindings(db,{target,masterSlug:safeOwnerSlug});
+return shared.length===1?shared[0]:null;
 }
 
 async function listAuthUsersByTargetRole(db, { target, requestedRole }){
@@ -620,7 +625,10 @@ ORDER BY id ASC
 FOR UPDATE
 `, [target.value, safeRole]);
 
-return userRes.rows || [];
+const ordinary=userRes.rows||[];
+if(safeRole!=="master")return ordinary;
+const shared=await readKgSharedMasterBindings(db,{target});
+return [...ordinary,...shared];
 }
 
 function getOwnerSlugFromAuthUser(user, requestedRole){
@@ -788,7 +796,7 @@ await db.query(`
   )
 `, insertParams);
 
-console.log("OTP_CODE", target, purpose, code);
+// Never log authentication OTP or recipient.
 if(channel==="email"){
   const { locale } = await resolveRecipientLocale(db, { userId, requestedLocale });
   Promise.resolve()
@@ -982,6 +990,7 @@ role:String(auth?.role || "public"),
 source:auth?.source || null,
 session_id:auth?.session_id || null,
 session_source:auth?.session_source || null,
+...(auth?.kg_shared_master_request_id?{master_slug:auth.master_slug}:{}),
 session_expires_at:auth?.session_expires_at || null,
 last_seen_at:auth?.last_seen_at || null,
 idle_timeout_at:auth?.idle_timeout_at || null
@@ -1127,7 +1136,9 @@ const accessToken = jwt.sign(
 {
 user_id: Number(user.id),
 role: String(user.role),
-session_id: session.id
+session_id: session.id,
+auth_session_version: VERIFIED_SESSION_VERSION,
+...kgSharedMasterClaim(user)
 },
 secret
 );
@@ -2135,7 +2146,9 @@ r.post("/auth/verify", async (req,res)=>{
         {
           user_id: Number(user.id),
           role: String(user.role),
-          session_id: session.id
+          session_id: session.id,
+        auth_session_version: VERIFIED_SESSION_VERSION,
+...kgSharedMasterClaim(user)
         },
         secret
       );
@@ -2161,146 +2174,10 @@ r.post("/auth/verify", async (req,res)=>{
       });
     }
 
-    const otpRes = await db.query(`
-      SELECT *
-      FROM public.auth_otps
-      WHERE target=$1
-        AND purpose=$2
-        AND consumed_at IS NULL
-      ORDER BY created_at DESC
-      LIMIT 1
-      FOR UPDATE
-    `,[authTarget.value, purpose]);
-
-    const otp = otpRes.rows[0] || null;
-
-    if(!otp){
-      await db.query("ROLLBACK");
-      return res.status(401).json({
-        ok:false,
-        error:"OTP_INVALID"
-      });
-    }
-
-    if(otp.blocked_until && new Date(otp.blocked_until).getTime() > Date.now()){
-      await db.query("ROLLBACK");
-      return res.status(429).json({
-        ok:false,
-        error:"OTP_BLOCKED",
-        blocked_until: otp.blocked_until
-      });
-    }
-
-    if(otp.expires_at && new Date(otp.expires_at).getTime() <= Date.now()){
-      await db.query("ROLLBACK");
-      return res.status(401).json({
-        ok:false,
-        error:"OTP_EXPIRED"
-      });
-    }
-
-    const attemptsUsed = Number(otp.attempts_used || 0);
-    const maxAttempts = Number(otp.max_attempts || 5);
-
-    if(attemptsUsed >= maxAttempts){
-      await db.query(`
-        UPDATE public.auth_otps
-        SET blocked_until = COALESCE(blocked_until, NOW() + ($2 || ' minutes')::interval)
-        WHERE id=$1
-      `,[otp.id, AUTH_OTP_BLOCK_MINUTES]);
-
-      await db.query("COMMIT");
-      return res.status(429).json({
-        ok:false,
-        error:"OTP_BLOCKED"
-      });
-    }
-
-    const codeOk = await bcrypt.compare(code, String(otp.code_hash || ""));
-
-    if(!codeOk){
-      const updatedAttempts = attemptsUsed + 1;
-      const shouldBlock = updatedAttempts >= maxAttempts;
-
-      const failedUpdate = await db.query(`
-        UPDATE public.auth_otps
-        SET attempts_used=$2,
-            blocked_until=CASE
-              WHEN $3 THEN NOW() + ($4 || ' minutes')::interval
-              ELSE blocked_until
-            END
-        WHERE id=$1
-        RETURNING attempts_used, max_attempts, blocked_until
-      `,[otp.id, updatedAttempts, shouldBlock, AUTH_OTP_BLOCK_MINUTES]);
-
-      await db.query("COMMIT");
-
-      return res.status(401).json({
-        ok:false,
-        error: shouldBlock ? "OTP_BLOCKED" : "OTP_INVALID",
-        attempts_used: Number(failedUpdate.rows[0]?.attempts_used || updatedAttempts),
-        max_attempts: Number(failedUpdate.rows[0]?.max_attempts || maxAttempts),
-        blocked_until: failedUpdate.rows[0]?.blocked_until || null
-      });
-    }
-
-    await db.query(`
-      UPDATE public.auth_otps
-      SET consumed_at=NOW()
-      WHERE id=$1
-    `,[otp.id]);
-
-    let user = await resolveOrCreateAuthUserForVerify(db, {
-      authTarget,
-      channel,
-      requestedRole,
-      requestedOwnerSlug
-    });
-
-    if(!user?.id){
-      throw new Error("AUTH_USER_RESOLVE_FAILED");
-    }
-
-    // FIX: verify не должен менять role, чтобы не ломать DB constraint
-
-    await applyAuthVerificationState(db, Number(user.id), {
-      ...authTarget,
-      channel
-    });
-
-    const session = await createAuthSession(db, Number(user.id));
-
-    const secret = String(process.env.JWT_SECRET || "").trim();
-    if(!secret){
-      throw new Error("JWT_SECRET_NOT_SET");
-    }
-
-    const accessToken = jwt.sign(
-      {
-        user_id: Number(user.id),
-        role: String(user.role),
-        session_id: session.id
-      },
-      secret
-    );
-
-    await db.query("COMMIT");
-
-    return res.json({
-      ok:true,
-      access_token: accessToken,
-      token_type:"Bearer",
-      auth:{
-        user_id:Number(user.id),
-        role:String(user.role),
-        source:"otp_login",
-        session_id:session.id,
-        session_source:"auth_sessions",
-        session_expires_at:session.expires_at,
-        last_seen_at:session.last_seen_at,
-        idle_timeout_at:session.idle_timeout_at
-      }
-    });
+    // Only the existing role-bound login OTP is a session authority.
+    // Password recovery uses /auth/password/reset/finish, not this route.
+    await db.query("ROLLBACK");
+    return res.status(409).json({ok:false,error:"AUTH_VERIFIED_OWNER_CONTEXT_REQUIRED"});
 
   }catch(err){
     try{ await db.query("ROLLBACK"); }catch(e){}

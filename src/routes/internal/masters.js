@@ -873,8 +873,8 @@ r.get("/masters/:slug", internalReadRateLimit, async (req,res)=>{
        String(req.auth.user_id)===String(master.user_id)){
       const auth=await pool.query(
         `SELECT email FROM public.auth_users
-          WHERE id=$1 AND role='master' AND enabled=true LIMIT 1`,
-        [master.user_id]
+          WHERE id=$1 AND role=$2 AND enabled=true LIMIT 1`,
+        [master.user_id,req.auth.kg_shared_master_request_id?"salon_admin":"master"]
       );
       if(auth.rows.length){
         profile=ownerProfilePayload("master",slug,master,auth.rows[0].email,
@@ -1129,8 +1129,8 @@ r.patch("/masters/:slug", async(req,res)=>{
     }
     const auth=await db.query(
       `SELECT email FROM public.auth_users WHERE id=$1 AND enabled=true
-          AND role='master' LIMIT 1`,
-      [master.user_id]
+          AND role=$2 LIMIT 1`,
+      [master.user_id,req.auth.kg_shared_master_request_id?"salon_admin":"master"]
     );
     if(auth.rows.length!==1){
       await db.query("ROLLBACK");
