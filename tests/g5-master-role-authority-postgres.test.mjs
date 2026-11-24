@@ -1,3 +1,6 @@
+import {activateOwnerOpeningCanonical} from "../src/services/provision/ownerOpeningCanonicalActivation.js";
+import {assertUsActivationReady,requestMarketCode} from "../src/services/provision/usOpenOwnerGuards.js";
+import {prepareUsPaidActivationEvidence} from "../src/services/provision/usPaidOwnerOpeningGate.js";
 import test,{before,beforeEach,after} from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
@@ -23,6 +26,7 @@ const password="fixture-password-not-real";
 const hash=await bcrypt.hash(password,4);
 Object.assign(env,{TOTEM_US_IMPORTED_MASTER_PROVISION_ENABLED:"true",TOTEM_US_IMPORTED_MASTER_PROVISION_RELEASE_APPROVED:"true",
  TOTEM_US_OWN_SALON_ROLE_CONTEXT_ENABLED:"true",TOTEM_US_OWN_SALON_ROLE_CONTEXT_RELEASE_APPROVED:"true",
+ TOTEM_US_OWN_SALON_MASTER_ACTIVATION_ENABLED:"true",TOTEM_US_OWN_SALON_MASTER_ACTIVATION_RELEASE_APPROVED:"true",TOTEM_US_ODOO_SAAS_ACTIVATION_ENABLED:"true",
  JWT_SECRET:"fixture-secret-not-real",TOTEM_US_ODOO_URL:"https://totem-platform.odoo.com",
  TOTEM_US_ODOO_DB:"totem-platform",TOTEM_US_ODOO_USER:"fixture",TOTEM_US_ODOO_API_KEY:"fixture"});
 const auth={source:"session",role:"salon_admin",user_id:100,session_id:"fixture-owner-session"};
@@ -42,7 +46,7 @@ before(async()=>{
 });
 beforeEach(async()=>{
  await q("DROP TABLE IF EXISTS public.slug_reservations");
- await q("TRUNCATE public.owner_opening_requests,public.audit_events,public.auth_users,public.auth_sessions,public.owner_salon,public.salons,public.masters,public.master_salon,public.markets,public.tenant_market_settings,public.billing_subscriptions,public.onboarding_state_transitions RESTART IDENTITY");
+ await q("TRUNCATE public.owner_opening_requests,public.audit_events,public.auth_users,public.auth_sessions,public.owner_salon,public.salons,public.masters,public.master_salon,public.markets,public.tenant_market_settings,public.billing_subscriptions,public.onboarding_state_transitions,public.us_salon_locations,public.us_location_geo_verifications RESTART IDENTITY");
  await q(`INSERT INTO public.markets(id,code,country_code,default_locale,supported_locales,default_currency,supported_currencies,default_timezone,country_pack_code,country_pack_version,active)
  VALUES(4,'US','US','en',ARRAY['en'],'USD',ARRAY['USD'],'America/New_York','US','1',true);
  INSERT INTO public.salons(id,slug,name,status,enabled) VALUES(32,'fixture-salon','Fixture','active',true);
@@ -239,4 +243,68 @@ test("canonical bind cannot bypass receipt for an imported master even with lega
  await existing();await q("UPDATE public.owner_opening_requests SET status='provisioning' WHERE id=2; INSERT INTO public.masters(id,slug,name,user_id,active) VALUES(46,'fixture-master','Fixture',100,false)");
  await withFlags(()=>assert.rejects(()=>bindMasterToSalonCanonical({pool:db,verifiedUsAdminProvision:true,payload:{salon_slug:"fixture-salon",master_slug:"fixture-master",bind_mode:"active",required_market_code:"US"}}),/FRESH_SOURCE_REQUIRED/));
  assert.equal(await count("master_salon"),0);
+});
+
+async function geoReady(){
+ await q(`INSERT INTO public.us_salon_locations(id,salon_id,location_code,state_code,city_name,street_line1,postal_code,timezone_name,is_primary,enabled)
+ VALUES(91,32,'main','NY','New York','100 Fixture St','10001','America/New_York',true,true);
+ INSERT INTO public.us_location_geo_verifications(location_id,status,address_fingerprint_sha256,source_version,dataset_sha256,census_benchmark,
+ census_matched_address,census_state_code,census_zip5,resolved_timezone,latitude,longitude,boundary_distance_m,checked_at,expires_at)
+ SELECT id,'VERIFIED_GEOMETRY',public.us_geo_location_fingerprint(state_code,city_name,street_line1,street_line2,postal_code,timezone_name),
+ '2026d','2da5f1e980e70f53c781e1416e8e47bee03b98160353951c886a9901f525550a','Public_AR_Current','Fixture synthetic','NY','10001','America/New_York',40.7,-74,500,now()-interval '1 minute',now()+interval '1 day'
+ FROM public.us_salon_locations WHERE id=91;`);
+}
+async function ownActivationFixture(){
+ await own();const f=await freshSource("own_salon");await geoReady();return f;
+}
+async function runOwnActivation(receipt,overrides={}){
+ return withFlags(async()=>{
+  const {activateOwnerOpeningEntity}=await import("../src/routes/internal/adminOpenOwner.js");
+  return activateOwnerOpeningCanonical({pool:db,requestId:2,admin:{id:900,email:"fixture-admin@example.invalid"},
+   masterReceipt:receipt,getMarketCode:requestMarketCode,assertMarketPolicy:()=>{},assertUsActivationReady,
+   activateEntity:activateOwnerOpeningEntity,writeAudit:async(c,{request,eventType,data})=>
+    (await c.query("INSERT INTO public.audit_events(event_type,actor,core_user_id,data) VALUES($1,'fixture-admin',$2,$3::jsonb) RETURNING id",
+    [eventType,request.created_auth_user_id,JSON.stringify(data)])).rows[0],...overrides});
+ });
+}
+test("canonical own_salon activation uses existing paid salon, same principal, one projection, real entity writer and one audit",async()=>{
+ const f=await ownActivationFixture(),receipt=await f.read();
+ const results=await runOwnActivation(receipt);
+ assert.equal(results.request.status,"activated");
+ assert.equal(results.owner_activation.master.active,true);
+ assert.equal(Number(results.owner_activation.master.user_id),100);
+ assert.equal(await count("auth_users"),1);assert.equal(await count("auth_sessions"),1);
+ assert.equal(await count("billing_subscriptions"),1);assert.equal(await count("audit_events"),1);
+ const row=(await q("SELECT data FROM public.audit_events")).rows[0].data;
+ assert.equal(row.shared_salon_subscription,true);assert.equal(row.odoo_subscription_order_id,30001);
+ assert.equal((await runOwnActivation(null)).idempotent,true);
+ assert.equal(await count("audit_events"),1);
+ const token=await switchRole();assert.equal(jwt.verify(token.access_token,env.JWT_SECRET).auth_session_version,2);
+});
+test("own_salon activation rejects missing receipt, stale payment, second projection and expired geo",async()=>{
+ const f=await ownActivationFixture();
+ await assert.rejects(()=>runOwnActivation(null),/FRESH_SOURCE_REQUIRED/);
+ await q("UPDATE public.billing_subscriptions SET provider_verified_at=now()-interval '301 seconds'");
+ await assert.rejects(async()=>runOwnActivation(await f.read()),/EVIDENCE_STALE/);
+ await q("UPDATE public.billing_subscriptions SET provider_verified_at=now()");
+ await q("INSERT INTO public.billing_subscriptions(owner_type,owner_id,amount,currency) VALUES('master',46,0,'USD')");
+ await assert.rejects(async()=>runOwnActivation(await f.read()),/SINGLE_PROJECTION_REQUIRED/);
+ await q("DELETE FROM public.billing_subscriptions WHERE owner_type='master'");
+ await q("UPDATE public.us_location_geo_verifications SET checked_at=now()-interval '2 days',expires_at=now()-interval '1 day'");
+ await assert.rejects(async()=>runOwnActivation(await f.read()),/US_LOCATION_NOT_READY/);
+ assert.equal((await q("SELECT active FROM public.masters")).rows[0].active,false);
+ assert.equal((await q("SELECT status FROM public.owner_opening_requests WHERE id=2")).rows[0].status,"provisioned");
+ assert.equal(await count("audit_events"),0);
+});
+test("own_salon audit failure rolls back activation; second payment receipt cannot be supplied",async()=>{
+ const f=await ownActivationFixture();
+ await assert.rejects(async()=>runOwnActivation(await f.read(),{paidEvidence:{status:"PAID_VERIFIED"}}),/SECOND_PAID_RECEIPT_FORBIDDEN/);
+ await assert.rejects(async()=>runOwnActivation(await f.read(),{writeAudit:async()=>null}),/ACTIVATION_AUDIT_REQUIRED/);
+ assert.equal((await q("SELECT active FROM public.masters")).rows[0].active,false);
+ assert.equal(await count("billing_subscriptions"),1);assert.equal(await count("audit_events"),0);
+});
+test("shared master never requests its own Odoo paid receipt or second billing projection",async()=>{
+ await own();const r=(await q("SELECT * FROM public.owner_opening_requests WHERE id=2")).rows[0];
+ const denied=await prepareUsPaidActivationEvidence(r,{env,createClient:()=>{throw Error("UNEXPECTED_RPC");}});
+ assert.equal(denied.status,"WAIT");assert.equal(denied.reason,"US_OWN_SALON_SHARED_SUBSCRIPTION_NO_SECOND_PAID_RECEIPT");
 });

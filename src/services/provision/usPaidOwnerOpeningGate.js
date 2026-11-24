@@ -16,6 +16,9 @@ export async function prepareUsPaidActivationEvidence(request, {
   env = process.env, createClient = createUsOdooReadOnlyClient,
   verify = verifyUsOdooPaidEntitlement, now = () => new Date(),
 } = {}) {
+  if(request?.owner_type==="master"&&request.source_namespace==="odoo_online"&&
+     request.precheck_result_json?.odoo_source_proof?.entry_mode==="own_salon")
+    return WAIT("US_OWN_SALON_SHARED_SUBSCRIPTION_NO_SECOND_PAID_RECEIPT");
   if (!request || request.source_namespace !== "odoo_online" ||
       positive(request.source_company_id) !== 4 ||
       positive(request.source_website_id) !== 5 ||

@@ -1,3 +1,4 @@
+import {readUsOwnSalonMasterAuthority} from "../../services/provision/usMasterRoleAuthority.js";
 import express from "express";
 import { getUsSaasAccess,readUsSaasProjectionPolicy } from "../../services/billing/usSaasEntitlementProjection.js";
 import crypto from "crypto";
@@ -865,7 +866,18 @@ r.get("/masters/:slug", internalReadRateLimit, async (req,res)=>{
     if(!hasMasterOwnership(req,master.id)){
       return res.status(403).json({ok:false,error:"FORBIDDEN"});
     }
-    const billing_access=await getMasterBillingAccess(pool,master.id);
+    let shared=null;
+    if(req.auth?.us_role_context==="own_salon_master_v1"){
+      shared=await readUsOwnSalonMasterAuthority(pool,req.auth.master_request_id);
+      if(shared.masterId!==Number(master.id)||shared.principalAuthUserId!==Number(req.auth.user_id))
+        return res.status(403).json({ok:false,error:"US_ROLE_CONTEXT_SCOPE_MISMATCH"});
+    }
+    // Paid shared subscription readback does not unlock unaudited legacy
+    // commercial/master write routes. Existing limited context is read-only.
+    const billing_access=shared?{exists:true,subscription_status:"active",access_state:"active",
+      can_write:false,can_withdraw:false,billing:null,shared_salon_subscription:true,
+      salon_owner_id:shared.salonId,paid_until:shared.paidUntil,role_context_limited:true}
+      :await getMasterBillingAccess(pool,master.id);
     const masterSalon=await pool.query(
       `SELECT ms.salon_id,s.slug AS salon_slug
          FROM public.master_salon ms
@@ -880,8 +892,8 @@ r.get("/masters/:slug", internalReadRateLimit, async (req,res)=>{
        String(req.auth.user_id)===String(master.user_id)){
       const auth=await pool.query(
         `SELECT email FROM public.auth_users
-          WHERE id=$1 AND role='master' AND enabled=true LIMIT 1`,
-        [master.user_id]
+          WHERE id=$1 AND role=$2 AND enabled=true LIMIT 1`,
+        [master.user_id,shared?"salon_admin":"master"]
       );
       if(auth.rows.length){
         profile=ownerProfilePayload("master",slug,master,auth.rows[0].email,

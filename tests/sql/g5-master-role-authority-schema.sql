@@ -124,3 +124,48 @@ CREATE SEQUENCE public.onboarding_state_transitions_id_seq START WITH 1 INCREMEN
 ALTER SEQUENCE public.onboarding_state_transitions_id_seq OWNED BY public.onboarding_state_transitions.id;
 ALTER TABLE ONLY public.onboarding_state_transitions ALTER COLUMN id SET DEFAULT nextval('public.onboarding_state_transitions_id_seq'::regclass);
 ALTER TABLE ONLY public.onboarding_state_transitions ADD CONSTRAINT onboarding_state_transitions_pkey PRIMARY KEY(id);
+
+-- Selected geo table DDL/keys from verified 2026-11-16 schema-only snapshot;
+-- no data, catalog FKs or triggers reproduced. Exact fingerprint from US07.
+CREATE TABLE public.us_salon_locations (
+ id bigint NOT NULL,salon_id integer NOT NULL,location_code text NOT NULL,state_code text NOT NULL,
+ city_name text NOT NULL,street_line1 text NOT NULL,street_line2 text,postal_code text NOT NULL,
+ timezone_name text NOT NULL,is_primary boolean DEFAULT false NOT NULL,enabled boolean DEFAULT false NOT NULL,
+ created_at timestamp with time zone DEFAULT now() NOT NULL,updated_at timestamp with time zone DEFAULT now() NOT NULL,
+ CONSTRAINT us_salon_locations_city_check CHECK ((length(TRIM(BOTH FROM city_name)) > 0)),
+ CONSTRAINT us_salon_locations_code_check CHECK ((location_code ~ '^[a-z0-9]+(-[a-z0-9]+)*$'::text)),
+ CONSTRAINT us_salon_locations_street_check CHECK ((length(TRIM(BOTH FROM street_line1)) > 0)),
+ CONSTRAINT us_salon_locations_zip_check CHECK ((postal_code ~ '^[0-9]{5}(-[0-9]{4})?$'::text))
+);
+ALTER TABLE ONLY public.us_salon_locations ADD CONSTRAINT us_salon_locations_per_salon_code UNIQUE (salon_id,location_code);
+ALTER TABLE ONLY public.us_salon_locations ADD CONSTRAINT us_salon_locations_pkey PRIMARY KEY(id);
+CREATE UNIQUE INDEX us_salon_locations_one_primary_per_salon_idx ON public.us_salon_locations USING btree(salon_id) WHERE (is_primary=true);
+CREATE TABLE public.us_location_geo_verifications (
+ location_id bigint NOT NULL,status text NOT NULL,reasons text[] DEFAULT ARRAY[]::text[] NOT NULL,
+ address_fingerprint_sha256 text NOT NULL,source_version text NOT NULL,dataset_sha256 text NOT NULL,
+ census_benchmark text NOT NULL,census_matched_address text,census_state_code text,census_zip5 text,
+ resolved_timezone text,latitude double precision,longitude double precision,boundary_distance_m double precision,
+ checked_at timestamp with time zone NOT NULL,expires_at timestamp with time zone NOT NULL,
+ updated_at timestamp with time zone DEFAULT now() NOT NULL,
+ CONSTRAINT us_geo_status_evidence_check CHECK ((((status = 'VERIFIED_GEOMETRY'::text) AND (cardinality(reasons) = 0) AND (census_matched_address IS NOT NULL) AND (census_state_code IS NOT NULL) AND (census_zip5 IS NOT NULL) AND (resolved_timezone IS NOT NULL) AND ((latitude >= (18)::double precision) AND (latitude <= (72)::double precision)) AND ((longitude >= ('-180'::integer)::double precision) AND (longitude <= (180)::double precision)) AND (boundary_distance_m >= (250)::double precision)) OR ((status = 'NEEDS_REVIEW'::text) AND (cardinality(reasons) > 0)))),
+ CONSTRAINT us_geo_time_window_check CHECK (((expires_at > checked_at) AND (expires_at <= (checked_at + '30 days'::interval)))),
+ CONSTRAINT us_location_geo_verifications_address_fingerprint_sha256_check CHECK ((address_fingerprint_sha256 ~ '^[0-9a-f]{64}$'::text)),
+ CONSTRAINT us_location_geo_verifications_census_benchmark_check CHECK ((census_benchmark = 'Public_AR_Current'::text)),
+ CONSTRAINT us_location_geo_verifications_dataset_sha256_check CHECK ((dataset_sha256 = '2da5f1e980e70f53c781e1416e8e47bee03b98160353951c886a9901f525550a'::text)),
+ CONSTRAINT us_location_geo_verifications_source_version_check CHECK ((source_version = '2026d'::text)),
+ CONSTRAINT us_location_geo_verifications_status_check CHECK ((status = ANY (ARRAY['VERIFIED_GEOMETRY'::text,'NEEDS_REVIEW'::text])))
+);
+ALTER TABLE ONLY public.us_location_geo_verifications ADD CONSTRAINT us_location_geo_verifications_pkey PRIMARY KEY(location_id);
+CREATE FUNCTION public.us_geo_location_fingerprint(
+  p_state text,p_city text,p_street1 text,p_street2 text,
+  p_postal text,p_tz text
+) RETURNS text LANGUAGE sql IMMUTABLE
+AS $fingerprint$
+  SELECT encode(sha256(convert_to(
+    upper(coalesce(p_state,'')) || chr(31) ||
+    btrim(regexp_replace(upper(coalesce(p_city,'')), '[^A-Z0-9]+', ' ', 'g')) || chr(31) ||
+    btrim(regexp_replace(upper(coalesce(p_street1,'')), '[^A-Z0-9]+', ' ', 'g')) || chr(31) ||
+    btrim(regexp_replace(upper(coalesce(p_street2,'')), '[^A-Z0-9]+', ' ', 'g')) || chr(31) ||
+    coalesce(p_postal,'') || chr(31) || coalesce(p_tz,''),
+    'UTF8')),'hex')
+$fingerprint$;
