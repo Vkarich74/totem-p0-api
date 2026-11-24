@@ -1,3 +1,4 @@
+import {assertSensitiveOwnerPassword} from "../../auth/usSensitiveOwnerReauth.js";
 // G5: authority proofs for existing role-scoped Owner Opening rows.
 // No account creation, payment, session issuance, membership or activation.
 // Current role-specific authentication must not be bypassed.
@@ -95,7 +96,7 @@ export function usMasterConsentEnabled(env=process.env){
 }
 // Read and decide under the same locks. Only the direct owner's live session
 // may record or withdraw consent. Applicant, admin and indirect member cannot.
-export async function decideUsExistingSalonConsent({pool,requestId,auth,decision,expectedFingerprint,env=process.env}={}){
+export async function decideUsExistingSalonConsent({pool,requestId,auth,decision,expectedFingerprint,password,env=process.env}={}){
  if(!usMasterConsentEnabled(env))throw fail("US_MASTER_CONSENT_HOLD");
  if(!["grant","revoke","read"].includes(decision))throw fail("US_MASTER_CONSENT_DECISION_INVALID",400);
  const db=await pool.connect();
@@ -106,6 +107,7 @@ export async function decideUsExistingSalonConsent({pool,requestId,auth,decision
     throw fail("US_MASTER_CONSENT_REQUEST_NOT_PENDING");
   const target=await targetOwner(db,r);
   await sessionOwner(db,auth,target);
+  await assertSensitiveOwnerPassword(db,target.auth_user_id,password);
   const clock=await one(db,"SELECT clock_timestamp() AS now",[]);
   const now=new Date(clock.now).getTime();
   if(!Number.isFinite(now))throw fail("US_MASTER_CLOCK_INVALID");

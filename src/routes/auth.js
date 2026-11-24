@@ -314,78 +314,13 @@ router.post("/verify", async (req, res) => {
   }
 });
 
-/*
-  LOGIN:
-  - проверяет только email
-  - проверяет enabled=true
-  - password игнорируется (тестовый режим)
-*/
-router.post("/login", async (req, res) => {
-  try {
-    const { email } = req.body;
-
-    if (!email) {
-      return res.status(400).json({ error: "EMAIL_REQUIRED" });
-    }
-
-    const { rows } = await db.query(
-      `SELECT id, email, role, salon_slug, master_slug, enabled
-       FROM auth_users
-       WHERE email=$1
-       LIMIT 1`,
-      [email]
-    );
-
-    const user = rows[0];
-
-    if (!user) {
-      return res.status(401).json({ error: "USER_NOT_FOUND" });
-    }
-
-    if (!user.enabled) {
-      return res.status(403).json({ error: "USER_DISABLED" });
-    }
-
-    const sessionId = await createSession(user.id);
-    const accessToken = jwt.sign({ user_id: user.id, role: user.role, session_id: sessionId }, process.env.JWT_SECRET, { expiresIn: '24h' });
-
-    res.cookie("totem_session", sessionId, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: true
-    });
-
-    return res.json({
- ok: true,
- access_token: accessToken,
- token: accessToken,
- token_type: "Bearer",
- role: user.role,
- salon_slug: user.salon_slug,
- master_slug: user.master_slug,
- auth: {
- role: user.role,
- slug: user.master_slug || user.salon_slug || null,
- salon_slug: user.salon_slug,
- master_slug: user.master_slug
- },
- auth_context: {
- role: user.role,
- slug: user.master_slug || user.salon_slug || null,
- salon_slug: user.salon_slug,
- master_slug: user.master_slug
- }
- });
-
-  } catch (e) {
-    console.error("[AUTH_LOGIN_ERROR]", e);
-    return res.status(500).json({ error: "INTERNAL_ERROR" });
-  }
+// Legacy email-only login is not an authentication proof. Canonical
+// password and OTP flows are under /internal/auth. Never mint a session here.
+router.post("/login", (_req,res)=>{
+  return res.status(410).json({ok:false,error:"LEGACY_EMAIL_ONLY_LOGIN_DISABLED"});
 });
 
-/*
-  RESOLVE:
-*/
+/* RESOLVE: existing cookie session, no context escalation. */
 router.get("/resolve", async (req, res) => {
   try {
     const sessionId = req.cookies?.totem_session;
@@ -399,7 +334,8 @@ router.get("/resolve", async (req, res) => {
       SELECT s.id, u.role, u.salon_slug, u.master_slug
       FROM auth_sessions s
       JOIN auth_users u ON u.id = s.user_id
-      WHERE s.id=$1
+      WHERE s.id=$1 AND s.revoked_at IS NULL AND s.expires_at>NOW()
+        AND s.last_seen_at>NOW()-interval '24 hours' AND u.enabled=true
       LIMIT 1
       `,
       [sessionId]

@@ -1,3 +1,4 @@
+import {switchUsOwnSalonRole} from "../auth/usOwnSalonRoleContext.js";
 import { buildOtpEmail, buildPasswordResetEmail, buildEmailMime } from "../services/notifications/emailTemplates.js";
 import { resolveRecipientLocale } from "../services/notifications/recipientLocale.js";
 import express from "express";
@@ -1009,6 +1010,22 @@ error:"auth_session_resolve_failed"
 }
 });
 
+// Existing auth namespace, explicit password reauthentication of the same principal.
+// No role or principal selected from arbitrary body fields.
+r.post("/auth/role/switch", internalReadRateLimit, async(req,res)=>{
+  res.set("Cache-Control","no-store");
+  const b=req.body||{};
+  if(Object.keys(b).some(k=>!["role","master_request_id","password"].includes(k)))
+    return res.status(400).json({ok:false,error:"US_ROLE_CONTEXT_BODY_INVALID"});
+  try{
+    const result=await switchUsOwnSalonRole({pool,auth:req.auth,role:b.role,
+      masterRequestId:b.master_request_id,password:b.password});
+    return res.json({ok:true,...result});
+  }catch(e){
+    return res.status([403,409].includes(e?.status)?e.status:503).json({ok:false,error:
+      typeof e?.code==="string"&&/^US_(ROLE_CONTEXT|OWNER_REAUTH)_[A-Z0-9_]+$/.test(e.code)?e.code:"US_ROLE_CONTEXT_UNAVAILABLE"});
+  }
+});
 r.post("/auth/login", async (req,res)=>{
 const db = await pool.connect();
 

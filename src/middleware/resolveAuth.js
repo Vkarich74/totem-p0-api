@@ -1,3 +1,4 @@
+import {isUsRoleContextClaim,resolveUsOwnSalonRoleContext} from "../auth/usOwnSalonRoleContext.js";
 import jwt from 'jsonwebtoken';
 import pkg from 'pg';
 
@@ -365,6 +366,7 @@ export async function resolveAuth(req,res,next){
 
     const user_id = safeInt(payload?.user_id ?? payload?.id ?? payload?.sub);
     const roleRaw = String(payload?.role ?? '').trim();
+    const roleContext=isUsRoleContextClaim(payload);
     const session_id = String(payload?.session_id || '').trim() || null;
 
     if(!user_id || !ALLOWED_ROLES.has(roleRaw)){
@@ -373,6 +375,7 @@ export async function resolveAuth(req,res,next){
 
     // Legacy tokens are allowed only for internal roles.
     // Cabinet-facing roles must resolve through auth_sessions.
+    if(roleContext&&!session_id)return res.status(403).json({ok:false,error:"US_ROLE_CONTEXT_INVALID"});
     if(!session_id){
       if(!LEGACY_TOKEN_ROLES.has(roleRaw)){
         return next();
@@ -425,7 +428,7 @@ export async function resolveAuth(req,res,next){
           return;
         }
 
-        if(!s.enabled || String(s.role) !== roleRaw){
+        if(!s.enabled || (!roleContext && String(s.role) !== roleRaw)){
           return;
         }
 
@@ -459,6 +462,13 @@ export async function resolveAuth(req,res,next){
           idle_timeout_at: nextIdleTimeoutAt
         };
 
+        if(roleContext){
+          const context=await resolveUsOwnSalonRoleContext(client,{payload,session:s,req});
+          req.auth={...req.auth,role:"master",us_role_context:"own_salon_master_v1",
+            master_request_id:context.master_request_id,master_slug:context.master_slug};
+          req.identity={user_id,role:"master",...context.identity};
+          return;
+        }
         const requestedMasterSlug = extractRequestedMasterSlug(req);
 
         try{
@@ -479,8 +489,10 @@ export async function resolveAuth(req,res,next){
         }
       });
 
+      if(roleContext&&!req.identity)return res.status(403).json({ok:false,error:"US_ROLE_CONTEXT_INVALID"});
       return next();
     } catch(err) {
+      if(roleContext){req.auth=null;req.identity=null;return res.status(403).json({ok:false,error:"US_ROLE_CONTEXT_DENIED"});}
       if(isAuthResolveTimeoutError(err)){
         return res.status(503).json({
           ok: false,
