@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {readFile} from "node:fs/promises";
 import {startUsSaasRuntime,runUsSaasRuntimeOnce,usSaasRuntimeGate,createUsSaasProviderGuard} from "../src/services/billing/usSaasRuntime.js";
 import {createUsOdooReadOnlyClient} from "../src/services/billing/usOdooReadOnlyClient.js";
-import {readUsSaasRuntimeHealth} from "../src/services/billing/usSaasRuntimeMonitoring.js";
+import {readUsSaasRuntimeHealth,readUsSaasRuntimeWatchdog} from "../src/services/billing/usSaasRuntimeMonitoring.js";
 import {fixtureEnv} from "./fixtures/g5-odoo-batch-fixture.mjs";
 const env=()=>({...fixtureEnv(),TOTEM_US_ODOO_URL:"https://totem-platform.odoo.com",TOTEM_US_ODOO_DB:"totem-platform",
  TOTEM_US_ODOO_SAAS_RUNTIME_ENABLED:"true",TOTEM_US_ODOO_SAAS_RUNTIME_RELEASE_APPROVED:"true"});
@@ -84,4 +84,14 @@ test("recursive timer never overlaps; stop waits for current tick",async()=>{
 test("monitor missing rows or malformed fields are errors, never fake zero",async()=>{
  await assert.rejects(()=>readUsSaasRuntimeHealth({query:async()=>({rows:[]})}),/MONITOR_INVALID/);
  await assert.rejects(()=>readUsSaasRuntimeHealth({query:async()=>({rows:[{sampled_at:new Date()}]})}),/MONITOR_INVALID/);
+});
+
+test("watchdog fails closed on missing state without fabricating heartbeat",async()=>{
+ await assert.rejects(()=>readUsSaasRuntimeWatchdog({query:async()=>({rows:[]})}),/WATCHDOG_STATE_MISSING/);
+});
+test("watchdog command is opt-in and no app registration exists",async()=>{
+ const cli=await readFile(new URL("../jobs/usSaasRuntimeWatchdog.js",import.meta.url),"utf8");
+ assert.match(cli,/if\(process.env.TOTEM_US_ODOO_SAAS_WATCHDOG_ENABLED!=="true"\)/);
+ const app=await readFile(new URL("../src/app.js",import.meta.url),"utf8");
+ assert.doesNotMatch(app,/usSaasRuntimeWatchdog/);
 });

@@ -107,14 +107,15 @@ export async function runUsSaasRuntimeOnce({db,env=process.env,tick,logger=defau
  }
  async function finish(client,code){
    const report=guard?.report()??{requests:0,peak:0,retryAfterMs:0,codes:{},stopped:false};
-   const consecutive=code==="OK"||code==="IDLE"?0:Math.min(20,failures+1);
+   // IDLE is not proof of provider recovery; preserve the failure streak.
+   const consecutive=code==="OK"?0:code==="IDLE"?failures:Math.min(20,failures+1);
    const wait=cooldown(code,consecutive,report.retryAfterMs);
    // Persist outcome/backoff before a different replica can acquire the lock.
    const metrics={...stats,rpc:report.requests,peak:report.peak,provider_codes:report.codes,
-      elapsed_ms:Math.max(0,Math.round(monotonic()-started)),cooldown_ms:wait};
+      elapsed_ms:Math.max(0,Math.round(monotonic()-started)),cooldown_ms:wait,consecutive_failures:consecutive};
    const persisted=await client.query(`UPDATE public.us_saas_runtime_control SET
     not_before=clock_timestamp()+($1::double precision*interval '1 millisecond'),
-    consecutive_failures=$2,last_finished_at=clock_timestamp(),last_outcome=$3,last_metrics=$4::jsonb
+    consecutive_failures=$2,last_finished_at=clock_timestamp(),last_heartbeat_at=clock_timestamp(),last_outcome=$3,last_metrics=$4::jsonb
     WHERE singleton=true RETURNING singleton`,[wait,consecutive,code,JSON.stringify(metrics)]);
    if(persisted.rows.length!==1)throw Error("US_SAAS_RUNTIME_STATE_MISSING");
    safeLog(logger,"US_SAAS_RUNTIME_OUTCOME",{outcome:code,...metrics});
@@ -128,6 +129,8 @@ export async function runUsSaasRuntimeOnce({db,env=process.env,tick,logger=defau
      if(state.rows.length!==1)throw Error("US_SAAS_RUNTIME_STATE_MISSING");
      failures=Number(state.rows[0].consecutive_failures);
      if(state.rows[0].cooling){
+       const beat=await client.query("UPDATE public.us_saas_runtime_control SET last_heartbeat_at=clock_timestamp() WHERE singleton=true RETURNING singleton");
+       if(beat.rows.length!==1)throw Error("US_SAAS_RUNTIME_STATE_MISSING");
        try{health=await readUsSaasRuntimeHealth(client);safeLog(logger,"US_SAAS_RUNTIME_HEALTH",health);}
        catch{safeLog(logger,"US_SAAS_RUNTIME_MONITOR_UNAVAILABLE",{severity:"CRITICAL"});}
        return {status:"COOLDOWN"};
@@ -140,7 +143,7 @@ export async function runUsSaasRuntimeOnce({db,env=process.env,tick,logger=defau
      if(!Number.isSafeInteger(outstanding)||outstanding<0)throw Error("US_SAAS_RUNTIME_QUEUE_COUNT_INVALID");
      const saved=await client.query(`UPDATE public.us_saas_runtime_control SET
        not_before=clock_timestamp()+interval '60 seconds',last_started_at=clock_timestamp(),
-       last_outcome='RUNNING' WHERE singleton=true RETURNING singleton`);
+       last_outcome='RUNNING',last_heartbeat_at=clock_timestamp() WHERE singleton=true RETURNING singleton`);
      if(saved.rows.length!==1)throw Error("US_SAAS_RUNTIME_STATE_MISSING");
      started=monotonic();guard=createUsSaasProviderGuard({fetchImpl,signal,monotonic});
      // If the backlog is full, drain existing work; never enqueue more.

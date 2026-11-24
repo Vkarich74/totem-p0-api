@@ -60,3 +60,25 @@ export async function readUsSaasRuntimeHealth(db){
    (result.oldest_runnable_s??0)>60?"WARN":"OK";
  return Object.freeze(result);
 }
+
+// Independent READ ONLY watchdog, intended for a separate process/sink.
+// Does not require Odoo credentials or start the scheduler.
+export async function readUsSaasRuntimeWatchdog(db){
+ const {rows}=await db.query(`SELECT statement_timestamp() AS sampled_at,
+ last_outcome,consecutive_failures,
+ extract(epoch FROM statement_timestamp()-last_heartbeat_at) AS heartbeat_age_s,
+ not_before>statement_timestamp() AS cooling
+ FROM public.us_saas_runtime_control WHERE singleton=true`);
+ if(rows.length!==1)throw Error("US_SAAS_WATCHDOG_STATE_MISSING");
+ const r=rows[0],heartbeat=age(r.heartbeat_age_s),failures=number(r.consecutive_failures);
+ const allowed=["NEVER","RUNNING","OK","IDLE","PARTIAL","RATE_LIMIT","AUTH_REJECTED","PROVIDER_ERROR","TICK_ERROR"];
+ if(!allowed.includes(r.last_outcome)||typeof r.cooling!=="boolean"||failures>20)throw Error("US_SAAS_WATCHDOG_INVALID");
+ const health=await readUsSaasRuntimeHealth(db);
+ const dead=heartbeat===null||heartbeat< -1||heartbeat>60;
+ const severity=dead||health.severity==="CRITICAL"||r.last_outcome==="AUTH_REJECTED"||r.last_outcome==="TICK_ERROR"?"CRITICAL":
+   heartbeat>45||failures>0||r.cooling&&r.last_outcome!=="RUNNING"||health.severity==="WARN"?"WARN":"OK";
+ return Object.freeze({severity,heartbeat_age_s:heartbeat,last_outcome:r.last_outcome,
+   consecutive_failures:failures,cooling:r.cooling,
+   reason:dead?"HEARTBEAT_MISSING_OR_STALE":severity==="OK"?"HEALTHY":"DEGRADED",
+   health});
+}

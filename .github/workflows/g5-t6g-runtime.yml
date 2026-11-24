@@ -9,6 +9,7 @@ on:
       - 'src/services/billing/**'
       - 'jobs/usSaasReconciliationTick.js'
       - 'jobs/queueWorker.js'
+      - 'jobs/usSaasRuntimeWatchdog.js'
       - 'tests/g5-us-saas-runtime.test.mjs'
       - 'tests/g5-t6g-postgres.test.mjs'
       - 'tests/fixtures/g5-odoo-batch-fixture.mjs'
@@ -56,5 +57,7 @@ jobs:
           set -euo pipefail
           test -z "${DATABASE_URL:-}"
           node --check src/app.js
+          node --check jobs/usSaasRuntimeWatchdog.js
+          node jobs/usSaasRuntimeWatchdog.js
           node --test tests/g5-us-saas-runtime.test.mjs
           node --test tests/g5-t6g-postgres.test.mjs

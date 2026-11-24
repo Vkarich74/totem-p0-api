@@ -7,10 +7,12 @@ CREATE TABLE IF NOT EXISTS public.us_saas_runtime_control (
  consecutive_failures integer NOT NULL DEFAULT 0 CHECK (consecutive_failures BETWEEN 0 AND 20),
  last_started_at timestamptz,
  last_finished_at timestamptz,
+ last_heartbeat_at timestamptz,
  last_outcome text NOT NULL DEFAULT 'NEVER' CHECK
  (last_outcome IN ('NEVER','RUNNING','OK','IDLE','PARTIAL','RATE_LIMIT','AUTH_REJECTED','PROVIDER_ERROR','TICK_ERROR')),
  last_metrics jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(last_metrics)='object')
 );
+ALTER TABLE public.us_saas_runtime_control ADD COLUMN IF NOT EXISTS last_heartbeat_at timestamptz;
 INSERT INTO public.us_saas_runtime_control(singleton) VALUES(true) ON CONFLICT DO NOTHING;
 -- Avoid scanning all historical jobs per tick; no history deletion.
 CREATE INDEX IF NOT EXISTS idx_us_saas_reconcile_request_history

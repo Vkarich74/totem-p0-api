@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {readFile} from "node:fs/promises";
 import pg from "pg";
 import {runUsSaasRuntimeOnce} from "../src/services/billing/usSaasRuntime.js";
-import {readUsSaasRuntimeHealth} from "../src/services/billing/usSaasRuntimeMonitoring.js";
+import {readUsSaasRuntimeHealth,readUsSaasRuntimeWatchdog} from "../src/services/billing/usSaasRuntimeMonitoring.js";
 import {runUsSaasReconciliationTick} from "../jobs/usSaasReconciliationTick.js";
 import {fixtureData,fixtureEnv,fixtureTransport} from "./fixtures/g5-odoo-batch-fixture.mjs";
 const conn=process.env.G5_TEST_DATABASE_URL;
@@ -30,7 +30,7 @@ before(async()=>{
 });
 beforeEach(async()=>{
  await q("TRUNCATE public.async_jobs,public.audit_events,public.billing_subscriptions,public.owner_opening_requests RESTART IDENTITY");
- await q("UPDATE public.us_saas_runtime_control SET not_before='-infinity',consecutive_failures=0,last_started_at=NULL,last_finished_at=NULL,last_outcome='NEVER',last_metrics='{}'");
+ await q("UPDATE public.us_saas_runtime_control SET not_before='-infinity',consecutive_failures=0,last_started_at=NULL,last_finished_at=NULL,last_heartbeat_at=NULL,last_outcome='NEVER',last_metrics='{}'");
 });
 after(async()=>db.end());
 async function seed(n){
@@ -182,4 +182,24 @@ test("combined PG + populated 1000 owners/3000 invoices + measured latency repla
  assert.equal(await count("SELECT count(DISTINCT data->>'request_id') AS n FROM public.audit_events"),1000);
  assert.equal(await count("SELECT count(*) AS n FROM public.billing_subscriptions WHERE owner_id=999999 AND wallet_only AND provider_namespace IS NULL"),1);
  console.log("G5_T6G_COMBINED",JSON.stringify({owners:1000,invoices:3000,done,elapsedMs:Date.now()-start,maxAgeSeconds:maxAge,objectReads:t.metrics.reads,auth:t.metrics.auth,peak}));
+});
+
+test("independent heartbeat watchdog detects dead runtime, fresh cooldown and recovery",async()=>{
+ await seed(1);
+ const never=await readUsSaasRuntimeWatchdog(db);assert.equal(never.severity,"CRITICAL");assert.equal(never.reason,"HEARTBEAT_MISSING_OR_STALE");
+ await q("UPDATE public.us_saas_runtime_control SET last_heartbeat_at=clock_timestamp()-interval '61 seconds',last_outcome='RUNNING'");
+ assert.equal((await readUsSaasRuntimeWatchdog(db)).severity,"CRITICAL");
+ await q("UPDATE public.us_saas_runtime_control SET last_heartbeat_at=clock_timestamp(),last_outcome='RATE_LIMIT',consecutive_failures=1,not_before=clock_timestamp()+interval '10 minutes'");
+ assert.equal((await readUsSaasRuntimeWatchdog(db)).severity,"WARN");
+ assert.equal((await run(()=>{throw Error("NETWORK");})).status,"COOLDOWN");
+ assert.ok((await readUsSaasRuntimeWatchdog(db)).heartbeat_age_s<2);
+ await q("UPDATE public.us_saas_runtime_control SET not_before=clock_timestamp()-interval '1 second'");
+ const t=provider(1);assert.equal((await run(t.fetchImpl)).workers[0].done,1);
+ assert.equal((await readUsSaasRuntimeWatchdog(db)).severity,"OK");
+});
+test("idle after prior failure never resets the durable failure streak",async()=>{
+ await seed(0);
+ await q("UPDATE public.us_saas_runtime_control SET consecutive_failures=3,last_outcome='PROVIDER_ERROR'");
+ const r=await run(()=>{throw Error("NETWORK");});
+ assert.equal(r.status,"RAN");assert.equal((await state()).consecutive_failures,3);
 });
