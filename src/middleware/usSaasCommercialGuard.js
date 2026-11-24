@@ -19,10 +19,23 @@ function matchOwnerPath(path){
   if(match)return {type:ownerType(match[1]),id:Number(match[2])};
   match=value.match(/^\/us-pay-c11\/bookings\/(\d+)(?:\/|$)/i);
   if(match)return {bookingId:Number(match[1])};
+  match=value.match(/^\/money-core\/withdraw-destinations\/(\d+)(?:\/archive)?\/?$/i);
+  if(match)return {withdrawDestinationId:Number(match[1])};
+  match=value.match(/^\/money-core\/owners\/(salon|master)\/(\d+)\/withdraw-(?:destinations|settings|requests)\/?$/i);
+  if(match)return {type:ownerType(match[1]),id:Number(match[2])};
   return null;
 }
 function isLegacyWalletPath(path){
   return /^\/(?:salons|masters)\/[^/]+\/(?:subscription\/charge|billing\/(?:block|unblock))(?:\/|$)/i.test(path);
+}
+// US subscription billing is not a grant to mutate KG wallet / withdrawal
+// infrastructure. Existing administrative settlement/reconciliation is separate.
+function legacyOwnerFinance(path){
+  return /^\/(?:salons|masters)\/[^/]+\/(?:money-core\/(?:owner-qr-destinations|withdraw-destinations|withdraw-settings|withdraw-requests)(?:\/|$)|withdraw(?:\/|$))/i.test(path)||
+    /^\/money-core\/(?:owners\/(?:salon|master)\/\d+\/withdraw-(?:destinations|settings|requests)|withdraw-destinations\/\d+(?:\/archive)?)\/?$/i.test(path);
+}
+function exactCustomerRefund(path,method){
+  return method==="POST"&&/^\/us-pay-c11\/live-connect\/(?:salon|master)\/[1-9]\d*\/bookings\/[1-9]\d*\/refund\/?$/i.test(path);
 }
 function safeInternalNonCommercialMutation(path){
   return /^\/(?:salons|masters)\/[^/]+\/(?:notifications\/[^/]+\/read|push-subscriptions)(?:\/|$)/i.test(path);
@@ -38,6 +51,11 @@ async function resolveOwner(pool,ref){
     const result=await pool.query("SELECT id FROM "+table+" WHERE slug=$1 LIMIT 1",[safe]);
     return result.rows.length?{type:ref.type,id:Number(result.rows[0].id)}:null;
   }
+  if(ref.withdrawDestinationId){
+    const result=await pool.query("SELECT owner_type,owner_id FROM public.withdraw_destinations WHERE id=$1 LIMIT 1",[ref.withdrawDestinationId]);
+    const row=result.rows[0],type=ownerType(row?.owner_type);
+    return type&&Number.isSafeInteger(Number(row.owner_id))?{type,id:Number(row.owner_id)}:null;
+  }
   if(ref.bookingId){
     const result=await pool.query(
       "SELECT salon_id FROM public.bookings WHERE id=$1 LIMIT 1",[ref.bookingId]);
@@ -49,12 +67,13 @@ async function resolveOwner(pool,ref){
 export function classifyUsSaasInternalWrite(path,method){
   if(["GET","HEAD","OPTIONS"].includes(String(method||"GET").toUpperCase()))
     return {action:"READ"};
+  if(exactCustomerRefund(path,String(method||"").toUpperCase()))return {action:"CUSTOMER_REFUND"};
   if(safeInternalNonCommercialMutation(path))
     return {action:"SAFE_OWNER_PREFERENCES"};
   const matched=matchOwnerPath(path);
   if(!matched)return {action:"OUT_OF_SCOPE"};
   return {
-    action:isLegacyWalletPath(path)?"WALLET_BILLER":"COMMERCIAL_WRITE",
+    action:isLegacyWalletPath(path)?"WALLET_BILLER":legacyOwnerFinance(path)?"LEGACY_OWNER_FINANCE":"COMMERCIAL_WRITE",
     target:matched,
   };
 }
@@ -67,6 +86,15 @@ export function buildUsSaasCommercialGuard(pool,{
     const path=maxPath(req.path);
     if(path.length>400)return res.status(414).json({ok:false,error:"US_SAAS_ROUTE_TOO_LONG"});
     const c=classifyUsSaasInternalWrite(path,req.method);
+    // A refund is an existing customer obligation, not a new SaaS grant.
+    // The existing refund route still requires its own flag, direct session,
+    // seller and immutable paid-receipt checks. A shared Master never qualifies.
+    if(c.action==="CUSTOMER_REFUND"){
+      if(req.auth?.source!=="session"||req.auth?.us_role_context||
+         !["salon_admin","master"].includes(req.auth?.role))
+        return res.status(403).json({ok:false,error:"US_C11_REFUND_OWNER_SESSION_REQUIRED"});
+      return next();
+    }
     if(["READ","OUT_OF_SCOPE","SAFE_OWNER_PREFERENCES"].includes(c.action))
       return next();
     try{
@@ -93,6 +121,8 @@ export function buildUsSaasCommercialGuard(pool,{
         ownerType:owner.type,ownerId:owner.id,policy:getPolicy(),
       });
       if(!checked.managed)return next();
+      if(c.action==="LEGACY_OWNER_FINANCE"&&["salon_admin","master"].includes(req.auth?.role))
+        return res.status(409).json({ok:false,error:"US_LEGACY_OWNER_FINANCE_FORBIDDEN"});
       if(c.action==="WALLET_BILLER")
         return res.status(409).json({
           ok:false,error:"US_ODOO_SAAS_LEGACY_WALLET_BILLING_FORBIDDEN",

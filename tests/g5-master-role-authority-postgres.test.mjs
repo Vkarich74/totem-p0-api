@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import pg from "pg";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-import {switchUsOwnSalonRole,resolveUsOwnSalonRoleContext,isUsRoleContextRouteAllowed} from "../src/auth/usOwnSalonRoleContext.js";
+import {switchUsOwnSalonRole,resolveUsOwnSalonRoleContext,isUsRoleContextRouteAllowed,listUsOwnSalonRoleOptions} from "../src/auth/usOwnSalonRoleContext.js";
 import {prepareUsImportedMasterReceipt,assertUsImportedMasterProvision} from "../src/services/provision/usImportedMasterProvision.js";
 import {createUsOdooApprovedSourceClient} from "../src/services/billing/usOdooReadOnlyClient.js";
 import {masterSourceFixture,sourceTransport} from "./fixtures/g5-approved-source-fixture.mjs";
@@ -154,6 +154,10 @@ async function activeOwn(){
 const switchRole=(extra={})=>switchUsOwnSalonRole({pool:db,auth,role:"master",masterRequestId:2,password,env,...extra});
 test("existing principal and session: signed limited master role and switch back, no additional account or session",async()=>{
  await activeOwn();
+ const options=await listUsOwnSalonRoleOptions(db,{auth,env});
+ assert.deepEqual(options,[{role:"master",master_request_id:2,master_slug:"fixture-master",salon_slug:"fixture-salon"}]);
+ assert.deepEqual(await listUsOwnSalonRoleOptions(db,{auth:{...auth,user_id:999},env}),[]);
+ assert.deepEqual(await listUsOwnSalonRoleOptions(db,{auth,env:{}}),[]);
  const r=await switchRole(),payload=jwt.verify(r.access_token,env.JWT_SECRET);
  assert.equal(payload.user_id,100);assert.equal(payload.role,"master");assert.equal(payload.session_id,auth.session_id);
  assert.equal(payload.us_master_request_id,2);assert.ok(r.expires_in<=300);
@@ -399,6 +403,9 @@ test("shared Master service links, USD price, weekly hours and manual booking HT
  const {default:buildMastersRouter}=await import("../src/routes/internal/masters.js");
  const {buildUsMasterManualBookingRouter}=await import("../src/routes/internalUsMasterManualBooking.js");
  const {buildPublicCreateBooking}=await import("../src/routes/publicCreateBooking.js");
+ const {buildUsPayC11OwnerRouter}=await import("../src/routes/internalUsPayC11Owner.js");
+ const {buildUsServiceTaxSettingsRouter}=await import("../src/routes/internalUsServiceTaxSettings.js");
+ const {buildUsServiceTaxQuoteRouter}=await import("../src/routes/internalUsServiceTaxQuote.js");
  const {resolveBusinessMarketContext}=await import("../src/market-context/BusinessContext.js");
  const config={...env,TOTEM_US_SHARED_MASTER_SERVICES_ENABLED:"true",TOTEM_US_SHARED_MASTER_SERVICES_RELEASE_APPROVED:"true",TOTEM_US_SHARED_MASTER_PRICE_ENABLED:"false",TOTEM_US_SHARED_MASTER_PRICE_RELEASE_APPROVED:"false",TOTEM_US_SHARED_MASTER_HOURS_ENABLED:"false",TOTEM_US_SHARED_MASTER_HOURS_RELEASE_APPROVED:"false",TOTEM_US_SHARED_MASTER_BOOKING_ENABLED:"false",TOTEM_US_SHARED_MASTER_BOOKING_RELEASE_APPROVED:"false",TOTEM_US_SHARED_MASTER_PROFILE_ENABLED:"true",TOTEM_US_SHARED_MASTER_PROFILE_RELEASE_APPROVED:"true",VAPID_PUBLIC_KEY:"",VAPID_PRIVATE_KEY:"",VAPID_SUBJECT:""};
  const previous=Object.fromEntries(Object.keys(config).map(k=>[k,process.env[k]]));
@@ -414,7 +421,7 @@ test("shared Master service links, USD price, weekly hours and manual booking HT
    const c=await db.connect();try{return await fn(c);}finally{c.release();}
  }}),buildUsSaasCommercialGuard(db),async(_req,_res,next)=>{
    try{if(beforeHandler){const action=beforeHandler;beforeHandler=null;await action();}next();}catch(err){next(err);}
- },buildUsServicePricesRouter(db),buildUsMasterManualBookingRouter(db),buildMastersRouter(db,(_req,_res,next)=>next()));
+ },buildUsServicePricesRouter(db),buildUsMasterManualBookingRouter(db),buildUsPayC11OwnerRouter(db),buildUsServiceTaxSettingsRouter(db),buildUsServiceTaxQuoteRouter(db),buildMastersRouter(db,(_req,_res,next)=>next()));
  const server=app.listen(0,"127.0.0.1");
  try{
   await new Promise((resolve,reject)=>{server.once("listening",resolve);server.once("error",reject);});
@@ -443,6 +450,7 @@ test("shared Master service links, USD price, weekly hours and manual booking HT
   a=await call(path,"POST",body);assert.equal(a.status,200,JSON.stringify(a.body));assert.equal(a.body.service.master_id,46);
   assert.equal(a.body.service.salon_id,32);assert.equal(a.body.service.amount_minor,"1250");assert.equal(a.body.readback_verified,true);
   const servicePk=a.body.service.service_pk;
+  const serviceList=await call("/masters/fixture-master/services");assert.equal(serviceList.status,200,JSON.stringify(serviceList.body));assert.equal(serviceList.body.services.length,1);assert.equal(Number(serviceList.body.services[0].master_id),46);assert.equal(Number(serviceList.body.services[0].salon_id),32);
   assert.deepEqual(await totals(),[2,2,1]);
   a=await call(path+"/options");assert.equal(a.status,200,JSON.stringify(a.body));assert.deepEqual(a.body.catalog_services.map(x=>x.service_pk),[servicePk]);
   assert.equal((await call(path,"POST",{operation:"attach",salon_slug:"fixture-salon",service_pk:servicePk,duration_min:30,amount_minor:1100})).status,409);
@@ -664,6 +672,65 @@ test("shared Master service links, USD price, weekly hours and manual booking HT
    await restore();
    const directSaved=await directPrice();assert.equal(directSaved.status,200,JSON.stringify(directSaved.body));assert.equal(directSaved.body.price_version,4);
    const directCreated=await directLink();assert.equal(directCreated.status,200,JSON.stringify(directCreated.body));
+
+   // Existing C11 and TAX production DDL only, applied to disposable fixture.
+   const collectorStart=migration.indexOf("CREATE TABLE public.us_booking_payment_collectors (");
+   const collectorEnd=migration.indexOf("CREATE FUNCTION public.us_pay_c11_booking_context(",collectorStart);
+   const collectorTrigger=migration.indexOf("CREATE FUNCTION public.us_pay_c11_validate_collector()");
+   assert.ok(collectorStart>=0&&collectorEnd>collectorStart&&collectorTrigger>collectorEnd);
+   await q(migration.slice(collectorStart,collectorEnd)+migration.slice(collectorTrigger,migration.lastIndexOf("COMMIT;")));
+   await q(await readFile(new URL("../migrations/2026_11_17__us_pay_c11_collector_selection_audit.sql",import.meta.url),"utf8"));
+   await q(await readFile(new URL("../migrations/2026_11_17__us_service_tax_mvp.sql",import.meta.url),"utf8"));
+   const collectorPath="/us-pay-c11/bookings/"+created.body.booking_id+"/collector";
+   const taxPath="/us-service-tax/salon/fixture-salon";
+   const quotePath="/us-pay-c11/bookings/"+created.body.booking_id+"/service-tax-quote";
+   const choose=()=>call(collectorPath,"PUT",{collector_owner_type:"salon",expected_revision:0},salonToken);
+   const saveTax=()=>call(taxPath,"PUT",{rate_bps:800,expected_revision:0},salonToken);
+   assert.equal((await call(collectorPath,"PUT",{collector_owner_type:"master",expected_revision:0})).status,403);
+   assert.equal((await call("/us-service-tax/master/fixture-master","PUT",{rate_bps:800,expected_revision:0})).status,403);
+   const profile=await call("/masters/fixture-master");assert.equal(profile.status,200,JSON.stringify(profile.body));assert.equal(profile.body.billing_access.shared_operations.finance,false);assert.equal(profile.body.billing_access.can_write,false);assert.equal(profile.body.billing_access.can_withdraw,false);
+   assert.equal((await call("/salons/fixture-salon/money-core/withdraw-requests","POST",{},salonToken)).status,409);
+   beforeHandler=()=>q("UPDATE public.billing_subscriptions SET current_period_end=clock_timestamp()");
+   denied=await choose();assert.equal(denied.status,403,JSON.stringify(denied.body));assert.equal(await count("us_booking_payment_collectors"),0);await restore();
+   const expireTrigger=async(table,operation,action)=>{
+     const suffix="fixture_finance_expire";
+     await q("CREATE FUNCTION public."+suffix+"() RETURNS trigger LANGUAGE plpgsql AS $finance_fixture$ BEGIN UPDATE public.billing_subscriptions SET current_period_end=clock_timestamp(); RETURN NEW; END; $finance_fixture$; CREATE TRIGGER "+suffix+" AFTER "+operation+" ON public."+table+" FOR EACH ROW EXECUTE FUNCTION public."+suffix+"()");
+     try{const result=await action();assert.equal(result.status,403,JSON.stringify(result.body));}
+     finally{await q("DROP TRIGGER "+suffix+" ON public."+table+"; DROP FUNCTION public."+suffix+"()");}
+   };
+   await expireTrigger("us_booking_payment_collectors","INSERT",choose);
+   assert.equal(await count("us_booking_payment_collectors"),0);assert.equal(await count("us_booking_collector_selection_events"),0);
+   const chosen=await choose();assert.equal(chosen.status,201,JSON.stringify(chosen.body));assert.equal(chosen.body.collector.verification_status,"pending");assert.equal(chosen.body.payment_ready,false);
+   await expireTrigger("us_owner_service_tax_settings","INSERT",saveTax);
+   assert.equal(await count("us_owner_service_tax_settings"),0);
+   const savedTax=await saveTax();assert.equal(savedTax.status,200,JSON.stringify(savedTax.body));
+   // Simulated already-verified merchant receipt only in isolated DB. Never
+   // promotes a real collector or initiates an actual Stripe operation.
+   const rev=Number((await q("UPDATE public.us_booking_payment_collectors SET verification_status='verified',verified_at=now() WHERE booking_id=$1 RETURNING revision",[created.body.booking_id])).rows[0].revision);
+   const makeQuote=()=>call(quotePath,"POST",{expected_collector_revision:rev,expected_tax_setting_revision:1},salonToken);
+   await expireTrigger("us_booking_service_tax_snapshots","INSERT",makeQuote);
+   assert.equal(await count("us_booking_service_tax_snapshots"),0);
+   const made=await makeQuote();assert.equal(made.status,201,JSON.stringify(made.body));assert.equal(made.body.quote.service_base_minor,"1750");assert.equal(made.body.quote.service_tax_minor,"140");assert.equal(made.body.quote.charge_total_minor,"1890");assert.equal(made.body.payment_ready,false);
+   // Real reconciliation logic consumes synthetic definitive provider evidence.
+   const {reconcileUsSaasOpening}=await import("../src/services/billing/usSaasReconciliation.js");
+   const revoked=await reconcileUsSaasOpening({pool:db,requestId:1,readback:async()=>({status:"WAIT",reason:"ODOO_INVOICE_REVERSED"}),writeAudit:async(client,{request,eventType,data})=>{
+    return (await client.query("INSERT INTO public.audit_events(event_type,actor,core_user_id,data) VALUES($1,'fixture-reconcile',0,$2::jsonb) RETURNING id",[eventType,JSON.stringify(data)])).rows[0];
+   }});
+   assert.equal(revoked.status,"REVOKED",JSON.stringify(revoked));
+   assert.equal((await call("/masters/fixture-master")).status,403);
+   assert.equal((await call("/masters/fixture-master/services")).status,403);
+   assert.equal((await call(collectorPath,"PUT",{collector_owner_type:"salon",expected_revision:rev},salonToken)).status,403);
+   assert.equal((await saveTax()).status,403);assert.equal((await makeQuote()).status,403);
+   assert.deepEqual(await listUsOwnSalonRoleOptions(db,{auth:{...auth,session_id:sessionId},env}),[]);
+   assert.equal((await publicBook()).status,403);
+   assert.equal(await count("us_booking_collector_selection_events"),1);assert.equal(await count("us_booking_service_tax_snapshots"),1);
+   const {classifyUsSaasInternalWrite,buildUsSaasCommercialGuard:buildGuard}=await import("../src/middleware/usSaasCommercialGuard.js");
+   const refund="/us-pay-c11/live-connect/salon/32/bookings/"+created.body.booking_id+"/refund";
+   assert.equal(classifyUsSaasInternalWrite(refund,"POST").action,"CUSTOMER_REFUND");
+   let forwarded=false;
+   await buildGuard(db)({path:refund,method:"POST",auth:{...auth,session_id:sessionId}},{status(){throw Error("REFUND_GUARD_MUST_NOT_BLOCK_EXISTING_OBLIGATION");}},()=>{forwarded=true;});
+   assert.equal(forwarded,true);
+   await q("UPDATE public.billing_subscriptions SET blocked_at=NULL");await restore();
    assert.equal(await count("billing_subscriptions"),1);assert.equal(await count("auth_users"),1);assert.equal(await count("auth_sessions"),1);
   }
  }finally{

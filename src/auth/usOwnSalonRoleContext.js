@@ -91,6 +91,7 @@ export function isUsRoleContextRouteAllowed(req,slug,env=process.env){
  if(usSharedMasterHoursEnabled(env)&&["GET","PUT"].includes(method)&&path==="/masters/"+slug+"/us-working-hours")return true;
  if(usSharedMasterBookingEnabled(env)&&method==="POST"&&path==="/masters/"+slug+"/us-manual-bookings")return true;
  if(usSharedMasterServicesEnabled(env)){
+   if(method==="GET"&&path==="/masters/"+slug+"/services")return true;
    const links="/us-service-links/master/"+slug;
    if(method==="GET"&&path===links+"/options"||method==="POST"&&path===links)return true;
  }
@@ -105,6 +106,28 @@ export async function resolveUsOwnSalonRoleContext(db,{payload,session,req,env=p
  if(!isUsRoleContextRouteAllowed(req,a.masterSlug,env))throw fail("US_ROLE_CONTEXT_ROUTE_HOLD");
  return {role:"master",master_request_id:a.masterRequestId,master_slug:a.masterSlug,
    identity:{salons:[],masters:[a.masterId],ownership:[{owner_type:"master",owner_id:a.masterId,relation:"verified_own_salon_role_context"}]}};
+}
+// Discovery is not a role grant. Only the direct, live salon principal may
+// discover its already active, paid own-salon Master request.
+export async function listUsOwnSalonRoleOptions(db,{auth,env=process.env}={}){
+ if(!usRoleContextEnabled(env)||auth?.source!=="session"||auth.role!=="salon_admin"||
+    auth.us_role_context||!id(auth.user_id)||!auth.session_id)return [];
+ const session=await db.query("SELECT s.id FROM public.auth_sessions s JOIN public.auth_users u ON u.id=s.user_id "+
+   "WHERE s.id=$1 AND s.user_id=$2 AND s.revoked_at IS NULL AND s.expires_at>clock_timestamp() "+
+   "AND s.last_seen_at>clock_timestamp()-interval '24 hours' AND u.enabled=true AND u.role='salon_admin'",
+   [auth.session_id,id(auth.user_id)]);
+ if(session.rows.length!==1)return [];
+ const rows=await db.query("SELECT id FROM public.owner_opening_requests WHERE owner_type='master' "+
+   "AND source_namespace='odoo_online' AND source_company_id=4 AND source_website_id=5 "+
+   "AND created_auth_user_id=$1 AND status IN ('activated','email_ready','email_sent','email_failed') ORDER BY id LIMIT 2",
+   [id(auth.user_id)]);
+ if(rows.rows.length!==1)return [];
+ try{
+   const a=await readActive(db,auth.user_id,rows.rows[0].id,env);
+   const salon=await db.query("SELECT slug FROM public.salons WHERE id=$1",[a.salonId]);
+   if(salon.rows.length!==1)return [];
+   return [{role:"master",master_request_id:a.masterRequestId,master_slug:a.masterSlug,salon_slug:salon.rows[0].slug}];
+ }catch(e){if([403,409].includes(e?.status))return [];throw e;}
 }
 export async function switchUsOwnSalonRole({pool,auth,role,masterRequestId,password,env=process.env}={}){
  if(!usRoleContextEnabled(env))throw fail("US_ROLE_CONTEXT_HOLD",409);

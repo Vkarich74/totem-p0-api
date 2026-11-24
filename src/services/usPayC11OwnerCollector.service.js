@@ -1,3 +1,4 @@
+import {getUsSaasAccess,readUsSaasProjectionPolicy} from "./billing/usSaasEntitlementProjection.js";
 // US-PAY-C11-PAYEE-AUTH: owner-authenticated selection of booking collector.
 // IMPORTANT: this selects the proposed recipient; merchant verification and
 // Stripe Connect onboarding are a later, independent contract.
@@ -52,7 +53,7 @@ async function readOwnerScopedBooking(db, bookingId, userId, lock) {
             b.currency_code
        FROM public.bookings b
        JOIN public.owner_salon os
-         ON os.salon_id = b.salon_id AND os.owner_id::text = $2::text
+         ON os.salon_id = b.salon_id AND os.owner_id::text = $2::text AND os.status='active'
        JOIN public.tenant_market_settings tms ON tms.salon_id = b.salon_id
        JOIN public.markets m ON m.id = tms.market_id
       WHERE b.id = $1
@@ -196,6 +197,8 @@ export async function chooseUsC11OwnerCollector(pool, {
     }
     const scope = await readOwnerScopedBooking(db, booking, actor.userId, true);
     if (!scope) return result(404, "US_COLLECTOR_BOOKING_NOT_FOUND");
+    const paid=()=>getUsSaasAccess(db,{ownerType:"salon",ownerId:Number(scope.salon_id),policy:readUsSaasProjectionPolicy(),lock:true});
+    if(!(await paid()).can_write)return result(403,"US_COLLECTOR_BILLING_BLOCKED");
     if (!["reserved", "confirmed"].includes(String(scope.status))) {
       return result(409, "US_COLLECTOR_BOOKING_NOT_SELECTABLE");
     }
@@ -276,6 +279,8 @@ export async function chooseUsC11OwnerCollector(pool, {
       ]
     );
 
+    if(!await checkLiveOwnerSession(db,actor,true)||!(await paid()).can_write)
+      return result(403,"US_COLLECTOR_BILLING_BLOCKED");
     return {
       status: current ? 200 : 201,
       body: {

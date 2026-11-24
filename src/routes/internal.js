@@ -1,6 +1,6 @@
 import {readKgSharedMasterBindings,kgSharedMasterClaim} from "../services/provision/kgSharedMasterIdentity.js";
 import {VERIFIED_SESSION_VERSION} from "../auth/verifiedSessionContract.js";
-import {switchUsOwnSalonRole} from "../auth/usOwnSalonRoleContext.js";
+import {switchUsOwnSalonRole,listUsOwnSalonRoleOptions} from "../auth/usOwnSalonRoleContext.js";
 import { buildOtpEmail, buildPasswordResetEmail, buildEmailMime } from "../services/notifications/emailTemplates.js";
 import { resolveRecipientLocale } from "../services/notifications/recipientLocale.js";
 import express from "express";
@@ -998,6 +998,7 @@ source:auth?.source || null,
 session_id:auth?.session_id || null,
 session_source:auth?.session_source || null,
 ...(auth?.kg_shared_master_request_id?{master_slug:auth.master_slug}:{}),
+...(auth?.us_role_context==="own_salon_master_v1"?{master_slug:auth.master_slug,us_role_context:auth.us_role_context,master_request_id:auth.master_request_id}:{}),
 session_expires_at:auth?.session_expires_at || null,
 last_seen_at:auth?.last_seen_at || null,
 idle_timeout_at:auth?.idle_timeout_at || null
@@ -1021,6 +1022,13 @@ error:"auth_session_resolve_failed"
 
 // Existing auth namespace, explicit password reauthentication of the same principal.
 // No role or principal selected from arbitrary body fields.
+r.get("/auth/role/options",internalReadRateLimit,async(req,res)=>{
+  res.set("Cache-Control","private, no-store");
+  if(req.auth?.source!=="session"||req.auth?.role!=="salon_admin")
+    return res.status(403).json({ok:false,error:"US_ROLE_CONTEXT_INVALID"});
+  try{return res.json({ok:true,options:await listUsOwnSalonRoleOptions(pool,{auth:req.auth})});}
+  catch(e){return res.status(503).json({ok:false,error:"US_ROLE_CONTEXT_UNAVAILABLE"});}
+});
 r.post("/auth/role/switch", internalReadRateLimit, async(req,res)=>{
   res.set("Cache-Control","no-store");
   const b=req.body||{};

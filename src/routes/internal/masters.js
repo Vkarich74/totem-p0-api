@@ -1,5 +1,5 @@
 import {readUsOwnSalonMasterAuthority} from "../../services/provision/usMasterRoleAuthority.js";
-import {readUsOwnSalonProfileAccess,usSharedMasterProfileEnabled,readUsOwnSalonHoursAccess} from "../../auth/usOwnSalonRoleContext.js";
+import {readUsOwnSalonProfileAccess,usSharedMasterProfileEnabled,readUsOwnSalonHoursAccess,readUsOwnSalonServicesAccess,usSharedMasterServicesEnabled,usSharedMasterPriceEnabled,usSharedMasterHoursEnabled,usSharedMasterBookingEnabled} from "../../auth/usOwnSalonRoleContext.js";
 import express from "express";
 import { getUsSaasAccess,readUsSaasProjectionPolicy } from "../../services/billing/usSaasEntitlementProjection.js";
 import crypto from "crypto";
@@ -882,7 +882,10 @@ r.get("/masters/:slug", internalReadRateLimit, async (req,res)=>{
     // commercial/master write routes. Existing limited context is read-only.
     const billing_access=shared?{exists:true,subscription_status:"active",access_state:"active",
       can_write:false,can_withdraw:false,billing:null,shared_salon_subscription:true,
-      salon_owner_id:shared.salonId,paid_until:shared.paidUntil,role_context_limited:true}
+      salon_owner_id:shared.salonId,paid_until:shared.paidUntil,role_context_limited:true,
+      shared_operations:{profile:sharedProfileWrite,services:usSharedMasterServicesEnabled(),
+        price:usSharedMasterPriceEnabled(),hours:usSharedMasterHoursEnabled(),
+        booking:usSharedMasterBookingEnabled(),finance:false}}
       :await getMasterBillingAccess(pool,master.id);
     const masterSalon=await pool.query(
       `SELECT ms.salon_id,s.slug AS salon_slug
@@ -1569,6 +1572,27 @@ if(!hasMasterOwnership(req, masterId)){
 return res.status(403).json({ok:false,error:"FORBIDDEN"});
 }
 
+if(req.auth?.us_role_context==="own_salon_master_v1"){
+  try{
+    const shared=await readUsOwnSalonServicesAccess(pool,{auth:req.auth,slug});
+    if(shared.masterId!==Number(masterId))return res.status(403).json({ok:false,error:"FORBIDDEN"});
+    const scoped=await pool.query(`
+      SELECT sms.id,sms.service_pk,sms.salon_id,sms.master_id,
+        salon.slug AS salon_slug,sms.currency_code,'US' AS market_code,
+        s.service_id AS catalog_service_id,s.name,sms.duration_min,sms.active
+      FROM public.salon_master_services sms JOIN public.services s ON s.id=sms.service_pk
+      JOIN public.salons salon ON salon.id=sms.salon_id
+      JOIN public.tenant_market_settings tm ON tm.salon_id=sms.salon_id
+      JOIN public.markets mk ON mk.id=tm.market_id
+      WHERE sms.master_id=$1 AND sms.salon_id=$2 AND sms.active=true AND sms.currency_code='USD'
+      AND mk.code='US' AND mk.active=true AND mk.default_currency='USD'
+      ORDER BY sms.id DESC LIMIT 300`,[shared.masterId,shared.salonId]);
+    return res.json({ok:true,services:scoped.rows,billing_access:{can_write:false,can_withdraw:false,role_context_limited:true}});
+  }catch(e){
+    if([403,409].includes(e?.status))return res.status(403).json({ok:false,error:"US_ROLE_CONTEXT_OPERATION_HOLD"});
+    throw e;
+  }
+}
 const services = await pool.query(`
 SELECT
 sms.id,
