@@ -70,7 +70,7 @@ for us_partner in records:
     if len(us_existing) > 1:
         raise UserError('TOTEM US: duplicate CRM source, manual review required')
     if us_existing:
-        if us_existing.x_totem_us_source_partner_id.id != us_partner.id or us_existing.partner_id.id != us_partner.id or us_existing.x_totem_us_source_key != us_key or us_existing.x_totem_us_source_marker != 'totem_us_portal_approved_v1' or us_existing.x_totem_us_website_id != 5 or us_existing.x_totem_us_owner_type != us_kind:
+        if not us_existing.active or us_existing.x_totem_us_source_partner_id.id != us_partner.id or us_existing.partner_id.id != us_partner.id or us_existing.x_totem_us_source_key != us_key or us_existing.x_totem_us_source_marker != 'totem_us_portal_approved_v1' or us_existing.x_totem_us_website_id != 5 or us_existing.x_totem_us_owner_type != us_kind:
             raise UserError('TOTEM US: conflicting CRM source')
         # Never overwrite an existing reviewed source or create a second lead.
         continue
