@@ -382,7 +382,7 @@ test("shared Master profile HTTP: one salon entitlement, scope and transaction-t
 
 // Reuse the already maintained service table fixture; real router, real PG,
 // no second commercial projection and no external billing calls.
-test("shared Master service links HTTP: paid create, scope, transaction rollback and same-row recovery",async()=>{
+test("shared Master service links HTTP: paid create, scope, transaction rollback and same-row recovery",async t=>{
  await activeOwn();
  const ddl=await readFile(new URL("./sql/us_services_01_isolated_fixture.sql",import.meta.url),"utf8");
  const first=ddl.indexOf("CREATE TABLE public.services("),last=ddl.indexOf("INSERT INTO public.auth_users",first);
@@ -396,7 +396,7 @@ test("shared Master service links HTTP: paid create, scope, transaction rollback
  const {resolveAuth}=await import("../src/middleware/resolveAuth.js");
  const {buildUsSaasCommercialGuard}=await import("../src/middleware/usSaasCommercialGuard.js");
  const {buildUsServicePricesRouter}=await import("../src/routes/internalUsServicePrices.js");
- const config={...env,TOTEM_US_SHARED_MASTER_SERVICES_ENABLED:"true",TOTEM_US_SHARED_MASTER_SERVICES_RELEASE_APPROVED:"true"};
+ const config={...env,TOTEM_US_SHARED_MASTER_SERVICES_ENABLED:"true",TOTEM_US_SHARED_MASTER_SERVICES_RELEASE_APPROVED:"true",TOTEM_US_SHARED_MASTER_PRICE_ENABLED:"false",TOTEM_US_SHARED_MASTER_PRICE_RELEASE_APPROVED:"false"};
  const previous=Object.fromEntries(Object.keys(config).map(k=>[k,process.env[k]]));
  Object.assign(process.env,config);
  let beforeHandler=null;
@@ -458,6 +458,45 @@ test("shared Master service links HTTP: paid create, scope, transaction rollback
   const recovered=await call(path,"POST",pending);assert.equal(recovered.status,200,JSON.stringify(recovered.body));
   assert.deepEqual(await totals(),[3,3,2]);
   assert.equal(await count("billing_subscriptions"),1);assert.equal(await count("auth_users"),1);assert.equal(await count("auth_sessions"),1);
+
+  await t.test("shared Master existing USD price: actual version trigger, exact scope and rollback after UPDATE",async()=>{
+   // The existing service fixture has a minimal market guard. For price
+   // revision tests replace it with the actual version trigger from C11.
+   const migration=await readFile(new URL("../migrations/2026_11_17__us_pay_c11_price_collector_sidecars.sql",import.meta.url),"utf8");
+   const start=migration.indexOf("CREATE FUNCTION public.us_pay_c11_validate_service_price()");
+   const end=migration.indexOf("CREATE FUNCTION public.us_pay_c11_validate_booking_snapshot()",start);
+   assert.ok(start>=0&&end>start);
+   await q("DROP TRIGGER us_pay_c11_service_price_guard ON public.us_service_price_amounts; ALTER TABLE public.us_service_price_amounts ADD COLUMN created_at timestamptz NOT NULL DEFAULT now(),ADD COLUMN updated_at timestamptz NOT NULL DEFAULT now()");
+   await q(migration.slice(start,end));
+   const link=Number((await q("SELECT id FROM public.salon_master_services WHERE master_id=46 AND service_pk=$1",[servicePk])).rows[0].id);
+   const pricePath="/us-service-prices/master/fixture-master/"+link;
+   const desired={amount_minor:1550,expected_version:1};
+   assert.equal((await call(pricePath)).status,403);
+   assert.equal((await call(pricePath,"PUT",desired)).status,403);
+   process.env.TOTEM_US_SHARED_MASTER_PRICE_ENABLED="true";
+   process.env.TOTEM_US_SHARED_MASTER_PRICE_RELEASE_APPROVED="true";
+   let p=await call(pricePath);assert.equal(p.status,200,JSON.stringify(p.body));assert.equal(p.body.amount_minor,"1250");assert.equal(p.body.price_version,1);
+   assert.equal((await call("/us-service-prices/master/fixture-other-master/"+link,"PUT",desired)).status,403);
+   assert.equal((await call("/us-service-prices/master/fixture-master/1","PUT",desired)).status,404);
+   assert.equal((await call(pricePath,"PUT",{amount_minor:1550,expected_version:0})).status,409);
+   p=await call(pricePath,"PUT",desired);assert.equal(p.status,200,JSON.stringify(p.body));assert.equal(p.body.price_version,2);assert.equal(p.body.amount_minor,"1550");
+   p=await call(pricePath,"PUT",{amount_minor:1550,expected_version:2});assert.equal(p.status,200,JSON.stringify(p.body));assert.equal(p.body.price_version,2);
+   const next={amount_minor:1750,expected_version:2};
+   const checkPrice=async(amount,version)=>{
+    const row=(await q("SELECT amount_minor::text AS amount,price_version FROM public.us_service_price_amounts WHERE salon_master_service_id=$1",[link])).rows[0];
+    assert.equal(row.amount,String(amount));assert.equal(Number(row.price_version),version);
+   };
+   const denyPrice=async()=>{const r=await call(pricePath,"PUT",next);assert.equal(r.status,403,JSON.stringify(r.body));await checkPrice(1550,2);};
+   await q("UPDATE public.billing_subscriptions SET subscription_status='blocked',provider_revoked_at=now()");await denyPrice();await restore();
+   beforeHandler=()=>q("UPDATE public.billing_subscriptions SET current_period_end=clock_timestamp()");await denyPrice();assert.equal(beforeHandler,null);await restore();
+   await q("CREATE FUNCTION public.fixture_expire_price_proof() RETURNS trigger LANGUAGE plpgsql AS $ BEGIN UPDATE public.billing_subscriptions SET current_period_end=clock_timestamp(); RETURN NEW; END; $; CREATE TRIGGER fixture_expire_price_proof AFTER UPDATE ON public.us_service_price_amounts FOR EACH ROW EXECUTE FUNCTION public.fixture_expire_price_proof()");
+   await denyPrice();
+   await q("DROP TRIGGER fixture_expire_price_proof ON public.us_service_price_amounts; DROP FUNCTION public.fixture_expire_price_proof()");
+   beforeHandler=()=>q("UPDATE public.auth_sessions SET revoked_at=now()");await denyPrice();assert.equal(beforeHandler,null);
+   await q("UPDATE public.auth_sessions SET revoked_at=NULL");
+   p=await call(pricePath,"PUT",next);assert.equal(p.status,200,JSON.stringify(p.body));await checkPrice(1750,3);
+   assert.deepEqual(await totals(),[3,3,2]);assert.equal(await count("billing_subscriptions"),1);
+  });
  }finally{
   await new Promise(resolve=>server.close(resolve));
   for(const [k,v] of Object.entries(previous)){if(v===undefined)delete process.env[k];else process.env[k]=v;}

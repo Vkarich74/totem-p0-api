@@ -37,10 +37,21 @@ export const usSharedMasterServicesEnabled=(env=process.env)=>usRoleContextEnabl
  env.TOTEM_US_SHARED_MASTER_SERVICES_ENABLED==="true"&&
  env.TOTEM_US_SHARED_MASTER_SERVICES_RELEASE_APPROVED==="true";
 
+export const usSharedMasterPriceEnabled=(env=process.env)=>usSharedMasterServicesEnabled(env)&&
+ env.TOTEM_US_SHARED_MASTER_PRICE_ENABLED==="true"&&
+ env.TOTEM_US_SHARED_MASTER_PRICE_RELEASE_APPROVED==="true";
+
+export function isUsSharedMasterPricePath(path,slug){
+ const prefix="/us-service-prices/master/"+slug+"/";
+ if(!path.startsWith(prefix))return false;
+ const suffix=path.slice(prefix.length);
+ return /^[1-9][0-9]*$/.test(suffix)&&Number.isSafeInteger(Number(suffix));
+}
+
 // For writes caller MUST pass the existing transaction client with lock=true.
 // Use the same canonical paid salon projection as role switching/activation.
 async function readUsOwnSalonOperationAccess(db,{auth,slug,env=process.env,lock=false}={},operation){
- if(!(operation==="profile"?usSharedMasterProfileEnabled(env):operation==="services"&&usSharedMasterServicesEnabled(env)))
+ if(!({profile:usSharedMasterProfileEnabled,services:usSharedMasterServicesEnabled,price:usSharedMasterPriceEnabled}[operation]?.(env)))
    throw fail("US_ROLE_CONTEXT_OPERATION_HOLD");
  if(auth?.source!=="session"||auth.role!=="master"||auth.us_role_context!==kind||
     auth.kg_shared_master_request_id||!id(auth.user_id)||!id(auth.master_request_id)||
@@ -59,12 +70,14 @@ async function readUsOwnSalonOperationAccess(db,{auth,slug,env=process.env,lock=
 }
 export const readUsOwnSalonProfileAccess=(db,options)=>readUsOwnSalonOperationAccess(db,options,"profile");
 export const readUsOwnSalonServicesAccess=(db,options)=>readUsOwnSalonOperationAccess(db,options,"services");
+export const readUsOwnSalonPriceAccess=(db,options)=>readUsOwnSalonOperationAccess(db,options,"price");
 // Only explicitly reviewed profile and service-link operations are allowed.
 export function isUsRoleContextRouteAllowed(req,slug,env=process.env){
  const method=String(req.method||"").toUpperCase(),path=String(req.path||"");
  if(method==="GET"&&path==="/auth/session/resolve")return true;
  if(method==="POST"&&["/auth/role/switch","/auth/logout","/auth/logout-all"].includes(path))return true;
  if(!/^[a-z0-9][a-z0-9-]{2,79}$/.test(slug))return false;
+ if(usSharedMasterPriceEnabled(env)&&["GET","PUT"].includes(method)&&isUsSharedMasterPricePath(path,slug))return true;
  if(usSharedMasterServicesEnabled(env)){
    const links="/us-service-links/master/"+slug;
    if(method==="GET"&&path===links+"/options"||method==="POST"&&path===links)return true;

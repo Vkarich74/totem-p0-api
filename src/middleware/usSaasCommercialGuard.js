@@ -3,7 +3,7 @@
 import { getUsSaasAccess,readUsSaasProjectionPolicy } from
   "../services/billing/usSaasEntitlementProjection.js";
 
-import {readUsOwnSalonProfileAccess,readUsOwnSalonServicesAccess} from "../auth/usOwnSalonRoleContext.js";
+import {readUsOwnSalonProfileAccess,readUsOwnSalonServicesAccess,readUsOwnSalonPriceAccess,isUsSharedMasterPricePath} from "../auth/usOwnSalonRoleContext.js";
 
 function ownerType(value){
   const s=String(value||"").toLowerCase();
@@ -78,9 +78,10 @@ export function buildUsSaasCommercialGuard(pool,{
         const method=String(req.method).toUpperCase();
         const profile=method==="PATCH"&&path==="/masters/"+req.auth.master_slug;
         const services=method==="POST"&&path==="/us-service-links/master/"+req.auth.master_slug;
-        if(c.action!=="COMMERCIAL_WRITE"||c.target.type!=="master"||!profile&&!services)
+        const price=method==="PUT"&&isUsSharedMasterPricePath(path,req.auth.master_slug);
+        if(c.action!=="COMMERCIAL_WRITE"||c.target.type!=="master"||!profile&&!services&&!price)
           return res.status(403).json({ok:false,error:"US_ROLE_CONTEXT_ROUTE_HOLD"});
-        const read=profile?readUsOwnSalonProfileAccess:readUsOwnSalonServicesAccess;
+        const read=profile?readUsOwnSalonProfileAccess:services?readUsOwnSalonServicesAccess:readUsOwnSalonPriceAccess;
         const shared=await read(pool,{auth:req.auth,slug:c.target.slug});
         if(shared.masterId!==owner.id)
           return res.status(403).json({ok:false,error:"US_ROLE_CONTEXT_PROFILE_SCOPE"});

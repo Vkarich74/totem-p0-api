@@ -6,6 +6,8 @@ import {
   actorFor, checkSession, ownerContext, transact,
 } from "./usServiceTaxSettings.service.js";
 
+import {readUsOwnSalonPriceAccess} from "../auth/usOwnSalonRoleContext.js";
+
 const OWNER_TYPES = new Set(["salon", "master"]);
 const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$/;
 const MAX_USD_MINOR = 99_999_999;
@@ -68,7 +70,13 @@ function requestScope({ ownerType, ownerSlug, serviceLinkId, auth, identity, bod
     { failure: errorReply(400, "US_PRICE_AMOUNT_OR_VERSION_INVALID") };
 }
 
-async function ownerServiceLink(db, ownerType, linkId, ownerId, marketId, write) {
+async function sharedPriceAccess(db,options,lock){
+  if(options.auth?.us_role_context!=="own_salon_master_v1")return null;
+  if(options.ownerType!=="master")throw Object.assign(Error("US_PRICE_SHARED_SCOPE"),{status:403});
+  return readUsOwnSalonPriceAccess(db,{auth:options.auth,slug:options.ownerSlug,lock});
+}
+
+async function ownerServiceLink(db, ownerType, linkId, ownerId, marketId, write, shared=null) {
   const query = await db.query(
     `SELECT sms.id
        FROM public.salon_master_services sms
@@ -87,10 +95,11 @@ async function ownerServiceLink(db, ownerType, linkId, ownerId, marketId, write)
         AND market.active IS TRUE AND market.default_currency='USD'
         AND (($3='salon' AND sms.salon_id=$4) OR
              ($3='master' AND sms.master_id=$4))
+      ${shared?"AND sms.salon_id=$5 AND sms.currency_code='USD'":""}
       LIMIT 1${write
         ? " FOR UPDATE OF sms FOR SHARE OF s,master,ms,tm,market"
         : ""}`,
-    [linkId, marketId, ownerType, ownerId]
+    [linkId, marketId, ownerType, ownerId,...(shared?[shared.salonId]:[])]
   );
   return query.rows.length === 1;
 }
@@ -114,14 +123,15 @@ export async function readUsOwnerServicePrice(pool, options = {}) {
   });
   if (request.failure) return request.failure;
   return transact(pool, false, async db => {
-    if (!await checkSession(db, request.actor, false)) {
+    const shared=await sharedPriceAccess(db,options,false);
+    if (!shared&&!await checkSession(db, request.actor, false)) {
       return errorReply(403, "US_PRICE_OWNER_SESSION_INVALID");
     }
     const scope = await ownerContext(
       db, ownerType, ownerSlug, request.actor.userId, false
     );
-    if (!scope || !await ownerServiceLink(
-      db, ownerType, request.serviceLinkId, scope.owner_id, scope.market_id, false
+    if (!scope || shared&&Number(scope.owner_id)!==shared.masterId || !await ownerServiceLink(
+      db, ownerType, request.serviceLinkId, scope.owner_id, scope.market_id, false,shared
     )) return errorReply(404, "US_PRICE_SERVICE_NOT_FOUND");
     return scopedPrice(ownerType, ownerSlug, request.serviceLinkId,
       scope.market_id,
@@ -136,14 +146,15 @@ export async function saveUsOwnerServicePrice(pool, options = {}) {
   });
   if (request.failure) return request.failure;
   return transact(pool, true, async db => {
-    if (!await checkSession(db, request.actor, true)) {
+    const shared=await sharedPriceAccess(db,options,true);
+    if (!shared&&!await checkSession(db, request.actor, true)) {
       return errorReply(403, "US_PRICE_OWNER_SESSION_INVALID");
     }
     const scope = await ownerContext(
       db, ownerType, ownerSlug, request.actor.userId, true
     );
-    if (!scope || !await ownerServiceLink(
-      db, ownerType, request.serviceLinkId, scope.owner_id, scope.market_id, true
+    if (!scope || shared&&Number(scope.owner_id)!==shared.masterId || !await ownerServiceLink(
+      db, ownerType, request.serviceLinkId, scope.owner_id, scope.market_id, true,shared
     )) return errorReply(404, "US_PRICE_SERVICE_NOT_FOUND");
     // Legacy US service-creation routes leave currency_code NULL.
     // Only AFTER direct US owner authorization, mark that US-only link USD.
@@ -157,6 +168,7 @@ export async function saveUsOwnerServicePrice(pool, options = {}) {
     const previous = await currentPrice(
       db, request.serviceLinkId, scope.market_id, true
     );
+    if(shared&&!previous)return errorReply(409,"US_PRICE_EXISTING_AMOUNT_REQUIRED");
     if (Number(previous?.price_version ?? 0) !== request.input.version) {
       return errorReply(409, "US_PRICE_VERSION_CONFLICT");
     }
@@ -179,6 +191,15 @@ export async function saveUsOwnerServicePrice(pool, options = {}) {
         );
     if (result.rows.length !== 1) {
       return errorReply(409, "US_PRICE_VERSION_CONFLICT");
+    }
+    if(shared){
+      const stored=await currentPrice(db,request.serviceLinkId,scope.market_id,true);
+      const expectedVersion=Number(previous.price_version)+(String(previous.amount_minor)===String(request.input.amount)?0:1);
+      if(!stored||String(stored.amount_minor)!==String(request.input.amount)||Number(stored.price_version)!==expectedVersion)
+        return errorReply(409,"US_PRICE_READBACK_MISMATCH");
+      const final=await sharedPriceAccess(db,options,true);
+      if(final.masterId!==shared.masterId||final.salonId!==shared.salonId)
+        return errorReply(403,"US_PRICE_SHARED_SCOPE");
     }
     return scopedPrice(ownerType,ownerSlug,request.serviceLinkId,
       scope.market_id,result.rows[0]);
@@ -363,6 +384,8 @@ export async function createUsBookingPriceSnapshot(db, {
 }
 
 export function usServicePriceErrorResponse(error) {
+  if([403,409].includes(error?.status)&&/^US_(ROLE_CONTEXT|MASTER_|SAAS_|PRICE_SHARED)/.test(String(error?.code||error?.message||"")))
+    return errorReply(403,"US_PRICE_BILLING_BLOCKED");
   if (error?.code === "23505" || error?.code === "40001" ||
       error?.code === "40P01") {
     return errorReply(409, "US_PRICE_VERSION_CONFLICT");
