@@ -27,7 +27,7 @@ BEGIN
         )
         OR
         (
-          source_namespace = 'odoo_online'
+          source_namespace IS NOT NULL AND source_namespace = 'odoo_online'
           AND source_company_id IS NOT NULL AND source_company_id > 0
           AND source_website_id IS NOT NULL AND source_website_id > 0
           AND source_partner_id IS NOT NULL AND source_partner_id > 0

@@ -7,6 +7,7 @@ function fixture({acquired=true,result={status:"PAID_VERIFIED"}}={}){
  const calls=[],jobs=[],work=[];
  const client={async query(sql,args){calls.push(sql);
   if(sql.includes("pg_try_advisory"))return {rows:[{acquired}]};
+  if(sql.includes("pg_advisory_unlock"))return {rows:[{released:true}]};
   if(sql.includes("clock_timestamp() AS now"))return {rows:[{now:"2026-11-24T01:00:00Z"}]};
   if(sql.includes("WITH last_job"))return {rows:[{request_id:"11"},{request_id:"12"}]};
   return {rows:[]};
@@ -25,12 +26,12 @@ test("scheduler enqueues only scoped jobs using existing client and stable minut
  assert.equal(r.enqueued,2);assert.equal(f.jobs[0].job_type,US_SAAS_RECONCILE_JOB);
  assert.equal(f.jobs[0].dbClient,f.client);assert.equal(f.jobs[0].max_attempts,2);
  assert.match(f.jobs[0].idempotency_key,/^us_saas_reconcile:11:\d+$/);
- assert.equal(f.work.length,2);assert.equal(f.work[0].limit,1);
+ assert.equal(f.work.length,2);assert.equal(f.work[0].limit,4);
  assert.ok(f.calls.includes("COMMIT"));assert.ok(f.calls.includes("release"));
 });
-test("another replica holding enqueue lock does not enqueue",async()=>{
+test("another replica holding session lock does not enqueue or execute",async()=>{
  const f=fixture({acquired:false});const r=await runUsSaasReconciliationTick(f.opts);
- assert.equal(r.enqueued,0);assert.equal(f.jobs.length,0);assert.equal(f.work.length,2);
+ assert.equal(r.status,"BUSY");assert.equal(r.enqueued,0);assert.equal(f.jobs.length,0);assert.equal(f.work.length,0);
 });
 test("WAIT is a retryable failure, never fake success",async()=>{
  const f=fixture({result:{status:"WAIT"}});await runUsSaasReconciliationTick(f.opts);

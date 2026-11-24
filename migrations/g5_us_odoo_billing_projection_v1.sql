@@ -34,7 +34,7 @@ BEGIN
         AND provider_policy_version IS NULL
         AND provider_verified_at IS NULL AND provider_revoked_at IS NULL
       ) OR (
-        provider_namespace = 'odoo_online'
+        provider_namespace IS NOT NULL AND provider_namespace = 'odoo_online'
         AND provider_company_id = 4 AND provider_company_id IS NOT NULL
         AND provider_website_id = 5 AND provider_website_id IS NOT NULL
         AND provider_partner_id IS NOT NULL AND provider_partner_id > 0
