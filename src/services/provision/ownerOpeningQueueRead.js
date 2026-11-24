@@ -1,6 +1,6 @@
 // G5 T6: server-side Owner Opening scope and stable PostgreSQL cursor.
 // No inferred market, no mutations, no dependency on uninstalled migrations.
-const MARKET = "UPPER(BTRIM(COALESCE(NULLIF(BTRIM(precheck_result_json->'normalized'->>'market_code'),''),precheck_result_json->>'market_code','')))";
+export const OWNER_QUEUE_MARKET_SQL = "UPPER(BTRIM(COALESCE(NULLIF(precheck_result_json->'normalized'->>'market_code',''),precheck_result_json->>'market_code','')))";
 const MARKETS = new Set(["US","KG","KZ","UNKNOWN"]);
 const ROLES = new Set(["salon","master"]);
 const STATUSES = new Set(["draft","validated","validation_failed","approved","provisioning","provisioned","email_ready","email_sent","email_failed","activated","rejected","suspended","failed"]);
@@ -17,8 +17,8 @@ export function ownerQueueScope(query={}) {
   const status=optional(query,"status",STATUSES);
   const values=[], conditions=[];
   const bind=v=>{values.push(v);return "$"+values.length;};
-  if(market==="UNKNOWN") conditions.push(MARKET+" = ''");
-  else if(market) conditions.push(MARKET+" = "+bind(market));
+  if(market==="UNKNOWN") conditions.push(OWNER_QUEUE_MARKET_SQL+" = ''");
+  else if(market) conditions.push(OWNER_QUEUE_MARKET_SQL+" = "+bind(market));
   if(role) conditions.push("owner_type = "+bind(role));
   if(status) conditions.push("status = "+bind(status));
   return {scope:{market,owner_type:role,status},values,conditions};

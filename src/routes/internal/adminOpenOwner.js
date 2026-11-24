@@ -1,6 +1,6 @@
 import { activateOwnerOpeningCanonical } from "../../services/provision/ownerOpeningCanonicalActivation.js";
 import { prepareUsPaidActivationEvidence } from "../../services/provision/usPaidOwnerOpeningGate.js";
-import { ownerQueueScope, ownerQueuePage, ownerQueueResult } from "../../services/provision/ownerOpeningQueueRead.js";
+import { OWNER_QUEUE_MARKET_SQL, ownerQueueScope, ownerQueuePage, ownerQueueResult } from "../../services/provision/ownerOpeningQueueRead.js";
 import { reconcileUsSaasOpening } from "../../services/billing/usSaasReconciliation.js";
 import { buildOwnerOpeningEmail, buildEmailMime } from "../../services/notifications/emailTemplates.js";
 import {
@@ -2954,7 +2954,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
             work_mode,
             salon_slug,
             admin_notes,
-            COALESCE(precheck_result_json->'normalized'->>'market_code',precheck_result_json->>'market_code') AS market_code,
+            NULLIF(${OWNER_QUEUE_MARKET_SQL},'') AS market_code,
             created_owner_id,
             created_auth_user_id,
             moderation_case_id,
