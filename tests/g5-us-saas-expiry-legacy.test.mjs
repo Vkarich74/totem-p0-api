@@ -284,7 +284,7 @@ test("US service-link and manual master booking call same guarded entitlement re
   assert.ok(booking.includes("US_SAAS_BOOKING_DISABLED"));
 });
 
-function reconciliationPool(existing=row()){
+function reconciliationPool(existing=row(),{priorRevision="12",lockedRevision=priorRevision}={}){
   const db=fakeDb(existing),base=db.query.bind(db);
   const events=[];
   db.query=async(sql,args)=>{
@@ -293,12 +293,14 @@ function reconciliationPool(existing=row()){
     }
     if(sql.includes("FROM public.owner_opening_requests")&&sql.includes("FOR UPDATE"))
       return {rows:[owner()]};
+    if(sql.includes("xmin::text AS projection_revision"))
+      return {rows:lockedRevision===null?[]:[{projection_id:"55",projection_revision:lockedRevision}]};
     if(sql.includes("clock_timestamp()"))
       return {rows:[{now:new Date(NOW)}]};
     return base(sql,args);
   };
   return {db,events,
-    pool:{query:async()=>({rows:[owner()]}),connect:async()=>({
+    pool:{query:async(sql)=>sql.includes("xmin::text AS projection_revision")?{rows:priorRevision===null?[]:[{projection_id:"55",projection_revision:priorRevision}]}:{rows:[owner()]},connect:async()=>({
       query:db.query.bind(db),release:()=>{},
     })},
   };
@@ -356,4 +358,22 @@ test("paid projection UPDATE binds every parameter and reasserts the exact provi
  const used=new Set([...sql.matchAll(/\$(\d+)/g)].map(m=>Number(m[1])));
  assert.deepEqual([...used].sort((a,b)=>a-b),Array.from({length:args.length},(_,i)=>i+1));
  assert.match(sql,/provider_partner_id=\$3 AND provider_source_request_id=\$4/);
+});
+
+for(const [name,result] of [["paid",evidence()],["revocation",{status:"WAIT",reason:"ODOO_INVOICE_REVERSED"}]]){
+ test("concurrent projection update invalidates older "+name+" readback",async()=>{
+  const c=reconciliationPool(row(),{priorRevision:"12",lockedRevision:"13"});
+  let audit=0;
+  const out=await reconcileUsSaasOpening({pool:c.pool,requestId:11,readback:async()=>result,writeAudit:async()=>{audit++;}});
+  assert.equal(out.reason,"US_SAAS_RECONCILIATION_PROJECTION_CHANGED");
+  assert.deepEqual(c.events,["BEGIN","ROLLBACK"]);
+  assert.equal(audit,0);
+  assert.equal(c.db.sql.some(x=>x.includes("UPDATE public.billing_subscriptions")),false);
+ });
+}
+test("reconciliation never provisions a missing billing row",async()=>{
+ const c=reconciliationPool(row(),{priorRevision:null});let reads=0;
+ const out=await reconcileUsSaasOpening({pool:c.pool,requestId:11,readback:async()=>{reads++;return evidence();},writeAudit:async()=>{}});
+ assert.equal(out.reason,"US_SAAS_EXISTING_PROJECTION_REQUIRED");
+ assert.equal(reads,0);assert.deepEqual(c.events,[]);
 });

@@ -26,6 +26,21 @@ function equalSource(a,b){
     Number(a.source_partner_id)===Number(b.source_partner_id)&&
     Number(a.source_company_id)===4&&Number(a.source_website_id)===5;
 }
+// A transient MVCC version protects the existing projection from out-of-order
+// provider readbacks. Compare only within a single reconcile call; never persist
+// xmin or use it as a business identifier.
+async function readProjectionVersion(db,request,lock=false){
+  const {rows}=await db.query(
+    "SELECT id::text AS projection_id,xmin::text AS projection_revision "+
+    "FROM public.billing_subscriptions WHERE owner_type=$1 AND owner_id=$2 "+
+    "AND provider_namespace='odoo_online' AND provider_company_id=4 "+
+    "AND provider_website_id=5 AND provider_partner_id=$3 "+
+    "AND provider_source_request_id=$4"+(lock?" FOR UPDATE":""),
+    [request.owner_type,request.created_owner_id,request.source_partner_id,request.source_request_id]);
+  const version=rows.length===1?rows[0]:null;
+  return version&&typeof version.projection_id==="string"&&
+    typeof version.projection_revision==="string"?version:null;
+}
 export async function reconcileUsSaasOpening({
   pool,requestId,readback=prepareUsPaidActivationEvidence,
   writeAudit,operator={id:0},
@@ -41,6 +56,8 @@ export async function reconcileUsSaasOpening({
   if(!snapshot||snapshot.source_namespace!=="odoo_online"||
      !CURRENT.has(snapshot.status))
     return {status:"WAIT",reason:"US_SAAS_ACTIVE_SOURCE_REQUIRED"};
+  const prior=await readProjectionVersion(pool,snapshot);
+  if(!prior)return {status:"WAIT",reason:"US_SAAS_EXISTING_PROJECTION_REQUIRED"};
   let result;
   try{result=await readback(snapshot);}catch{
     return {status:"WAIT",reason:"ODOO_READBACK_UNAVAILABLE"};
@@ -59,6 +76,12 @@ export async function reconcileUsSaasOpening({
     const request=locked.rows[0];
     if(!equalSource(request,snapshot)||!CURRENT.has(request.status))
       throw err("US_SAAS_RECONCILIATION_SOURCE_CHANGED");
+    const current=await readProjectionVersion(db,request,true);
+    if(!current||current.projection_id!==prior.projection_id||
+       current.projection_revision!==prior.projection_revision){
+      await db.query("ROLLBACK");
+      return {status:"WAIT",reason:"US_SAAS_RECONCILIATION_PROJECTION_CHANGED"};
+    }
     if(paid){
       const now=await db.query("SELECT clock_timestamp() AS now");
       const billing=await persistUsSaasPaidProjection(
