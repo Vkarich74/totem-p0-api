@@ -84,7 +84,7 @@ r.use(buildLocalePreferencesRouter(pool, internalReadRateLimit));
 // Owner-authenticated US-only recipient choice; read model remains separate.
 r.use(buildUsPayC11OwnerRouter(pool));
 // G5 pending master consent, not a membership or commercial grant.
-r.use(buildUsMasterConsentRouter(pool));
+r.use(buildUsMasterConsentRouter(pool,internalReadRateLimit));
 // US-only service-tax settings: no booking/payment mutation.
 r.use(buildUsServiceTaxSettingsRouter(pool));
 // US-only explicit USD-cents prices; never infer from legacy KGS price.

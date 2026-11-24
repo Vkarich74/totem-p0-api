@@ -361,6 +361,7 @@ export async function resolveAuth(req,res,next){
     return next();
   }
 
+  const claimedContext=isUsRoleContextClaim(jwt.decode(token));
   try{
     const payload = jwt.verify(token, process.env.JWT_SECRET);
 
@@ -370,6 +371,7 @@ export async function resolveAuth(req,res,next){
     const session_id = String(payload?.session_id || '').trim() || null;
 
     if(!user_id || !ALLOWED_ROLES.has(roleRaw)){
+      if(roleContext)return res.status(403).json({ok:false,error:"US_ROLE_CONTEXT_INVALID"});
       return next();
     }
 
@@ -503,6 +505,7 @@ export async function resolveAuth(req,res,next){
       return next();
     }
   }catch(err){
+    if(claimedContext){req.auth=null;req.identity=null;return res.status(403).json({ok:false,error:"US_ROLE_CONTEXT_INVALID"});}
     return next();
   }
 }

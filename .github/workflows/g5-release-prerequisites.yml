@@ -12,6 +12,9 @@ on:
       - 'tests/sql/g5-master-role-authority-schema.sql'
       - 'src/routes/internalUsMasterConsent.js'
       - 'src/routes/internal.js'
+      - 'src/routes/auth.js'
+      - 'src/auth/us*.js'
+      - 'src/middleware/resolveAuth.js'
       - 'odoo/drafts/g5_action_1185_approved_us_profiles.py'
       - 'tests/g5-odoo-action-1185-draft.py'
       - 'tests/fixtures/g5-approved-source-fixture.mjs'
@@ -76,4 +79,7 @@ jobs:
           python3 tests/g5-odoo-action-1185-draft.py
           node --test tests/g5-approved-source.test.mjs
           node --test tests/g5-approved-source-postgres.test.mjs
+          node --check src/middleware/resolveAuth.js
+          node --check src/routes/internal.js
+          node --check src/routes/auth.js
           node --test tests/g5-master-role-authority-postgres.test.mjs

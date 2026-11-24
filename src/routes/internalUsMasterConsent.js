@@ -3,7 +3,7 @@ import {requireAuth} from "../middleware/requireAuth.js";
 import {decideUsExistingSalonConsent,usMasterConsentEnabled} from "../services/provision/usMasterRoleAuthority.js";
 // Default OFF; explicit owner action, never an alternative registration route.
 // No cookie-only authorization and no client-selected salon/owner identity.
-export function buildUsMasterConsentRouter(pool){
+export function buildUsMasterConsentRouter(pool,rateLimit){
  const r=express.Router();
  const handler=decision=>async(req,res)=>{
   res.set("Cache-Control","no-store");
@@ -30,8 +30,8 @@ export function buildUsMasterConsentRouter(pool){
    return res.status(status).json({ok:false,error:code});
   }
  };
- r.post("/us-master-consent/:requestId/review",requireAuth,handler("read"));
- r.put("/us-master-consent/:requestId",requireAuth,handler("grant"));
- r.delete("/us-master-consent/:requestId",requireAuth,handler("revoke"));
+ r.post("/us-master-consent/:requestId/review",requireAuth,rateLimit,handler("read"));
+ r.put("/us-master-consent/:requestId",requireAuth,rateLimit,handler("grant"));
+ r.delete("/us-master-consent/:requestId",requireAuth,rateLimit,handler("revoke"));
  return r;
 }
