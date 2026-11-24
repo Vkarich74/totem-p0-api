@@ -111,7 +111,10 @@ app.post(
   buildUsC11LivePaymentWebhook({pool})
 );
 
-app.use(express.json());
+app.use(express.json({verify(req,res,buf){
+  if(req.method==="POST"&&/^\/internal\/admin\/open-owner\/(?:odoo-intake|requests\/[0-9]+\/(?:approve|provision))\/?$/.test(String(req.originalUrl||req.url||"").split("?")[0]))
+    req.usG3RawBody=Buffer.from(buf);
+}}));
 app.use(cookieParser());
 
 // Stripe Connect OAuth redirect receives only a one-time code and CSRF state.

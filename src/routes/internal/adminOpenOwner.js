@@ -1,3 +1,7 @@
+import {validG3Seal,sameG3Seal} from "../../services/provision/usOdooG3SealProof.js";
+import {hasManualG3Envelope,prepareManualG3RequestReceipt,assertManualG3RequestReceipt,isManualG3Request,isScopedUsOdooRequest,assertUsOdooDispatchHold} from "../../services/provision/usG3ManualRequestReceipt.js";
+import {prepareUsImportedMasterReceipt} from "../../services/provision/usImportedMasterProvision.js";
+import {isUsOdooIntakeHint,registerApprovedUsOdooSalon} from "../../services/provision/usApprovedOdooSalonIntake.js";
 import {kgSharedMasterEnabled,isKgSharedMasterCandidate,readKgSharedMasterCandidate,kgSharedMasterProof,assertKgSharedMasterPending,assertKgSharedMasterActivation} from "../../services/provision/kgSharedMasterIdentity.js";
 import { buildOwnerOpeningEmail, buildEmailMime } from "../../services/notifications/emailTemplates.js";
 import { resolveRecipientLocale } from "../../services/notifications/recipientLocale.js";
@@ -256,6 +260,7 @@ export async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
   const errors = [];
   const allowMissingPhone = Boolean(options?.allowMissingPhone);
   const allowMissingCity = Boolean(options?.allowMissingCity);
+  const deferVerifiedUsMasterBinding = options?.deferVerifiedUsMasterBinding === true;
 
   const ownerType = normalizeOwnerType(body.owner_type);
   const name = normalizeText(body.name);
@@ -398,6 +403,8 @@ export async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
 
       if(!salonSlug){
         errors.push("SALON_SLUG_REQUIRED");
+      }else if(marketCode==="US"&&deferVerifiedUsMasterBinding){
+        addCheck(checks,"us_master_binding_deferred",true,{consent_and_identity_required:true});
       }else{
         const salonCheck = await checkSalonSlug(pool, salonSlug);
         addCheck(checks, "salon_slug_exists", salonCheck.exists, {
@@ -871,7 +878,8 @@ async function writeOwnerOpeningAuditEvent(db, { request, eventType, admin, data
     ...data,
   };
 
-  const actor = admin.email || (admin.id ? `admin:${admin.id}` : "admin");
+  const actor = admin.actor==="system:us_odoo_intake"&&admin.id==null&&!admin.email&&eventType==="owner_opening.request_created"
+    ? admin.actor : admin.email || (admin.id ? `admin:${admin.id}` : "admin");
 
   return await insertDynamicPublicRow(db, "audit_events", {
     event_type: eventType,
@@ -952,6 +960,97 @@ function buildOwnerOpeningLinks({ request, provisionResult, bindResult = null })
     provision_urls: us ? null : provisionResult?.result?.urls || null,
     bind_urls: bindResult?.result?.urls || null,
   };
+}
+
+// G4-07: read-only evidence from existing Core records. Missing or ambiguous
+// evidence is not permission to recreate an owner. Historical workers must
+// be drained before any operator recovery is permitted in a later release.
+async function inspectUsProvisionRecovery(db,r){
+  if(requestMarketCode(r)!=="US"||!["provisioning","failed"].includes(r.status))return null;
+  const held=reason=>({decision:"manual_review",reason,can_return_to_validated:false});
+  const proof=r.precheck_result_json?.odoo_source_proof;
+  const empty=o=>o&&typeof o==="object"&&!Array.isArray(o)&&Object.keys(o).length===0;
+  if(r.source_namespace!=="odoo_online"||Number(r.source_company_id)!==4||
+     Number(r.source_website_id)!==5||!Number.isSafeInteger(Number(r.source_partner_id))||
+     Number(r.source_partner_id)<1||!r.source_request_id||!proof||
+     proof.source_marker!=="totem_us_portal_approved_v1"||
+     Number(proof.source_stage_id)!==82||
+     String(proof.source_partner_id)!==String(r.source_partner_id)||
+     proof.source_request_id!==r.source_request_id||
+     !["salon","master"].includes(r.owner_type)||!r.slug_final||!r.email||!r.phone_normalized||
+     !r.validated_at||!r.approved_at)
+    return held("US_RECOVERY_SOURCE_NOT_PROVEN");
+  // Recovery is not permission to reinterpret an old or incomplete seal.
+  // Legacy or inconsistent proof requires explicit manual review.
+  if(!validG3Seal(proof)||proof.source!=="odoo_us_approved_profile_v1"||
+     r.source_request_id!=="odoo-us-partner-"+r.source_partner_id||
+     !Number.isSafeInteger(Number(proof.odoo_lead_id))||Number(proof.odoo_lead_id)<1)
+    return held("US_RECOVERY_SEAL_NOT_PROVEN");
+  const mode=proof.entry_mode;
+  if((mode==="salon"&&(r.owner_type!=="salon"||proof.role_set!=="salon"))||
+     (mode==="own_salon"&&proof.role_set!=="salon,master")||
+     (mode==="existing_salon"&&(r.owner_type!=="master"||proof.role_set!=="master"||
+       !Number.isSafeInteger(proof.target_salon_partner_id)||proof.target_salon_partner_id<=0||
+       proof.target_salon_partner_id===Number(r.source_partner_id)||
+       !r.salon_slug||proof.target_salon_slug!==r.salon_slug||
+       proof.target_source_revision!=="1"||!(/^[a-f0-9]{64}$/).test(proof.target_source_hash??"")))||
+     !["salon","own_salon","existing_salon"].includes(mode))
+    return held("US_RECOVERY_ROLE_SET_NOT_PROVEN");
+  if(r.created_owner_id!=null||r.created_auth_user_id!=null||r.provisioned_at||r.activated_at||
+     r.message_id!=null||r.email_sent_at||r.email_status!=="not_ready"||
+     !empty(r.links_json)||!empty(r.email_preview_json)||
+     !(empty(r.provision_result_json)||r.status==="failed"&&r.provision_result_json?.ok===false))
+    return held("US_RECOVERY_EXISTING_RESULT");
+  const audit=(await db.query(
+    "SELECT event_type FROM public.audit_events WHERE data->>'request_id'=$1 AND event_type LIKE 'owner_opening.%' ORDER BY id",
+    [String(r.id)])).rows;
+  const events=audit.map(x=>x.event_type);
+  if(!events.includes("owner_opening.approved")||!events.includes("owner_opening.provision_started")||
+     events.some(x=>/^(owner_opening\.(provisioned|activated|email.*))$/.test(x)))
+    return held("US_RECOVERY_AUDIT_AMBIGUOUS");
+  const emails=(await db.query(
+    "SELECT id FROM public.messages WHERE idempotency_key LIKE $1 OR data->>'request_id'=$2 LIMIT 1",
+    ["owner_opening:"+r.id+":%",String(r.id)])).rows;
+  if(emails.length)return held("US_RECOVERY_EMAIL_EXISTS");
+  const reservations=(await db.query(
+    "SELECT id FROM public.slug_reservations WHERE owner_type=$1 AND lower(slug)=lower($2) AND status IN ('reserved','activated') LIMIT 1",
+    [r.owner_type,r.slug_final])).rows;
+  if(reservations.length)return held("US_RECOVERY_RESERVATION_EXISTS");
+  const users=(await db.query(
+    "SELECT id FROM public.auth_users WHERE lower(email)=lower($1) OR phone=$2 OR "+
+    "lower(CASE WHEN $3='salon' THEN salon_slug ELSE master_slug END)=lower($4) ORDER BY id LIMIT 3",
+    [r.email,r.phone_normalized,r.owner_type,r.slug_final])).rows;
+  let principalId=null;
+  if(r.owner_type==="master"&&proof.entry_mode==="own_salon"&&proof.role_set==="salon,master"){
+    const parent=(await db.query(
+      "SELECT a.id,o.precheck_result_json FROM public.owner_opening_requests o JOIN public.auth_users a ON a.id=o.created_auth_user_id "+
+      "JOIN public.salons s ON s.id=o.created_owner_id JOIN public.owner_salon os ON os.salon_id=s.id AND os.owner_id=a.id::text "+
+      "JOIN public.tenant_market_settings t ON t.salon_id=s.id JOIN public.markets m ON m.id=t.market_id "+
+      "WHERE o.owner_type='salon' AND o.source_namespace='odoo_online' AND o.source_company_id=4 AND o.source_website_id=5 "+
+      "AND o.source_partner_id=$1 AND o.source_request_id=$2 AND o.status IN ('activated','email_ready','email_sent','email_failed') "+
+      "AND o.precheck_result_json->'odoo_source_proof'->>'source_marker'=$3 "+
+      "AND o.precheck_result_json->'odoo_source_proof'->>'entry_mode'='own_salon' "+
+      "AND o.precheck_result_json->'odoo_source_proof'->>'role_set'='salon,master' "+
+      "AND o.precheck_result_json->'odoo_source_proof'->>'odoo_lead_id'=$4 "+
+      "AND a.role='salon_admin' AND a.enabled=true AND a.email_verified_at IS NOT NULL "+
+      "AND lower(a.email)=lower($5) AND a.phone=$6 AND a.salon_slug=s.slug AND a.salon_id=s.id::text "+
+      "AND s.slug=$7 AND s.status='active' AND s.enabled=true AND os.status='active' "+
+      "AND m.code='US' AND m.country_code='US' AND m.active=true AND COALESCE(t.currency_override,m.default_currency)='USD'",
+      [r.source_partner_id,r.source_request_id,proof.source_marker,String(proof.odoo_lead_id),r.email,r.phone_normalized,r.salon_slug])).rows;
+    if(parent.length!==1||users.length!==1||String(parent[0].id)!==String(users[0].id))
+      return held("US_RECOVERY_SHARED_PRINCIPAL_AMBIGUOUS");
+    if(!sameG3Seal(proof,parent[0].precheck_result_json?.odoo_source_proof))
+      return held("US_RECOVERY_PARENT_SEAL_CHANGED");
+    principalId=parent[0].id;
+  }else if(users.length)return held("US_RECOVERY_IDENTITY_EXISTS");
+  const entity=r.owner_type==="salon"
+    ? await db.query("SELECT id FROM public.salons WHERE lower(slug)=lower($1) OR phone=$2 LIMIT 1",[r.slug_final,r.phone_normalized])
+    : await db.query("SELECT id FROM public.masters WHERE lower(slug)=lower($1) OR user_id=$2 LIMIT 1",[r.slug_final,principalId]);
+  if(entity.rows.length)return held("US_RECOVERY_ENTITY_EXISTS");
+  const revision=(await db.query("SELECT updated_at::text AS revision FROM public.owner_opening_requests WHERE id=$1",[r.id])).rows[0]?.revision;
+  if(!revision)return held("US_RECOVERY_REVISION_REQUIRED");
+  return {decision:"return_to_validated",reason:"US_RECOVERY_NO_COMMITTED_ENTITY_EVIDENCE",
+    can_return_to_validated:true,revision};
 }
 
 function resolveProvisionStatus(err){
@@ -1179,6 +1278,129 @@ async function activateOwnerOpeningEntity(db, request){
 }
 
 
+
+
+// Reuse existing Core intake INSERT/moderation/audit. Caller owns transaction.
+async function createIntakeValidatedRequest(db,precheck,precheckForStorage,admin,sourceAudit,strict=false){
+      const createdRequest = await db.query(
+        `
+          INSERT INTO public.owner_opening_requests(
+            owner_type,
+            status,
+            name,
+            slug_requested,
+            slug_final,
+            email,
+            phone_raw,
+            phone_normalized,
+            city,
+            address,
+            description,
+            specialization,
+            work_mode,
+            salon_slug,
+            admin_notes,
+            precheck_result_json,
+            created_by_admin_id,
+            created_by_admin_email,
+            validated_at,
+            created_at,
+            updated_at
+          )
+          VALUES(
+            $1,
+            'validated',
+            $2,
+            $3,
+            $4,
+            $5,
+            $6,
+            $7,
+            $8,
+            $9,
+            $10,
+            $11,
+            $12,
+            $13,
+            $14,
+            $15,
+            $16,
+            $17,
+            NOW(),
+            NOW(),
+            NOW()
+          )
+          RETURNING *
+        `,
+        [
+          precheck.normalized.owner_type,
+          precheck.normalized.name,
+          precheck.normalized.slug_requested,
+          precheck.normalized.slug_final,
+          precheck.normalized.email,
+          precheck.normalized.phone_raw,
+          precheck.normalized.phone_normalized,
+          precheck.normalized.city,
+          precheck.normalized.address,
+          precheck.normalized.description,
+          precheck.normalized.specialization,
+          precheck.normalized.work_mode,
+          precheck.normalized.salon_slug,
+          precheck.normalized.admin_notes,
+          JSON.stringify(precheckForStorage),
+          admin.id,
+          admin.email || null,
+        ]
+      );
+
+      let request = createdRequest.rows[0];
+
+      const moderationCase = await createOwnerOpeningModerationCase(db, request);
+
+      if(moderationCase?.id){
+        const updatedRequest = await db.query(
+          `
+            UPDATE public.owner_opening_requests
+            SET moderation_case_id=$2,
+                updated_at=NOW()
+            WHERE id=$1
+            RETURNING *
+          `,
+          [Number(request.id), Number(moderationCase.id)]
+        );
+
+        request = updatedRequest.rows[0] || request;
+      }
+
+      const audit = await writeOwnerOpeningAuditEvent(db, {
+        request,
+        eventType: "owner_opening.request_created",
+        admin,
+          data: {
+            moderation_case_id: moderationCase?.id ? Number(moderationCase.id) : null,
+            precheck_valid: true,
+            ...sourceAudit,
+          },
+        });
+
+      if(strict&&(!moderationCase?.id||!audit?.id))throw new Error("US_ODOO_INTAKE_AUDIT_REQUIRED");
+      return request;
+
+}
+export async function createVerifiedUsIntakeRequest(db,verified,proof){
+  if(!["salon","master"].includes(proof.owner_type)||verified.intake.owner_type!==proof.owner_type||
+     verified.proof.owner_type!==proof.owner_type||proof.source_company_id!==4||proof.source_website_id!==5||
+     verified.proof.partner_id!==proof.source_partner_id||verified.proof.source_request_id!==proof.source_request_id)
+    throw Object.assign(new Error("US_ODOO_SOURCE_SCOPE_INVALID"),{code:"US_ODOO_SOURCE_SCOPE_INVALID",status:409});
+  const precheck=await buildOpenOwnerPrecheck(db,verified.intake,{
+    deferVerifiedUsMasterBinding:proof.owner_type==="master"&&["own_salon","existing_salon"].includes(verified.provenance.entry_mode)});
+  if(!precheck.valid)throw Object.assign(new Error("US_ODOO_INTAKE_PRECHECK_FAILED"),{code:"US_ODOO_INTAKE_PRECHECK_FAILED",status:409});
+  const stored={...precheck,source:"odoo_us_approved_profile_v1",
+    odoo_request_id:proof.source_request_id,odoo_lead_id:String(verified.provenance.odoo_lead_id),
+    odoo_source_proof:verified.provenance};
+  return createIntakeValidatedRequest(db,precheck,stored,
+    {id:null,email:"",actor:"system:us_odoo_intake"},verified.provenance,true);
+}
 
 export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
   const r = express.Router();
@@ -1470,6 +1692,19 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
   });
 
   r.post("/odoo-intake", async (req,res)=>{
+    const incoming = req.body || {};
+    if(isUsOdooIntakeHint(incoming)){
+      try{
+        const result=await registerApprovedUsOdooSalon({pool,body:incoming,raw:req.usG3RawBody,headers:req.headers,
+          query:req.query,createExistingOpeningRequest:createVerifiedUsIntakeRequest});
+        return res.status(result.duplicate?200:201).json({ok:true,...result});
+      }catch(e){
+        const status=[400,401,409,503].includes(e?.status)?e.status:500;
+        const code=typeof e?.code==="string"&&/^(US_ODOO_[A-Z0-9_]+|ADMIN_US_ODOO_INTAKE_HOLD)$/.test(e.code)
+          ?e.code:"ADMIN_OPEN_OWNER_US_ODOO_INTAKE_FAILED";
+        return res.status(status).json({ok:false,error:code});
+      }
+    }
     const bridgeTokenConfigured = String(process.env.ODOO_BRIDGE_TOKEN || "").trim();
 
     if(!bridgeTokenConfigured){
@@ -1479,7 +1714,6 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       });
     }
 
-    const incoming = req.body || {};
     const intake = buildOdooCoreRequestIntake(incoming);
 
     if(intake?.error){
@@ -1847,6 +2081,12 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       });
     }
 
+    let masterReceipt,manualReceipt;
+    try{
+      if(hasManualG3Envelope(req.body))manualReceipt=await prepareManualG3RequestReceipt(pool,requestId,{raw:req.usG3RawBody,purpose:"approve",admin:req.admin});
+      masterReceipt=await prepareUsImportedMasterReceipt(pool,requestId,{manualReceipt,purpose:"approve",admin:req.admin});
+    }
+    catch(err){return res.status(resolveProvisionStatus(err)).json({ok:false,error:err.code||"US_MASTER_SOURCE_UNAVAILABLE"});}
     const db = await pool.connect();
 
     try{
@@ -1883,6 +2123,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         return res.status(policyError.statusCode).json({ ok: false, error: policyError.code });
       }
 
+      assertManualG3RequestReceipt(current,manualReceipt,{purpose:"approve",admin:req.admin});
       if(current.status === "approved"){
         await db.query("COMMIT");
         return res.status(200).json({
@@ -1902,7 +2143,8 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       }
 
       if(kgSharedMasterProof(current))await assertKgSharedMasterPending(db,current);
-      if (requestMarketCode(current) === "US") await assertUsOpenOwnerContract(db,current);
+      if (requestMarketCode(current) === "US") await assertUsOpenOwnerContract(db,current,{masterReceipt});
+      assertManualG3RequestReceipt(current,manualReceipt,{purpose:"approve",admin:req.admin});
 
       const updatedResult = await db.query(
         `
@@ -1924,6 +2166,10 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         admin,
       });
 
+      if(isManualG3Request(current)){
+        if(!auditEvent?.id)throw Object.assign(Error("US_ODOO_G3_MANUAL_AUDIT_REQUIRED"),{code:"US_ODOO_G3_MANUAL_AUDIT_REQUIRED",status:409});
+        assertManualG3RequestReceipt(current,manualReceipt,{purpose:"approve",admin:req.admin});
+      }
       await db.query("COMMIT");
 
       return res.status(200).json({
@@ -1953,6 +2199,13 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       });
     }
 
+    const recovering=req.body?.recovery_decision==="return_to_validated";
+    let masterReceipt,manualReceipt;
+    try{
+      if(hasManualG3Envelope(req.body))manualReceipt=await prepareManualG3RequestReceipt(pool,requestId,{raw:req.usG3RawBody,purpose:"provision",admin:req.admin});
+      if(!recovering)masterReceipt=await prepareUsImportedMasterReceipt(pool,requestId,{manualReceipt,purpose:"provision",admin:req.admin});
+    }
+    catch(err){return res.status(resolveProvisionStatus(err)).json({ok:false,error:err.code||"US_MASTER_SOURCE_UNAVAILABLE"});}
     let request = null;
     const admin = getAdminActor(req);
     const markDb = await pool.connect();
@@ -1989,6 +2242,8 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         return res.status(policyError.statusCode).json({ ok: false, error: policyError.code });
       }
 
+      // Manual evidence cannot authorize recovery or a different state transition.
+      assertManualG3RequestReceipt(request,manualReceipt,{purpose:"provision",admin:req.admin});
       if(request.status === "provisioned"){
         await markDb.query("COMMIT");
         return res.status(200).json({
@@ -1998,6 +2253,35 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
+      if(recovering){
+        if(!admin.id||requestMarketCode(request)!=="US"||
+           !["provisioning","failed"].includes(request.status)){
+          await markDb.query("ROLLBACK");
+          return res.status(409).json({ok:false,error:"US_PROVISION_RECOVERY_NOT_ALLOWED"});
+        }
+        const decision=await inspectUsProvisionRecovery(markDb,request);
+        if(!decision?.can_return_to_validated||req.body?.recovery_revision!==decision.revision){
+          await markDb.query("ROLLBACK");
+          return res.status(409).json({ok:false,error:"US_PROVISION_RECOVERY_REVIEW_REQUIRED",recovery:decision});
+        }
+        // This is an explicit return to the existing moderation state, NOT
+        // a provision, automatic approval, credential change or deletion.
+        const reset=await markDb.query(
+          "UPDATE public.owner_opening_requests SET status='validated',approved_at=NULL,provision_result_json='{}'::jsonb,updated_at=NOW() "+
+          "WHERE id=$1 AND status=$2 AND updated_at=$3::timestamptz RETURNING *",
+          [requestId,request.status,decision.revision]);
+        if(reset.rows.length!==1)throw Object.assign(Error("US_RECOVERY_STATE_CHANGED"),{code:"US_RECOVERY_STATE_CHANGED",status:409});
+        const event=await writeOwnerOpeningAuditEvent(markDb,{request:reset.rows[0],eventType:"owner_opening.provision_recovered",admin,
+          data:{prior_status:request.status,prior_approved_at:request.approved_at,prior_result:request.provision_result_json,reason:decision.reason}});
+        if(!event?.id)throw Object.assign(Error("US_RECOVERY_AUDIT_REQUIRED"),{code:"US_RECOVERY_AUDIT_REQUIRED",status:409});
+        await markDb.query("COMMIT");
+        return res.json({ok:true,request:reset.rows[0],recovered:true,audit_event_id:Number(event.id)});
+      }
+      if(requestMarketCode(request)==="US"&&["provisioning","failed"].includes(request.status)){
+        const recovery=await inspectUsProvisionRecovery(markDb,request);
+        await markDb.query("ROLLBACK");
+        return res.status(409).json({ok:false,error:"US_PROVISION_RECOVERY_REVIEW_REQUIRED",status:request.status,recovery});
+      }
       if(request.status !== "approved"){
         await markDb.query("ROLLBACK");
         return res.status(409).json({
@@ -2028,7 +2312,8 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         await markDb.query("COMMIT");
         return res.status(200).json({ok:true,request:finalRequest,provision_result:provisionResult,bind_result:bindResult,links,audit_event_id:Number(auditEvent.id)});
       }
-      if (requestMarketCode(request) === "US") await assertUsOpenOwnerContract(markDb,request);
+      if (requestMarketCode(request) === "US") await assertUsOpenOwnerContract(markDb,request,{masterReceipt});
+      assertManualG3RequestReceipt(request,manualReceipt,{purpose:"provision",admin:req.admin});
 
       const provisioningResult = await markDb.query(
         `
@@ -2043,37 +2328,20 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
 
       request = provisioningResult.rows[0] || request;
 
-      await writeOwnerOpeningAuditEvent(markDb, {
+      const startedAudit=await writeOwnerOpeningAuditEvent(markDb, {
         request,
         eventType: "owner_opening.provision_started",
         admin,
       });
 
-      await markDb.query("COMMIT");
-    }catch(err){
-      try{ await markDb.query("ROLLBACK"); }catch(e){}
-      if(kgSharedMasterProof(request)&&err?.code)return res.status(resolveProvisionStatus(err)).json({ok:false,error:String(err.code)});
-      console.error("ADMIN_OPEN_OWNER_MARK_PROVISIONING_ERROR", err);
-      return res.status(500).json({
-        ok: false,
-        error: "ADMIN_OPEN_OWNER_MARK_PROVISIONING_FAILED",
-      });
-    }finally{
-      markDb.release();
-    }
-
-    try{
-      let provisionResult = null;
-      let bindResult = null;
-
-      if(requestMarketCode(request) === "US"){
-        // US owner creation, master-salon binding, state readback and
-        // audit must either all commit or all roll back together.
-        const usDb = await pool.connect();
-        try{
-          await usDb.query("BEGIN");
-          await assertUsOpenOwnerContract(usDb, request);
-
+      if(requestMarketCode(request)==="US"){
+        // Keep the existing canonical writer and source guard in ONE transaction.
+        // No committed intermediate provisioning state and no blind recovery.
+        // A failure rolls the request back to approved; a successful commit
+        // remains idempotently provisioned if the HTTP acknowledgement is lost.
+        if(!startedAudit?.id)throw Object.assign(Error("US_PROVISION_AUDIT_REQUIRED"),{code:"US_PROVISION_AUDIT_REQUIRED",status:409});
+        const usDb=markDb;
+        let provisionResult=null,bindResult=null;
           if(request.owner_type === "salon"){
             provisionResult = await createSalonCanonical({
               pool, dbClient: usDb,
@@ -2093,11 +2361,11 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
             }
           }else if(request.owner_type === "master"){
             provisionResult = await createMasterCanonical({
-              pool, dbClient: usDb,
+              pool, dbClient: usDb, masterReceipt,
               payload: buildMasterProvisionPayload(request),
             });
             bindResult = await bindMasterToSalonCanonical({
-              pool, dbClient: usDb, verifiedUsAdminProvision: true,
+              pool, dbClient: usDb, verifiedUsAdminProvision: true, masterReceipt,
               payload: {
                 salon_slug: request.salon_slug,
                 master_slug: provisionResult?.canonical_slug || request.slug_final,
@@ -2127,6 +2395,11 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
             err.code="OWNER_TYPE_INVALID";err.status=400;throw err;
           }
 
+          // Never silently reuse an unrelated account or generated suffix.
+          // A failed exact-source creation rolls back the existing transaction.
+          if(provisionResult?.meta?.created!==true||provisionResult?.meta?.idempotent===true||
+             provisionResult?.canonical_slug!==request.slug_final)
+            throw Object.assign(Error("US_PROVISION_EXACT_CREATION_REQUIRED"),{code:"US_PROVISION_EXACT_CREATION_REQUIRED",status:409});
           const ownerId=extractProvisionOwnerId(provisionResult);
           const authUserId=extractProvisionAuthUserId(provisionResult);
           if(!ownerId || !authUserId){
@@ -2159,19 +2432,39 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
               bind_created:Boolean(bindResult),market_code:"US",
             },
           });
+          if(!auditEvent?.id)throw Object.assign(Error("US_PROVISION_AUDIT_REQUIRED"),{code:"US_PROVISION_AUDIT_REQUIRED",status:409});
+          if(isManualG3Request(request)&&(!manualReceipt||Date.now()-manualReceipt.verified.provenance.observed_end_ms>15000))
+            throw Object.assign(Error("US_ODOO_G3_MANUAL_FRESHNESS"),{code:"US_ODOO_G3_MANUAL_FRESHNESS",status:409});
           await usDb.query("COMMIT");
           return res.status(200).json({
             ok:true,request:finalRequest,provision_result:provisionResult,
             bind_result:bindResult,links,
             audit_event_id:auditEvent?.id ? Number(auditEvent.id) : null,
           });
-        }catch(err){
-          try{await usDb.query("ROLLBACK");}catch(_ignored){}
-          throw err;
-        }finally{
-          usDb.release();
-        }
       }
+      await markDb.query("COMMIT");
+    }catch(err){
+      try{ await markDb.query("ROLLBACK"); }catch(e){}
+      if(kgSharedMasterProof(request)&&err?.code)return res.status(resolveProvisionStatus(err)).json({ok:false,error:String(err.code)});
+      if(request&&requestMarketCode(request)==="US"){
+        // Never mark failed after an uncertain COMMIT or overwrite a concurrent
+        // successful request. Readback/retry uses the existing locked route.
+        return res.status(resolveProvisionStatus(err)).json({ok:false,error:buildProvisionErrorCode(err)});
+      }
+      console.error("ADMIN_OPEN_OWNER_MARK_PROVISIONING_ERROR", err);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_OPEN_OWNER_MARK_PROVISIONING_FAILED",
+      });
+    }finally{
+      markDb.release();
+    }
+
+    try{
+      let provisionResult = null;
+      let bindResult = null;
+
+
 
 
       if(request.owner_type === "salon"){
@@ -2423,6 +2716,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       );
       const current = before.rows[0] || null;
       if (!current) return res.status(404).json({ok:false,error:"OWNER_OPENING_REQUEST_NOT_FOUND"});
+      assertUsOdooDispatchHold(current);
       if (requestMarketCode(current) !== "US" ||
           current.owner_type !== "salon" || current.status !== "provisioned") {
         return res.status(409).json({ok:false,error:"US_SALON_NOT_PROVISIONED"});
@@ -2449,6 +2743,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       await db.query("BEGIN");
       begun = true;
       const locked = await getOwnerOpeningRequestForUpdate(db,requestId);
+      assertUsOdooDispatchHold(locked);
       if (!locked || locked.status !== "provisioned" ||
           locked.owner_type !== "salon" || requestMarketCode(locked) !== "US" ||
           Number(locked.created_owner_id) !== Number(current.created_owner_id) ||
@@ -2561,6 +2856,11 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         return res.status(policyError.statusCode).json({ ok: false, error: policyError.code });
       }
 
+      if(isScopedUsOdooRequest(current)){
+        await db.query("ROLLBACK");
+        return res.status(409).json({ok:false,error:"US_G3_COMMERCIAL_ACTIVATION_RELEASE_HOLD"});
+      }
+
       if(current.status === "activated"){
         await db.query("COMMIT");
         return res.status(200).json({
@@ -2667,6 +2967,11 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
+      if(isScopedUsOdooRequest(request)){
+        await db.query("ROLLBACK");
+        return res.status(409).json({ok:false,error:"US_G3_WELCOME_RELEASE_HOLD"});
+      }
+
       if (requestMarketCode(request) === "US") {
         assertAdminOpeningMarketPolicy("US");
         await assertUsActivationReady(db,request,Number(request.created_owner_id));
@@ -2764,6 +3069,11 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
           ok: false,
           error: "OWNER_OPENING_REQUEST_NOT_FOUND",
         });
+      }
+
+      if(isScopedUsOdooRequest(request)){
+        await prepareDb.query("ROLLBACK");
+        return res.status(409).json({ok:false,error:"US_G3_WELCOME_RELEASE_HOLD"});
       }
 
       if (requestMarketCode(request) === "US") {
@@ -3205,9 +3515,15 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
+      let recovery=null;
+      if(requestMarketCode(request)==="US"&&["provisioning","failed"].includes(request.status)){
+        try{recovery=await inspectUsProvisionRecovery(pool,request);}
+        catch(_error){recovery={decision:"manual_review",reason:"US_RECOVERY_READBACK_UNAVAILABLE",can_return_to_validated:false};}
+      }
       return res.status(200).json({
         ok: true,
         request,
+        ...(recovery?{recovery}:{}),
       });
     }catch(err){
       console.error("ADMIN_OPEN_OWNER_GET_REQUEST_ERROR", err);
