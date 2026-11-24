@@ -1,3 +1,4 @@
+import {inspectUsPaidAuthorityContract} from "./usPaidOwnerOpeningGate.js";
 // US G3 manual release contract. This module performs read-only readiness checks.
 // Commercial activation and welcome remain hard-disabled until the separately
 // approved Odoo paid-proof/projection transaction is installed. No env override.
@@ -102,7 +103,7 @@ export async function inspectUsManualActivationWelcome(pool,request){
  if(!isScopedUsOdooRequest(request))return null;
  const base={contract:"us_g3_manual_activation_welcome_v1",activation:"HOLD",welcome:"HOLD",
   activation_allowed:false,welcome_allowed:false,automatic_retry_allowed:false,
-  paid_authority:"NOT_INSTALLED",commercial_projection_required:true,
+  paid_authority:"VERIFIER_INSTALLED_HOLD",commercial_projection_required:true,
   owner_mode:proof(request)?.entry_mode??null,
   credential_mode:request.owner_type==="master"&&proof(request)?.entry_mode==="own_salon"?"existing_salon_principal":"role_specific",
   fresh_source_and_admin_recheck_required:true,owner_consent_recheck_required:proof(request)?.entry_mode==="existing_salon",
@@ -120,7 +121,8 @@ export async function inspectUsManualActivationWelcome(pool,request){
     data->>'logical_intent_key' AS logical_intent_key,data->>'delivery_state' AS delivery_state,
     COALESCE((data->>'gmail_message_id') ~ '^[a-zA-Z0-9_-]{1,200}$',false) AS has_provider_id
    FROM public.messages WHERE idempotency_key LIKE $1 ORDER BY id LIMIT 2`,["owner_opening:"+id(r.id)+":%"]);
-  const result={...base,owner_mode:proof(r)?.entry_mode??null,source_seal_valid:source,
+  const paid=await inspectUsPaidAuthorityContract(db);
+  const result={...base,paid_authority_contract:paid,owner_mode:proof(r)?.entry_mode??null,source_seal_valid:source,
     canonical_identity_ready:c.identity,geo_ready:c.geo,technical_reason:c.reason,
     welcome_intent:classifyWelcomeIntent(r,m.rows),welcome_intent_key:welcomeIntentKey(r.id),
     welcome_rfc_message_id:welcomeRfcMessageId(r.id)};
