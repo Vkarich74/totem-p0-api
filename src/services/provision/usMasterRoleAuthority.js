@@ -26,7 +26,7 @@ function fingerprint(r){
  return createHash("sha256").update(JSON.stringify([
   String(r.id),r.source_request_id,String(r.source_partner_id),p.odoo_lead_id,
   p.profile_write_date,p.lead_write_date,p.target_salon_partner_id,p.target_salon_slug,
-  p.target_salon_write_date,r.salon_slug,r.slug_final,r.email,r.phone_normalized,
+  p.target_salon_write_date,r.salon_slug,r.slug_final,r.name,r.specialization,r.email,r.phone_normalized,
  ])).digest("hex");
 }
 async function one(db,sql,args,code="US_MASTER_AUTHORITY_REQUIRED"){
