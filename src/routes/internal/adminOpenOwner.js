@@ -2019,6 +2019,12 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
+      if(requestMarketCode(request)==="US"&&request.status==="provisioning"){
+        // Historical two-phase rows are quarantined, not automatically replayed.
+        // Exact owner/auth/relation/audit readback is required before recovery.
+        await markDb.query("ROLLBACK");
+        return res.status(409).json({ok:false,error:"US_PROVISION_RECOVERY_REVIEW_REQUIRED",status:request.status});
+      }
       if(request.status !== "approved"){
         await markDb.query("ROLLBACK");
         return res.status(409).json({
@@ -2064,40 +2070,20 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
 
       request = provisioningResult.rows[0] || request;
 
-      await writeOwnerOpeningAuditEvent(markDb, {
+      const startedAudit=await writeOwnerOpeningAuditEvent(markDb, {
         request,
         eventType: "owner_opening.provision_started",
         admin,
       });
 
-      await markDb.query("COMMIT");
-    }catch(err){
-      try{ await markDb.query("ROLLBACK"); }catch(e){}
-      if(kgSharedMasterProof(request)&&err?.code)return res.status(resolveProvisionStatus(err)).json({ok:false,error:String(err.code)});
-      console.error("ADMIN_OPEN_OWNER_MARK_PROVISIONING_ERROR", err);
-      return res.status(500).json({
-        ok: false,
-        error: "ADMIN_OPEN_OWNER_MARK_PROVISIONING_FAILED",
-      });
-    }finally{
-      markDb.release();
-    }
-
-    try{
-      let provisionResult = null;
-      let bindResult = null;
-
-      if(requestMarketCode(request) === "US"){
-        // US owner creation, master-salon binding, state readback and
-        // audit must either all commit or all roll back together.
-        const usDb = await pool.connect();
-        try{
-          await usDb.query("BEGIN");
-          const locked=await usDb.query("SELECT * FROM public.owner_opening_requests WHERE id=$1 AND status='provisioning' FOR UPDATE",[requestId]);
-          if(locked.rows.length!==1)throw Object.assign(Error("US_PROVISION_REQUEST_STATE_CHANGED"),{code:"US_PROVISION_REQUEST_STATE_CHANGED",status:409});
-          request=locked.rows[0];
-          await assertUsOpenOwnerContract(usDb, request,{masterReceipt});
-
+      if(requestMarketCode(request)==="US"){
+        // Keep the existing canonical writer and source guard in ONE transaction.
+        // No committed intermediate provisioning state and no blind recovery.
+        // A failure rolls the request back to approved; a successful commit
+        // remains idempotently provisioned if the HTTP acknowledgement is lost.
+        if(!startedAudit?.id)throw Object.assign(Error("US_PROVISION_AUDIT_REQUIRED"),{code:"US_PROVISION_AUDIT_REQUIRED",status:409});
+        const usDb=markDb;
+        let provisionResult=null,bindResult=null;
           if(request.owner_type === "salon"){
             provisionResult = await createSalonCanonical({
               pool, dbClient: usDb,
@@ -2183,19 +2169,37 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
               bind_created:Boolean(bindResult),market_code:"US",
             },
           });
+          if(!auditEvent?.id)throw Object.assign(Error("US_PROVISION_AUDIT_REQUIRED"),{code:"US_PROVISION_AUDIT_REQUIRED",status:409});
           await usDb.query("COMMIT");
           return res.status(200).json({
             ok:true,request:finalRequest,provision_result:provisionResult,
             bind_result:bindResult,links,
             audit_event_id:auditEvent?.id ? Number(auditEvent.id) : null,
           });
-        }catch(err){
-          try{await usDb.query("ROLLBACK");}catch(_ignored){}
-          throw err;
-        }finally{
-          usDb.release();
-        }
       }
+      await markDb.query("COMMIT");
+    }catch(err){
+      try{ await markDb.query("ROLLBACK"); }catch(e){}
+      if(kgSharedMasterProof(request)&&err?.code)return res.status(resolveProvisionStatus(err)).json({ok:false,error:String(err.code)});
+      if(request&&requestMarketCode(request)==="US"){
+        // Never mark failed after an uncertain COMMIT or overwrite a concurrent
+        // successful request. Readback/retry uses the existing locked route.
+        return res.status(resolveProvisionStatus(err)).json({ok:false,error:buildProvisionErrorCode(err)});
+      }
+      console.error("ADMIN_OPEN_OWNER_MARK_PROVISIONING_ERROR", err);
+      return res.status(500).json({
+        ok: false,
+        error: "ADMIN_OPEN_OWNER_MARK_PROVISIONING_FAILED",
+      });
+    }finally{
+      markDb.release();
+    }
+
+    try{
+      let provisionResult = null;
+      let bindResult = null;
+
+
 
 
       if(request.owner_type === "salon"){
