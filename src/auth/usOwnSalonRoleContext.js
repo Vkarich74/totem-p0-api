@@ -26,17 +26,22 @@ async function readActive(db,userId,requestId,env,lock=false){
    if(current.rows.length!==1)throw fail("US_ROLE_CONTEXT_NOT_ACTIVE");
  }
  if(a.principalAuthUserId!==id(userId))throw fail("US_ROLE_CONTEXT_PRINCIPAL_MISMATCH");
- return {masterRequestId:id(requestId),masterId:a.masterId,masterSlug:found.rows[0].slug_final};
+ return {masterRequestId:id(requestId),masterId:a.masterId,masterSlug:found.rows[0].slug_final,salonId:a.salonId};
 }
 // First operational slice. Both flags default OFF; no cabinet-wide grant.
 export const usSharedMasterProfileEnabled=(env=process.env)=>usRoleContextEnabled(env)&&
  env.TOTEM_US_SHARED_MASTER_PROFILE_ENABLED==="true"&&
  env.TOTEM_US_SHARED_MASTER_PROFILE_RELEASE_APPROVED==="true";
 
+export const usSharedMasterServicesEnabled=(env=process.env)=>usRoleContextEnabled(env)&&
+ env.TOTEM_US_SHARED_MASTER_SERVICES_ENABLED==="true"&&
+ env.TOTEM_US_SHARED_MASTER_SERVICES_RELEASE_APPROVED==="true";
+
 // For writes caller MUST pass the existing transaction client with lock=true.
 // Use the same canonical paid salon projection as role switching/activation.
-export async function readUsOwnSalonProfileAccess(db,{auth,slug,env=process.env,lock=false}={}){
- if(!usSharedMasterProfileEnabled(env))throw fail("US_ROLE_CONTEXT_PROFILE_HOLD");
+async function readUsOwnSalonOperationAccess(db,{auth,slug,env=process.env,lock=false}={},operation){
+ if(!(operation==="profile"?usSharedMasterProfileEnabled(env):operation==="services"&&usSharedMasterServicesEnabled(env)))
+   throw fail("US_ROLE_CONTEXT_OPERATION_HOLD");
  if(auth?.source!=="session"||auth.role!=="master"||auth.us_role_context!==kind||
     auth.kg_shared_master_request_id||!id(auth.user_id)||!id(auth.master_request_id)||
     typeof auth.session_id!=="string"||!auth.session_id||auth.session_id.length>128||
@@ -52,12 +57,19 @@ export async function readUsOwnSalonProfileAccess(db,{auth,slug,env=process.env,
  if(a.masterSlug!==slug)throw fail("US_ROLE_CONTEXT_PROFILE_SCOPE");
  return a;
 }
-// Only the exact own-profile PATCH is added. All other mutations remain HOLD.
+export const readUsOwnSalonProfileAccess=(db,options)=>readUsOwnSalonOperationAccess(db,options,"profile");
+export const readUsOwnSalonServicesAccess=(db,options)=>readUsOwnSalonOperationAccess(db,options,"services");
+// Only explicitly reviewed profile and service-link operations are allowed.
 export function isUsRoleContextRouteAllowed(req,slug,env=process.env){
  const method=String(req.method||"").toUpperCase(),path=String(req.path||"");
  if(method==="GET"&&path==="/auth/session/resolve")return true;
  if(method==="POST"&&["/auth/role/switch","/auth/logout","/auth/logout-all"].includes(path))return true;
- return (method==="GET"||method==="PATCH"&&usSharedMasterProfileEnabled(env))&&/^[a-z0-9][a-z0-9-]{2,79}$/.test(slug)&&path==="/masters/"+slug;
+ if(!/^[a-z0-9][a-z0-9-]{2,79}$/.test(slug))return false;
+ if(usSharedMasterServicesEnabled(env)){
+   const links="/us-service-links/master/"+slug;
+   if(method==="GET"&&path===links+"/options"||method==="POST"&&path===links)return true;
+ }
+ return (method==="GET"||method==="PATCH"&&usSharedMasterProfileEnabled(env))&&path==="/masters/"+slug;
 }
 export async function resolveUsOwnSalonRoleContext(db,{payload,session,req,env=process.env}={}){
  if(!usRoleContextEnabled(env)||payload.us_role_context!==kind||payload.role!=="master"||

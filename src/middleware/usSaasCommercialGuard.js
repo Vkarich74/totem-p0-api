@@ -3,7 +3,7 @@
 import { getUsSaasAccess,readUsSaasProjectionPolicy } from
   "../services/billing/usSaasEntitlementProjection.js";
 
-import {readUsOwnSalonProfileAccess} from "../auth/usOwnSalonRoleContext.js";
+import {readUsOwnSalonProfileAccess,readUsOwnSalonServicesAccess} from "../auth/usOwnSalonRoleContext.js";
 
 function ownerType(value){
   const s=String(value||"").toLowerCase();
@@ -75,10 +75,13 @@ export function buildUsSaasCommercialGuard(pool,{
       // No generic master projection or wallet fallback for shared profiles.
       // The handler repeats this decision under the actual write transaction.
       if(req.auth?.us_role_context==="own_salon_master_v1"){
-        if(c.action!=="COMMERCIAL_WRITE"||c.target.type!=="master"||
-          String(req.method).toUpperCase()!=="PATCH"||path!=="/masters/"+req.auth.master_slug)
+        const method=String(req.method).toUpperCase();
+        const profile=method==="PATCH"&&path==="/masters/"+req.auth.master_slug;
+        const services=method==="POST"&&path==="/us-service-links/master/"+req.auth.master_slug;
+        if(c.action!=="COMMERCIAL_WRITE"||c.target.type!=="master"||!profile&&!services)
           return res.status(403).json({ok:false,error:"US_ROLE_CONTEXT_ROUTE_HOLD"});
-        const shared=await readUsOwnSalonProfileAccess(pool,{auth:req.auth,slug:c.target.slug});
+        const read=profile?readUsOwnSalonProfileAccess:readUsOwnSalonServicesAccess;
+        const shared=await read(pool,{auth:req.auth,slug:c.target.slug});
         if(shared.masterId!==owner.id)
           return res.status(403).json({ok:false,error:"US_ROLE_CONTEXT_PROFILE_SCOPE"});
         return next();

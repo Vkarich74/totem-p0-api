@@ -378,3 +378,88 @@ test("shared Master profile HTTP: one salon entitlement, scope and transaction-t
   for(const [k,v] of Object.entries(previous)){if(v===undefined)delete process.env[k];else process.env[k]=v;}
  }
 });
+
+
+// Reuse the already maintained service table fixture; real router, real PG,
+// no second commercial projection and no external billing calls.
+test("shared Master service links HTTP: paid create, scope, transaction rollback and same-row recovery",async()=>{
+ await activeOwn();
+ const ddl=await readFile(new URL("./sql/us_services_01_isolated_fixture.sql",import.meta.url),"utf8");
+ const first=ddl.indexOf("CREATE TABLE public.services("),last=ddl.indexOf("INSERT INTO public.auth_users",first);
+ assert.ok(first>=0&&last>first);
+ await q(ddl.slice(first,last));
+ const sessionId="11111111-2222-4333-8444-555555555555";
+ await q("UPDATE public.auth_sessions SET id=$1",[sessionId]);
+ await q("INSERT INTO public.masters(id,slug,name,user_id,active) VALUES(47,'fixture-other-master','Other',100,true); INSERT INTO public.master_salon(id,master_id,salon_id,status) VALUES(2,47,32,'active');");
+ await q("INSERT INTO public.services(service_id,name,duration_min,price) VALUES('10','Other master catalog',30,0); INSERT INTO public.salon_master_services(salon_id,master_id,service_pk,price,duration_min,active,currency_code) VALUES(32,47,1,0,30,true,'USD');");
+ const {default:express}=await import("express");
+ const {resolveAuth}=await import("../src/middleware/resolveAuth.js");
+ const {buildUsSaasCommercialGuard}=await import("../src/middleware/usSaasCommercialGuard.js");
+ const {buildUsServicePricesRouter}=await import("../src/routes/internalUsServicePrices.js");
+ const config={...env,TOTEM_US_SHARED_MASTER_SERVICES_ENABLED:"true",TOTEM_US_SHARED_MASTER_SERVICES_RELEASE_APPROVED:"true"};
+ const previous=Object.fromEntries(Object.keys(config).map(k=>[k,process.env[k]]));
+ Object.assign(process.env,config);
+ let beforeHandler=null;
+ const app=express();app.use(express.json());
+ app.use("/internal",(req,res,next)=>resolveAuth(req,res,next,{withClient:async fn=>{
+   const c=await db.connect();try{return await fn(c);}finally{c.release();}
+ }}),buildUsSaasCommercialGuard(db),async(_req,_res,next)=>{
+   try{if(beforeHandler){const action=beforeHandler;beforeHandler=null;await action();}next();}catch(err){next(err);}
+ },buildUsServicePricesRouter(db));
+ const server=app.listen(0,"127.0.0.1");
+ try{
+  await new Promise((resolve,reject)=>{server.once("listening",resolve);server.once("error",reject);});
+  const origin="http://127.0.0.1:"+server.address().port+"/internal";
+  const {access_token:token}=await switchRole({auth:{...auth,session_id:sessionId}});
+  const salonToken=jwt.sign({user_id:100,role:"salon_admin",session_id:sessionId,auth_session_version:2},env.JWT_SECRET,{expiresIn:300});
+  const path="/us-service-links/master/fixture-master";
+  const call=async(p,method="GET",body,accessToken=token)=>{
+   const r=await fetch(origin+p,{method,headers:{Authorization:"Bearer "+accessToken,"Content-Type":"application/json"},...(body?{body:JSON.stringify(body)}:{})});
+   return {status:r.status,body:await r.json()};
+  };
+  const totals=async()=>Promise.all(["services","salon_master_services","us_service_price_amounts"].map(count));
+  const body={operation:"create",salon_slug:"fixture-salon",name:"Fixture haircut",duration_min:45,amount_minor:1250};
+  delete process.env.TOTEM_US_SHARED_MASTER_SERVICES_RELEASE_APPROVED;
+  assert.equal((await call(path+"/options")).status,403);
+  assert.equal((await call(path,"POST",body)).status,403);
+  process.env.TOTEM_US_SHARED_MASTER_SERVICES_RELEASE_APPROVED="true";
+  let a=await call(path+"/options");assert.equal(a.status,200,JSON.stringify(a.body));
+  assert.deepEqual(a.body.salons.map(x=>x.id),[32]);assert.deepEqual(a.body.catalog_services,[]);
+  assert.equal((await call("/us-service-links/master/fixture-other-master/options")).status,403);
+  assert.equal((await call("/us-service-links/salon/fixture-salon","POST",{...body,master_id:47})).status,403);
+  assert.equal((await call("/us-service-prices/master/fixture-master/1","PUT",{amount_minor:10,expected_price_version:1})).status,403);
+  assert.equal((await call(path,"POST",{...body,salon_slug:"foreign-salon"})).status,404);
+  assert.equal((await call(path,"POST",{operation:"attach",salon_slug:"fixture-salon",service_pk:1,duration_min:30,amount_minor:1100})).status,404);
+  assert.deepEqual(await totals(),[1,1,0]);
+  a=await call(path,"POST",body);assert.equal(a.status,200,JSON.stringify(a.body));assert.equal(a.body.service.master_id,46);
+  assert.equal(a.body.service.salon_id,32);assert.equal(a.body.service.amount_minor,"1250");assert.equal(a.body.readback_verified,true);
+  const servicePk=a.body.service.service_pk;
+  assert.deepEqual(await totals(),[2,2,1]);
+  a=await call(path+"/options");assert.equal(a.status,200,JSON.stringify(a.body));assert.deepEqual(a.body.catalog_services.map(x=>x.service_pk),[servicePk]);
+  assert.equal((await call(path,"POST",{operation:"attach",salon_slug:"fixture-salon",service_pk:servicePk,duration_min:30,amount_minor:1100})).status,409);
+  const pending={...body,name:"Fixture second haircut"};
+  const reject=async()=>{const r=await call(path,"POST",pending);assert.equal(r.status,403,JSON.stringify(r.body));assert.deepEqual(await totals(),[2,2,1]);};
+  const restore=()=>q("UPDATE public.billing_subscriptions SET current_period_end=now()+interval '30 days',provider_verified_at=now(),subscription_status='active',provider_revoked_at=NULL");
+  await q("UPDATE public.billing_subscriptions SET current_period_end=clock_timestamp()");
+  await reject();
+  const salonBody={operation:"create",master_id:46,name:"Denied salon write",duration_min:30,amount_minor:500};
+  assert.equal((await call("/us-service-links/salon/fixture-salon","POST",salonBody,salonToken)).status,403);
+  await restore();
+  await q("UPDATE public.billing_subscriptions SET provider_verified_at=now()-interval '301 seconds'");await reject();await restore();
+  await q("UPDATE public.billing_subscriptions SET subscription_status='blocked',provider_revoked_at=now()");await reject();await restore();
+  beforeHandler=()=>q("UPDATE public.billing_subscriptions SET current_period_end=clock_timestamp()");await reject();assert.equal(beforeHandler,null);await restore();
+  // Trigger only inside the disposable DB: invalidate evidence AFTER the
+  // actual price insert, prove the final check rolls all three rows back.
+  await q("CREATE FUNCTION public.fixture_expire_service_proof() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN UPDATE public.billing_subscriptions SET current_period_end=clock_timestamp(); RETURN NEW; END; $$; CREATE TRIGGER fixture_expire_service_proof AFTER INSERT ON public.us_service_price_amounts FOR EACH ROW EXECUTE FUNCTION public.fixture_expire_service_proof()");
+  await reject();
+  await q("DROP TRIGGER fixture_expire_service_proof ON public.us_service_price_amounts; DROP FUNCTION public.fixture_expire_service_proof()");
+  beforeHandler=()=>q("UPDATE public.auth_sessions SET revoked_at=now()");await reject();assert.equal(beforeHandler,null);
+  await q("UPDATE public.auth_sessions SET revoked_at=NULL");
+  const recovered=await call(path,"POST",pending);assert.equal(recovered.status,200,JSON.stringify(recovered.body));
+  assert.deepEqual(await totals(),[3,3,2]);
+  assert.equal(await count("billing_subscriptions"),1);assert.equal(await count("auth_users"),1);assert.equal(await count("auth_sessions"),1);
+ }finally{
+  await new Promise(resolve=>server.close(resolve));
+  for(const [k,v] of Object.entries(previous)){if(v===undefined)delete process.env[k];else process.env[k]=v;}
+ }
+});
