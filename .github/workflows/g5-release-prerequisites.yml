@@ -12,6 +12,8 @@ on:
       - 'tests/sql/g5-master-role-authority-schema.sql'
       - 'src/routes/internalUsMasterConsent.js'
       - 'src/routes/internal.js'
+      - 'src/routes/internalOwnerRoleSession.js'
+      - 'tests/fixtures/g5-shared-sdk-browser*'
       - 'src/routes/auth.js'
       - 'src/auth/us*.js'
       - 'src/middleware/resolveAuth.js'
@@ -34,7 +36,7 @@ jobs:
   release-qa:
     if: github.head_ref == 'g5-t1-existing-queue-lease-20261124'
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:17
@@ -67,7 +69,31 @@ jobs:
       - run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
       - name: Prepare exact isolated schema
         run: node tests/setup-g5-release-isolated.mjs
+      - uses: actions/checkout@v4
+        with:
+          repository: Vkarich74/totem-sdk
+          ref: 82e81b155388275982c6b06e8b5c928dcf2b4f6b
+          path: sdk-shared
+          persist-credentials: false
+      - name: Install pinned SDK and isolated Chromium
+        working-directory: sdk-shared
+        run: |
+          npm ci --include=dev --ignore-scripts --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: Start pinned SDK on loopback
+        run: |
+          cp tests/fixtures/g5-shared-sdk-browser.html tests/fixtures/g5-shared-sdk-browser.jsx sdk-shared/
+          cd sdk-shared
+          VITE_API_BASE="" npm run dev -- --host 127.0.0.1 --port 4173 --strictPort > /tmp/g5-sdk-vite.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:4173/g5-shared-sdk-browser.html >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/g5-sdk-vite.log
+          exit 1
       - name: Previously unverified exact-head T1/T3/T4/T6 contracts
+        env:
+          G5_SHARED_SDK_BROWSER: "YES"
         run: |
           set -euo pipefail
           test -z "${DATABASE_URL:-}"

@@ -327,6 +327,14 @@ test("shared Master profile HTTP: one salon entitlement, scope and transaction-t
  Object.assign(process.env,config);
  let beforeHandler=null;
  const app=express();app.use(express.json());
+ app.use((req,res,next)=>{
+   if(req.headers.origin==="http://127.0.0.1:4173"){
+     res.set("Access-Control-Allow-Origin",req.headers.origin);
+     res.set("Access-Control-Allow-Methods","GET, POST, PUT, PATCH, OPTIONS");
+     res.set("Access-Control-Allow-Headers","Authorization, Content-Type, Idempotency-Key, X-Totem-Locale, Accept");
+     if(req.method==="OPTIONS")return res.sendStatus(204);
+   }next();
+ });
  app.use("/internal",(req,res,next)=>resolveAuth(req,res,next,{withClient:async fn=>{
    const c=await db.connect();try{return await fn(c);}finally{c.release();}
  }}),buildUsSaasCommercialGuard(db),async(_req,_res,next)=>{
@@ -402,6 +410,7 @@ test("shared Master service links, USD price, weekly hours and manual booking HT
  const {buildUsServicePricesRouter}=await import("../src/routes/internalUsServicePrices.js");
  const {default:buildMastersRouter}=await import("../src/routes/internal/masters.js");
  const {buildUsMasterManualBookingRouter}=await import("../src/routes/internalUsMasterManualBooking.js");
+ const {buildOwnerRoleSessionRouter}=await import("../src/routes/internalOwnerRoleSession.js");
  const {buildPublicCreateBooking}=await import("../src/routes/publicCreateBooking.js");
  const {buildUsPayC11OwnerRouter}=await import("../src/routes/internalUsPayC11Owner.js");
  const {buildUsServiceTaxSettingsRouter}=await import("../src/routes/internalUsServiceTaxSettings.js");
@@ -421,7 +430,7 @@ test("shared Master service links, USD price, weekly hours and manual booking HT
    const c=await db.connect();try{return await fn(c);}finally{c.release();}
  }}),buildUsSaasCommercialGuard(db),async(_req,_res,next)=>{
    try{if(beforeHandler){const action=beforeHandler;beforeHandler=null;await action();}next();}catch(err){next(err);}
- },buildUsServicePricesRouter(db),buildUsMasterManualBookingRouter(db),buildUsPayC11OwnerRouter(db),buildUsServiceTaxSettingsRouter(db),buildUsServiceTaxQuoteRouter(db),buildMastersRouter(db,(_req,_res,next)=>next()));
+ },buildOwnerRoleSessionRouter(db,(_req,_res,next)=>next()),buildUsServicePricesRouter(db),buildUsMasterManualBookingRouter(db),buildUsPayC11OwnerRouter(db),buildUsServiceTaxSettingsRouter(db),buildUsServiceTaxQuoteRouter(db),buildMastersRouter(db,(_req,_res,next)=>next()));
  const server=app.listen(0,"127.0.0.1");
  try{
   await new Promise((resolve,reject)=>{server.once("listening",resolve);server.once("error",reject);});
@@ -732,6 +741,14 @@ test("shared Master service links, USD price, weekly hours and manual booking HT
    assert.equal(forwarded,true);
    await q("UPDATE public.billing_subscriptions SET blocked_at=NULL");await restore();
    assert.equal(await count("billing_subscriptions"),1);assert.equal(await count("auth_users"),1);assert.equal(await count("auth_sessions"),1);
+   if(process.env.G5_SHARED_SDK_BROWSER==="YES"){
+    const {runSharedSdkBrowser}=await import("./fixtures/g5-shared-sdk-browser.mjs");
+    await runSharedSdkBrowser({base:"http://127.0.0.1:"+server.address().port,
+      salonToken,password,sessionId,link,date,startAt:await at("09:00"),
+      revoke:async()=>q("UPDATE public.billing_subscriptions SET provider_revoked_at=now(),subscription_status='blocked'"),
+      restore:async()=>{await q("UPDATE public.billing_subscriptions SET blocked_at=NULL");await restore();},q});
+    assert.equal(await count("billing_subscriptions"),1);assert.equal(await count("auth_users"),1);assert.equal(await count("auth_sessions"),1);
+   }
   }
  }finally{
   await new Promise(resolve=>server.close(resolve));
