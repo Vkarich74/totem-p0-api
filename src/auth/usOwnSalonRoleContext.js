@@ -9,24 +9,55 @@ const fail=(code,status=403)=>Object.assign(Error(code),{code,status});
 const id=x=>Number.isSafeInteger(Number(x))&&Number(x)>0?Number(x):0;
 export const usRoleContextEnabled=(env=process.env)=>env.TOTEM_US_OWN_SALON_ROLE_CONTEXT_ENABLED==="true"&&env.TOTEM_US_OWN_SALON_ROLE_CONTEXT_RELEASE_APPROVED==="true";
 export const isUsRoleContextClaim=p=>p?.us_role_context!==undefined||p?.us_master_request_id!==undefined;
-async function readActive(db,userId,requestId,env){
+async function readActive(db,userId,requestId,env,lock=false){
  const found=await db.query(`SELECT r.id,r.slug_final FROM public.owner_opening_requests r
  JOIN public.masters m ON m.id=r.created_owner_id AND m.user_id=r.created_auth_user_id
  WHERE r.id=$1 AND r.created_auth_user_id=$2 AND r.owner_type='master'
  AND r.status IN ('activated','email_ready','email_sent','email_failed') AND m.active=true
  AND r.source_namespace='odoo_online'`,[id(requestId),id(userId)]);
  if(found.rows.length!==1)throw fail("US_ROLE_CONTEXT_NOT_ACTIVE");
- const a=await readUsOwnSalonMasterAuthority(db,id(requestId),{env});
+ const a=await readUsOwnSalonMasterAuthority(db,id(requestId),{env,lock});
+ if(lock){
+   const current=await db.query("SELECT r.id FROM public.owner_opening_requests r "+
+    "JOIN public.masters m ON m.id=r.created_owner_id AND m.user_id=r.created_auth_user_id "+
+    "WHERE r.id=$1 AND r.created_auth_user_id=$2 AND r.owner_type='master' "+
+    "AND r.status IN ('activated','email_ready','email_sent','email_failed') AND m.active=true "+
+    "AND r.slug_final=$3 AND m.slug=$3 FOR UPDATE OF r,m",[id(requestId),id(userId),found.rows[0].slug_final]);
+   if(current.rows.length!==1)throw fail("US_ROLE_CONTEXT_NOT_ACTIVE");
+ }
  if(a.principalAuthUserId!==id(userId))throw fail("US_ROLE_CONTEXT_PRINCIPAL_MISMATCH");
  return {masterRequestId:id(requestId),masterId:a.masterId,masterSlug:found.rows[0].slug_final};
 }
-// This draft exposes session resolution and one own-profile GET only.
-// Full cabinet write, finance, and SDK route audit is a separate gate.
-export function isUsRoleContextRouteAllowed(req,slug){
+// First operational slice. Both flags default OFF; no cabinet-wide grant.
+export const usSharedMasterProfileEnabled=(env=process.env)=>usRoleContextEnabled(env)&&
+ env.TOTEM_US_SHARED_MASTER_PROFILE_ENABLED==="true"&&
+ env.TOTEM_US_SHARED_MASTER_PROFILE_RELEASE_APPROVED==="true";
+
+// For writes caller MUST pass the existing transaction client with lock=true.
+// Use the same canonical paid salon projection as role switching/activation.
+export async function readUsOwnSalonProfileAccess(db,{auth,slug,env=process.env,lock=false}={}){
+ if(!usSharedMasterProfileEnabled(env))throw fail("US_ROLE_CONTEXT_PROFILE_HOLD");
+ if(auth?.source!=="session"||auth.role!=="master"||auth.us_role_context!==kind||
+    auth.kg_shared_master_request_id||!id(auth.user_id)||!id(auth.master_request_id)||
+    typeof auth.session_id!=="string"||!auth.session_id||auth.session_id.length>128||
+    typeof slug!=="string"||slug!==auth.master_slug)
+   throw fail("US_ROLE_CONTEXT_PROFILE_SCOPE");
+ const sessions=await db.query("SELECT s.id FROM public.auth_sessions s "+
+    "JOIN public.auth_users u ON u.id=s.user_id "+
+    "WHERE s.id=$1 AND s.user_id=$2 AND s.revoked_at IS NULL "+
+    "AND s.expires_at>clock_timestamp() AND s.last_seen_at>clock_timestamp()-interval '24 hours' "+
+    "AND u.enabled=true AND u.role='salon_admin'"+(lock?" FOR UPDATE OF s,u":""),[auth.session_id,id(auth.user_id)]);
+ if(sessions.rows.length!==1)throw fail("US_ROLE_CONTEXT_SESSION_INVALID");
+ const a=await readActive(db,auth.user_id,auth.master_request_id,env,lock);
+ if(a.masterSlug!==slug)throw fail("US_ROLE_CONTEXT_PROFILE_SCOPE");
+ return a;
+}
+// Only the exact own-profile PATCH is added. All other mutations remain HOLD.
+export function isUsRoleContextRouteAllowed(req,slug,env=process.env){
  const method=String(req.method||"").toUpperCase(),path=String(req.path||"");
  if(method==="GET"&&path==="/auth/session/resolve")return true;
  if(method==="POST"&&["/auth/role/switch","/auth/logout","/auth/logout-all"].includes(path))return true;
- return method==="GET"&&/^[a-z0-9][a-z0-9-]{2,79}$/.test(slug)&&path==="/masters/"+slug;
+ return (method==="GET"||method==="PATCH"&&usSharedMasterProfileEnabled(env))&&/^[a-z0-9][a-z0-9-]{2,79}$/.test(slug)&&path==="/masters/"+slug;
 }
 export async function resolveUsOwnSalonRoleContext(db,{payload,session,req,env=process.env}={}){
  if(!usRoleContextEnabled(env)||payload.us_role_context!==kind||payload.role!=="master"||
@@ -34,7 +65,7 @@ export async function resolveUsOwnSalonRoleContext(db,{payload,session,req,env=p
     !Number.isFinite(payload.exp)||payload.exp*1000<=Date.now())
    throw fail("US_ROLE_CONTEXT_INVALID");
  const a=await readActive(db,session.user_id,payload.us_master_request_id,env);
- if(!isUsRoleContextRouteAllowed(req,a.masterSlug))throw fail("US_ROLE_CONTEXT_ROUTE_HOLD");
+ if(!isUsRoleContextRouteAllowed(req,a.masterSlug,env))throw fail("US_ROLE_CONTEXT_ROUTE_HOLD");
  return {role:"master",master_request_id:a.masterRequestId,master_slug:a.masterSlug,
    identity:{salons:[],masters:[a.masterId],ownership:[{owner_type:"master",owner_id:a.masterId,relation:"verified_own_salon_role_context"}]}};
 }

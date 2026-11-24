@@ -308,3 +308,73 @@ test("shared master never requests its own Odoo paid receipt or second billing p
  const denied=await prepareUsPaidActivationEvidence(r,{env,createClient:()=>{throw Error("UNEXPECTED_RPC");}});
  assert.equal(denied.status,"WAIT");assert.equal(denied.reason,"US_OWN_SALON_SHARED_SUBSCRIPTION_NO_SECOND_PAID_RECEIPT");
 });
+
+
+// Real resolver + commercial middleware + canonical profile handlers against
+// the same disposable PostgreSQL fixture. No external services.
+test("shared Master profile HTTP: one salon entitlement, scope and transaction-time revocation",async()=>{
+ await activeOwn();
+ const {default:express}=await import("express");
+ const {resolveAuth}=await import("../src/middleware/resolveAuth.js");
+ const {buildUsSaasCommercialGuard}=await import("../src/middleware/usSaasCommercialGuard.js");
+ const {default:buildMastersRouter}=await import("../src/routes/internal/masters.js");
+ const config={...env,TOTEM_US_SHARED_MASTER_PROFILE_ENABLED:"true",TOTEM_US_SHARED_MASTER_PROFILE_RELEASE_APPROVED:"true"};
+ const previous=Object.fromEntries(Object.keys(config).map(k=>[k,process.env[k]]));
+ Object.assign(process.env,config);
+ let beforeHandler=null;
+ const app=express();app.use(express.json());
+ app.use("/internal",(req,res,next)=>resolveAuth(req,res,next,{withClient:async fn=>{
+   const c=await db.connect();try{return await fn(c);}finally{c.release();}
+ }}),buildUsSaasCommercialGuard(db),async(_req,_res,next)=>{
+   try{if(beforeHandler){const action=beforeHandler;beforeHandler=null;await action();}next();}
+   catch(err){next(err);}
+ },buildMastersRouter(db,(_req,_res,next)=>next()));
+ const server=app.listen(0,"127.0.0.1");
+ try{
+  await new Promise((resolve,reject)=>{server.once("listening",resolve);server.once("error",reject);});
+  const base="http://127.0.0.1:"+server.address().port+"/internal";
+  const {access_token:token}=await switchRole();
+  const path="/masters/fixture-master";
+  const call=async(p=path,method="GET",data,authToken=token)=>{
+    const r=await fetch(base+p,{method,headers:{Authorization:"Bearer "+authToken,"Content-Type":"application/json"},...(data?{body:JSON.stringify(data)}:{})});
+    return {status:r.status,body:await r.json()};
+  };
+  const currentName=async()=>(await q("SELECT name FROM public.masters WHERE id=46")).rows[0].name;
+  let a=await call();assert.equal(a.status,200,JSON.stringify(a.body));
+  assert.equal(a.body.profile_can_write,true);assert.equal(a.body.billing_access.can_withdraw,false);
+  assert.equal(a.body.billing_access.can_write,false);
+  const body={revision:a.body.profile_revision,profile:{name:"New fixture master"}};
+  delete process.env.TOTEM_US_SHARED_MASTER_PROFILE_RELEASE_APPROVED;
+  assert.equal((await call()).body.profile_can_write,false);
+  assert.equal((await call(path,"PATCH",body)).status,403);
+  process.env.TOTEM_US_SHARED_MASTER_PROFILE_RELEASE_APPROVED="true";
+  for(const [p,m] of [["/masters/other","PATCH"],[path+"/services","POST"],[path+"/billing/unblock","POST"],["/salons/fixture-salon","PATCH"]]){
+   assert.equal((await call(p,m,body)).status,403);
+  }
+  a=await call(path,"PATCH",body);assert.equal(a.status,200,JSON.stringify(a.body));assert.equal(a.body.profile_saved,true);
+  assert.equal(await currentName(),"New fixture master");
+  assert.equal((await call(path,"PATCH",body)).status,409);
+  const next={revision:a.body.profile_revision,profile:{name:"Second fixture master"}};
+  const reject=async()=>{const r=await call(path,"PATCH",next);assert.equal(r.status,403,JSON.stringify(r.body));assert.equal(await currentName(),"New fixture master");};
+  const restore=()=>q("UPDATE public.billing_subscriptions SET current_period_end=now()+interval '30 days',provider_verified_at=now(),subscription_status='active',provider_revoked_at=NULL");
+  await q("UPDATE public.billing_subscriptions SET current_period_end=clock_timestamp()");await reject();await restore();
+  await q("UPDATE public.billing_subscriptions SET provider_verified_at=now()-interval '301 seconds'");await reject();await restore();
+  await q("UPDATE public.billing_subscriptions SET subscription_status='blocked',provider_revoked_at=now()");await reject();await restore();
+  await q("INSERT INTO public.billing_subscriptions(owner_type,owner_id,amount,currency) VALUES('master',46,0,'USD')");await reject();
+  await q("DELETE FROM public.billing_subscriptions WHERE owner_type='master'");
+  // A valid initial guard is not sufficient: simulate expiry between it and the actual handler.
+  beforeHandler=()=>q("UPDATE public.billing_subscriptions SET current_period_end=clock_timestamp()");
+  await reject();assert.equal(beforeHandler,null);await restore();
+  // Same check for session revocation between the two boundaries.
+  beforeHandler=()=>q("UPDATE public.auth_sessions SET revoked_at=now()");
+  await reject();assert.equal(beforeHandler,null);
+  await reject();
+  await q("UPDATE public.auth_sessions SET revoked_at=NULL");
+  const recovered=await call(path,"PATCH",next);assert.equal(recovered.status,200,JSON.stringify(recovered.body));
+  assert.equal(await currentName(),"Second fixture master");
+  assert.equal(await count("billing_subscriptions"),1);assert.equal(await count("auth_users"),1);assert.equal(await count("auth_sessions"),1);
+ }finally{
+  await new Promise(resolve=>server.close(resolve));
+  for(const [k,v] of Object.entries(previous)){if(v===undefined)delete process.env[k];else process.env[k]=v;}
+ }
+});

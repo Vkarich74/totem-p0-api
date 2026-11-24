@@ -1,4 +1,5 @@
 import {readUsOwnSalonMasterAuthority} from "../../services/provision/usMasterRoleAuthority.js";
+import {readUsOwnSalonProfileAccess,usSharedMasterProfileEnabled} from "../../auth/usOwnSalonRoleContext.js";
 import express from "express";
 import { getUsSaasAccess,readUsSaasProjectionPolicy } from "../../services/billing/usSaasEntitlementProjection.js";
 import crypto from "crypto";
@@ -872,6 +873,11 @@ r.get("/masters/:slug", internalReadRateLimit, async (req,res)=>{
       if(shared.masterId!==Number(master.id)||shared.principalAuthUserId!==Number(req.auth.user_id))
         return res.status(403).json({ok:false,error:"US_ROLE_CONTEXT_SCOPE_MISMATCH"});
     }
+    let sharedProfileWrite=false;
+    if(shared&&usSharedMasterProfileEnabled()){
+      const access=await readUsOwnSalonProfileAccess(pool,{auth:req.auth,slug});
+      sharedProfileWrite=access.masterId===Number(master.id);
+    }
     // Paid shared subscription readback does not unlock unaudited legacy
     // commercial/master write routes. Existing limited context is read-only.
     const billing_access=shared?{exists:true,subscription_status:"active",access_state:"active",
@@ -897,7 +903,7 @@ r.get("/masters/:slug", internalReadRateLimit, async (req,res)=>{
       );
       if(auth.rows.length){
         profile=ownerProfilePayload("master",slug,master,auth.rows[0].email,
-          billing_access.can_write);
+          shared?sharedProfileWrite:billing_access.can_write);
       }
     }
     return res.json({
@@ -1136,6 +1142,8 @@ r.patch("/masters/:slug", async(req,res)=>{
     await db.query("BEGIN");
     await db.query("SET LOCAL statement_timeout = '5000ms'");
     await db.query("SET LOCAL lock_timeout = '2000ms'");
+    const sharedContext=req.auth.us_role_context==="own_salon_master_v1";
+    const shared=sharedContext?await readUsOwnSalonProfileAccess(db,{auth:req.auth,slug:req.params.slug,lock:true}):null;
     const before=await db.query(
       `SELECT id,name,slug,user_id FROM public.masters
         WHERE slug=$1 LIMIT 1 FOR UPDATE`,
@@ -1147,20 +1155,20 @@ r.patch("/masters/:slug", async(req,res)=>{
     }
     const master=before.rows[0];
     if(!hasMasterOwnership(req,master.id) ||
-       String(req.auth.user_id)!==String(master.user_id)){
+       String(req.auth.user_id)!==String(master.user_id)||shared&&shared.masterId!==Number(master.id)){
       await db.query("ROLLBACK");
       return res.status(403).json({ok:false,error:"FORBIDDEN"});
     }
     const auth=await db.query(
       `SELECT email FROM public.auth_users WHERE id=$1 AND enabled=true
           AND role=$2 LIMIT 1`,
-      [master.user_id,req.auth.kg_shared_master_request_id?"salon_admin":"master"]
+      [master.user_id,(shared||req.auth.kg_shared_master_request_id)?"salon_admin":"master"]
     );
     if(auth.rows.length!==1){
       await db.query("ROLLBACK");
       return res.status(403).json({ok:false,error:"PROFILE_SESSION_INVALID"});
     }
-    await ensureMasterWriteAllowed(db,master.id);
+    if(!shared)await ensureMasterWriteAllowed(db,master.id);
     if(ownerProfileRevision("master",master)!==input.revision){
       await db.query("ROLLBACK");
       return res.status(409).json({ok:false,error:"PROFILE_REVISION_CONFLICT"});
@@ -1175,13 +1183,15 @@ r.patch("/masters/:slug", async(req,res)=>{
       await db.query("ROLLBACK");
       return res.status(409).json({ok:false,error:"PROFILE_STORAGE_READBACK_MISMATCH"});
     }
+    // Recheck paid period and session immediately before commit.
+    if(shared)await readUsOwnSalonProfileAccess(db,{auth:req.auth,slug:req.params.slug,lock:true});
     const profile=ownerProfilePayload("master",req.params.slug,after.rows[0],
       auth.rows[0].email,true,true);
     await db.query("COMMIT");
     return res.json({ok:true,master:after.rows[0],...profile});
   }catch(err){
     try{await db.query("ROLLBACK");}catch(_ignored){}
-    if(err.code==="BILLING_BLOCKED"){
+    if(err.code==="BILLING_BLOCKED"||req.auth?.us_role_context==="own_salon_master_v1"&&[403,409].includes(err?.status)){
       return res.status(403).json({ok:false,error:"PROFILE_BILLING_BLOCKED"});
     }
     console.error("MASTER_PROFILE_UPDATE_FAILED",err);
