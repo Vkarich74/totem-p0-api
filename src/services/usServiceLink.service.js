@@ -51,24 +51,11 @@ function validatePayload(ownerType, body) {
 }
 
 async function writeAllowed(db,ownerType,ownerId) {
+  // This route is US-only (ownerContext already verifies the exact US market).
+  // An unresolved projection must NEVER fall back to KG wallet/missing=active.
   const us=await getUsSaasAccess(db,{ownerType,ownerId,
     policy:readUsSaasProjectionPolicy()});
-  if(us.managed)return us.can_write;
-  const result=await db.query(
-    "SELECT subscription_status,blocked_at,next_charge_at,grace_until "+
-    "FROM public.billing_subscriptions WHERE owner_type=$1 AND owner_id=$2 LIMIT 1",
-    [ownerType,ownerId]
-  );
-  const billing=result.rows[0];
-  if (!billing) return true; // Existing owner billing contract: missing = active.
-  if (billing.blocked_at) return false;
-  const now=Date.now();
-  const next=billing.next_charge_at?new Date(billing.next_charge_at).getTime():null;
-  const grace=billing.grace_until?new Date(billing.grace_until).getTime():null;
-  if (next && (!Number.isFinite(next) || next<now)) {
-    return Boolean(grace && Number.isFinite(grace) && grace>=now);
-  }
-  return ["active","grace"].includes(String(billing.subscription_status||"active"));
+  return us.managed===true && us.can_write===true;
 }
 
 async function exactTarget(db,ownerType,scope,input) {
