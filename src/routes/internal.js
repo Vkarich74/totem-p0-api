@@ -1,3 +1,4 @@
+import {readKgSharedMasterBindings,kgSharedMasterClaim} from "../services/provision/kgSharedMasterIdentity.js";
 import {VERIFIED_SESSION_VERSION} from "../auth/verifiedSessionContract.js";
 import {switchUsOwnSalonRole} from "../auth/usOwnSalonRoleContext.js";
 import { buildOtpEmail, buildPasswordResetEmail, buildEmailMime } from "../services/notifications/emailTemplates.js";
@@ -586,7 +587,10 @@ LIMIT 1
 FOR UPDATE
 `,[target.value, safeRole, safeOwnerSlug]);
 
-return userRes.rows[0] || null;
+if(userRes.rows.length)return userRes.rows[0];
+if(safeRole!=="master")return null;
+const shared=await readKgSharedMasterBindings(db,{target,masterSlug:safeOwnerSlug});
+return shared.length===1?shared[0]:null;
 }
 
 async function listAuthUsersByTargetRole(db, { target, requestedRole }){
@@ -628,7 +632,10 @@ ORDER BY id ASC
 FOR UPDATE
 `, [target.value, safeRole]);
 
-return userRes.rows || [];
+const ordinary=userRes.rows||[];
+if(safeRole!=="master")return ordinary;
+const shared=await readKgSharedMasterBindings(db,{target});
+return [...ordinary,...shared];
 }
 
 function getOwnerSlugFromAuthUser(user, requestedRole){
@@ -796,7 +803,7 @@ await db.query(`
   )
 `, insertParams);
 
-console.log("OTP_CODE", target, purpose, code);
+// Never log authentication OTP or recipient.
 if(channel==="email"){
   const { locale } = await resolveRecipientLocale(db, { userId, requestedLocale });
   Promise.resolve()
@@ -990,6 +997,7 @@ role:String(auth?.role || "public"),
 source:auth?.source || null,
 session_id:auth?.session_id || null,
 session_source:auth?.session_source || null,
+...(auth?.kg_shared_master_request_id?{master_slug:auth.master_slug}:{}),
 session_expires_at:auth?.session_expires_at || null,
 last_seen_at:auth?.last_seen_at || null,
 idle_timeout_at:auth?.idle_timeout_at || null
@@ -1152,7 +1160,8 @@ const accessToken = jwt.sign(
 user_id: Number(user.id),
 role: String(user.role),
 session_id: session.id,
-auth_session_version: VERIFIED_SESSION_VERSION
+auth_session_version: VERIFIED_SESSION_VERSION,
+...kgSharedMasterClaim(user)
 },
 secret
 );
@@ -2162,7 +2171,8 @@ r.post("/auth/verify", async (req,res)=>{
           user_id: Number(user.id),
           role: String(user.role),
           session_id: session.id,
-        auth_session_version: VERIFIED_SESSION_VERSION
+        auth_session_version: VERIFIED_SESSION_VERSION,
+...kgSharedMasterClaim(user)
         },
         secret
       );

@@ -1,3 +1,4 @@
+import {assertKgSharedMasterPending} from "./kgSharedMasterIdentity.js";
 import {assertUsImportedMasterProvision} from "./usImportedMasterProvision.js";
 
 import {
@@ -229,7 +230,7 @@ async function resolveMasterSlugForReservation(db, requestedSlug){
   return ensureUniqueMasterSlug(db, requested);
 }
 
-export async function createMasterCanonical({ pool, payload, dbClient = null, masterReceipt=null }){
+export async function createMasterCanonical({ pool, payload, dbClient = null, kgSharedRequestId=null, masterReceipt=null }){
   const input = validateMasterProvisionInput(payload || {});
   const ownsTransaction = !dbClient;
   const db = dbClient || await pool.connect();
@@ -250,6 +251,23 @@ export async function createMasterCanonical({ pool, payload, dbClient = null, ma
     }
     input.phone = phoneResult.phone;
 
+    if(kgSharedRequestId){
+      if(!dbClient||input.market_code!=="KG")throw Object.assign(Error("KG_SHARED_MASTER_TRANSACTION_REQUIRED"),{code:"KG_SHARED_MASTER_TRANSACTION_REQUIRED",status:409});
+      const r=(await db.query("SELECT * FROM public.owner_opening_requests WHERE id=$1 AND status='provisioning' FOR UPDATE",[kgSharedRequestId])).rows[0];
+      const a=await assertKgSharedMasterPending(db,r);
+      if(r.email!==input.email||r.name!==input.name||r.slug_final!==input.master_slug||r.phone_normalized!==input.phone)
+        throw Object.assign(Error("KG_SHARED_MASTER_INPUT_CHANGED"),{code:"KG_SHARED_MASTER_INPUT_CHANGED",status:409});
+      const availability=await checkSlugAvailability(db,"master",input.master_slug);
+      if(!availability.available||availability.slug!==input.master_slug)throw Object.assign(Error("SLUG_NOT_AVAILABLE"),{code:"SLUG_NOT_AVAILABLE",status:409});
+      const reservation=await reserveSlug(db,{owner_type:"master",slug:input.master_slug,meta:{source:"kg_shared_master"}});
+      const master=(await db.query("INSERT INTO public.masters(slug,name,active,created_at,user_id) VALUES($1,$2,false,NOW(),$3) RETURNING *",
+        [input.master_slug,input.name,a.principal_auth_user_id])).rows[0];
+      const user=(await db.query("SELECT id,email,role,master_slug,master_id,enabled,must_set_password,phone FROM public.auth_users WHERE id=$1",
+        [a.principal_auth_user_id])).rows[0];
+      const activatedReservation=await activateReservedSlug(db,{owner_type:"master",slug:master.slug,owner_id:Number(master.id),reservation_id:reservation?.reservation?.id||reservation?.id||null});
+      return buildProvisionResult({user,master,onboardingIdentity:null,onboardingTransition:null,reservation:activatedReservation?.reservation||activatedReservation,
+        meta:buildProvisionMeta({created:true})});
+    }
     // A US verified intake must not be bypassed by the generic create route.
     if(input.market_code==="US"&&!masterReceipt){
       const imported=await db.query("SELECT id FROM public.owner_opening_requests WHERE owner_type='master' AND source_namespace='odoo_online' AND (slug_final=$1 OR lower(email)=lower($2) OR phone_normalized=$3) LIMIT 1",[input.master_slug,input.email,input.phone]);
@@ -439,7 +457,7 @@ export async function createMasterCanonical({ pool, payload, dbClient = null, ma
       try{ await db.query("ROLLBACK"); }catch(_error){}
     }
 
-    const resolved = err?.status&&/^US_MASTER_|^US_ODOO_/.test(err?.code||'')?{status:err.status,error:err.code}:resolveProvisionError(err);
+    const resolved = err?.status&&/^(KG_SHARED_MASTER_|US_MASTER_|US_ODOO_)/.test(err?.code||"")?{status:err.status,error:err.code}:resolveProvisionError(err);
     const wrapped = new Error(resolved.error);
     wrapped.code = resolved.error;
     wrapped.status = resolved.status;

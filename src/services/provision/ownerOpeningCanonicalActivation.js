@@ -1,3 +1,4 @@
+import {kgSharedMasterProof,assertKgSharedMasterActivation} from "./kgSharedMasterIdentity.js";
 import {isUsOwnSalonMaster,assertUsOwnSalonActivationReady} from "./usOwnSalonCanonicalActivation.js";
 import { persistUsSaasPaidProjection } from "../billing/usSaasEntitlementProjection.js";
 // G5-T3: one transactional Core Owner Opening activation for Admin and
@@ -101,6 +102,10 @@ export async function activateOwnerOpeningCanonical({
       throw fail("OWNER_OPENING_REQUEST_STATUS_INVALID");
     }
 
+    if(kgSharedMasterProof(current)){
+      if(market!=="KG")throw fail("KG_SHARED_MASTER_MARKET_MISMATCH");
+      await assertKgSharedMasterActivation(db,current);
+    }
     let sharedAuthority=null;
     if(market==="US"&&isUsOwnSalonMaster(current)){
       // The same salon subscription is already projected. Never consume a
