@@ -79,7 +79,7 @@ export function createUsOdooReadOnlyClient({
       }
       const result = await rpc("object", "execute_kw", [
         database, await userId(), apiKey, model, "search_read", [domain],
-        { fields, limit, context: { allowed_company_ids: [4], company_id: 4 } },
+        { fields, limit, order: "id asc", context: { allowed_company_ids: [4], company_id: 4 } },
       ]);
       if (!Array.isArray(result)) throw new Error("US_ODOO_RESULT_INVALID");
       return result;

@@ -5,6 +5,10 @@ import assert from "node:assert/strict";
 import {readFile} from "node:fs/promises";
 import {setTimeout as delay} from "node:timers/promises";
 import pg from "pg";
+import {createUsOdooReadOnlyClient} from "../src/services/billing/usOdooReadOnlyClient.js";
+import {prepareUsPaidActivationEvidenceBatch} from "../src/services/billing/usOdooBatchReadback.js";
+import {reconcileUsSaasOpeningsBatch} from "../src/services/billing/usSaasReconciliation.js";
+import {fixtureData,fixtureEnv,fixtureTransport} from "./fixtures/g5-odoo-batch-fixture.mjs";
 import {runUsSaasReconciliationTick} from "../jobs/usSaasReconciliationTick.js";
 import {reconcileUsSaasOpening} from "../src/services/billing/usSaasReconciliation.js";
 import {US_SAAS_SYSTEM_ACTOR,writeSystemUsSaasReconciliationAudit} from "../src/services/billing/usSaasReconciliationAudit.js";
@@ -167,3 +171,59 @@ for(const [n,latency] of [[50,1000],[250,250],[1000,200]]){
   console.log("G5_T6D_LOAD "+JSON.stringify({owners:n,simulatedOdooMs:latency,elapsedMs:Date.now()-t,peakConcurrent:peak,ticks,maxEvidenceAgeSeconds:maxAge}));
  });
 }
+
+test("T6-F real PostgreSQL queue batch: two forced-due cycles of 1000 populated owner proofs", {timeout:480000},async()=>{
+ const n=1000;await seed(n);
+ const f=fixtureData(n),transport=fixtureTransport(f.data,{latency:(model,i)=>model==="auth"?400:i%5===0?600:330});
+ const batchEnv=fixtureEnv();
+ const reconcileBatch=opts=>reconcileUsSaasOpeningsBatch({...opts,
+  readback:(requests,options)=>prepareUsPaidActivationEvidenceBatch(requests,{...options,
+   createClient:o=>createUsOdooReadOnlyClient({...o,fetchImpl:transport.fetchImpl})})});
+ const samples=[];
+ for(let cycle=1;cycle<=2;cycle++){
+   // Force due times in isolated fixture only. Not a wall-clock scheduler SLA.
+   await q("UPDATE public.billing_subscriptions SET provider_verified_at=clock_timestamp()-interval '65 seconds' WHERE provider_namespace='odoo_online'");
+   const started=Date.now(),beforeReads=transport.metrics.reads,beforeAuth=transport.metrics.auth;
+   let maxAge=0;
+   for(let i=0;i<n/50;i++){
+    const r=await runUsSaasReconciliationTick({db,env:batchEnv,limit:50,concurrency:4,reconcileBatch});
+    assert.equal(r.status,"RAN");assert.equal(r.workers[0].done,50,JSON.stringify(r));
+    const age=Number((await q("SELECT max(extract(epoch from clock_timestamp()-provider_verified_at)) AS age FROM public.billing_subscriptions WHERE provider_namespace='odoo_online'")).rows[0].age);
+    maxAge=Math.max(age,maxAge);assert.ok(age<300);
+    assert.ok(Date.now()-started<230000);
+   }
+   assert.equal(await count("SELECT count(*) AS n FROM public.audit_events"),cycle*n);
+   assert.equal(await count("SELECT count(*) AS n FROM (SELECT data->>'request_id' FROM public.audit_events GROUP BY data->>'request_id' HAVING count(*)=$1) a",[cycle]),n);
+   assert.equal(await count("SELECT count(*) AS n FROM public.billing_subscriptions WHERE provider_namespace='odoo_online' AND subscription_status='active'"),n);
+   assert.equal(await count("SELECT count(*) AS n FROM public.billing_subscriptions WHERE owner_id=999999 AND wallet_only AND provider_namespace IS NULL"),1);
+   const sample={cycle,owners:n,elapsedMs:Date.now()-started,objectReads:transport.metrics.reads-beforeReads,
+    auth:transport.metrics.auth-beforeAuth,maxEvidenceAgeSeconds:maxAge,peakProviderConcurrency:transport.metrics.peak};
+   assert.equal(sample.objectReads,200);assert.equal(sample.auth,20);samples.push(sample);
+   console.log("G5_T6F_LOAD "+JSON.stringify(sample));
+   // Queue idempotency is minute-bucketed. A forced due cycle is a distinct
+   // logical cycle, so make the preceding completed fixture keys historical.
+   if(cycle===1)await q("UPDATE public.async_jobs SET idempotency_key=idempotency_key||':fixture-cycle1' WHERE status='done'");
+ }
+ assert.equal(await count("SELECT count(*) AS n FROM public.async_jobs WHERE status='done'"),2*n);
+});
+test("T6-F real PostgreSQL batch failure does not refresh or revoke; leases retry",async()=>{
+ await seed(4);const before=await count("SELECT count(*) AS n FROM public.billing_subscriptions WHERE provider_namespace='odoo_online' AND provider_verified_at<clock_timestamp()-interval '60 seconds'");
+ const f=fixtureData(4),transport=fixtureTransport(f.data,{mutate:({model,rows})=>{if(model==="account.move")throw Error("FIXTURE_OUTAGE");return rows;}});
+ const r=await runUsSaasReconciliationTick({db,env:fixtureEnv(),limit:4,concurrency:2,
+  reconcileBatch:opts=>reconcileUsSaasOpeningsBatch({...opts,readback:(requests,o)=>prepareUsPaidActivationEvidenceBatch(requests,{...o,
+   createClient:c=>createUsOdooReadOnlyClient({...c,fetchImpl:transport.fetchImpl})})})});
+ assert.equal(r.workers[0].retried,4);assert.equal(await count("SELECT count(*) AS n FROM public.audit_events"),0);
+ assert.equal(await count("SELECT count(*) AS n FROM public.billing_subscriptions WHERE provider_namespace='odoo_online' AND provider_verified_at<clock_timestamp()-interval '60 seconds'"),before);
+});
+test("T6-F real PostgreSQL lease loss fences business transaction",async()=>{
+ await seed(2);const f=fixtureData(2),transport=fixtureTransport(f.data);
+ const r=await runUsSaasReconciliationTick({db,env:fixtureEnv(),limit:2,concurrency:2,
+  reconcileBatch:opts=>reconcileUsSaasOpeningsBatch({...opts,readback:async(requests,o)=>{
+   const proofs=await prepareUsPaidActivationEvidenceBatch(requests,{...o,createClient:c=>createUsOdooReadOnlyClient({...c,fetchImpl:transport.fetchImpl})});
+   await q("UPDATE public.async_jobs SET lease_until=clock_timestamp()-interval '1 second' WHERE payload->>'request_id'='1'");
+   return proofs;
+  }})});
+ assert.equal(r.workers[0].done,1);assert.equal(r.workers[0].retried,1);
+ assert.equal(await count("SELECT count(*) AS n FROM public.audit_events"),1);
+ assert.equal(await count("SELECT count(*) AS n FROM public.audit_events WHERE data->>'request_id'='2'"),1);
+});

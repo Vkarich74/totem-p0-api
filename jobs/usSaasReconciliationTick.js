@@ -2,8 +2,8 @@
 // No auto-start, no Odoo writes, no account provisioning or welcome email.
 // Runtime wiring requires approved system audit identity and load/SQL QA.
 import { enqueueJob } from "../utils/enqueueJob.js";
-import { runQueueWorker } from "./queueWorker.js";
-import { reconcileUsSaasOpening } from "../src/services/billing/usSaasReconciliation.js";
+import { runQueueWorker,runQueueBatchWorker } from "./queueWorker.js";
+import { reconcileUsSaasOpening,reconcileUsSaasOpeningsBatch } from "../src/services/billing/usSaasReconciliation.js";
 import { US_SAAS_SYSTEM_ACTOR, writeSystemUsSaasReconciliationAudit } from "../src/services/billing/usSaasReconciliationAudit.js";
 
 export const US_SAAS_RECONCILE_JOB = "us_saas_reconcile";
@@ -46,6 +46,7 @@ export async function runUsSaasReconciliationTick({
   db,env=process.env,writeAudit=writeSystemUsSaasReconciliationAudit,
   operator=US_SAAS_SYSTEM_ACTOR,limit=8,concurrency=2,
   enqueue=enqueueJob,worker=runQueueWorker,reconcile=reconcileUsSaasOpening,
+  batchWorker=runQueueBatchWorker,reconcileBatch=reconcileUsSaasOpeningsBatch,
 }={}){
   if(!enabled(env))return {status:"HOLD",enqueued:0,workers:[]};
   if(!db||typeof db.connect!=="function"||typeof writeAudit!=="function"||
@@ -77,6 +78,19 @@ export async function runUsSaasReconciliationTick({
       if(q.enqueued)enqueued++;
     }
     await client.query("COMMIT");begun=false;
+    // Explicit draft-only opt-in. No scheduler start or flag change here.
+    if(env.TOTEM_US_ODOO_SAAS_BATCH_READBACK_ENABLED==="true"){
+      const batch=await batchWorker({db,jobType:US_SAAS_RECONCILE_JOB,limit,leaseMs:60000,
+        handler:async items=>{
+          if(!enabled(env))throw error("US_SAAS_RECONCILIATION_HOLD");
+          if(items.some(j=>!validId(j.payload?.request_id)))throw error("US_SAAS_SCHEDULER_REQUEST_INVALID");
+          const results=await reconcileBatch({pool:db,env,writeAudit,operator,concurrency,
+            jobs:items.map(j=>({requestId:Number(j.payload.request_id),signal:j.signal,assertLease:j.assertLease}))});
+          return results.map(r=>r?.status==="PAID_VERIFIED"||r?.status==="REVOKED"?null:
+            r instanceof Error?r:error("US_SAAS_RECONCILIATION_WAIT"));
+        }});
+      return {status:"RAN",enqueued,workers:[batch]};
+    }
     const handler=async(payload,{signal}={})=>{
       if(!enabled(env)||signal?.aborted)throw error("US_SAAS_RECONCILIATION_HOLD");
       if(!validId(payload?.request_id))throw error("US_SAAS_SCHEDULER_REQUEST_INVALID");

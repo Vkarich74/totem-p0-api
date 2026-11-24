@@ -1,4 +1,4 @@
-name: G5 T6-D isolated PostgreSQL 17 (no deploy)
+name: G5 T6-D/F isolated PostgreSQL 17 (no deploy)
 on:
   pull_request:
     branches: [main]
@@ -6,6 +6,8 @@ on:
     paths:
       - '.github/workflows/g5-t6d-postgres.yml'
       - 'tests/g5-t6d-postgres.test.mjs'
+      - 'tests/g5-odoo-batch-readback.test.mjs'
+      - 'tests/fixtures/g5-odoo-batch-fixture.mjs'
       - 'tests/sql/g5-t6d-prod-schema-fixture.sql'
       - 'tests/g5-us-saas-reconciliation-tick.test.mjs'
       - 'jobs/usSaasReconciliationTick.js'
@@ -17,7 +19,7 @@ jobs:
   postgres:
     if: github.head_ref == 'g5-t1-existing-queue-lease-20261124'
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:17
@@ -55,4 +57,5 @@ jobs:
           node --check jobs/usSaasReconciliationTick.js
           node --check src/services/billing/usSaasReconciliationAudit.js
           node --test tests/g5-us-saas-reconciliation-tick.test.mjs
+          node --test tests/g5-odoo-paid-entitlement.test.mjs tests/g5-odoo-batch-readback.test.mjs tests/g5-us-saas-expiry-legacy.test.mjs
           node --test tests/g5-t6d-postgres.test.mjs

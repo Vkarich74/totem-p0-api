@@ -181,3 +181,46 @@ export async function runQueueWorker({
   }
   return result;
 }
+
+// Opt-in batch handler for one explicitly registered job type. Uses the SAME
+// claims, lease heartbeat, completion and retry paths; no new queue/table.
+export async function runQueueBatchWorker({db=pool,jobType,limit=50,leaseMs=60000,
+ handler,workerId=randomUUID()}={}){
+ if(!JOB_TYPE.test(jobType||"")||!Number.isInteger(limit)||limit<1||limit>50||
+   !Number.isInteger(leaseMs)||leaseMs<1000||leaseMs>900000||
+   typeof handler!=="function"||!db||typeof db.connect!=="function"||
+   typeof db.query!=="function"||typeof workerId!=="string"||!workerId.length||workerId.length>128)
+   throw Error("ASYNC_JOB_BATCH_CONTRACT_INVALID");
+ const result={claimed:0,done:0,retried:0,failed:0,lost_lease:0},entries=[],runs=[];
+ const types=[jobType];
+ await resolveStaleExhausted(db,types);
+ let failure=null;
+ try{
+   for(let i=0;i<limit;i++){
+     const job=await claimNext(db,types,workerId,leaseMs);if(!job)break;
+     result.claimed++;
+     // Heartbeat starts immediately, even while the rest of the batch is claimed.
+     const run=executeClaimed(db,job,(payload,{signal})=>new Promise((resolve,reject)=>{
+       entries.push({payload,signal,resolve,reject,assertLease:async tx=>{
+         if(signal.aborted)throw Error("ASYNC_JOB_BATCH_LEASE_LOST");
+         const check=await tx.query(
+           "SELECT id FROM public.async_jobs WHERE id=$1 AND lease_token=$2 AND status='processing' AND lease_until>clock_timestamp() FOR UPDATE",
+           [job.id,job.lease_token]);
+         if(check.rows.length!==1)throw Error("ASYNC_JOB_BATCH_LEASE_LOST");
+       }});
+     }),leaseMs);
+     runs.push(run.then(out=>{result[out]++;},e=>{failure=e;}));
+   }
+   if(entries.length){
+     const outcomes=await handler(entries.map(({payload,signal,assertLease})=>({payload,signal,assertLease})));
+     if(!Array.isArray(outcomes)||outcomes.length!==entries.length||
+        outcomes.some(x=>x!==null&&!(x instanceof Error)))throw Error("ASYNC_JOB_BATCH_RESULT_INVALID");
+     for(let i=0;i<entries.length;i++){
+       if(outcomes[i]===null)entries[i].resolve();else entries[i].reject(outcomes[i]);
+     }
+   }
+ }catch(e){failure=e;for(const x of entries)x.reject(e);}
+ await Promise.all(runs);
+ if(failure)throw failure;
+ return result;
+}
