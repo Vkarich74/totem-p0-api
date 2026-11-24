@@ -115,3 +115,23 @@ test("HOLD never instantiates a provider; batch size enforced",async()=>{
  await assert.rejects(()=>prepareUsPaidActivationEvidenceBatch([]),/BATCH_SIZE_INVALID/);
  await assert.rejects(()=>prepareUsPaidActivationEvidenceBatch(fixtureData(51,NOW).requests),/BATCH_SIZE_INVALID/);
 });
+
+function addSecondInvoice(f,{refund=false,old=false}={}){
+ const invoice={...f.data["account.move"][0],id:90001,invoice_line_ids:[90002],payment_ids:[90003],
+ reversal_move_ids:refund?[90004]:[]};
+ const line={...f.data["account.move.line"][0],id:90002,move_id:[90001,"fixture"]};
+ if(old){line.deferred_start_date="2026-10-01";line.deferred_end_date="2026-10-31";f.data["sale.order"][0].start_date="2026-10-01";}
+ f.data["account.move"].push(invoice);f.data["account.move.line"].push(line);
+ f.data["account.payment"].push({...f.data["account.payment"][0],id:90003,invoice_ids:[90001]});
+ f.data["sale.order"][0].invoice_ids.push(90001);
+}
+test("all linked invoices are checked: later reversal cannot be hidden by earlier paid proof",async()=>{
+ const r=await parity({change:f=>addSecondInvoice(f,{refund:true})});
+ assert.equal(r.actual[0].reason,"ODOO_INVOICE_REVERSED");
+});
+test("multiple current invoices are ambiguous, older valid invoice can coexist",async()=>{
+ const a=await parity({change:f=>addSecondInvoice(f)});
+ assert.equal(a.actual[0].reason,"ODOO_MULTIPLE_CURRENT_PAID_INVOICES");
+ const b=await parity({change:f=>addSecondInvoice(f,{old:true})});
+ assert.equal(b.actual[0].status,"PAID_VERIFIED");assert.equal(b.actual[0].invoiceId,40001);
+});

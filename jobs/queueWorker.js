@@ -78,6 +78,7 @@ async function executeClaimed(db, job, handler, leaseMs) {
         `UPDATE public.async_jobs
          SET lease_until = now() + ($3::integer * interval '1 millisecond')
          WHERE id = $1 AND lease_token = $2 AND status = 'processing'
+           AND lease_until > clock_timestamp()
          RETURNING id`,
         [job.id, token, leaseMs],
       );

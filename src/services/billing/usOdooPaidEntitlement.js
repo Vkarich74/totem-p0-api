@@ -158,6 +158,7 @@ export async function verifyUsOdooPaidEntitlement({
 
     let settled = false;
     let covered = false;
+    const currentProofs = new Map();
     for (const invoice of invoices) {
       const invoiceId = id(invoice.id);
       if (!invoiceIds.includes(invoiceId)) return WAIT("ODOO_INVOICE_READBACK_MISMATCH");
@@ -236,7 +237,7 @@ export async function verifyUsOdooPaidEntitlement({
         if (!interval) continue;
         covered = true;
         if (!interval.current) continue;
-        return Object.freeze({
+        const proof = Object.freeze({
           status: "PAID_VERIFIED", canActivate: true,
           companyId: COMPANY_ID, websiteId: WEBSITE_ID, partnerId,
           subscriptionOrderId: orderId, invoiceId,
@@ -245,8 +246,14 @@ export async function verifyUsOdooPaidEntitlement({
           commercialPolicyVersion: policy.version,
           evidence: "posted_paid_invoice_linked_line_approved_deferred_period",
         });
+        currentProofs.set(invoiceId,proof);
       }
     }
+    // Do not let the ordering of invoices hide a later linked reversal,
+    // scope mismatch or a second current invoice. One unique current invoice
+    // is required; ambiguous current invoices fail closed without revocation.
+    if (currentProofs.size > 1) return WAIT("ODOO_MULTIPLE_CURRENT_PAID_INVOICES");
+    if (currentProofs.size === 1) return [...currentProofs.values()][0];
     if (!settled) return WAIT("ODOO_PAID_INVOICE_NOT_FOUND");
     if (!covered) return WAIT("ODOO_PAYMENT_OR_PERIOD_UNVERIFIED");
     return WAIT("ODOO_PAID_PERIOD_NOT_CURRENT");

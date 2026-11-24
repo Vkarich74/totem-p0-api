@@ -172,7 +172,7 @@ for(const [n,latency] of [[50,1000],[250,250],[1000,200]]){
  });
 }
 
-test("T6-F real PostgreSQL queue batch: two forced-due cycles of 1000 populated owner proofs", {timeout:480000},async()=>{
+test("T6-F real PostgreSQL queue batch: two naturally due cycles of 1000 populated owner proofs", {timeout:480000},async()=>{
  const n=1000;await seed(n);
  const f=fixtureData(n),transport=fixtureTransport(f.data,{latency:(model,i)=>model==="auth"?400:i%5===0?600:330});
  const batchEnv=fixtureEnv();
@@ -181,8 +181,12 @@ test("T6-F real PostgreSQL queue batch: two forced-due cycles of 1000 populated 
    createClient:o=>createUsOdooReadOnlyClient({...o,fetchImpl:transport.fetchImpl})})});
  const samples=[];
  for(let cycle=1;cycle<=2;cycle++){
-   // Force due times in isolated fixture only. Not a wall-clock scheduler SLA.
-   await q("UPDATE public.billing_subscriptions SET provider_verified_at=clock_timestamp()-interval '65 seconds' WHERE provider_namespace='odoo_online'");
+   // The first cycle is due at seed. For the second use the actual 60s
+   // threshold, without altering queue keys or verified_at.
+   if(cycle===2){
+    const waitMs=Number((await q("SELECT GREATEST(0,ceil(61000-1000*extract(epoch from clock_timestamp()-max(provider_verified_at)))) AS ms FROM public.billing_subscriptions WHERE provider_namespace='odoo_online'")).rows[0].ms);
+    if(waitMs>0)await delay(waitMs);
+   }
    const started=Date.now(),beforeReads=transport.metrics.reads,beforeAuth=transport.metrics.auth;
    let maxAge=0;
    for(let i=0;i<n/50;i++){
@@ -200,9 +204,7 @@ test("T6-F real PostgreSQL queue batch: two forced-due cycles of 1000 populated 
     auth:transport.metrics.auth-beforeAuth,maxEvidenceAgeSeconds:maxAge,peakProviderConcurrency:transport.metrics.peak};
    assert.equal(sample.objectReads,200);assert.equal(sample.auth,20);samples.push(sample);
    console.log("G5_T6F_LOAD "+JSON.stringify(sample));
-   // Queue idempotency is minute-bucketed. A forced due cycle is a distinct
-   // logical cycle, so make the preceding completed fixture keys historical.
-   if(cycle===1)await q("UPDATE public.async_jobs SET idempotency_key=idempotency_key||':fixture-cycle1' WHERE status='done'");
+
  }
  assert.equal(await count("SELECT count(*) AS n FROM public.async_jobs WHERE status='done'"),2*n);
 });
