@@ -46,7 +46,7 @@ export async function prepareManualG3RequestReceipt(db,requestId,{raw,purpose,ad
  const receipt=Object.freeze({requestId,adminId:id(admin.user_id),sessionId:String(admin.session_id),purpose,verified:v,at:Date.now()});
  receipts.add(receipt);return receipt;
 }
-export function assertManualG3RequestReceipt(r,receipt,{purpose,admin,env=process.env}={}){
+export function assertManualG3RequestReceipt(r,receipt,{purpose,admin,env=process.env,canonicalProvision=false}={}){
  assertUsOdooDispatchHold(r,env);
  if(!isManualG3Request(r)){if(receipt)fail();return false;}
  const now=Date.now();
@@ -54,6 +54,7 @@ export function assertManualG3RequestReceipt(r,receipt,{purpose,admin,env=proces
  receipt.adminId!==id(admin?.user_id)||receipt.sessionId!==String(admin?.session_id??"")||admin?.role!=="admin"||
  receipt.purpose!==purpose||now<receipt.at||now-receipt.at>15000||
  now-receipt.verified.provenance.observed_end_ms>15000||
- !(purpose==="approve"?["validated","approved"].includes(r.status):["approved","provisioned"].includes(r.status)))fail();
+ !(purpose==="approve"?(!canonicalProvision&&["validated","approved"].includes(r.status)):
+    purpose==="provision"&&(canonicalProvision?r.status==="provisioning":["approved","provisioned"].includes(r.status))))fail();
  compare(r,receipt.verified);return true;
 }

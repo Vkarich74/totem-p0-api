@@ -362,6 +362,7 @@ export async function bindMasterToSalonCanonical({ pool, payload, dbClient = nul
       throw err;
     }
 
+    await assertCanonicalImportedMasterBind(db,{salon,master,receipt:masterReceipt,bindMode:input.bind_mode,createContract:input.create_contract});
     if (salon.market_code === "US" || input.required_market_code === "US") {
       // The HTTP payload cannot elevate itself to a verified US Admin scope.
       // Other legacy callers keep their old KG/KZ behavior.
@@ -378,7 +379,6 @@ export async function bindMasterToSalonCanonical({ pool, payload, dbClient = nul
         error.status = 409;
         throw error;
       }
-      await assertCanonicalImportedMasterBind(db,{salon,master,receipt:masterReceipt});
       // An existing active KG/KZ (or unresolved) relationship must never be
       // repurposed as a US owner identity by cross-market binding.
       const conflict = await db.query(

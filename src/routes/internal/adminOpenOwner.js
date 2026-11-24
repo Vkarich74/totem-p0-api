@@ -1,3 +1,4 @@
+import {assertCanonicalUsProvisionResult} from "../../services/provision/usCanonicalSourceBoundary.js";
 import {validG3Seal,sameG3Seal} from "../../services/provision/usOdooG3SealProof.js";
 import {hasManualG3Envelope,prepareManualG3RequestReceipt,assertManualG3RequestReceipt,isManualG3Request,isScopedUsOdooRequest,assertUsOdooDispatchHold} from "../../services/provision/usG3ManualRequestReceipt.js";
 import {prepareUsImportedMasterReceipt} from "../../services/provision/usImportedMasterProvision.js";
@@ -2344,7 +2345,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         let provisionResult=null,bindResult=null;
           if(request.owner_type === "salon"){
             provisionResult = await createSalonCanonical({
-              pool, dbClient: usDb,
+              pool, dbClient: usDb, manualReceipt, receiptAdmin:req.admin,
               payload: buildSalonProvisionPayload(request),
             });
             const proof = await usDb.query(
@@ -2407,6 +2408,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
             err.code="US_OWNER_IDENTITY_NOT_READY";err.status=409;throw err;
           }
 
+          await assertCanonicalUsProvisionResult(usDb,request,{ownerId,authUserId,masterReceipt,manualReceipt,admin:req.admin});
           const links=buildOwnerOpeningLinks({request,provisionResult,bindResult});
           const resultJson={provision:provisionResult,bind:bindResult};
           const done=await usDb.query(

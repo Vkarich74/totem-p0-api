@@ -2,8 +2,8 @@
 // No external RPC in a PostgreSQL transaction. All mutable Core checks are
 // repeated under row locks immediately before the canonical bind.
 import {createUsOdooApprovedSourceClient} from "../billing/usOdooReadOnlyClient.js";
-import {readUsApprovedOdooSource,readG3SourceReaderPolicy,createG3TargetGeoReader} from "./usApprovedOdooSalonIntake.js";
-import {isManualG3Request,assertManualG3RequestReceipt} from "./usG3ManualRequestReceipt.js";
+import {readUsApprovedOdooSource,readG3SourceReaderPolicy,createG3TargetGeoReader,usOdooIntakeEnabled} from "./usApprovedOdooSalonIntake.js";
+import {isManualG3Request,assertManualG3RequestReceipt,assertUsOdooDispatchHold,isScopedUsOdooRequest} from "./usG3ManualRequestReceipt.js";
 import {sameG3Seal,validG3Seal} from "./usOdooG3SealProof.js";
 import {assertUsExistingSalonConsent} from "./usMasterRoleAuthority.js";
 import {US_COUNTRY_PACK} from "../../market-context/country-packs/US.js";
@@ -12,8 +12,8 @@ const fail=(code,status=409)=>Object.assign(Error(code),{code,status});
 const id=x=>Number.isSafeInteger(Number(x))&&Number(x)>0?Number(x):0;
 const equal=(a,b)=>id(a)>0&&id(a)===id(b);
 const proof=r=>r?.precheck_result_json?.odoo_source_proof;
-export const isImportedMaster=r=>r?.owner_type==="master"&&r.source_namespace==="odoo_online";
-export const usImportedMasterProvisionEnabled=(env=process.env)=>env.TOTEM_US_IMPORTED_MASTER_PROVISION_ENABLED==="true"&&env.TOTEM_US_IMPORTED_MASTER_PROVISION_RELEASE_APPROVED==="true";
+export const isImportedMaster=r=>r?.owner_type==="master"&&isScopedUsOdooRequest(r);
+export const usImportedMasterProvisionEnabled=(env=process.env)=>usOdooIntakeEnabled(env)&&env.TOTEM_US_IMPORTED_MASTER_PROVISION_ENABLED==="true"&&env.TOTEM_US_IMPORTED_MASTER_PROVISION_RELEASE_APPROVED==="true";
 const hold=r=>fail(proof(r)?.entry_mode==="existing_salon"?"US_ODOO_SALON_OWNER_CONSENT_REQUIRED":
  proof(r)?.entry_mode==="own_salon"?"US_ODOO_SHARED_IDENTITY_COMMERCIAL_CONTRACT_HOLD":"US_ODOO_MASTER_ROLE_CONTRACT_HOLD");
 const keys=["source","odoo_lead_id","source_partner_id","source_request_id","source_stage_id","source_marker","entry_mode","role_set","target_salon_partner_id","target_salon_slug"];
@@ -49,6 +49,7 @@ export async function prepareUsImportedMasterReceipt(db,requestId,{env=process.e
  const receipt=Object.freeze({requestId:id(r.id),verified:v,at:Date.now()});receipts.add(receipt);return receipt;
 }
 export async function assertUsImportedMasterProvision(db,r,receipt,{env=process.env}={}){
+ assertUsOdooDispatchHold(r,env);
  if(!usImportedMasterProvisionEnabled(env))throw hold(r);
  if(!receipt||!receipts.has(receipt)||!equal(receipt.requestId,r.id)||Date.now()-receipt.at>15000||Date.now()<receipt.at)
    throw fail("US_MASTER_FRESH_SOURCE_REQUIRED");
@@ -89,14 +90,19 @@ export async function assertUsImportedMasterProvision(db,r,receipt,{env=process.
    throw fail("US_MASTER_SHARED_IDENTITY_REQUIRED");
  return {mode:"own_salon",salonId:id(principal.created_owner_id),principalId:id(principal.principal_id)};
 }
-export async function assertCanonicalImportedMasterBind(db,{salon,master,receipt,env=process.env}){
+export async function assertCanonicalImportedMasterBind(db,{salon,master,receipt,bindMode,createContract,env=process.env}){
  // Existing manual US path unchanged if there is no Odoo master source.
  const found=await db.query(`SELECT * FROM public.owner_opening_requests WHERE owner_type='master'
- AND source_namespace='odoo_online' AND (slug_final=$1 OR created_owner_id=$2)
+ AND source_namespace='odoo_online' AND (source_company_id=4 OR source_website_id=5 OR upper(trim(COALESCE(precheck_result_json->'normalized'->>'market_code',precheck_result_json->>'market_code','')))='US') AND (lower(slug_final)=lower($1) OR created_owner_id=$2)
  ORDER BY id FOR UPDATE`,[master.slug,master.id]);
  if(!found.rows.length){if(receipt)throw fail("US_MASTER_SOURCE_MISSING");return;}
+ for(const r of found.rows)assertUsOdooDispatchHold(r,env);
+ if(salon.market_code!=="US"||bindMode!=="active"||createContract!==false)
+   throw fail("US_MASTER_BIND_SCOPE_INVALID");
  if(found.rows.length!==1||found.rows[0].status!=="provisioning")throw fail("US_MASTER_BIND_SOURCE_STATE_INVALID");
  const r=found.rows[0],a=await assertUsImportedMasterProvision(db,r,receipt,{env});
+ const prior=await db.query("SELECT id FROM public.master_salon WHERE master_id=$1 FOR UPDATE",[master.id]);
+ if(prior.rows.length)throw fail("US_MASTER_BIND_EXISTING_RELATION");
  if(!equal(salon.id,a.salonId)||master.slug!==r.slug_final||master.active!==false)
    throw fail("US_MASTER_BIND_SCOPE_INVALID");
  if(a.mode==="own_salon"){

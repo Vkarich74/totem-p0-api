@@ -1,3 +1,5 @@
+import {findScopedCanonicalSources} from "./usCanonicalSourceBoundary.js";
+import {assertUsOdooDispatchHold} from "./usG3ManualRequestReceipt.js";
 import {assertKgSharedMasterPending} from "./kgSharedMasterIdentity.js";
 import {assertUsImportedMasterProvision} from "./usImportedMasterProvision.js";
 
@@ -269,9 +271,10 @@ export async function createMasterCanonical({ pool, payload, dbClient = null, kg
         meta:buildProvisionMeta({created:true})});
     }
     // A US verified intake must not be bypassed by the generic create route.
-    if(input.market_code==="US"&&!masterReceipt){
-      const imported=await db.query("SELECT id FROM public.owner_opening_requests WHERE owner_type='master' AND source_namespace='odoo_online' AND (slug_final=$1 OR lower(email)=lower($2) OR phone_normalized=$3) LIMIT 1",[input.master_slug,input.email,input.phone]);
-      if(imported.rows.length)throw Object.assign(Error("US_MASTER_FRESH_SOURCE_REQUIRED"),{code:"US_MASTER_FRESH_SOURCE_REQUIRED",status:409});
+    if(!masterReceipt){
+      const imported=await findScopedCanonicalSources(db,{role:"master",slug:input.master_slug,email:input.email,phone:input.phone});
+      for(const source of imported)assertUsOdooDispatchHold(source);
+      if(imported.length)throw Object.assign(Error("US_MASTER_FRESH_SOURCE_REQUIRED"),{code:"US_MASTER_FRESH_SOURCE_REQUIRED",status:409});
     }
     // Only trusted internal receipt, never a request-body principal ID.
     if(masterReceipt){
@@ -364,6 +367,8 @@ export async function createMasterCanonical({ pool, payload, dbClient = null, kg
     }
 
     const finalMasterSlug = await resolveMasterSlugForReservation(db, input.master_slug || input.name);
+    if(masterReceipt&&finalMasterSlug!==input.master_slug)
+      throw Object.assign(Error("US_MASTER_EXACT_SLUG_REQUIRED"),{code:"US_MASTER_EXACT_SLUG_REQUIRED",status:409});
 
     const reservation = await reserveSlug(db, {
       owner_type: "master",

@@ -1,3 +1,4 @@
+import {assertCanonicalUsSalonCreate} from "./usCanonicalSourceBoundary.js";
 import {
   activateReservedSlug,
   checkSlugAvailability,
@@ -245,7 +246,7 @@ async function resolveSalonSlugForReservation(db, requestedSlug){
   return ensureUniqueSalonSlug(db, requested);
 }
 
-export async function createSalonCanonical({ pool, payload, dbClient = null }){
+export async function createSalonCanonical({ pool, payload, dbClient = null, manualReceipt=null, receiptAdmin=null }){
   const input = validateSalonProvisionInput(payload || {});
   const ownsTransaction = !dbClient;
   const db = dbClient || await pool.connect();
@@ -265,10 +266,12 @@ export async function createSalonCanonical({ pool, payload, dbClient = null }){
       throw error;
     }
     input.phone = phoneResult.phone;
+    const scopedSource=await assertCanonicalUsSalonCreate(db,input,{receipt:manualReceipt,admin:receiptAdmin,externalTransaction:Boolean(dbClient)});
 
     const existingUser = await findExistingAuthUser(db, input.email, "salon_admin");
 
     if(existingUser){
+      if(scopedSource)throw Object.assign(Error("US_ODOO_CANONICAL_SALON_IDENTITY_CONFLICT"),{code:"US_ODOO_CANONICAL_SALON_IDENTITY_CONFLICT",status:409});
       const existingSalonSlug = String(existingUser.salon_slug || "").trim();
       const existingSalon = existingSalonSlug
         ? await findSalonBySlug(db, existingSalonSlug)
@@ -314,6 +317,8 @@ export async function createSalonCanonical({ pool, payload, dbClient = null }){
     }
 
     const finalSalonSlug = await resolveSalonSlugForReservation(db, input.salon_slug || input.salon_name);
+    if(scopedSource&&finalSalonSlug!==input.salon_slug)
+      throw Object.assign(Error("US_ODOO_CANONICAL_SLUG_CONFLICT"),{code:"US_ODOO_CANONICAL_SLUG_CONFLICT",status:409});
 
     const reservation = await reserveSlug(db, {
       owner_type: "salon",
@@ -415,7 +420,7 @@ export async function createSalonCanonical({ pool, payload, dbClient = null }){
       try{ await db.query("ROLLBACK"); }catch(_error){}
     }
 
-    const resolved = resolveProvisionError(err);
+    const resolved = err?.status&&/^US_ODOO_/.test(err?.code||"")?{status:err.status,error:err.code}:resolveProvisionError(err);
     const wrapped = new Error(resolved.error);
     wrapped.code = resolved.error;
     wrapped.status = resolved.status;
