@@ -62,7 +62,7 @@ export async function switchUsOwnSalonRole({pool,auth,role,masterRequestId,passw
      ...(a?{us_role_context:kind,us_master_request_id:a.masterRequestId}:{})};
    const token=jwt.sign(payload,env.JWT_SECRET,{expiresIn:ttl});
    await db.query(`INSERT INTO public.audit_events(event_type,actor,core_user_id,data)
-    VALUES('auth.us_own_salon_role_context','owner:'||$1::text,$1,$2::jsonb)`,
+    VALUES('auth.us_own_salon_role_context','owner:'||($1::bigint)::text,$1::bigint,$2::jsonb)`,
     [id(auth.user_id),JSON.stringify({role,master_request_id:a?.masterRequestId??id(auth.master_request_id)})]);
    await db.query("COMMIT");
    return {access_token:token,token_type:"Bearer",role,session_id:auth.session_id,
