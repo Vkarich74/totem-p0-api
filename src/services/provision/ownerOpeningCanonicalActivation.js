@@ -1,3 +1,4 @@
+import {isUsOwnSalonMaster,assertUsOwnSalonActivationReady} from "./usOwnSalonCanonicalActivation.js";
 import { persistUsSaasPaidProjection } from "../billing/usSaasEntitlementProjection.js";
 // G5-T3: one transactional Core Owner Opening activation for Admin and
 // future authenticated reconciliation workers. This is NOT an HTTP endpoint.
@@ -61,7 +62,7 @@ export function assertUsPaidEvidenceForLockedRequest(request, evidence, now) {
  * Takes a fresh FOR UPDATE lock and revalidates the verified Odoo receipt.
  */
 export async function activateOwnerOpeningCanonical({
-  pool, requestId, admin, paidEvidence = null,
+  pool, requestId, admin, paidEvidence = null, masterReceipt = null,
   getMarketCode, assertMarketPolicy, assertUsActivationReady,
   activateEntity, writeAudit,
 } = {}) {
@@ -100,7 +101,13 @@ export async function activateOwnerOpeningCanonical({
       throw fail("OWNER_OPENING_REQUEST_STATUS_INVALID");
     }
 
-    if (market === "US") {
+    let sharedAuthority=null;
+    if(market==="US"&&isUsOwnSalonMaster(current)){
+      // The same salon subscription is already projected. Never consume a
+      // master payment receipt or create a duplicate projection.
+      if(paidEvidence)throw fail("US_MASTER_SECOND_PAID_RECEIPT_FORBIDDEN");
+      sharedAuthority=await assertUsOwnSalonActivationReady(db,current,masterReceipt);
+    }else if (market === "US") {
       const nowRow = await db.query("SELECT clock_timestamp() AS now");
       assertUsPaidEvidenceForLockedRequest(
         current, paidEvidence, nowRow.rows[0]?.now,
@@ -112,7 +119,12 @@ export async function activateOwnerOpeningCanonical({
     }
 
     const ownerActivation = await activateEntity(db, current);
-    if (market === "US") {
+    if(sharedAuthority){
+      if(Number(ownerActivation?.master?.id)!==sharedAuthority.masterId||
+         Number(ownerActivation?.master?.user_id)!==sharedAuthority.principalAuthUserId||
+         ownerActivation?.master?.active!==true)
+        throw fail("US_MASTER_SHARED_ACTIVATION_READBACK_MISMATCH");
+    }else if (market === "US") {
       const role = current.owner_type === "salon" ? "salon_admin" :
         current.owner_type === "master" ? "master" : null;
       if (!role) throw fail("OWNER_OPENING_ROLE_INVALID");
@@ -137,7 +149,12 @@ export async function activateOwnerOpeningCanonical({
       data: {
         created_owner_id: positive(current.created_owner_id),
         owner_activation: ownerActivation,
-        ...(market === "US" ? {
+        ...(sharedAuthority ? {
+          shared_salon_subscription:true,salon_owner_id:sharedAuthority.salonId,
+          principal_auth_user_id:sharedAuthority.principalAuthUserId,
+          odoo_subscription_order_id:sharedAuthority.subscriptionOrderId,
+          paid_period_end_utc:sharedAuthority.paidUntil,
+        } : market === "US" ? {
           odoo_paid_invoice_id: positive(paidEvidence.invoiceId),
           odoo_subscription_order_id: positive(paidEvidence.subscriptionOrderId),
           paid_period_end_utc: paidEvidence.periodEndExclusiveUtc,
@@ -146,6 +163,7 @@ export async function activateOwnerOpeningCanonical({
         } : {}),
       },
     });
+    if(sharedAuthority&&!auditEvent?.id)throw fail("US_MASTER_SHARED_ACTIVATION_AUDIT_REQUIRED");
     await db.query("COMMIT");
     return {
       request, owner_activation: ownerActivation,

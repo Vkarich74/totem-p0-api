@@ -155,14 +155,14 @@ export async function assertUsExistingSalonConsent(db,locked){
 // Read-only commercial authority contract for a future single-principal
 // master role. Never reads a second invoice/order, creates a projection,
 // enables a user or grants a session. Both role bindings must already exist.
-export async function readUsOwnSalonMasterAuthority(db,masterRequestId,{env=process.env}={}){
+export async function readUsOwnSalonMasterAuthority(db,masterRequestId,{env=process.env,lock=false}={}){
  if(env.TOTEM_US_OWN_SALON_SHARED_ENTITLEMENT_ENABLED!=="true")throw fail("US_MASTER_SHARED_ENTITLEMENT_HOLD");
  let policy;try{policy=JSON.parse(env.TOTEM_US_ODOO_SAAS_COMMERCIAL_POLICY_JSON||"");}catch{throw fail("US_MASTER_SHARED_POLICY_REQUIRED");}
  const accessPolicy=readUsSaasProjectionPolicy(env);
  if(!accessPolicy||!Array.isArray(policy.coveredOwnerTypes)||policy.ownSalonEntitlement!=="single_salon_subscription"||
     !policy.coveredOwnerTypes?.includes("salon")||!policy.coveredOwnerTypes?.includes("master"))
    throw fail("US_MASTER_SHARED_POLICY_REQUIRED");
- const r=await one(db,"SELECT * FROM public.owner_opening_requests WHERE id=$1",[id(masterRequestId)]);
+ const r=await one(db,"SELECT * FROM public.owner_opening_requests WHERE id=$1"+(lock?" FOR UPDATE":""),[id(masterRequestId)]);
  const p=source(r,"master","own_salon");
  if(p.role_set!=="salon,master"||!id(r.created_owner_id)||!id(r.created_auth_user_id))throw fail("US_MASTER_SHARED_IDENTITY_REQUIRED");
  const salon=await one(db,`SELECT o.* FROM public.owner_opening_requests o
@@ -180,7 +180,7 @@ export async function readUsOwnSalonMasterAuthority(db,masterRequestId,{env=proc
    AND s.slug=$5 AND s.enabled=true AND s.status='active' AND os.status='active'
    AND ma.slug=$6 AND ms.status='active'
    AND m.code='US' AND m.country_code='US' AND m.active=true AND COALESCE(t.currency_override,m.default_currency)='USD'
-   AND NOT EXISTS(SELECT 1 FROM public.master_salon x WHERE x.master_id=ma.id AND x.salon_id<>s.id AND x.status='active')`,
+   AND NOT EXISTS(SELECT 1 FROM public.master_salon x WHERE x.master_id=ma.id AND x.salon_id<>s.id AND x.status='active')${lock?" FOR UPDATE OF o,s,a,os,ma,ms,t,m":""}`,
  [id(r.created_owner_id),id(r.source_partner_id),r.source_request_id,id(r.created_auth_user_id),r.salon_slug,r.slug_final],
  "US_MASTER_SHARED_IDENTITY_REQUIRED");
  const q=source(salon,"salon","own_salon");
@@ -188,7 +188,7 @@ export async function readUsOwnSalonMasterAuthority(db,masterRequestId,{env=proc
    q.profile_write_date!==p.profile_write_date||q.lead_write_date!==p.lead_write_date)
    throw fail("US_MASTER_SHARED_SOURCE_CHANGED");
  const projections=await db.query(`SELECT * FROM public.billing_subscriptions
- WHERE (owner_type='salon' AND owner_id=$1) OR (owner_type='master' AND owner_id=$2)`,
+ WHERE (owner_type='salon' AND owner_id=$1) OR (owner_type='master' AND owner_id=$2)${lock?" FOR UPDATE":""}`,
  [id(salon.created_owner_id),id(r.created_owner_id)]);
  if(projections.rows.length!==1||projections.rows[0].owner_type!=="salon")throw fail("US_MASTER_SHARED_SINGLE_PROJECTION_REQUIRED");
  const clock=await one(db,"SELECT clock_timestamp() AS now",[]);

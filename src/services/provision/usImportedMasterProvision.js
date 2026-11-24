@@ -29,7 +29,7 @@ function compare(r,v){
 export async function prepareUsImportedMasterReceipt(db,requestId,{env=process.env,createClient=createUsOdooApprovedSourceClient}={}){
  if(!usImportedMasterProvisionEnabled(env))return null;
  const r=(await db.query("SELECT * FROM public.owner_opening_requests WHERE id=$1",[requestId])).rows[0];
- if(!isImportedMaster(r)||!["validated","approved"].includes(r.status))return null;
+ if(!isImportedMaster(r)||!["validated","approved","provisioned"].includes(r.status))return null;
  let url;try{url=new URL(env.TOTEM_US_ODOO_URL);}catch{throw fail("US_MASTER_SOURCE_CONFIG_REQUIRED",503);}
  if(url.origin!=="https://totem-platform.odoo.com"||url.pathname!=="/"||url.search||url.hash||url.username||url.password||
    env.TOTEM_US_ODOO_DB!=="totem-platform"||!env.TOTEM_US_ODOO_USER?.trim()||!env.TOTEM_US_ODOO_API_KEY?.trim())throw fail("US_MASTER_SOURCE_CONFIG_REQUIRED",503);

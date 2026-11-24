@@ -1,3 +1,4 @@
+import {isUsOwnSalonMaster} from "../../services/provision/usOwnSalonCanonicalActivation.js";
 import {prepareUsImportedMasterReceipt} from "../../services/provision/usImportedMasterProvision.js";
 import {isUsOdooIntakeHint,registerApprovedUsOdooSalon} from "../../services/provision/usApprovedOdooSalonIntake.js";
 import { activateOwnerOpeningCanonical } from "../../services/provision/ownerOpeningCanonicalActivation.js";
@@ -1068,7 +1069,7 @@ async function getOwnerOpeningRequestForUpdate(db, requestId){
   return result.rows[0] || null;
 }
 
-async function activateOwnerOpeningEntity(db, request){
+export async function activateOwnerOpeningEntity(db, request){
   const ownerType = normalizeOwnerType(request?.owner_type);
   const ownerId = Number(request?.created_owner_id || 0);
 
@@ -2520,7 +2521,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
     // Payment and commercial policy readback run BEFORE the SQL transaction.
     // This endpoint remains protected by the existing AdminRuntimeGuard mount;
     // an Odoo webhook has no Admin JWT and cannot use this HTTP route.
-    let paidEvidence = null;
+    let paidEvidence = null, masterReceipt = null;
     try {
       const preflight = await pool.query(
         "SELECT * FROM public.owner_opening_requests WHERE id=$1 LIMIT 1",
@@ -2535,6 +2536,9 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       assertAdminOpeningMarketPolicy(candidate);
       if(requestMarketCode(candidate) === "US" &&
          candidate.status === "provisioned"){
+        if(isUsOwnSalonMaster(candidate)){
+          masterReceipt=await prepareUsImportedMasterReceipt(pool,requestId);
+        }else{
         paidEvidence = await prepareUsPaidActivationEvidence(candidate);
         if(paidEvidence?.status !== "PAID_VERIFIED" ||
            paidEvidence.canActivate !== true){
@@ -2543,13 +2547,14 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
             reason:paidEvidence?.reason || "US_ODOO_READBACK_UNAVAILABLE",
           });
         }
+        }
       }
 
       // Exactly ONE canonical Core activation transaction for both markets.
       // A concurrent Admin invocation or future trusted worker must use the
       // same service; the service reacquires FOR UPDATE and rechecks source.
       const done = await activateOwnerOpeningCanonical({
-        pool, requestId, admin, paidEvidence,
+        pool, requestId, admin, paidEvidence, masterReceipt,
         getMarketCode:requestMarketCode,
         assertMarketPolicy:assertAdminOpeningMarketPolicy,
         assertUsActivationReady,
