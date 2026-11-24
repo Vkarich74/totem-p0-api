@@ -1,3 +1,4 @@
+import {isKgSharedMasterClaim,readKgSharedMasterBindings,isKgSharedMasterRouteAllowed} from "../services/provision/kgSharedMasterIdentity.js";
 import {rejectUnprovenSession} from "../auth/verifiedSessionContract.js";
 import jwt from 'jsonwebtoken';
 import pkg from 'pg';
@@ -361,8 +362,13 @@ export async function resolveAuth(req,res,next){
     return next();
   }
 
+  const sharedClaim=isKgSharedMasterClaim(jwt.decode(token));
   try{
     const payload = jwt.verify(token, process.env.JWT_SECRET);
+    const shared=isKgSharedMasterClaim(payload);
+    if(shared&&(payload.role!=="master"||!Number.isSafeInteger(payload.kg_shared_master_request_id)||payload.kg_shared_master_request_id<1||
+       !payload.session_id||payload.auth_session_version!==2))
+       return res.status(403).json({ok:false,error:"KG_SHARED_MASTER_SESSION_INVALID"});
     if(rejectUnprovenSession(req,res,next,payload))return;
 
     const user_id = safeInt(payload?.user_id ?? payload?.id ?? payload?.sub);
@@ -427,7 +433,7 @@ export async function resolveAuth(req,res,next){
           return;
         }
 
-        if(!s.enabled || String(s.role) !== roleRaw){
+        if(!s.enabled || (shared?String(s.role)!=="salon_admin":String(s.role)!==roleRaw)){
           return;
         }
 
@@ -461,6 +467,15 @@ export async function resolveAuth(req,res,next){
           idle_timeout_at: nextIdleTimeoutAt
         };
 
+        if(shared){
+          const rows=await readKgSharedMasterBindings(client,{principalId:user_id,requestId:payload.kg_shared_master_request_id});
+          const binding=rows.length===1?rows[0]:null;
+          if(!binding||!isKgSharedMasterRouteAllowed(req,binding.master_slug))throw Error("KG_SHARED_MASTER_SCOPE_DENIED");
+          req.auth={...req.auth,kg_shared_master_request_id:payload.kg_shared_master_request_id,master_slug:binding.master_slug};
+          req.identity={user_id,role:"master",master_slug:binding.master_slug,salons:[],masters:[Number(binding.master_id)],
+            ownership:[{owner_type:"master",owner_id:Number(binding.master_id),relation:"kg_shared_owner_master_v1"}]};
+          return;
+        }
         const requestedMasterSlug = extractRequestedMasterSlug(req);
 
         try{
@@ -481,8 +496,10 @@ export async function resolveAuth(req,res,next){
         }
       });
 
+      if(shared&&!req.identity)return res.status(403).json({ok:false,error:"KG_SHARED_MASTER_SESSION_INVALID"});
       return next();
     } catch(err) {
+      if(shared){req.auth=null;req.identity=null;return res.status(403).json({ok:false,error:"KG_SHARED_MASTER_SCOPE_DENIED"});}
       if(isAuthResolveTimeoutError(err)){
         return res.status(503).json({
           ok: false,
@@ -493,6 +510,7 @@ export async function resolveAuth(req,res,next){
       return next();
     }
   }catch(err){
+    if(sharedClaim){req.auth=null;req.identity=null;return res.status(403).json({ok:false,error:"KG_SHARED_MASTER_SESSION_INVALID"});}
     return next();
   }
 }
