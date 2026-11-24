@@ -1079,7 +1079,6 @@ r.put("/masters/:slug/us-working-hours",async(req,res)=>{
     await client.query("SET LOCAL statement_timeout = '5000ms'");
     await client.query("SET LOCAL lock_timeout = '2000ms'");
     const actor=await checkedUsMasterHoursActor(client,req);
-    await ensureMasterWriteAllowed(client,actor.master_id);
     // Reuse the EXACT US public-booking transaction advisory lock (master
     // key 973103); acquire before location row locks for consistent order.
     // No KG/KZ endpoint acquires this lock.
@@ -1089,6 +1088,12 @@ r.put("/masters/:slug/us-working-hours",async(req,res)=>{
     );
     const location=await selectLockedUsHoursLocation(
       client,actor.master_id,scope);
+    // Explicit US-only location: never fall back to legacy wallet/missing=active.
+    const entitlement=await getUsSaasAccess(client,{ownerType:"master",ownerId:actor.master_id,
+      policy:readUsSaasProjectionPolicy()});
+    if(entitlement.managed!==true||entitlement.can_write!==true){
+      const error=new Error("BILLING_BLOCKED");error.code="BILLING_BLOCKED";throw error;
+    }
     const saved=await replaceUsMasterWeeklyHours(client,{
       locationId:location.location_id,masterId:actor.master_id,
       revision:desired.revision,hours:desired.hours,
