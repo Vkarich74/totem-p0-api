@@ -44,6 +44,14 @@ export async function readUsSalon(db, salonSlug) {
 export async function assertUsOpenOwnerContract(db, request) {
   if (requestMarketCode(request) !== "US") return false;
 
+  // A role-scoped request is not consent, a second identity or a second paid right.
+  // Do not enter the legacy create/bind path for these newly imported roles.
+  if(request.source_namespace==="odoo_online"&&request.owner_type==="master"){
+    const mode=request.precheck_result_json?.odoo_source_proof?.entry_mode;
+    if(mode==="existing_salon")throw problem("US_ODOO_SALON_OWNER_CONSENT_REQUIRED");
+    if(mode==="own_salon")throw problem("US_ODOO_SHARED_IDENTITY_COMMERCIAL_CONTRACT_HOLD");
+    throw problem("US_ODOO_MASTER_ROLE_CONTRACT_HOLD");
+  }
   const normalized = request?.precheck_result_json?.normalized || {};
   const rawPhone = String(request.phone_normalized || request.phone_raw || "").trim();
   const contact = US_COUNTRY_PACK.normalizeBusinessPhone(rawPhone);

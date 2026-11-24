@@ -264,6 +264,7 @@ export async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
   const errors = [];
   const allowMissingPhone = Boolean(options?.allowMissingPhone);
   const allowMissingCity = Boolean(options?.allowMissingCity);
+  const deferVerifiedUsMasterBinding = options?.deferVerifiedUsMasterBinding === true;
 
   const ownerType = normalizeOwnerType(body.owner_type);
   const name = normalizeText(body.name);
@@ -405,6 +406,8 @@ export async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
 
       if(!salonSlug){
         errors.push("SALON_SLUG_REQUIRED");
+      }else if(marketCode==="US"&&deferVerifiedUsMasterBinding){
+        addCheck(checks,"us_master_binding_deferred",true,{consent_and_identity_required:true});
       }else{
         const salonCheck = await checkSalonSlug(pool, salonSlug);
         addCheck(checks, "salon_slug_exists", salonCheck.exists, {
@@ -1249,10 +1252,12 @@ async function createIntakeValidatedRequest(db,precheck,precheckForStorage,admin
 
 }
 export async function createVerifiedUsIntakeRequest(db,verified,proof){
-  if(proof.owner_type!=="salon"||proof.source_company_id!==4||proof.source_website_id!==5||
+  if(!["salon","master"].includes(proof.owner_type)||verified.intake.owner_type!==proof.owner_type||
+     verified.proof.owner_type!==proof.owner_type||proof.source_company_id!==4||proof.source_website_id!==5||
      verified.proof.partner_id!==proof.source_partner_id||verified.proof.source_request_id!==proof.source_request_id)
     throw Object.assign(new Error("US_ODOO_SOURCE_SCOPE_INVALID"),{code:"US_ODOO_SOURCE_SCOPE_INVALID",status:409});
-  const precheck=await buildOpenOwnerPrecheck(db,verified.intake);
+  const precheck=await buildOpenOwnerPrecheck(db,verified.intake,{
+    deferVerifiedUsMasterBinding:proof.owner_type==="master"&&["own_salon","existing_salon"].includes(verified.provenance.entry_mode)});
   if(!precheck.valid)throw Object.assign(new Error("US_ODOO_INTAKE_PRECHECK_FAILED"),{code:"US_ODOO_INTAKE_PRECHECK_FAILED",status:409});
   const stored={...precheck,source:"odoo_us_approved_profile_v1",
     odoo_request_id:proof.source_request_id,odoo_lead_id:String(verified.provenance.odoo_lead_id),

@@ -53,98 +53,71 @@ const GET_EXISTING = `
   FOR UPDATE
 `;
 
-export async function registerVerifiedUsOdooSource({
-  pool,
-  candidate,
-  readVerifiedOdooSource,
-  createExistingOpeningRequest,
-  assertExisting = null,
-} = {}) {
-  if (!pool || typeof pool.connect !== "function") {
-    throw new Error("US_ODOO_POSTGRES_POOL_REQUIRED");
-  }
-  if (typeof readVerifiedOdooSource !== "function" ||
-      typeof createExistingOpeningRequest !== "function" ||
-      (assertExisting!==null&&typeof assertExisting!=="function")) {
-    throw new Error("US_ODOO_TRUSTED_CALLBACKS_REQUIRED");
-  }
-
-  // Never accept candidate payload as proof. T2 must perform authenticated
-  // Odoo API readback and return an approved, role-scoped source identity.
-  // The network readback deliberately occurs BEFORE the PostgreSQL lock.
-  const proof = normalizeVerifiedProof(await readVerifiedOdooSource(candidate));
-  const key = [
-    proof.source_namespace, proof.source_company_id,
-    proof.source_website_id, proof.source_request_id, proof.owner_type,
-  ].join(":");
-  const tuple = [
-    proof.source_namespace, proof.source_company_id,
-    proof.source_website_id, proof.source_request_id, proof.owner_type,
-  ];
-
-  const db = await pool.connect();
-  try {
+// One source-level transaction, existing role-scoped UNIQUE remains authoritative.
+// The single-role wrapper preserves the historical internal API.
+export async function registerVerifiedUsOdooSources({
+  pool,candidate,readVerifiedOdooSources,createExistingOpeningRequest,
+  assertExisting=null,exactRoles=true,
+}={}){
+  if(!pool||typeof pool.connect!=="function")throw Error("US_ODOO_POSTGRES_POOL_REQUIRED");
+  if(typeof readVerifiedOdooSources!=="function"||typeof createExistingOpeningRequest!=="function"||
+     (assertExisting!==null&&typeof assertExisting!=="function"))throw Error("US_ODOO_TRUSTED_CALLBACKS_REQUIRED");
+  const raw=await readVerifiedOdooSources(candidate);
+  if(!Array.isArray(raw)||raw.length<1||raw.length>2)throw Error("US_ODOO_SOURCE_ROLE_SET_INVALID");
+  const proofs=raw.map(normalizeVerifiedProof).sort((a,b)=>a.owner_type==="salon"?-1:b.owner_type==="salon"?1:0);
+  const first=proofs[0],key=[first.source_namespace,first.source_company_id,first.source_website_id,first.source_request_id].join(":");
+  const tuple=[first.source_namespace,first.source_company_id,first.source_website_id,first.source_request_id];
+  const roles=new Set(proofs.map(p=>p.owner_type));
+  if(roles.size!==proofs.length||proofs.some(p=>p.source_namespace!==first.source_namespace||
+    p.source_company_id!==first.source_company_id||p.source_website_id!==first.source_website_id||
+    p.source_request_id!==first.source_request_id||p.source_partner_id!==first.source_partner_id))
+    throw Error("US_ODOO_SOURCE_ROLE_SET_INVALID");
+  const db=await pool.connect();
+  try{
     await db.query("BEGIN");
-    // Serialize identical source/role attempts BEFORE creating business rows.
-    // Hash collisions only serialize unrelated requests; UNIQUE is authority.
-    await db.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [key]);
-
-    const existing = await db.query(GET_EXISTING, tuple);
-    if (existing.rows.length) {
-      const record = existing.rows[0];
-      if (Number(record.source_partner_id) !== proof.source_partner_id) {
-        throw new Error("US_ODOO_SOURCE_PARTNER_MISMATCH");
+    await db.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",[key]);
+    // Also retain the original role lock for compatibility with an old caller.
+    for(const p of proofs)await db.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",[key+":"+p.owner_type]);
+    if(exactRoles){
+      const prior=await db.query(`SELECT owner_type,source_partner_id FROM public.owner_opening_requests
+        WHERE source_namespace=$1 AND source_company_id=$2 AND source_website_id=$3 AND source_request_id=$4 FOR UPDATE`,tuple);
+      if(prior.rows.some(r=>!roles.has(r.owner_type)||Number(r.source_partner_id)!==first.source_partner_id))
+        throw Error("US_ODOO_SOURCE_ROLE_SET_CHANGED");
+    }
+    const results=[];
+    for(const proof of proofs){
+      const existing=await db.query(GET_EXISTING,[...tuple,proof.owner_type]);
+      if(existing.rows.length){
+        if(existing.rows.length!==1||Number(existing.rows[0].source_partner_id)!==proof.source_partner_id)
+          throw Error("US_ODOO_SOURCE_PARTNER_MISMATCH");
+        const record=existing.rows[0];
+        if(assertExisting)await assertExisting(record,proof);
+        results.push(Object.freeze({request_id:Number(record.id),status:record.status,duplicate:true,owner_type:proof.owner_type}));
+        continue;
       }
-      if(assertExisting)await assertExisting(record,proof);
-      await db.query("COMMIT");
-      return Object.freeze({
-        request_id: Number(record.id),
-        status: record.status,
-        duplicate: true,
-        owner_type: proof.owner_type,
-      });
-    }
-
-    // The callback MUST call the existing Core canonical request creation,
-    // moderation and audit using the SAME db client, without BEGIN/COMMIT.
-    const created = await createExistingOpeningRequest(db, proof);
-    const requestId = Number(created?.id);
-    if (!Number.isSafeInteger(requestId) || requestId <= 0) {
-      throw new Error("US_ODOO_CANONICAL_REQUEST_NOT_CREATED");
-    }
-
-    const bound = await db.query(
-      `UPDATE public.owner_opening_requests SET
-         source_namespace = $2,
-         source_company_id = $3,
-         source_website_id = $4,
-         source_request_id = $5,
-         source_partner_id = $6,
-         updated_at = NOW()
-       WHERE id = $1 AND owner_type = $7
-         AND source_namespace IS NULL AND source_company_id IS NULL
-         AND source_request_id IS NULL
-       RETURNING id, status`,
-      [
-        requestId, proof.source_namespace, proof.source_company_id,
-        proof.source_website_id, proof.source_request_id,
-        proof.source_partner_id, proof.owner_type,
-      ],
-    );
-    if (bound.rows.length !== 1) {
-      throw new Error("US_ODOO_CANONICAL_REQUEST_SOURCE_BIND_FAILED");
+      const created=await createExistingOpeningRequest(db,proof);
+      const requestId=Number(created?.id);
+      if(!Number.isSafeInteger(requestId)||requestId<=0)throw Error("US_ODOO_CANONICAL_REQUEST_NOT_CREATED");
+      const bound=await db.query(
+        `UPDATE public.owner_opening_requests SET
+         source_namespace=$2,source_company_id=$3,source_website_id=$4,
+         source_request_id=$5,source_partner_id=$6,updated_at=NOW()
+         WHERE id=$1 AND owner_type=$7 AND source_namespace IS NULL AND source_company_id IS NULL
+           AND source_request_id IS NULL RETURNING id,status`,
+        [requestId,...tuple,proof.source_partner_id,proof.owner_type]);
+      if(bound.rows.length!==1)throw Error("US_ODOO_CANONICAL_REQUEST_SOURCE_BIND_FAILED");
+      results.push(Object.freeze({request_id:requestId,status:bound.rows[0].status,duplicate:false,owner_type:proof.owner_type}));
     }
     await db.query("COMMIT");
-    return Object.freeze({
-      request_id: requestId,
-      status: bound.rows[0].status,
-      duplicate: false,
-      owner_type: proof.owner_type,
-    });
-  } catch (error) {
-    await db.query("ROLLBACK").catch(() => {});
-    throw error;
-  } finally {
-    db.release();
-  }
+    return Object.freeze(results);
+  }catch(error){
+    await db.query("ROLLBACK").catch(()=>{});throw error;
+  }finally{db.release();}
+}
+export async function registerVerifiedUsOdooSource({pool,candidate,readVerifiedOdooSource,createExistingOpeningRequest,assertExisting=null}={}){
+  if(typeof readVerifiedOdooSource!=="function")throw Error("US_ODOO_TRUSTED_CALLBACKS_REQUIRED");
+  const [result]=await registerVerifiedUsOdooSources({pool,candidate,
+    readVerifiedOdooSources:async c=>[await readVerifiedOdooSource(c)],
+    createExistingOpeningRequest,assertExisting,exactRoles:false});
+  return result;
 }

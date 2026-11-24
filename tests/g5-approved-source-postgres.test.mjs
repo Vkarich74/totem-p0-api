@@ -2,7 +2,7 @@
 import test,{before,beforeEach,after} from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
-import {sourceFixture,sourceEnv,sourceHint,sourceHeaders,sourceTransport} from "./fixtures/g5-approved-source-fixture.mjs";
+import {sourceFixture,masterSourceFixture,sourceEnv,sourceHint,sourceHeaders,sourceTransport} from "./fixtures/g5-approved-source-fixture.mjs";
 import {createUsOdooApprovedSourceClient} from "../src/services/billing/usOdooReadOnlyClient.js";
 import {registerApprovedUsOdooSalon} from "../src/services/provision/usApprovedOdooSalonIntake.js";
 const url=process.env.G5_TEST_DATABASE_URL;
@@ -63,4 +63,42 @@ test("legacy same contact remains distinct and is never silently backfilled",asy
  const r=await register();assert.equal(r.duplicate,false);
  const rows=(await q("SELECT source_namespace FROM public.owner_opening_requests ORDER BY id")).rows;
  assert.deepEqual(rows.map(x=>x.source_namespace),[null,"odoo_online"]);
+});
+
+test("own_salon: 50 concurrent deliveries create exactly two validated roles, one source, no users, payments or letters",async()=>{
+ const results=await Promise.all(Array.from({length:50},()=>register(masterSourceFixture())));
+ assert.equal(results.filter(x=>!x.duplicate).length,1);
+ assert.equal(new Set(results.map(x=>JSON.stringify(x.requests.map(r=>r.request_id)))).size,1);
+ assert.equal(await count("owner_opening_requests"),2);assert.equal(await count("moderation_cases"),2);assert.equal(await count("audit_events"),2);
+ const rows=(await q("SELECT * FROM public.owner_opening_requests ORDER BY id")).rows;
+ assert.deepEqual(rows.map(r=>r.owner_type),["salon","master"]);
+ assert.equal(rows[0].source_request_id,rows[1].source_request_id);
+ assert.equal(rows[0].slug_final,rows[1].salon_slug);
+ assert.ok(rows.every(r=>r.status==="validated"&&r.created_auth_user_id===null&&r.created_owner_id===null));
+ assert.equal(rows[1].precheck_result_json.odoo_source_proof.entry_mode,"own_salon");
+ for(const table of ["auth_users","billing_subscriptions","messages"])assert.equal(await count(table),0);
+ const {assertUsOpenOwnerContract}=await import("../src/services/provision/usOpenOwnerGuards.js");
+ await assert.rejects(()=>assertUsOpenOwnerContract(db,rows[1]),/SHARED_IDENTITY_COMMERCIAL_CONTRACT_HOLD/);
+});
+test("own_salon: failure of second role rolls back first role, moderation and audit",async()=>{
+ await q("INSERT INTO public.slug_reservations VALUES(2,'fixture-master','reserved')");
+ try{await assert.rejects(()=>register(masterSourceFixture()),/INTAKE_PRECHECK_FAILED/);}
+ finally{await q("DELETE FROM public.slug_reservations WHERE id=2");}
+ for(const table of ["owner_opening_requests","moderation_cases","audit_events","auth_users","billing_subscriptions","messages"])assert.equal(await count(table),0);
+});
+test("existing_salon: no new salon, consent required before binding or payment",async()=>{
+ const r=await register(masterSourceFixture("existing_salon"));
+ assert.equal(r.owner_type,"master");assert.equal(await count("owner_opening_requests"),1);
+ const row=(await q("SELECT * FROM public.owner_opening_requests")).rows[0];
+ assert.equal(row.precheck_result_json.odoo_source_proof.consent_status,"REQUIRED");
+ const {assertUsOpenOwnerContract}=await import("../src/services/provision/usOpenOwnerGuards.js");
+ await assert.rejects(()=>assertUsOpenOwnerContract(db,row),/SALON_OWNER_CONSENT_REQUIRED/);
+ for(const table of ["auth_users","billing_subscriptions","messages","salons"])assert.equal(await count(table),0);
+});
+test("role set or source revision cannot silently change after registration",async()=>{
+ await register(masterSourceFixture());
+ await assert.rejects(()=>register(sourceFixture()),/SOURCE_ROLE_SET_CHANGED/);
+ const f=masterSourceFixture();f.lead.write_date="2026-11-23 10:03:00";
+ await assert.rejects(()=>register(f),/EXISTING_SOURCE_REVIEW_REQUIRED/);
+ assert.equal(await count("owner_opening_requests"),2);
 });

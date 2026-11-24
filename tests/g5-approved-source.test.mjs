@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {createUsOdooReadOnlyClient,createUsOdooApprovedSourceClient} from "../src/services/billing/usOdooReadOnlyClient.js";
-import {readUsApprovedOdooSalonSource,registerApprovedUsOdooSalon,isUsOdooIntakeHint} from "../src/services/provision/usApprovedOdooSalonIntake.js";
-import {sourceFixture,sourceEnv,sourceHint,sourceHeaders,sourceTransport} from "./fixtures/g5-approved-source-fixture.mjs";
+import {readUsApprovedOdooSalonSource,readUsApprovedOdooSource,registerApprovedUsOdooSalon,isUsOdooIntakeHint} from "../src/services/provision/usApprovedOdooSalonIntake.js";
+import {sourceFixture,masterSourceFixture,sourceEnv,sourceHint,sourceHeaders,sourceTransport} from "./fixtures/g5-approved-source-fixture.mjs";
 const options={baseUrl:"https://totem-platform.odoo.com",database:"totem-platform",username:"fixture",apiKey:"fixture"};
 const client=t=>createUsOdooApprovedSourceClient({...options,fetchImpl:t.fetchImpl});
 const read=t=>readUsApprovedOdooSalonSource(9001,{client:client(t)});
@@ -30,8 +30,6 @@ for(const [label,change,code] of [
  ["changed email",f=>{f.partner.email="different@example.invalid"},"SNAPSHOT_MISMATCH"],
  ["changed ZIP",f=>{f.partner.x_totem_us_business_zip="10002"},"SNAPSHOT_MISMATCH"],
  ["non-US state",f=>{f.state.country_id=[1,"foreign"]},"STATE_REQUIRED"],
- ["own salon role",f=>{f.lead.x_totem_us_owner_type="master";f.partner.x_totem_us_account_kind="master";f.partner.x_totem_us_master_entry_mode="own_salon"},"MASTER_ROLE_CONTRACT_HOLD"],
- ["existing salon role",f=>{f.lead.x_totem_us_owner_type="master";f.partner.x_totem_us_account_kind="master";f.partner.x_totem_us_master_entry_mode="existing_salon"},"MASTER_ROLE_CONTRACT_HOLD"],
 ]){
  test("reject "+label,async()=>{const f=sourceFixture();change(f);await assert.rejects(()=>read(sourceTransport(f)),new RegExp(code));});
 }
@@ -60,3 +58,33 @@ test("provider errors sanitized, no invented proof",async()=>{
  const t=sourceTransport(sourceFixture(),{change:()=>{throw Error("PRIVATE_PROVIDER_ERROR");}});
  await assert.rejects(()=>read(t),e=>e.message==="US_ODOO_APPROVED_SOURCE_READBACK_UNAVAILABLE"&&!String(e).includes("PRIVATE"));
 });
+
+const readRoles=f=>readUsApprovedOdooSource(9001,{client:client(sourceTransport(f))});
+test("own_salon has exactly two ordered role requests from one approved source, not two payments",async()=>{
+ const r=await readRoles(masterSourceFixture());
+ assert.deepEqual(r.map(x=>x.proof.owner_type),["salon","master"]);
+ assert.equal(new Set(r.map(x=>x.proof.source_request_id)).size,1);
+ assert.equal(new Set(r.map(x=>x.provenance.odoo_lead_id)).size,1);
+ assert.equal(r[1].intake.salon_slug,r[0].intake.slug_requested);
+ assert.equal(r[0].intake.email,r[1].intake.email);
+ assert.equal(r[1].provenance.entry_mode,"own_salon");
+ assert.equal(r[1].provenance.role_set,"salon,master");
+ assert.equal(r[1].provenance.target_salon_partner_id,null);
+});
+test("existing_salon has only master request; target association is not owner consent",async()=>{
+ const r=await readRoles(masterSourceFixture("existing_salon"));
+ assert.equal(r.length,1);assert.equal(r[0].proof.owner_type,"master");
+ assert.equal(r[0].proof.partner_id,20001);assert.equal(r[0].provenance.target_salon_partner_id,20002);
+ assert.equal(r[0].provenance.consent_status,"REQUIRED");
+});
+for(const [name,mode,mutate,expected] of [
+ ["unrecognized entry mode","own_salon",f=>f.partner.x_totem_us_master_entry_mode="other","ENTRY_MODE_INVALID"],
+ ["own salon foreign relation","own_salon",f=>f.partner.x_totem_us_master_salon_id=[20002,"foreign"],"SNAPSHOT_MISMATCH"],
+ ["same public slug for two roles","own_salon",f=>{f.partner.x_totem_us_master_slug="fixture-salon";f.lead.x_totem_us_slug_requested="fixture-salon"},"SNAPSHOT_MISMATCH"],
+ ["target not approved","existing_salon",f=>f.target.x_totem_us_profile_status="submitted","TARGET_SALON_REQUIRED"],
+ ["foreign target","existing_salon",f=>f.target.company_id=[1,"foreign"],"TARGET_SALON_REQUIRED"],
+ ["self target","existing_salon",f=>f.partner.x_totem_us_master_salon_id=[20001,"self"],"TARGET_SALON_REQUIRED"],
+ ["target slug substituted","existing_salon",f=>f.lead.x_totem_us_salon_slug="wrong-salon","SNAPSHOT_MISMATCH"],
+]){
+ test("reject "+name,async()=>{const f=masterSourceFixture(mode);mutate(f);await assert.rejects(()=>readRoles(f),new RegExp(expected));});
+}

@@ -3,7 +3,7 @@
 // remains HOLD until the own_salon/existing_salon role/consent contract is proven.
 import {timingSafeEqual} from "node:crypto";
 import {createUsOdooApprovedSourceClient} from "../billing/usOdooReadOnlyClient.js";
-import {registerVerifiedUsOdooSource} from "./usOdooSourceRegistration.js";
+import {registerVerifiedUsOdooSources} from "./usOdooSourceRegistration.js";
 
 const problem=(code,status=409)=>Object.assign(Error(code),{code,status});
 const id=v=>Number.isSafeInteger(v)&&v>0?v:0;
@@ -59,9 +59,11 @@ function checkPartner(p,partner,lead){
    p.x_totem_us_profile_status!=="approved"||p.x_totem_us_account_kind!==lead.x_totem_us_owner_type||
    !Number.isFinite(stamp(p.write_date))||stamp(p.write_date)>stamp(lead.write_date))
    throw problem("US_ODOO_APPROVED_PROFILE_REQUIRED");
- if(p.x_totem_us_account_kind!=="salon")throw problem("US_ODOO_MASTER_ROLE_CONTRACT_HOLD");
+ if(!["salon","master"].includes(p.x_totem_us_account_kind))throw problem("US_ODOO_SOURCE_ROLE_INVALID");
 }
-export async function readUsApprovedOdooSalonSource(leadId,{client,now=()=>Date.now()}={}){
+// Read one approved profile and derive role-scoped requests; the CRM
+// record remains ONE source. No ownership consent or payment inferred.
+export async function readUsApprovedOdooSource(leadId,{client,now=()=>Date.now()}={}){
  if(!id(leadId)||!client)throw problem("US_ODOO_SOURCE_ID_INVALID",400);
  const started=now();
  try{
@@ -71,45 +73,85 @@ export async function readUsApprovedOdooSalonSource(leadId,{client,now=()=>Date.
   checkLead(lead,leadId,partner);
   const p=single(await client.readPartner(partner),"US_ODOO_APPROVED_PROFILE_NOT_FOUND");
   checkPartner(p,partner,lead);
-  // Compare actual CRM snapshot fields with approved profile; no caller
-  // contact details or provider payment assertions are used.
-  const stateId=relation(p.x_totem_us_business_state_id);
-  if(!stateId)throw problem("US_ODOO_PROFILE_STATE_REQUIRED");
-  const state=single(await client.readState(stateId),"US_ODOO_PROFILE_STATE_REQUIRED");
-  const name=str(p.x_totem_us_business_name),phone=str(p.x_totem_us_business_phone),
-   street=str(p.x_totem_us_business_street),city=str(p.x_totem_us_business_city),
-   zip=str(p.x_totem_us_business_zip),slug=normSlug(p.x_totem_us_business_slug),
-   addressState=str(state.code).toUpperCase(),contact=email(p.email);
-  if(state.id!==stateId||relation(state.country_id)!==233||!name||!phone||!street||!city||
-     !/^[A-Z]{2}$/.test(addressState)||!/^\d{5}(?:-\d{4})?$/.test(zip)||
-     !/^[a-z0-9][a-z0-9-]{2,79}$/.test(slug)||!contact||
-     email(lead.email_from)!==contact||str(lead.phone)!==phone||
-     str(lead.street)!==street||str(lead.city)!==city||relation(lead.state_id)!==stateId||
-     str(lead.x_totem_us_state_code).toUpperCase()!==addressState||
-     str(lead.zip)!==zip||str(lead.x_totem_us_postal_code)!==zip||
-     normSlug(lead.x_totem_us_slug_requested)!==slug)
-    throw problem("US_ODOO_APPROVED_PROFILE_SNAPSHOT_MISMATCH");
-  // Confirm one lead, including inactive records, and re-read the profile.
-  // A concurrent revision or duplicated CRM source cannot create a request.
+  const master=p.x_totem_us_account_kind==="master";
+  const mode=master?p.x_totem_us_master_entry_mode:"salon";
+  if(!["salon","own_salon","existing_salon"].includes(mode)||master&&mode==="salon")
+    throw problem("US_ODOO_MASTER_ENTRY_MODE_INVALID");
+  const contact=email(p.email),masterSlug=normSlug(p.x_totem_us_master_slug);
+  const slugOK=v=>/^[a-z0-9][a-z0-9-]{2,79}$/.test(v);
+  const mismatch=()=>{throw problem("US_ODOO_APPROVED_PROFILE_SNAPSHOT_MISMATCH");};
+  if(!contact||email(lead.email_from)!==contact)mismatch();
+  let target=null,roles=[];
+  const base={market_code:"US",email:contact,admin_notes:"Verified Odoo US approved profile"};
+  if(mode==="salon"||mode==="own_salon"){
+    const stateId=relation(p.x_totem_us_business_state_id);
+    if(!stateId)throw problem("US_ODOO_PROFILE_STATE_REQUIRED");
+    const state=single(await client.readState(stateId),"US_ODOO_PROFILE_STATE_REQUIRED");
+    const name=str(p.x_totem_us_business_name),phone=str(p.x_totem_us_business_phone),
+      street=str(p.x_totem_us_business_street),city=str(p.x_totem_us_business_city),
+      zip=str(p.x_totem_us_business_zip),slug=normSlug(p.x_totem_us_business_slug),
+      addressState=str(state.code).toUpperCase();
+    if(state.id!==stateId||relation(state.country_id)!==233||!name||!phone||!street||!city||
+      !/^[A-Z]{2}$/.test(addressState)||!/^\d{5}(?:-\d{4})?$/.test(zip)||!slugOK(slug)||
+      str(lead.phone)!==phone||str(lead.street)!==street||str(lead.city)!==city||
+      relation(lead.state_id)!==stateId||str(lead.x_totem_us_state_code).toUpperCase()!==addressState||
+      str(lead.zip)!==zip||str(lead.x_totem_us_postal_code)!==zip||
+      normSlug(lead.x_totem_us_slug_requested)!==(master?masterSlug:slug))mismatch();
+    if(master&&(relation(p.x_totem_us_master_salon_id)||normSlug(lead.x_totem_us_salon_slug)!==slug||
+      !slugOK(masterSlug)||masterSlug===slug||!str(p.name)||!str(p.phone)||!str(p.x_totem_us_master_specialty)||
+      str(lead.x_totem_us_specialization)!==str(p.x_totem_us_master_specialty)))mismatch();
+    roles.push({...base,owner_type:"salon",name,phone,city,address:street,state_code:addressState,postal_code:zip,
+      slug_requested:slug,description:str(p.x_totem_us_business_description)});
+    if(master)roles.push({...base,owner_type:"master",name:str(p.name),phone:str(p.phone),city,address:street,
+      slug_requested:masterSlug,description:str(p.x_totem_us_master_bio),specialization:str(p.x_totem_us_master_specialty),
+      work_mode:"attached_to_salon",salon_slug:slug});
+  }else{
+    const targetId=relation(p.x_totem_us_master_salon_id);
+    if(!targetId||targetId===partner)throw problem("US_ODOO_TARGET_SALON_REQUIRED");
+    target=single(await client.readPartner(targetId),"US_ODOO_TARGET_SALON_REQUIRED");
+    const slug=normSlug(target.x_totem_us_business_slug);
+    if(target.id!==targetId||target.active!==true||relation(target.company_id)!==4||relation(target.website_id)!==5||
+      target.x_totem_us_profile_status!=="approved"||target.x_totem_us_account_kind!=="salon"||
+      !slugOK(slug)||!Number.isFinite(stamp(target.write_date)))
+      throw problem("US_ODOO_TARGET_SALON_REQUIRED");
+    if(!str(p.name)||!str(p.phone)||!str(p.x_totem_us_master_specialty)||!slugOK(masterSlug)||
+      masterSlug===slug||normSlug(lead.x_totem_us_slug_requested)!==masterSlug||
+      normSlug(lead.x_totem_us_salon_slug)!==slug||str(lead.phone)!==str(p.phone)||
+      str(lead.x_totem_us_specialization)!==str(p.x_totem_us_master_specialty))mismatch();
+    roles.push({...base,owner_type:"master",name:str(p.name),phone:str(p.phone),
+      city:str(lead.city)||str(target.x_totem_us_business_city),address:str(lead.street),
+      slug_requested:masterSlug,description:str(p.x_totem_us_master_bio),
+      specialization:str(p.x_totem_us_master_specialty),work_mode:"attached_to_salon",salon_slug:slug});
+  }
   const latestLead=single(await client.readPartnerLeads(partner),"US_ODOO_APPROVED_SOURCE_AMBIGUOUS");
   const latestPartner=single(await client.readPartner(partner),"US_ODOO_APPROVED_PROFILE_NOT_FOUND");
-  if(!same(lead,latestLead)||!same(p,latestPartner)||!Number.isFinite(started)||
-     !Number.isFinite(now())||now()<started||now()-started>15000)
+  if(!same(lead,latestLead)||!same(p,latestPartner)||
+     target&&!same(target,single(await client.readPartner(target.id),"US_ODOO_TARGET_SALON_REQUIRED"))||
+     !Number.isFinite(started)||!Number.isFinite(now())||now()<started||now()-started>15000)
     throw problem("US_ODOO_APPROVED_SOURCE_CHANGED");
-  return Object.freeze({
-   proof:Object.freeze({source_namespace:"odoo_online",company_id:4,website_id:5,
-    partner_id:partner,source_request_id:sourceKey(partner),owner_type:"salon"}),
-   intake:Object.freeze({owner_type:"salon",market_code:"US",name,email:contact,phone,city,
-    address:street,state_code:addressState,postal_code:zip,slug_requested:slug,
-    description:str(p.x_totem_us_business_description),admin_notes:"Verified Odoo US approved profile"}),
-   provenance:Object.freeze({source:"odoo_us_approved_profile_v1",odoo_lead_id:leadId,
-    source_partner_id:partner,source_request_id:sourceKey(partner),profile_write_date:p.write_date,
-    lead_write_date:lead.write_date,source_stage_id:82,source_marker:MARKER}),
-  });
+  return Object.freeze(roles.map(intake=>Object.freeze({
+    proof:Object.freeze({source_namespace:"odoo_online",company_id:4,website_id:5,partner_id:partner,
+      source_request_id:sourceKey(partner),owner_type:intake.owner_type}),
+    intake:Object.freeze(intake),
+    provenance:Object.freeze({source:"odoo_us_approved_profile_v1",odoo_lead_id:leadId,
+      source_partner_id:partner,source_request_id:sourceKey(partner),profile_write_date:p.write_date,
+      lead_write_date:lead.write_date,source_stage_id:82,source_marker:MARKER,
+      entry_mode:mode,role_set:roles.map(r=>r.owner_type).join(","),target_salon_partner_id:target?.id??null,
+      target_salon_slug:intake.salon_slug??null,
+      target_salon_write_date:target?.write_date??null,
+      // Neither an Odoo relation nor an approved profile is salon owner consent.
+      consent_status:mode==="existing_salon"?"REQUIRED":null}),
+  })));
  }catch(e){
   if(e?.status&&typeof e.code==="string"&&e.code.startsWith("US_ODOO_"))throw e;
   throw problem("US_ODOO_APPROVED_SOURCE_READBACK_UNAVAILABLE",503);
  }
+}
+// Compatibility for the existing salon-only readback tests/callers.
+export async function readUsApprovedOdooSalonSource(leadId,options){
+ const roles=await readUsApprovedOdooSource(leadId,options);
+ if(roles.length!==1||roles[0].proof.owner_type!=="salon")throw problem("US_ODOO_MASTER_ROLE_CONTRACT_HOLD");
+ return roles[0];
 }
 export async function registerApprovedUsOdooSalon({pool,body,headers,query,
  env=process.env,createClient=createUsOdooApprovedSourceClient,createExistingOpeningRequest}={}){
@@ -122,19 +164,26 @@ export async function registerApprovedUsOdooSalon({pool,body,headers,query,
     env.TOTEM_US_ODOO_DB!=="totem-platform"||!str(env.TOTEM_US_ODOO_USER)||!str(env.TOTEM_US_ODOO_API_KEY))
    throw problem("US_ODOO_SOURCE_CONFIG_REQUIRED",503);
  let verified;
- return registerVerifiedUsOdooSource({pool,candidate:leadId,
-   readVerifiedOdooSource:async candidate=>{
-    verified=await readUsApprovedOdooSalonSource(candidate,{client:createClient({
+ const results=await registerVerifiedUsOdooSources({pool,candidate:leadId,
+   readVerifiedOdooSources:async candidate=>{
+    verified=await readUsApprovedOdooSource(candidate,{client:createClient({
       baseUrl:env.TOTEM_US_ODOO_URL,database:env.TOTEM_US_ODOO_DB,
       username:env.TOTEM_US_ODOO_USER,apiKey:env.TOTEM_US_ODOO_API_KEY})});
-    return verified.proof;
+    return verified.map(v=>v.proof);
    },
-   assertExisting:async existing=>{
-    const saved=existing.precheck_result_json?.odoo_source_proof;
-    if(saved?.odoo_lead_id!==verified.provenance.odoo_lead_id||
-       saved?.source_request_id!==verified.proof.source_request_id)
+   assertExisting:async (existing,proof)=>{
+    const v=verified.find(v=>v.proof.owner_type===proof.owner_type),saved=existing.precheck_result_json?.odoo_source_proof;
+    if(saved?.odoo_lead_id!==v.provenance.odoo_lead_id||saved?.source_request_id!==v.proof.source_request_id||
+       (saved.entry_mode??"salon")!==v.provenance.entry_mode||(saved.role_set??"salon")!==v.provenance.role_set||
+       (saved.target_salon_partner_id??null)!==v.provenance.target_salon_partner_id||
+       (saved.target_salon_slug??null)!==v.provenance.target_salon_slug||
+       saved.profile_write_date!==v.provenance.profile_write_date||saved.lead_write_date!==v.provenance.lead_write_date||
+       (saved.target_salon_write_date??null)!==v.provenance.target_salon_write_date)
       throw problem("US_ODOO_EXISTING_SOURCE_REVIEW_REQUIRED");
    },
-   createExistingOpeningRequest:(db,proof)=>createExistingOpeningRequest(db,verified,proof),
+   createExistingOpeningRequest:(db,proof)=>createExistingOpeningRequest(db,verified.find(v=>v.proof.owner_type===proof.owner_type),proof),
  });
+ if(results.length===1)return results[0];
+ return Object.freeze({request_id:results[0].request_id,status:results[0].status,
+   duplicate:results.every(r=>r.duplicate),owner_type:"salon",requests:results});
 }

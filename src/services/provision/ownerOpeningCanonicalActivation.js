@@ -35,6 +35,8 @@ export function assertUsPaidEvidenceForLockedRequest(request, evidence, now) {
     throw fail("US_ODOO_PAYMENT_SOURCE_CHANGED");
   }
 
+  if(request.owner_type==="master"&&["own_salon","existing_salon"].includes(request.precheck_result_json?.odoo_source_proof?.entry_mode))
+    throw fail("US_ODOO_MASTER_ROLE_COMMERCIAL_CONTRACT_HOLD");
   const checkedAt = new Date(evidence.verifiedAtUtc);
   const start = new Date(evidence.periodStartUtc);
   const end = new Date(evidence.periodEndExclusiveUtc);

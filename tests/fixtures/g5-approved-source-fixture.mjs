@@ -41,11 +41,27 @@ export function sourceTransport(f=sourceFixture(),{change}={}){
   if(model==="res.partner"&&(!domain.some(d=>d.join(",")==="company_id,=,4")||!domain.some(d=>d.join(",")==="website_id,=,5")))throw Error("FIXTURE_PARTNER_SCOPE");
   if(model==="res.country.state"&&!domain.some(d=>d.join(",")==="country_id,=,233"))throw Error("FIXTURE_COUNTRY_SCOPE");
   metrics.reads++;metrics.models.push(model);
-  let rows=[model==="crm.lead"?f.lead:model==="res.partner"?f.partner:f.state]
+  let rows=(model==="crm.lead"?[f.lead]:model==="res.partner"?[f.partner,...(f.target?[f.target]:[])]:[f.state])
    .filter(r=>domain.every(([key,op,v])=>op==="="&&(Array.isArray(r[key])?r[key][0]:r[key])===v))
    .map(r=>Object.fromEntries(kw.fields.map(k=>[k,structuredClone(r[k]??false)])));
   if(change)rows=change({model,domain,rows,metrics,fields:kw.fields});
   return {ok:true,json:async()=>({result:rows})};
  };
  return {fetchImpl,metrics};
+}
+
+export function masterSourceFixture(mode="own_salon"){
+ const f=sourceFixture(),p=f.partner,l=f.lead;
+ Object.assign(p,{x_totem_us_account_kind:"master",x_totem_us_master_entry_mode:mode,
+  x_totem_us_master_slug:"fixture-master",x_totem_us_master_specialty:"Hair",
+  x_totem_us_master_bio:"fixture",phone:"+12125550123",x_totem_us_master_salon_id:false});
+ Object.assign(l,{x_totem_us_owner_type:"master",x_totem_us_slug_requested:"fixture-master",
+  x_totem_us_salon_slug:"fixture-salon",x_totem_us_specialization:"Hair"});
+ if(mode==="existing_salon"){
+  f.target={...sourceFixture().partner,id:20002,email:"owner@example.invalid",
+   x_totem_us_business_slug:"existing-fixture-salon"};
+  p.x_totem_us_master_salon_id=rel(20002);
+  l.x_totem_us_salon_slug="existing-fixture-salon";
+ }
+ return f;
 }

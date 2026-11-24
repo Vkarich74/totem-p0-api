@@ -109,13 +109,14 @@ const SOURCE_MODELS=new Set(["res.partner","crm.lead","res.country.state"]);
 const LEAD_FIELDS=["id","active","type","company_id","team_id","stage_id","partner_id",
  "x_totem_us_source_partner_id","x_totem_us_source_key","x_totem_us_source_marker",
  "x_totem_us_owner_type","x_totem_us_website_id","x_totem_us_slug_requested",
- "x_totem_us_state_code","x_totem_us_postal_code","email_from","phone","street","city",
+ "x_totem_us_state_code","x_totem_us_postal_code","x_totem_us_salon_slug","x_totem_us_specialization","email_from","phone","street","city",
  "state_id","zip","write_date"];
 const PROFILE_FIELDS=["id","active","company_id","website_id","email","name","write_date",
  "x_totem_us_profile_status","x_totem_us_account_kind","x_totem_us_master_entry_mode",
  "x_totem_us_business_name","x_totem_us_business_phone","x_totem_us_business_street",
  "x_totem_us_business_city","x_totem_us_business_state_id","x_totem_us_business_zip",
- "x_totem_us_business_slug","x_totem_us_business_description"];
+ "x_totem_us_business_slug","x_totem_us_business_description",
+ "phone","x_totem_us_master_slug","x_totem_us_master_specialty","x_totem_us_master_bio","x_totem_us_master_salon_id"];
 const validId=id=>Number.isSafeInteger(id)&&id>0;
 export function createUsOdooApprovedSourceClient(options={}){
  const c=createReadOnlyClient(SOURCE_MODELS,{allowed_company_ids:[4],company_id:4,active_test:false},options);
