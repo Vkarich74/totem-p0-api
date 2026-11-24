@@ -1,3 +1,4 @@
+import {readUsOwnerQueueStats,readUsOwnerQueuePage} from "../../services/provision/ownerOpeningQueueRead.js";
 import {usManualReleaseHold,inspectUsManualActivationWelcome} from "../../services/provision/usManualActivationWelcome.js";
 import {assertCanonicalUsProvisionResult} from "../../services/provision/usCanonicalSourceBoundary.js";
 import {validG3Seal,sameG3Seal} from "../../services/provision/usOdooG3SealProof.js";
@@ -1412,6 +1413,10 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
   }
 
   r.get("/stats", async (req,res)=>{
+    if(req.query?.market==="US"){
+      try{return res.status(200).json(await readUsOwnerQueueStats(pool,req.query));}
+      catch(e){return res.status(e?.status===400?400:500).json({ok:false,error:e?.status===400?e.code:"ADMIN_US_QUEUE_READ_FAILED"});}
+    }
     try{
       const totalResult = await pool.query(`
         SELECT COUNT(*)::int AS count
@@ -3430,6 +3435,10 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
 
 
   r.get("/requests", async (req,res)=>{
+    if(req.query?.market==="US"){
+      try{return res.status(200).json(await readUsOwnerQueuePage(pool,req.query));}
+      catch(e){return res.status(e?.status===400?400:500).json({ok:false,error:e?.status===400?e.code:"ADMIN_US_QUEUE_READ_FAILED"});}
+    }
     try{
       const limitRaw = Number(req.query?.limit || 100);
       const limit = Number.isInteger(limitRaw) && limitRaw > 0 && limitRaw <= 200 ? limitRaw : 100;
