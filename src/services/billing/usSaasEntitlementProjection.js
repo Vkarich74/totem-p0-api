@@ -141,6 +141,7 @@ export async function persistUsSaasPaidProjection(db,lockedRequest,evidence,now,
       "provider_subscription_order_id=$5,provider_invoice_id=$6,"+
       "provider_policy_version=$7,updated_at=NOW() "+
       "WHERE owner_type=$1 AND owner_id=$2 AND provider_namespace='odoo_online' "+
+      "AND provider_partner_id=$3 AND provider_source_request_id=$4 "+
       "RETURNING *",args);
     if(updated.rows.length!==1)throw fail("US_SAAS_PROJECTION_UPDATE_RACE");
     return updated.rows[0];

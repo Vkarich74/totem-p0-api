@@ -342,3 +342,18 @@ test("reconcile is a protected Admin operation, with default commercial HOLD",as
   assert.ok(body.includes('process.env.TOTEM_US_ODOO_SAAS_ACCESS_ENABLED!=="true"'));
   assert.ok(body.includes("reconcileUsSaasOpening({"));
 });
+
+// PostgreSQL must infer a type for every supplied positional bind parameter.
+test("paid projection UPDATE binds every parameter and reasserts the exact provider source",async()=>{
+ const calls=[];
+ const db={async query(sql,args){
+  if(sql.includes("SELECT * FROM public.billing_subscriptions"))return {rows:[row()]};
+  calls.push({sql,args});return {rows:[row()]};
+ }};
+ await persistUsSaasPaidProjection(db,owner(),evidence(),new Date(NOW),assertUsPaidEvidenceForLockedRequest);
+ assert.equal(calls.length,1);
+ const {sql,args}=calls[0];
+ const used=new Set([...sql.matchAll(/\$(\d+)/g)].map(m=>Number(m[1])));
+ assert.deepEqual([...used].sort((a,b)=>a-b),Array.from({length:args.length},(_,i)=>i+1));
+ assert.match(sql,/provider_partner_id=\$3 AND provider_source_request_id=\$4/);
+});
