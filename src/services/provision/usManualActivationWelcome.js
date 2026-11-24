@@ -1,3 +1,6 @@
+import {commercialWriterRelease} from "./usCommercialWriterRelease.js";
+import {welcomeIntentKey,welcomeRfcMessageId} from "../notifications/ownerOpeningWelcomeIntent.js";
+export {welcomeIntentKey,welcomeRfcMessageId};
 import {inspectUsPaidAuthorityContract} from "./usPaidOwnerOpeningGate.js";
 // US G3 manual release contract. This module performs read-only readiness checks.
 // Commercial activation and welcome remain hard-disabled until the separately
@@ -14,14 +17,6 @@ export function usManualReleaseHold(r,operation){
  if(operation==="activate")return "US_G3_COMMERCIAL_ACTIVATION_RELEASE_HOLD";
  if(["preview","send","resend"].includes(operation))return "US_G3_WELCOME_RELEASE_HOLD";
  throw fail("US_G3_MANUAL_RELEASE_OPERATION_INVALID");
-}
-export function welcomeIntentKey(v){
- const n=id(v);if(!n)throw fail("OWNER_OPENING_REQUEST_ID_INVALID");
- return "owner_opening:"+n+":welcome:v1";
-}
-export function welcomeRfcMessageId(v){
- const n=id(v);if(!n)throw fail("OWNER_OPENING_REQUEST_ID_INVALID");
- return "<totem-owner-opening-"+n+"-welcome-v1@totemv.com>";
 }
 function exactSource(r){
  const p=proof(r),mode=p?.entry_mode;
@@ -104,6 +99,7 @@ export async function inspectUsManualActivationWelcome(pool,request){
  const base={contract:"us_g3_manual_activation_welcome_v1",activation:"HOLD",welcome:"HOLD",
   activation_allowed:false,welcome_allowed:false,automatic_retry_allowed:false,
   paid_authority:"VERIFIER_INSTALLED_HOLD",commercial_projection_required:true,
+  commercial_writer_contract:commercialWriterRelease(),
   owner_mode:proof(request)?.entry_mode??null,
   credential_mode:request.owner_type==="master"&&proof(request)?.entry_mode==="own_salon"?"existing_salon_principal":"role_specific",
   fresh_source_and_admin_recheck_required:true,owner_consent_recheck_required:proof(request)?.entry_mode==="existing_salon",

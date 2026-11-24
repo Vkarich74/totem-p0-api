@@ -32,7 +32,7 @@ export function buildOwnerOpeningEmail({ name, ownerType, cabinetLink, publicLin
   }
   return result;
 }
-export function buildEmailMime({ to, from, subject, html, text = "", locale }) {
+export function buildEmailMime({ to, from, subject, html, text = "", locale, messageId = null }) {
   const header = value => {
     const result = String(value ?? "");
     if (/[\r\n]/.test(result)) throw new Error("EMAIL_HEADER_INVALID");
@@ -46,6 +46,10 @@ export function buildEmailMime({ to, from, subject, html, text = "", locale }) {
   }
   if (chunk || !words.length) words.push(chunk);
   const encodedSubject = words.map(word => "=?UTF-8?B?" + Buffer.from(word, "utf8").toString("base64") + "?=").join("\r\n ");
+  const stableMessageId = messageId == null ? null : header(messageId);
+  if (stableMessageId != null && (stableMessageId.length>254 || !/^<totem-owner-opening-[1-9][0-9]*-welcome-v1@totemv\.com>$/.test(stableMessageId))) {
+    throw new Error("EMAIL_MESSAGE_ID_INVALID");
+  }
   const boundary = "totem-mail-alternative-v1";
-  return ["MIME-Version: 1.0", `From: ${header(from)}`, `To: ${header(to)}`, `Subject: ${encodedSubject}`, `Content-Language: ${header(locale || emailLanguage(locale))}`, `Content-Type: multipart/alternative; boundary="${boundary}"`, "", `--${boundary}`, 'Content-Type: text/plain; charset="UTF-8"', "Content-Transfer-Encoding: base64", "", encode(text), `--${boundary}`, 'Content-Type: text/html; charset="UTF-8"', "Content-Transfer-Encoding: base64", "", encode(html), `--${boundary}--`, ""].join("\r\n");
+  return ["MIME-Version: 1.0", ...(stableMessageId ? [`Message-ID: ${stableMessageId}`] : []), `From: ${header(from)}`, `To: ${header(to)}`, `Subject: ${encodedSubject}`, `Content-Language: ${header(locale || emailLanguage(locale))}`, `Content-Type: multipart/alternative; boundary="${boundary}"`, "", `--${boundary}`, 'Content-Type: text/plain; charset="UTF-8"', "Content-Transfer-Encoding: base64", "", encode(text), `--${boundary}`, 'Content-Type: text/html; charset="UTF-8"', "Content-Transfer-Encoding: base64", "", encode(html), `--${boundary}--`, ""].join("\r\n");
 }
