@@ -7,6 +7,9 @@ on:
       - '.github/workflows/g5-release-prerequisites.yml'
       - 'tests/g5-queue-postgres.test.mjs'
       - 'tests/g5-us-odoo-source.test.mjs'
+      - 'tests/g5-approved-source*.mjs'
+      - 'tests/fixtures/g5-approved-source-fixture.mjs'
+      - 'src/routes/internal/adminOpenOwner.js'
       - 'tests/g5-owner-opening-paid-activation*.mjs'
       - 'tests/g5-welcome*.mjs'
       - 'tests/g5-admin-queue-pagination.test.mjs'
@@ -64,3 +67,5 @@ jobs:
           node --test tests/g5-us-odoo-source.test.mjs
           node --test tests/g5-owner-opening-paid-activation.test.mjs
           node --test tests/g5-welcome-postgres.test.mjs
+          node --test tests/g5-approved-source.test.mjs
+          node --test tests/g5-approved-source-postgres.test.mjs

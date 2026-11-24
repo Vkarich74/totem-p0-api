@@ -43,7 +43,7 @@ function normalizeVerifiedProof(input) {
 }
 
 const GET_EXISTING = `
-  SELECT id, status, source_partner_id
+  SELECT id, status, source_partner_id, precheck_result_json
   FROM public.owner_opening_requests
   WHERE source_namespace = $1
     AND source_company_id = $2
@@ -58,12 +58,14 @@ export async function registerVerifiedUsOdooSource({
   candidate,
   readVerifiedOdooSource,
   createExistingOpeningRequest,
+  assertExisting = null,
 } = {}) {
   if (!pool || typeof pool.connect !== "function") {
     throw new Error("US_ODOO_POSTGRES_POOL_REQUIRED");
   }
   if (typeof readVerifiedOdooSource !== "function" ||
-      typeof createExistingOpeningRequest !== "function") {
+      typeof createExistingOpeningRequest !== "function" ||
+      (assertExisting!==null&&typeof assertExisting!=="function")) {
     throw new Error("US_ODOO_TRUSTED_CALLBACKS_REQUIRED");
   }
 
@@ -93,6 +95,7 @@ export async function registerVerifiedUsOdooSource({
       if (Number(record.source_partner_id) !== proof.source_partner_id) {
         throw new Error("US_ODOO_SOURCE_PARTNER_MISMATCH");
       }
+      if(assertExisting)await assertExisting(record,proof);
       await db.query("COMMIT");
       return Object.freeze({
         request_id: Number(record.id),

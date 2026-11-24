@@ -1,3 +1,4 @@
+import {isUsOdooIntakeHint,registerApprovedUsOdooSalon} from "../../services/provision/usApprovedOdooSalonIntake.js";
 import { activateOwnerOpeningCanonical } from "../../services/provision/ownerOpeningCanonicalActivation.js";
 import { prepareUsPaidActivationEvidence } from "../../services/provision/usPaidOwnerOpeningGate.js";
 import { OWNER_QUEUE_MARKET_SQL, ownerQueueScope, ownerQueuePage, ownerQueueResult } from "../../services/provision/ownerOpeningQueueRead.js";
@@ -876,7 +877,8 @@ async function writeOwnerOpeningAuditEvent(db, { request, eventType, admin, data
     ...data,
   };
 
-  const actor = admin.email || (admin.id ? `admin:${admin.id}` : "admin");
+  const actor = admin.actor==="system:us_odoo_intake"&&admin.id==null&&!admin.email&&eventType==="owner_opening.request_created"
+    ? admin.actor : admin.email || (admin.id ? `admin:${admin.id}` : "admin");
 
   return await insertDynamicPublicRow(db, "audit_events", {
     event_type: eventType,
@@ -1137,6 +1139,127 @@ async function activateOwnerOpeningEntity(db, request){
 }
 
 
+
+
+// Reuse existing Core intake INSERT/moderation/audit. Caller owns transaction.
+async function createIntakeValidatedRequest(db,precheck,precheckForStorage,admin,sourceAudit,strict=false){
+      const createdRequest = await db.query(
+        `
+          INSERT INTO public.owner_opening_requests(
+            owner_type,
+            status,
+            name,
+            slug_requested,
+            slug_final,
+            email,
+            phone_raw,
+            phone_normalized,
+            city,
+            address,
+            description,
+            specialization,
+            work_mode,
+            salon_slug,
+            admin_notes,
+            precheck_result_json,
+            created_by_admin_id,
+            created_by_admin_email,
+            validated_at,
+            created_at,
+            updated_at
+          )
+          VALUES(
+            $1,
+            'validated',
+            $2,
+            $3,
+            $4,
+            $5,
+            $6,
+            $7,
+            $8,
+            $9,
+            $10,
+            $11,
+            $12,
+            $13,
+            $14,
+            $15,
+            $16,
+            $17,
+            NOW(),
+            NOW(),
+            NOW()
+          )
+          RETURNING *
+        `,
+        [
+          precheck.normalized.owner_type,
+          precheck.normalized.name,
+          precheck.normalized.slug_requested,
+          precheck.normalized.slug_final,
+          precheck.normalized.email,
+          precheck.normalized.phone_raw,
+          precheck.normalized.phone_normalized,
+          precheck.normalized.city,
+          precheck.normalized.address,
+          precheck.normalized.description,
+          precheck.normalized.specialization,
+          precheck.normalized.work_mode,
+          precheck.normalized.salon_slug,
+          precheck.normalized.admin_notes,
+          JSON.stringify(precheckForStorage),
+          admin.id,
+          admin.email || null,
+        ]
+      );
+
+      let request = createdRequest.rows[0];
+
+      const moderationCase = await createOwnerOpeningModerationCase(db, request);
+
+      if(moderationCase?.id){
+        const updatedRequest = await db.query(
+          `
+            UPDATE public.owner_opening_requests
+            SET moderation_case_id=$2,
+                updated_at=NOW()
+            WHERE id=$1
+            RETURNING *
+          `,
+          [Number(request.id), Number(moderationCase.id)]
+        );
+
+        request = updatedRequest.rows[0] || request;
+      }
+
+      const audit = await writeOwnerOpeningAuditEvent(db, {
+        request,
+        eventType: "owner_opening.request_created",
+        admin,
+          data: {
+            moderation_case_id: moderationCase?.id ? Number(moderationCase.id) : null,
+            precheck_valid: true,
+            ...sourceAudit,
+          },
+        });
+
+      if(strict&&(!moderationCase?.id||!audit?.id))throw new Error("US_ODOO_INTAKE_AUDIT_REQUIRED");
+      return request;
+
+}
+export async function createVerifiedUsIntakeRequest(db,verified,proof){
+  if(proof.owner_type!=="salon"||proof.source_company_id!==4||proof.source_website_id!==5||
+     verified.proof.partner_id!==proof.source_partner_id||verified.proof.source_request_id!==proof.source_request_id)
+    throw Object.assign(new Error("US_ODOO_SOURCE_SCOPE_INVALID"),{code:"US_ODOO_SOURCE_SCOPE_INVALID",status:409});
+  const precheck=await buildOpenOwnerPrecheck(db,verified.intake);
+  if(!precheck.valid)throw Object.assign(new Error("US_ODOO_INTAKE_PRECHECK_FAILED"),{code:"US_ODOO_INTAKE_PRECHECK_FAILED",status:409});
+  const stored={...precheck,source:"odoo_us_approved_profile_v1",
+    odoo_request_id:proof.source_request_id,odoo_lead_id:String(verified.provenance.odoo_lead_id),
+    odoo_source_proof:verified.provenance};
+  return createIntakeValidatedRequest(db,precheck,stored,
+    {id:null,email:"",actor:"system:us_odoo_intake"},verified.provenance,true);
+}
 
 export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
   const r = express.Router();
@@ -1440,6 +1563,18 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
     }
 
     const incoming = req.body || {};
+    if(isUsOdooIntakeHint(incoming)){
+      try{
+        const result=await registerApprovedUsOdooSalon({pool,body:incoming,headers:req.headers,
+          query:req.query,createExistingOpeningRequest:createVerifiedUsIntakeRequest});
+        return res.status(result.duplicate?200:201).json({ok:true,...result});
+      }catch(e){
+        const status=[400,401,409,503].includes(e?.status)?e.status:500;
+        const code=typeof e?.code==="string"&&/^(US_ODOO_[A-Z0-9_]+|ADMIN_US_ODOO_INTAKE_HOLD)$/.test(e.code)
+          ?e.code:"ADMIN_OPEN_OWNER_US_ODOO_INTAKE_FAILED";
+        return res.status(status).json({ok:false,error:code});
+      }
+    }
     const intake = buildOdooCoreRequestIntake(incoming);
 
     if(intake?.error){
@@ -1529,108 +1664,9 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
 
       await db.query("BEGIN");
 
-      const createdRequest = await db.query(
-        `
-          INSERT INTO public.owner_opening_requests(
-            owner_type,
-            status,
-            name,
-            slug_requested,
-            slug_final,
-            email,
-            phone_raw,
-            phone_normalized,
-            city,
-            address,
-            description,
-            specialization,
-            work_mode,
-            salon_slug,
-            admin_notes,
-            precheck_result_json,
-            created_by_admin_id,
-            created_by_admin_email,
-            validated_at,
-            created_at,
-            updated_at
-          )
-          VALUES(
-            $1,
-            'validated',
-            $2,
-            $3,
-            $4,
-            $5,
-            $6,
-            $7,
-            $8,
-            $9,
-            $10,
-            $11,
-            $12,
-            $13,
-            $14,
-            $15,
-            $16,
-            $17,
-            NOW(),
-            NOW(),
-            NOW()
-          )
-          RETURNING *
-        `,
-        [
-          precheck.normalized.owner_type,
-          precheck.normalized.name,
-          precheck.normalized.slug_requested,
-          precheck.normalized.slug_final,
-          precheck.normalized.email,
-          precheck.normalized.phone_raw,
-          precheck.normalized.phone_normalized,
-          precheck.normalized.city,
-          precheck.normalized.address,
-          precheck.normalized.description,
-          precheck.normalized.specialization,
-          precheck.normalized.work_mode,
-          precheck.normalized.salon_slug,
-          precheck.normalized.admin_notes,
-          JSON.stringify(precheckForStorage),
-          admin.id,
-          admin.email || null,
-        ]
-      );
-
-      let request = createdRequest.rows[0];
-
-      const moderationCase = await createOwnerOpeningModerationCase(db, request);
-
-      if(moderationCase?.id){
-        const updatedRequest = await db.query(
-          `
-            UPDATE public.owner_opening_requests
-            SET moderation_case_id=$2,
-                updated_at=NOW()
-            WHERE id=$1
-            RETURNING *
-          `,
-          [Number(request.id), Number(moderationCase.id)]
-        );
-
-        request = updatedRequest.rows[0] || request;
-      }
-
-      await writeOwnerOpeningAuditEvent(db, {
-        request,
-        eventType: "owner_opening.request_created",
-        admin,
-          data: {
-            moderation_case_id: moderationCase?.id ? Number(moderationCase.id) : null,
-            precheck_valid: true,
-            source: "odoo_core_form",
-            odoo_request_id: odooRequestId,
-            odoo_lead_id: odooLeadId || null,
-          },
-        });
+      const request=await createIntakeValidatedRequest(db,precheck,precheckForStorage,admin,{
+        source:"odoo_core_form",odoo_request_id:odooRequestId,odoo_lead_id:odooLeadId||null,
+      });
 
       await db.query("COMMIT");
 
