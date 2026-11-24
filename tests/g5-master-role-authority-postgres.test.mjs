@@ -382,7 +382,7 @@ test("shared Master profile HTTP: one salon entitlement, scope and transaction-t
 
 // Reuse the already maintained service table fixture; real router, real PG,
 // no second commercial projection and no external billing calls.
-test("shared Master service links and existing USD price HTTP: scope, transaction rollback and same-row recovery",async()=>{
+test("shared Master service links, USD price and weekly hours HTTP: scope, transaction rollback and same-row recovery",async()=>{
  await activeOwn();
  const ddl=await readFile(new URL("./sql/us_services_01_isolated_fixture.sql",import.meta.url),"utf8");
  const first=ddl.indexOf("CREATE TABLE public.services("),last=ddl.indexOf("INSERT INTO public.auth_users",first);
@@ -396,7 +396,8 @@ test("shared Master service links and existing USD price HTTP: scope, transactio
  const {resolveAuth}=await import("../src/middleware/resolveAuth.js");
  const {buildUsSaasCommercialGuard}=await import("../src/middleware/usSaasCommercialGuard.js");
  const {buildUsServicePricesRouter}=await import("../src/routes/internalUsServicePrices.js");
- const config={...env,TOTEM_US_SHARED_MASTER_SERVICES_ENABLED:"true",TOTEM_US_SHARED_MASTER_SERVICES_RELEASE_APPROVED:"true",TOTEM_US_SHARED_MASTER_PRICE_ENABLED:"false",TOTEM_US_SHARED_MASTER_PRICE_RELEASE_APPROVED:"false"};
+ const {default:buildMastersRouter}=await import("../src/routes/internal/masters.js");
+ const config={...env,TOTEM_US_SHARED_MASTER_SERVICES_ENABLED:"true",TOTEM_US_SHARED_MASTER_SERVICES_RELEASE_APPROVED:"true",TOTEM_US_SHARED_MASTER_PRICE_ENABLED:"false",TOTEM_US_SHARED_MASTER_PRICE_RELEASE_APPROVED:"false",TOTEM_US_SHARED_MASTER_HOURS_ENABLED:"false",TOTEM_US_SHARED_MASTER_HOURS_RELEASE_APPROVED:"false"};
  const previous=Object.fromEntries(Object.keys(config).map(k=>[k,process.env[k]]));
  Object.assign(process.env,config);
  let beforeHandler=null;
@@ -405,7 +406,7 @@ test("shared Master service links and existing USD price HTTP: scope, transactio
    const c=await db.connect();try{return await fn(c);}finally{c.release();}
  }}),buildUsSaasCommercialGuard(db),async(_req,_res,next)=>{
    try{if(beforeHandler){const action=beforeHandler;beforeHandler=null;await action();}next();}catch(err){next(err);}
- },buildUsServicePricesRouter(db));
+ },buildUsServicePricesRouter(db),buildMastersRouter(db,(_req,_res,next)=>next()));
  const server=app.listen(0,"127.0.0.1");
  try{
   await new Promise((resolve,reject)=>{server.once("listening",resolve);server.once("error",reject);});
@@ -498,6 +499,55 @@ test("shared Master service links and existing USD price HTTP: scope, transactio
    await q("UPDATE public.auth_sessions SET revoked_at=NULL");
    p=await call(pricePath,"PUT",next);assert.equal(p.status,200,JSON.stringify(p.body));await checkPrice(1750,3);
    assert.deepEqual(await totals(),[3,3,2]);assert.equal(await count("billing_subscriptions"),1);
+  }
+
+  // Existing US03 DDL/triggers on disposable PG. Only the booking and
+  // timezone columns used by these existing contracts are fixture inputs.
+  {
+   await geoReady();
+   await q("CREATE TABLE public.us_timezones(name text PRIMARY KEY); INSERT INTO public.us_timezones VALUES('America/New_York'); CREATE TABLE public.bookings(id integer PRIMARY KEY,salon_id integer NOT NULL,master_id integer NOT NULL,start_at timestamptz NOT NULL,end_at timestamptz NOT NULL,status text NOT NULL)");
+   const calendarMigration=await readFile(new URL("../migrations/2026_11_14__us03_location_calendar_links.sql",import.meta.url),"utf8");
+   const from=calendarMigration.indexOf("CREATE TABLE public.us_location_master_working_hours (");
+   const until=calendarMigration.indexOf("DO $us03_final$",from);
+   assert.ok(from>=0&&until>from);
+   await q(calendarMigration.slice(from,until));
+   await q("INSERT INTO public.us_salon_locations(id,salon_id,location_code,state_code,city_name,street_line1,postal_code,timezone_name,is_primary,enabled) VALUES(92,32,'second','NY','New York','101 Fixture St','10001','America/New_York',false,true)");
+   const hoursPath="/masters/fixture-master/us-working-hours";
+   const scoped=hoursPath+"?salon_slug=fixture-salon&location_code=main";
+   assert.equal((await call(hoursPath)).status,403);
+   process.env.TOTEM_US_SHARED_MASTER_HOURS_ENABLED="true";
+   assert.equal((await call(hoursPath)).status,403);
+   process.env.TOTEM_US_SHARED_MASTER_HOURS_RELEASE_APPROVED="true";
+   let h=await call(hoursPath);assert.equal(h.status,200,JSON.stringify(h.body));
+   assert.deepEqual(h.body.locations.map(x=>x.location_id),[91,92]);
+   assert.equal((await call("/masters/fixture-other-master/us-working-hours")).status,403);
+   assert.equal((await call(hoursPath+"?salon_slug=foreign-salon&location_code=main")).status,404);
+   h=await call(scoped);assert.equal(h.status,200,JSON.stringify(h.body));assert.equal(h.body.location.timezone,"America/New_York");
+   const empty=h.body.revision;
+   const initial={revision:empty,hours:[{weekday:1,start_time:"09:00",end_time:"18:00",break_start:"12:00",break_end:"13:00"}]};
+   h=await call(scoped,"PUT",initial);assert.equal(h.status,200,JSON.stringify(h.body));assert.equal(h.body.saved,true);
+   assert.equal((await call(scoped,"PUT",initial)).status,409);
+   assert.equal((await call(hoursPath+"?salon_slug=foreign-salon&location_code=main","PUT",initial)).status,404);
+   const rev=h.body.revision;
+   const {readUsMasterWeeklyHours}=await import("../src/services/usMasterWorkingHours.service.js");
+   const unchanged=async()=>{const actual=await readUsMasterWeeklyHours(db,91,46);assert.equal(actual.revision,rev);assert.deepEqual(actual.hours,initial.hours);};
+   // Future Monday at 10:00 local time, derived from DB clock, not UTC weekday.
+   await q("INSERT INTO public.bookings(id,salon_id,master_id,start_at,end_at,status) SELECT 700,32,46,(date_trunc('week',clock_timestamp() AT TIME ZONE 'America/New_York')+interval '7 days 10 hours') AT TIME ZONE 'America/New_York',(date_trunc('week',clock_timestamp() AT TIME ZONE 'America/New_York')+interval '7 days 11 hours') AT TIME ZONE 'America/New_York','confirmed'; INSERT INTO public.us_booking_location_links(booking_id,location_id) VALUES(700,91)");
+   const conflict=await call(scoped,"PUT",{revision:rev,hours:[]});assert.equal(conflict.status,409,JSON.stringify(conflict.body));assert.equal(conflict.body.error,"US_HOURS_FUTURE_BOOKINGS_CONFLICT");await unchanged();
+   const desired={revision:rev,hours:[{...initial.hours[0],end_time:"19:00"}]};
+   const denyHours=async()=>{const r=await call(scoped,"PUT",desired);assert.equal(r.status,403,JSON.stringify(r.body));await unchanged();};
+   await q("UPDATE public.billing_subscriptions SET subscription_status='blocked',provider_revoked_at=now()");await denyHours();await restore();
+   beforeHandler=()=>q("UPDATE public.billing_subscriptions SET current_period_end=clock_timestamp()");await denyHours();assert.equal(beforeHandler,null);await restore();
+   await q("CREATE FUNCTION public.fixture_expire_hours_proof() RETURNS trigger LANGUAGE plpgsql AS $hours_fixture$ BEGIN UPDATE public.billing_subscriptions SET current_period_end=clock_timestamp(); RETURN NEW; END; $hours_fixture$; CREATE TRIGGER fixture_expire_hours_proof AFTER INSERT ON public.us_location_master_working_hours FOR EACH ROW EXECUTE FUNCTION public.fixture_expire_hours_proof()");
+   await denyHours();
+   await q("DROP TRIGGER fixture_expire_hours_proof ON public.us_location_master_working_hours; DROP FUNCTION public.fixture_expire_hours_proof()");
+   beforeHandler=()=>q("UPDATE public.auth_sessions SET revoked_at=now()");await denyHours();assert.equal(beforeHandler,null);
+   await q("UPDATE public.auth_sessions SET revoked_at=NULL");
+   h=await call(scoped,"PUT",desired);assert.equal(h.status,200,JSON.stringify(h.body));
+   assert.equal(h.body.hours[0].end_time,"19:00");assert.notEqual(h.body.revision,rev);
+   assert.equal((await call(hoursPath+"?salon_slug=fixture-salon&location_code=second")).body.hours.length,0);
+   assert.equal(await count("bookings"),1);assert.equal(await count("billing_subscriptions"),1);
+   assert.equal(await count("auth_users"),1);assert.equal(await count("auth_sessions"),1);
   }
  }finally{
   await new Promise(resolve=>server.close(resolve));

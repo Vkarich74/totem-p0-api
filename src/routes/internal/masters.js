@@ -1,5 +1,5 @@
 import {readUsOwnSalonMasterAuthority} from "../../services/provision/usMasterRoleAuthority.js";
-import {readUsOwnSalonProfileAccess,usSharedMasterProfileEnabled} from "../../auth/usOwnSalonRoleContext.js";
+import {readUsOwnSalonProfileAccess,usSharedMasterProfileEnabled,readUsOwnSalonHoursAccess} from "../../auth/usOwnSalonRoleContext.js";
 import express from "express";
 import { getUsSaasAccess,readUsSaasProjectionPolicy } from "../../services/billing/usSaasEntitlementProjection.js";
 import crypto from "crypto";
@@ -942,6 +942,8 @@ const US_MASTER_LOCATION_ROWS = `
 `;
 
 function usHoursHttpError(res,err){
+  if([403,409].includes(err?.status)&&/^US_(ROLE_CONTEXT|MASTER_|SAAS_)/.test(String(err?.code||err?.message||"")))
+    return res.status(403).json({ok:false,error:"US_HOURS_BILLING_BLOCKED"});
   const known=Number.isInteger(err?.statusCode) && err?.code?.startsWith("US_");
   if (known) return res.status(err.statusCode).json({ok:false,error:err.code});
   if(err?.code==="BILLING_BLOCKED")
@@ -969,7 +971,7 @@ function parseUsHoursScope(query={},requireScope=false){
   return {salon_slug:salonSlug,location_code:code};
 }
 
-async function checkedUsMasterHoursActor(db,req){
+async function checkedUsMasterHoursActor(db,req,lock=false){
   if(req.auth?.source!=="session" || req.auth?.role!=="master" ||
      !Number.isSafeInteger(Number(req.auth.user_id)) ||
      Number(req.auth.user_id)<1) {
@@ -985,6 +987,12 @@ async function checkedUsMasterHoursActor(db,req){
      String(row.user_id)!==String(req.auth.user_id) ||
      !hasMasterOwnership(req,row.id)){
     throw usHoursProblem("US_HOURS_MASTER_FORBIDDEN",403);
+  }
+  if(req.auth.us_role_context==="own_salon_master_v1"){
+    const shared=await readUsOwnSalonHoursAccess(db,{auth:req.auth,slug:req.params.slug,lock});
+    if(shared.masterId!==Number(row.id))
+      throw usHoursProblem("US_HOURS_MASTER_FORBIDDEN",403);
+    return {master_id:shared.masterId,master_slug:String(req.params.slug),shared_salon_id:shared.salonId};
   }
   const validAuth=await db.query(
     "SELECT 1 FROM public.auth_users WHERE id=$1 AND enabled=true AND role='master' LIMIT 1",
@@ -1018,23 +1026,25 @@ function validateUsLocationHoursRow(row){
   };
 }
 
-async function listUsMasterHoursLocations(db,masterId){
+async function listUsMasterHoursLocations(db,masterId,sharedSalonId=null){
   const found=await db.query(
     US_MASTER_LOCATION_ROWS+
+    (sharedSalonId?" AND s.id=$2":"")+
     " ORDER BY s.slug,l.is_primary DESC,l.location_code LIMIT 101",
-    [masterId]
+    [masterId,...(sharedSalonId?[sharedSalonId]:[])]
   );
   if(found.rows.length>100)
     throw usHoursProblem("US_HOURS_TOO_MANY_LOCATIONS",409);
   return found.rows.map(validateUsLocationHoursRow);
 }
 
-async function selectLockedUsHoursLocation(db,masterId,scope){
+async function selectLockedUsHoursLocation(db,masterId,scope,sharedSalonId=null){
   const result=await db.query(
     US_MASTER_LOCATION_ROWS+
-    " AND s.slug=$2 AND l.location_code=$3 LIMIT 1"+
+    " AND s.slug=$2 AND l.location_code=$3"+
+    (sharedSalonId?" AND s.id=$4":"")+" LIMIT 1"+
     " FOR UPDATE OF l FOR SHARE OF ms,s",
-    [masterId,scope.salon_slug,scope.location_code]
+    [masterId,scope.salon_slug,scope.location_code,...(sharedSalonId?[sharedSalonId]:[])]
   );
   if(result.rows.length!==1){
     throw usHoursProblem("US_HOURS_LOCATION_RELATION_NOT_FOUND",404);
@@ -1062,13 +1072,13 @@ r.get("/masters/:slug/us-working-hours",internalReadRateLimit,async(req,res)=>{
     const scope=parseUsHoursScope(req.query,false);
     const actor=await checkedUsMasterHoursActor(pool,req);
     if(!scope){
-      const locations=await listUsMasterHoursLocations(pool,actor.master_id);
+      const locations=await listUsMasterHoursLocations(pool,actor.master_id,actor.shared_salon_id);
       return res.json({
         ok:true,market_code:"US",owner_type:"master",
         owner_slug:actor.master_slug,locations,
       });
     }
-    const locations=await listUsMasterHoursLocations(pool,actor.master_id);
+    const locations=await listUsMasterHoursLocations(pool,actor.master_id,actor.shared_salon_id);
     const location=locations.find(item=>
       item.salon_slug===scope.salon_slug &&
       item.location_code===scope.location_code);
@@ -1096,7 +1106,10 @@ r.put("/masters/:slug/us-working-hours",async(req,res)=>{
     started=true;
     await client.query("SET LOCAL statement_timeout = '5000ms'");
     await client.query("SET LOCAL lock_timeout = '2000ms'");
-    const actor=await checkedUsMasterHoursActor(client,req);
+    // Shared authority locks master/membership/market rows BEFORE the
+    // advisory lock: public booking already holds SHARE on these rows
+    // when acquiring 973103. Inverting this order risks a deadlock.
+    const actor=await checkedUsMasterHoursActor(client,req,true);
     // Reuse the EXACT US public-booking transaction advisory lock (master
     // key 973103); acquire before location row locks for consistent order.
     // No KG/KZ endpoint acquires this lock.
@@ -1105,18 +1118,25 @@ r.put("/masters/:slug/us-working-hours",async(req,res)=>{
       [973103,actor.master_id]
     );
     const location=await selectLockedUsHoursLocation(
-      client,actor.master_id,scope);
+      client,actor.master_id,scope,actor.shared_salon_id);
     // Explicit US-only location: never fall back to legacy wallet/missing=active.
-    const entitlement=await getUsSaasAccess(client,{ownerType:"master",ownerId:actor.master_id,
-      policy:readUsSaasProjectionPolicy()});
-    if(entitlement.managed!==true||entitlement.can_write!==true){
-      const error=new Error("BILLING_BLOCKED");error.code="BILLING_BLOCKED";throw error;
+    if(!actor.shared_salon_id){
+      const entitlement=await getUsSaasAccess(client,{ownerType:"master",ownerId:actor.master_id,
+        policy:readUsSaasProjectionPolicy()});
+      if(entitlement.managed!==true||entitlement.can_write!==true){
+        const error=new Error("BILLING_BLOCKED");error.code="BILLING_BLOCKED";throw error;
+      }
     }
     const saved=await replaceUsMasterWeeklyHours(client,{
       locationId:location.location_id,masterId:actor.master_id,
       revision:desired.revision,hours:desired.hours,
       timezone:location.timezone,
     });
+    if(actor.shared_salon_id){
+      const final=await readUsOwnSalonHoursAccess(client,{auth:req.auth,slug:req.params.slug,lock:true});
+      if(final.masterId!==actor.master_id||final.salonId!==actor.shared_salon_id)
+        throw usHoursProblem("US_HOURS_MASTER_FORBIDDEN",403);
+    }
     await client.query("COMMIT");
     started=false;
     return res.json(usMasterHoursPayload(actor,location,saved,true));
