@@ -332,10 +332,6 @@ export async function createMasterCanonical({ pool, payload, dbClient = null, kg
       });
     }
 
-    if(input.market_code==="KG"){
-      const collision=await db.query("SELECT id FROM public.auth_users WHERE lower(email)=lower($1) AND role='salon_admin' LIMIT 1",[input.email]);
-      if(collision.rows.length)throw Object.assign(Error("KG_SHARED_MASTER_ADMIN_REQUEST_REQUIRED"),{code:"KG_SHARED_MASTER_ADMIN_REQUEST_REQUIRED",status:409});
-    }
     const finalMasterSlug = await resolveMasterSlugForReservation(db, input.master_slug || input.name);
 
     const reservation = await reserveSlug(db, {

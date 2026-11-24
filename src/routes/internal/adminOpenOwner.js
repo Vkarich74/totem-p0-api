@@ -1,4 +1,4 @@
-import {isKgSharedMasterCandidate,readKgSharedMasterCandidate,kgSharedMasterProof,assertKgSharedMasterPending,assertKgSharedMasterActivation} from "../../services/provision/kgSharedMasterIdentity.js";
+import {kgSharedMasterEnabled,isKgSharedMasterCandidate,readKgSharedMasterCandidate,kgSharedMasterProof,assertKgSharedMasterPending,assertKgSharedMasterActivation} from "../../services/provision/kgSharedMasterIdentity.js";
 import { buildOwnerOpeningEmail, buildEmailMime } from "../../services/notifications/emailTemplates.js";
 import { resolveRecipientLocale } from "../../services/notifications/recipientLocale.js";
 import express from "express";
@@ -1295,7 +1295,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
 
       // Shared owner path uses the SAME canonical precheck as request creation.
       // Ordinary KG/US/KZ paths keep their existing behavior.
-      if(ownerType==="master"&&["","KG"].includes(marketCode)&&body.work_mode==="attached_to_salon"){
+      if(kgSharedMasterEnabled()&&ownerType==="master"&&["","KG"].includes(marketCode)&&body.work_mode==="attached_to_salon"){
         const normalizedPhone=await normalizeContactPhoneForBusiness(pool,phoneRaw,{marketCode,required:true});
         if(normalizedPhone.ok&&isKgSharedMasterCandidate({marketCode,ownerType,workMode:body.work_mode,
           salonSlug:normalizeSlug(body.salon_slug),email,phone:normalizedPhone.phone})){
@@ -1697,11 +1697,14 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
     const db = await pool.connect();
 
     try{
-      await db.query("BEGIN");
-      const precheck = await buildOpenOwnerPrecheck(db, req.body || {},{allowKgSharedOwner:true,lockKgSharedOwner:true});
+      const body=req.body||{};
+      const sharedCandidate=kgSharedMasterEnabled()&&normalizeOwnerType(body.owner_type)==="master"&&
+        ["","KG"].includes(normalizeText(body.market_code).toUpperCase())&&body.work_mode==="attached_to_salon";
+      if(sharedCandidate)await db.query("BEGIN");
+      const precheck = await buildOpenOwnerPrecheck(sharedCandidate?db:pool,body,{allowKgSharedOwner:sharedCandidate,lockKgSharedOwner:sharedCandidate});
 
       if(!precheck.valid){
-        await db.query("ROLLBACK");
+        if(sharedCandidate)await db.query("ROLLBACK");
         return res.status(400).json({
           ok: false,
           error: "PRECHECK_FAILED",
@@ -1711,6 +1714,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
 
       const admin = getAdminActor(req);
       const normalized = precheck.normalized;
+      if(!sharedCandidate)await db.query("BEGIN");
 
       const createdRequest = await db.query(
         `

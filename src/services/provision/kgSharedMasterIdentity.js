@@ -90,6 +90,7 @@ export async function readKgSharedMasterBindings(db,{principalId=null,masterSlug
  AND ($4::bigint IS NULL OR r.id=$4)
  AND ($5::text IS NULL OR ($6='email' AND lower(a.email)=lower($5)) OR ($6='phone' AND a.phone=$5))
  AND (ma.active=true OR ($7::boolean AND r.status='provisioned'))
+ AND NOT EXISTS(SELECT 1 FROM public.auth_users b WHERE b.id<>a.id AND (lower(b.email)=lower(a.email) OR b.phone=a.phone))
  AND NOT EXISTS(SELECT 1 FROM public.master_salon other WHERE other.master_id=ma.id AND other.salon_id<>s.id AND other.status='active')
  ${lock?"FOR UPDATE OF r,a,ma,ms,s,os,t,m":""}`,[
  states,id(principalId)||null,masterSlug||null,id(requestId)||null,target?.value||null,target?.lookup||null,allowProvisioned

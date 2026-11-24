@@ -352,7 +352,7 @@ function extractRequestedMasterSlug(req){
   }
 }
 
-export async function resolveAuth(req,res,next){
+export async function resolveAuth(req,res,next,{withClient=withAuthClient}={}){
   req.auth = null;
   req.identity = null;
 
@@ -407,7 +407,7 @@ export async function resolveAuth(req,res,next){
     }
 
     try{
-      await withAuthClient(async (client) => {
+      await withClient(async (client) => {
         const sRes = await client.query(
           `SELECT s.id,
                   s.user_id,
