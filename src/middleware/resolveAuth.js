@@ -1,3 +1,4 @@
+import {rejectUnprovenSession} from "../auth/verifiedSessionContract.js";
 import {isUsRoleContextClaim,resolveUsOwnSalonRoleContext} from "../auth/usOwnSalonRoleContext.js";
 import jwt from 'jsonwebtoken';
 import pkg from 'pg';
@@ -364,6 +365,7 @@ export async function resolveAuth(req,res,next){
   const claimedContext=isUsRoleContextClaim(jwt.decode(token));
   try{
     const payload = jwt.verify(token, process.env.JWT_SECRET);
+    if(rejectUnprovenSession(req,res,next,payload))return;
 
     const user_id = safeInt(payload?.user_id ?? payload?.id ?? payload?.sub);
     const roleRaw = String(payload?.role ?? '').trim();

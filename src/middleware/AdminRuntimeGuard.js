@@ -1,3 +1,4 @@
+import {isVerifiedSessionClaim} from "../auth/verifiedSessionContract.js";
 import jwt from "jsonwebtoken";
 import { pool } from "../db.js";
 import {
@@ -31,7 +32,8 @@ function getJwtSecret() {
 
 function verifyAdminJwt(token) {
   try {
-    return jwt.verify(token, getJwtSecret());
+    const payload=jwt.verify(token,getJwtSecret());
+    return isVerifiedSessionClaim(payload)?payload:null;
   } catch {
     return null;
   }

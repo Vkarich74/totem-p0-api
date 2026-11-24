@@ -1,3 +1,4 @@
+import {VERIFIED_SESSION_VERSION} from "./verifiedSessionContract.js";
 // Existing principal and existing live session; no auth_users mutation or
 // second credential/session row. Context token is narrow and short-lived.
 import jwt from "jsonwebtoken";
@@ -58,7 +59,7 @@ export async function switchUsOwnSalonRole({pool,auth,role,masterRequestId,passw
    else await readActive(db,auth.user_id,auth.master_request_id,env);
    const ttl=Math.min(300,Math.floor((new Date(rows.rows[0].expires_at).getTime()-Date.now())/1000));
    if(ttl<1||!env.JWT_SECRET)throw fail("US_ROLE_CONTEXT_SESSION_INVALID");
-   const payload={user_id:id(auth.user_id),role,session_id:auth.session_id,
+   const payload={user_id:id(auth.user_id),role,session_id:auth.session_id,auth_session_version:VERIFIED_SESSION_VERSION,
      ...(a?{us_role_context:kind,us_master_request_id:a.masterRequestId}:{})};
    const token=jwt.sign(payload,env.JWT_SECRET,{expiresIn:ttl});
    await db.query(`INSERT INTO public.audit_events(event_type,actor,core_user_id,data)
