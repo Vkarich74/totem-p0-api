@@ -382,7 +382,7 @@ test("shared Master profile HTTP: one salon entitlement, scope and transaction-t
 
 // Reuse the already maintained service table fixture; real router, real PG,
 // no second commercial projection and no external billing calls.
-test("shared Master service links HTTP: paid create, scope, transaction rollback and same-row recovery",async t=>{
+test("shared Master service links and existing USD price HTTP: scope, transaction rollback and same-row recovery",async()=>{
  await activeOwn();
  const ddl=await readFile(new URL("./sql/us_services_01_isolated_fixture.sql",import.meta.url),"utf8");
  const first=ddl.indexOf("CREATE TABLE public.services("),last=ddl.indexOf("INSERT INTO public.auth_users",first);
@@ -459,7 +459,9 @@ test("shared Master service links HTTP: paid create, scope, transaction rollback
   assert.deepEqual(await totals(),[3,3,2]);
   assert.equal(await count("billing_subscriptions"),1);assert.equal(await count("auth_users"),1);assert.equal(await count("auth_sessions"),1);
 
-  await t.test("shared Master existing USD price: actual version trigger, exact scope and rollback after UPDATE",async()=>{
+  // Continue inside the same top-level fixture: node:test inherited beforeEach
+  // would reset the parent data and conflict with the service-table FKs.
+  {
    // The existing service fixture has a minimal market guard. For price
    // revision tests replace it with the actual version trigger from C11.
    const migration=await readFile(new URL("../migrations/2026_11_17__us_pay_c11_price_collector_sidecars.sql",import.meta.url),"utf8");
@@ -496,7 +498,7 @@ test("shared Master service links HTTP: paid create, scope, transaction rollback
    await q("UPDATE public.auth_sessions SET revoked_at=NULL");
    p=await call(pricePath,"PUT",next);assert.equal(p.status,200,JSON.stringify(p.body));await checkPrice(1750,3);
    assert.deepEqual(await totals(),[3,3,2]);assert.equal(await count("billing_subscriptions"),1);
-  });
+  }
  }finally{
   await new Promise(resolve=>server.close(resolve));
   for(const [k,v] of Object.entries(previous)){if(v===undefined)delete process.env[k];else process.env[k]=v;}
