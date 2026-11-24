@@ -3,7 +3,7 @@
 import { getUsSaasAccess,readUsSaasProjectionPolicy } from
   "../services/billing/usSaasEntitlementProjection.js";
 
-import {readUsOwnSalonProfileAccess,readUsOwnSalonServicesAccess,readUsOwnSalonPriceAccess,readUsOwnSalonHoursAccess,isUsSharedMasterPricePath} from "../auth/usOwnSalonRoleContext.js";
+import {readUsOwnSalonProfileAccess,readUsOwnSalonServicesAccess,readUsOwnSalonPriceAccess,readUsOwnSalonHoursAccess,readUsOwnSalonBookingAccess,isUsSharedMasterPricePath} from "../auth/usOwnSalonRoleContext.js";
 
 function ownerType(value){
   const s=String(value||"").toLowerCase();
@@ -80,9 +80,10 @@ export function buildUsSaasCommercialGuard(pool,{
         const services=method==="POST"&&path==="/us-service-links/master/"+req.auth.master_slug;
         const price=method==="PUT"&&isUsSharedMasterPricePath(path,req.auth.master_slug);
         const hours=method==="PUT"&&path==="/masters/"+req.auth.master_slug+"/us-working-hours";
-        if(c.action!=="COMMERCIAL_WRITE"||c.target.type!=="master"||!profile&&!services&&!price&&!hours)
+        const booking=method==="POST"&&path==="/masters/"+req.auth.master_slug+"/us-manual-bookings";
+        if(c.action!=="COMMERCIAL_WRITE"||c.target.type!=="master"||!profile&&!services&&!price&&!hours&&!booking)
           return res.status(403).json({ok:false,error:"US_ROLE_CONTEXT_ROUTE_HOLD"});
-        const read=profile?readUsOwnSalonProfileAccess:services?readUsOwnSalonServicesAccess:price?readUsOwnSalonPriceAccess:readUsOwnSalonHoursAccess;
+        const read=profile?readUsOwnSalonProfileAccess:services?readUsOwnSalonServicesAccess:price?readUsOwnSalonPriceAccess:hours?readUsOwnSalonHoursAccess:readUsOwnSalonBookingAccess;
         const shared=await read(pool,{auth:req.auth,slug:c.target.slug});
         if(shared.masterId!==owner.id)
           return res.status(403).json({ok:false,error:"US_ROLE_CONTEXT_PROFILE_SCOPE"});

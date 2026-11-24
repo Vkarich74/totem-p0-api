@@ -382,7 +382,7 @@ test("shared Master profile HTTP: one salon entitlement, scope and transaction-t
 
 // Reuse the already maintained service table fixture; real router, real PG,
 // no second commercial projection and no external billing calls.
-test("shared Master service links, USD price and weekly hours HTTP: scope, transaction rollback and same-row recovery",async()=>{
+test("shared Master service links, USD price, weekly hours and manual booking HTTP: scope, rollback and same-row recovery",async()=>{
  await activeOwn();
  const ddl=await readFile(new URL("./sql/us_services_01_isolated_fixture.sql",import.meta.url),"utf8");
  const first=ddl.indexOf("CREATE TABLE public.services("),last=ddl.indexOf("INSERT INTO public.auth_users",first);
@@ -397,7 +397,8 @@ test("shared Master service links, USD price and weekly hours HTTP: scope, trans
  const {buildUsSaasCommercialGuard}=await import("../src/middleware/usSaasCommercialGuard.js");
  const {buildUsServicePricesRouter}=await import("../src/routes/internalUsServicePrices.js");
  const {default:buildMastersRouter}=await import("../src/routes/internal/masters.js");
- const config={...env,TOTEM_US_SHARED_MASTER_SERVICES_ENABLED:"true",TOTEM_US_SHARED_MASTER_SERVICES_RELEASE_APPROVED:"true",TOTEM_US_SHARED_MASTER_PRICE_ENABLED:"false",TOTEM_US_SHARED_MASTER_PRICE_RELEASE_APPROVED:"false",TOTEM_US_SHARED_MASTER_HOURS_ENABLED:"false",TOTEM_US_SHARED_MASTER_HOURS_RELEASE_APPROVED:"false"};
+ const {buildUsMasterManualBookingRouter}=await import("../src/routes/internalUsMasterManualBooking.js");
+ const config={...env,TOTEM_US_SHARED_MASTER_SERVICES_ENABLED:"true",TOTEM_US_SHARED_MASTER_SERVICES_RELEASE_APPROVED:"true",TOTEM_US_SHARED_MASTER_PRICE_ENABLED:"false",TOTEM_US_SHARED_MASTER_PRICE_RELEASE_APPROVED:"false",TOTEM_US_SHARED_MASTER_HOURS_ENABLED:"false",TOTEM_US_SHARED_MASTER_HOURS_RELEASE_APPROVED:"false",TOTEM_US_SHARED_MASTER_BOOKING_ENABLED:"false",TOTEM_US_SHARED_MASTER_BOOKING_RELEASE_APPROVED:"false",TOTEM_US_SHARED_MASTER_PROFILE_ENABLED:"true",TOTEM_US_SHARED_MASTER_PROFILE_RELEASE_APPROVED:"true",VAPID_PUBLIC_KEY:"",VAPID_PRIVATE_KEY:"",VAPID_SUBJECT:""};
  const previous=Object.fromEntries(Object.keys(config).map(k=>[k,process.env[k]]));
  Object.assign(process.env,config);
  let beforeHandler=null;
@@ -406,7 +407,7 @@ test("shared Master service links, USD price and weekly hours HTTP: scope, trans
    const c=await db.connect();try{return await fn(c);}finally{c.release();}
  }}),buildUsSaasCommercialGuard(db),async(_req,_res,next)=>{
    try{if(beforeHandler){const action=beforeHandler;beforeHandler=null;await action();}next();}catch(err){next(err);}
- },buildUsServicePricesRouter(db),buildMastersRouter(db,(_req,_res,next)=>next()));
+ },buildUsServicePricesRouter(db),buildUsMasterManualBookingRouter(db),buildMastersRouter(db,(_req,_res,next)=>next()));
  const server=app.listen(0,"127.0.0.1");
  try{
   await new Promise((resolve,reject)=>{server.once("listening",resolve);server.once("error",reject);});
@@ -414,8 +415,8 @@ test("shared Master service links, USD price and weekly hours HTTP: scope, trans
   const {access_token:token}=await switchRole({auth:{...auth,session_id:sessionId}});
   const salonToken=jwt.sign({user_id:100,role:"salon_admin",session_id:sessionId,auth_session_version:2},env.JWT_SECRET,{expiresIn:300});
   const path="/us-service-links/master/fixture-master";
-  const call=async(p,method="GET",body,accessToken=token)=>{
-   const r=await fetch(origin+p,{method,headers:{Authorization:"Bearer "+accessToken,"Content-Type":"application/json"},...(body?{body:JSON.stringify(body)}:{})});
+  const call=async(p,method="GET",body,accessToken=token,extraHeaders={})=>{
+   const r=await fetch(origin+p,{method,headers:{Authorization:"Bearer "+accessToken,"Content-Type":"application/json",...extraHeaders},...(body?{body:JSON.stringify(body)}:{})});
    return {status:r.status,body:await r.json()};
   };
   const totals=async()=>Promise.all(["services","salon_master_services","us_service_price_amounts"].map(count));
@@ -548,6 +549,80 @@ test("shared Master service links, USD price and weekly hours HTTP: scope, trans
    assert.equal((await call(hoursPath+"?salon_slug=fixture-salon&location_code=second")).body.hours.length,0);
    assert.equal(await count("bookings"),1);assert.equal(await count("billing_subscriptions"),1);
    assert.equal(await count("auth_users"),1);assert.equal(await count("auth_sessions"),1);
+  }
+
+  // Canonical booking writer on the existing disposable authority fixture.
+  // Supporting legacy tables contain only the contract columns exercised
+  // here; real US03 and C11 constraints/triggers are reused.
+  {
+   await q(await readFile(new URL("./sql/g5-shared-master-booking-fixture.sql",import.meta.url),"utf8"));
+   const migration=await readFile(new URL("../migrations/2026_11_17__us_pay_c11_price_collector_sidecars.sql",import.meta.url),"utf8");
+   const snapshotStart=migration.indexOf("CREATE TABLE public.us_booking_price_snapshots (");
+   const snapshotEnd=migration.indexOf("CREATE TABLE public.us_booking_payment_collectors",snapshotStart);
+   const contextStart=migration.indexOf("CREATE FUNCTION public.us_pay_c11_booking_context(");
+   const contextEnd=migration.indexOf("CREATE FUNCTION public.us_pay_c11_validate_service_price()",contextStart);
+   const triggerStart=migration.indexOf("CREATE FUNCTION public.us_pay_c11_validate_booking_snapshot()");
+   const triggerEnd=migration.indexOf("CREATE FUNCTION public.us_pay_c11_validate_collector()",triggerStart);
+   assert.ok(snapshotStart>=0&&snapshotEnd>snapshotStart&&contextStart>=0&&contextEnd>contextStart&&triggerStart>=0&&triggerEnd>triggerStart);
+   await q(migration.slice(snapshotStart,snapshotEnd)+migration.slice(contextStart,contextEnd)+migration.slice(triggerStart,triggerEnd));
+   const link=Number((await q("SELECT id FROM public.salon_master_services WHERE master_id=46 AND service_pk=$1",[servicePk])).rows[0].id);
+   const date=(await q("SELECT to_char(date_trunc('week',clock_timestamp() AT TIME ZONE 'America/New_York')+interval '7 days','YYYY-MM-DD') AS date")).rows[0].date;
+   const at=async time=>(await q("SELECT ($1::date+$2::time) AT TIME ZONE 'America/New_York' AS at",[date,time])).rows[0].at.toISOString();
+   const {randomUUID}=await import("node:crypto");
+   const bookingPath="/masters/fixture-master/us-manual-bookings";
+   const booked={salon_slug:"fixture-salon",location_code:"main",service_id:link,date,time:"14:00",start_at:await at("14:00"),
+     client_payload:{name:"Synthetic Client",phone:"+12125550123"},expected_us_price_version:3,expected_us_amount_minor:"1750"};
+   const book=(body=booked,key=randomUUID(),p=bookingPath)=>call(p,"POST",body,token,{"idempotency-key":key});
+   const tables=["bookings","calendar_slots","clients","us_booking_location_links","us_booking_price_snapshots","client_access_tokens","client_sources","client_audit_events","api_idempotency_keys","app_notifications","notification_deliveries"];
+   const bookingCounts=()=>Promise.all(tables.map(count));
+   const baseline=await bookingCounts();
+   assert.deepEqual(baseline,[1,0,0,1,0,0,0,0,0,0,0]);
+   assert.equal((await book()).status,403);
+   process.env.TOTEM_US_SHARED_MASTER_BOOKING_ENABLED="true";
+   assert.equal((await book()).status,403);
+   process.env.TOTEM_US_SHARED_MASTER_BOOKING_RELEASE_APPROVED="true";
+   assert.equal((await book(booked,randomUUID(),"/masters/fixture-other-master/us-manual-bookings")).status,403);
+   assert.equal((await book({...booked,salon_slug:"foreign-salon"})).status,404);
+   assert.equal((await book({...booked,service_id:1})).status,404);
+   assert.equal((await book({...booked,expected_us_price_version:2})).status,409);
+   assert.equal((await book({...booked,time:"10:00",start_at:await at("10:00")})).status,409);
+   assert.deepEqual(await bookingCounts(),baseline);
+   const key=randomUUID();
+   const created=await book(booked,key);assert.equal(created.status,201,JSON.stringify(created.body));
+   assert.equal(created.body.us_service_price.amount_minor,"1750");
+   assert.equal(created.body.us_service_price.service_price_version,3);
+   const stored=(await q("SELECT b.master_id,b.salon_id,b.currency_code,l.location_id,p.amount_minor::text,p.service_price_version FROM public.bookings b JOIN public.us_booking_location_links l ON l.booking_id=b.id JOIN public.us_booking_price_snapshots p ON p.booking_id=b.id WHERE b.id=$1",[created.body.booking_id])).rows[0];
+   assert.equal(Number(stored.master_id),46);assert.equal(Number(stored.salon_id),32);assert.equal(Number(stored.location_id),91);assert.equal(stored.currency_code,"USD");assert.equal(stored.amount_minor,"1750");assert.equal(Number(stored.service_price_version),3);
+   const after=await bookingCounts();
+   assert.deepEqual(after,[2,1,1,2,1,1,1,2,1,3,3]);
+   const replay=await book(booked,key);assert.equal(replay.status,201,JSON.stringify(replay.body));assert.equal(replay.body.booking_id,created.body.booking_id);assert.equal(replay.body.client_cabinet.url,null);
+   assert.equal((await book(booked)).status,409);
+   assert.deepEqual(await bookingCounts(),after);
+   const pending={...booked,time:"16:00",start_at:await at("16:00"),client_payload:{name:"Synthetic Rollback",phone:"+12125550124"}};
+   const denyBooking=async()=>{const r=await book(pending);assert.equal(r.status,403,JSON.stringify(r.body));assert.deepEqual(await bookingCounts(),after);};
+   beforeHandler=()=>q("UPDATE public.billing_subscriptions SET current_period_end=clock_timestamp()");await denyBooking();assert.equal(beforeHandler,null);await restore();
+   await q("CREATE FUNCTION public.fixture_expire_booking_proof() RETURNS trigger LANGUAGE plpgsql AS $booking_fixture$ BEGIN UPDATE public.billing_subscriptions SET current_period_end=clock_timestamp(); RETURN NEW; END; $booking_fixture$; CREATE TRIGGER fixture_expire_booking_proof AFTER INSERT ON public.us_booking_price_snapshots FOR EACH ROW EXECUTE FUNCTION public.fixture_expire_booking_proof()");
+   await denyBooking();
+   await q("DROP TRIGGER fixture_expire_booking_proof ON public.us_booking_price_snapshots; DROP FUNCTION public.fixture_expire_booking_proof()");
+   beforeHandler=()=>q("UPDATE public.auth_sessions SET revoked_at=now()");await denyBooking();assert.equal(beforeHandler,null);
+   await q("UPDATE public.auth_sessions SET revoked_at=NULL");
+   // Actual verified-revocation writer, not a second entitlement or role token.
+   // The synthetic fixture supplies the already-verified evidence input.
+   const {revokeUsSaasProjection}=await import("../src/services/billing/usSaasEntitlementProjection.js");
+   const c=await db.connect();
+   try{await c.query("BEGIN");const row=(await c.query("SELECT * FROM public.owner_opening_requests WHERE id=1 FOR UPDATE")).rows[0];
+    assert.equal(await revokeUsSaasProjection(c,row,{reason:"ODOO_INVOICE_REVERSED",verifiedAtUtc:new Date().toISOString()}),true);await c.query("COMMIT");
+   }catch(e){await c.query("ROLLBACK");throw e;}finally{c.release();}
+   await denyBooking();assert.equal((await book(booked,key)).status,403);
+   assert.equal((await call("/masters/fixture-master")).status,403);
+   assert.equal((await call("/us-service-links/master/fixture-master/options")).status,403);
+   assert.equal((await call("/us-service-prices/master/fixture-master/"+link)).status,403);
+   assert.equal((await call("/masters/fixture-master/us-working-hours")).status,403);
+   assert.equal((await call("/us-service-links/salon/fixture-salon","POST",{operation:"create",master_id:46,name:"Denied after revoke",duration_min:30,amount_minor:500},salonToken)).status,403);
+   await q("UPDATE public.billing_subscriptions SET blocked_at=NULL");await restore();
+   const recovered=await book(pending);assert.equal(recovered.status,201,JSON.stringify(recovered.body));
+   assert.deepEqual(await bookingCounts(),[3,2,2,3,2,2,2,4,2,6,6]);
+   assert.equal(await count("billing_subscriptions"),1);assert.equal(await count("auth_users"),1);assert.equal(await count("auth_sessions"),1);
   }
  }finally{
   await new Promise(resolve=>server.close(resolve));

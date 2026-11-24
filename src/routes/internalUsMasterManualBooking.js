@@ -4,7 +4,8 @@
 import express from "express";
 import { getUsSaasAccess,readUsSaasProjectionPolicy } from "../services/billing/usSaasEntitlementProjection.js";
 import { requireAuth } from "../middleware/requireAuth.js";
-import { publicCreateBooking } from "./publicCreateBooking.js";
+import { publicCreateBooking,createUsSharedMasterBooking } from "./publicCreateBooking.js";
+import {readUsOwnSalonBookingAccess} from "../auth/usOwnSalonRoleContext.js";
 import { resolveBusinessMarketContext } from "../market-context/BusinessContext.js";
 import { resolveUsSalonLocation } from "../services/usLocation.service.js";
 import { actorFor,checkSession,ownerContext,transact } from
@@ -59,10 +60,13 @@ async function authorize(pool,{auth,identity,masterSlug,body}) {
   const actor=actorFor(auth,identity,"master");
   if(!actor)return deny(403,"US_MANUAL_MASTER_SESSION_REQUIRED");
   return transact(pool,false,async db=>{
-    if(!await checkSession(db,actor,false))
+    const shared=auth?.us_role_context==="own_salon_master_v1"
+      ?await readUsOwnSalonBookingAccess(db,{auth,slug:masterSlug}):null;
+    if(!shared&&!await checkSession(db,actor,false))
       return deny(403,"US_MANUAL_MASTER_SESSION_INVALID");
     const owner=await ownerContext(db,"master",masterSlug,actor.userId,false);
-    if(!owner)return deny(404,"US_MANUAL_MASTER_NOT_FOUND");
+    if(!owner||shared&&Number(owner.owner_id)!==shared.masterId)
+      return deny(404,"US_MANUAL_MASTER_NOT_FOUND");
     const target=await db.query([
       "SELECT s.id AS salon_id,s.slug AS salon_slug,",
       "sms.id AS link_id,ms.master_id,market.id AS market_id",
@@ -83,10 +87,11 @@ async function authorize(pool,{auth,identity,masterSlug,body}) {
       Number(owner.owner_id),masterSlug,actor.userId,body.salon_slug,
       body.service_id,Number(owner.market_id),
     ]);
-    if(target.rows.length!==1)
+    if(target.rows.length!==1||shared&&Number(target.rows[0].salon_id)!==shared.salonId)
       return deny(404,"US_MANUAL_SERVICE_SCOPE_NOT_FOUND");
     // T5: both verified master and paid host salon must allow new US booking.
     // Missing old billing row or grace cannot grant an Odoo-managed account.
+    if(!shared){
     const policy=readUsSaasProjectionPolicy();
     const masterPaid=await getUsSaasAccess(db,{ownerType:"master",ownerId:Number(owner.owner_id),policy});
     const salonPaid=await getUsSaasAccess(db,{ownerType:"salon",ownerId:Number(target.rows[0].salon_id),policy});
@@ -112,6 +117,7 @@ async function authorize(pool,{auth,identity,masterSlug,body}) {
       if(state!=="active"&&state!=="grace")
         return deny(403,"US_MANUAL_MASTER_BILLING_BLOCKED");
     }
+    }
     const row=target.rows[0];
     await resolveUsSalonLocation(db,{
       salonId:Number(row.salon_id),locationCode:body.location_code,
@@ -128,6 +134,7 @@ async function authorize(pool,{auth,identity,masterSlug,body}) {
     return {status:200,body:{
       ok:true,master_id:Number(row.master_id),
       salon_slug:String(row.salon_slug),market_context:market,
+      shared_master:Boolean(shared),salon_id:Number(row.salon_id),
     }};
   });
 }
@@ -159,11 +166,12 @@ export function buildUsMasterManualBookingRouter(pool) {
         return res.status(permission.status).json(permission.body);
       // The existing canonical transaction independently rechecks the
       // location, service, USD price revision, occupied slots and DST.
-      return publicCreateBooking({
+      const canonicalRequest={
         ...req,
         params:{...req.params,slug:permission.body.salon_slug},
         market_context:permission.body.market_context,
-        headers:{...req.headers,"idempotency-key":"usm-"+requestKey},
+        headers:{...req.headers,"idempotency-key":permission.body.shared_master
+          ?"usm-shared-"+permission.body.master_id+"-"+requestKey:"usm-"+requestKey},
         body:{
           master_id:permission.body.master_id,
           service_id:body.service_id,
@@ -173,8 +181,16 @@ export function buildUsMasterManualBookingRouter(pool) {
           expected_us_price_version:body.expected_us_price_version,
           expected_us_amount_minor:body.expected_us_amount_minor,
         },
-      },res);
+      };
+      if(permission.body.shared_master)
+        return await createUsSharedMasterBooking(canonicalRequest,res,{
+          db:pool,auth:req.auth,masterSlug,salonId:permission.body.salon_id,
+          masterId:permission.body.master_id,
+        });
+      return publicCreateBooking(canonicalRequest,res);
     } catch(problem) {
+      if([403,409].includes(problem?.status)&&/^US_(ROLE_CONTEXT|MASTER_|SAAS_)/.test(String(problem?.code||"")))
+        return res.status(403).json({ok:false,error:"US_SAAS_BOOKING_DISABLED"});
       const known=Number.isSafeInteger(problem?.statusCode)&&
         String(problem?.code||"").startsWith("US_");
       if(known)return res.status(problem.statusCode).json({

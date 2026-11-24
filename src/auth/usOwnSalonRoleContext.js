@@ -45,6 +45,10 @@ export const usSharedMasterHoursEnabled=(env=process.env)=>usRoleContextEnabled(
  env.TOTEM_US_SHARED_MASTER_HOURS_ENABLED==="true"&&
  env.TOTEM_US_SHARED_MASTER_HOURS_RELEASE_APPROVED==="true";
 
+export const usSharedMasterBookingEnabled=(env=process.env)=>usRoleContextEnabled(env)&&
+ env.TOTEM_US_SHARED_MASTER_BOOKING_ENABLED==="true"&&
+ env.TOTEM_US_SHARED_MASTER_BOOKING_RELEASE_APPROVED==="true";
+
 export function isUsSharedMasterPricePath(path,slug){
  const prefix="/us-service-prices/master/"+slug+"/";
  if(!path.startsWith(prefix))return false;
@@ -55,7 +59,7 @@ export function isUsSharedMasterPricePath(path,slug){
 // For writes caller MUST pass the existing transaction client with lock=true.
 // Use the same canonical paid salon projection as role switching/activation.
 async function readUsOwnSalonOperationAccess(db,{auth,slug,env=process.env,lock=false}={},operation){
- if(!({profile:usSharedMasterProfileEnabled,services:usSharedMasterServicesEnabled,price:usSharedMasterPriceEnabled,hours:usSharedMasterHoursEnabled}[operation]?.(env)))
+ if(!({profile:usSharedMasterProfileEnabled,services:usSharedMasterServicesEnabled,price:usSharedMasterPriceEnabled,hours:usSharedMasterHoursEnabled,booking:usSharedMasterBookingEnabled}[operation]?.(env)))
    throw fail("US_ROLE_CONTEXT_OPERATION_HOLD");
  if(auth?.source!=="session"||auth.role!=="master"||auth.us_role_context!==kind||
     auth.kg_shared_master_request_id||!id(auth.user_id)||!id(auth.master_request_id)||
@@ -76,6 +80,7 @@ export const readUsOwnSalonProfileAccess=(db,options)=>readUsOwnSalonOperationAc
 export const readUsOwnSalonServicesAccess=(db,options)=>readUsOwnSalonOperationAccess(db,options,"services");
 export const readUsOwnSalonPriceAccess=(db,options)=>readUsOwnSalonOperationAccess(db,options,"price");
 export const readUsOwnSalonHoursAccess=(db,options)=>readUsOwnSalonOperationAccess(db,options,"hours");
+export const readUsOwnSalonBookingAccess=(db,options)=>readUsOwnSalonOperationAccess(db,options,"booking");
 // Only explicitly reviewed profile and service-link operations are allowed.
 export function isUsRoleContextRouteAllowed(req,slug,env=process.env){
  const method=String(req.method||"").toUpperCase(),path=String(req.path||"");
@@ -84,6 +89,7 @@ export function isUsRoleContextRouteAllowed(req,slug,env=process.env){
  if(!/^[a-z0-9][a-z0-9-]{2,79}$/.test(slug))return false;
  if(usSharedMasterPriceEnabled(env)&&["GET","PUT"].includes(method)&&isUsSharedMasterPricePath(path,slug))return true;
  if(usSharedMasterHoursEnabled(env)&&["GET","PUT"].includes(method)&&path==="/masters/"+slug+"/us-working-hours")return true;
+ if(usSharedMasterBookingEnabled(env)&&method==="POST"&&path==="/masters/"+slug+"/us-manual-bookings")return true;
  if(usSharedMasterServicesEnabled(env)){
    const links="/us-service-links/master/"+slug;
    if(method==="GET"&&path===links+"/options"||method==="POST"&&path===links)return true;
