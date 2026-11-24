@@ -47,6 +47,7 @@ export async function runUsSaasReconciliationTick({
   operator=US_SAAS_SYSTEM_ACTOR,limit=8,concurrency=2,
   enqueue=enqueueJob,worker=runQueueWorker,reconcile=reconcileUsSaasOpening,
   batchWorker=runQueueBatchWorker,reconcileBatch=reconcileUsSaasOpeningsBatch,
+  lifecycle=null,
 }={}){
   if(!enabled(env))return {status:"HOLD",enqueued:0,workers:[]};
   if(!db||typeof db.connect!=="function"||typeof writeAudit!=="function"||
@@ -55,14 +56,27 @@ export async function runUsSaasReconciliationTick({
     !Number.isInteger(concurrency)||concurrency<1||concurrency>4||
     (Number.isInteger(db.options?.max)&&db.options.max<concurrency+2))
     throw error("US_SAAS_SCHEDULER_CONTRACT_INVALID");
-  let enqueued=0,locked=false,begun=false,destroy=false;
+  if(lifecycle&&(env.TOTEM_US_ODOO_SAAS_BATCH_READBACK_ENABLED!=="true"||
+     typeof lifecycle.before!=="function"||typeof lifecycle.after!=="function"||
+     typeof lifecycle.failed!=="function"))
+    throw error("US_SAAS_RUNTIME_LIFECYCLE_INVALID");
+  let enqueued=0,locked=false,begun=false,destroy=false,started=false;
+  const fence=new AbortController();
   // A session lock fences the entire tick across replicas, not only enqueue.
   // The connection stays reserved, but NO transaction spans Odoo HTTP.
   const client=await db.connect();
+  const onError=()=>{destroy=true;fence.abort();};
+  if(lifecycle)client.on?.("error",onError);
   try{
     const lock=await client.query("SELECT pg_try_advisory_lock(594601, 6) AS acquired");
     if(lock.rows[0]?.acquired!==true)return {status:"BUSY",enqueued:0,workers:[]};
     locked=true;
+    if(lifecycle){
+      const gate=await lifecycle.before(client,{signal:fence.signal});
+      if(gate?.status!=="READY")return {status:gate?.status||"HOLD",enqueued:0,workers:[]};
+      started=true;
+      if(fence.signal.aborted)throw error("US_SAAS_RUNTIME_LOCK_LOST");
+    }
     await client.query("BEGIN");begun=true;
     const clock=await client.query("SELECT clock_timestamp() AS now");
     const now=new Date(clock.rows[0]?.now);
@@ -82,14 +96,25 @@ export async function runUsSaasReconciliationTick({
     if(env.TOTEM_US_ODOO_SAAS_BATCH_READBACK_ENABLED==="true"){
       const batch=await batchWorker({db,jobType:US_SAAS_RECONCILE_JOB,limit,leaseMs:60000,
         handler:async items=>{
-          if(!enabled(env))throw error("US_SAAS_RECONCILIATION_HOLD");
+          if(!enabled(env)||fence.signal.aborted)throw error("US_SAAS_RECONCILIATION_HOLD");
           if(items.some(j=>!validId(j.payload?.request_id)))throw error("US_SAAS_SCHEDULER_REQUEST_INVALID");
           const results=await reconcileBatch({pool:db,env,writeAudit,operator,concurrency,
-            jobs:items.map(j=>({requestId:Number(j.payload.request_id),signal:j.signal,assertLease:j.assertLease}))});
+            jobs:items.map(j=>({requestId:Number(j.payload.request_id),signal:j.signal,
+              assertLease:async tx=>{
+                if(fence.signal.aborted)throw error("US_SAAS_RUNTIME_LOCK_LOST");
+                await j.assertLease(tx);
+                if(fence.signal.aborted)throw error("US_SAAS_RUNTIME_LOCK_LOST");
+              }})),runtimeSignal:fence.signal});
+          lifecycle?.observeResults?.(results);
           return results.map(r=>r?.status==="PAID_VERIFIED"||r?.status==="REVOKED"?null:
             r instanceof Error?r:error("US_SAAS_RECONCILIATION_WAIT"));
         }});
-      return {status:"RAN",enqueued,workers:[batch]};
+      const result={status:"RAN",enqueued,workers:[batch]};
+      if(lifecycle){
+        if(fence.signal.aborted)throw error("US_SAAS_RUNTIME_LOCK_LOST");
+        await lifecycle.after(client,result);
+      }
+      return result;
     }
     const handler=async(payload,{signal}={})=>{
       if(!enabled(env)||signal?.aborted)throw error("US_SAAS_RECONCILIATION_HOLD");
@@ -107,6 +132,7 @@ export async function runUsSaasReconciliationTick({
     return {status:"RAN",enqueued,workers:workers.map(x=>x.value)};
   }catch(e){
     if(begun)try{await client.query("ROLLBACK");}catch{destroy=true;}
+    if(lifecycle&&started&&!destroy)try{await lifecycle.failed(client);}catch{destroy=true;}
     throw e;
   }finally{
     if(locked&&!destroy){
@@ -115,6 +141,7 @@ export async function runUsSaasReconciliationTick({
         if(r.rows[0]?.released!==true)destroy=true;
       }catch{destroy=true;}
     }
+    if(lifecycle)client.removeListener?.("error",onError);
     client.release(destroy);
     if(destroy)throw error("US_SAAS_SCHEDULER_CONNECTION_DISCARDED");
   }

@@ -299,6 +299,19 @@ if (FINANCE_MV_AUTO_REFRESH_ENABLED) {
   console.log("FINANCE_MV_AUTO_REFRESH_DISABLED");
 }
 
+/* G5-T6-G: no import, DB query, timer or provider call while disabled.
+   Release approval and the four existing gates are checked inside runtime. */
+if (process.env.TOTEM_US_ODOO_SAAS_RUNTIME_ENABLED === "true") {
+  import("./services/billing/usSaasRuntime.js").then(({startUsSaasRuntime})=>{
+    const runtime=startUsSaasRuntime({db:pool});
+    if(runtime.status==="ARMED"){
+      // Do not install signal handlers that override Node termination.
+      // SIGTERM/crash recovery is through the durable guard and queue leases.
+      app.locals.usSaasRuntime=runtime;
+    }
+  }).catch(()=>console.error("US_SAAS_RUNTIME_IMPORT_FAILED"));
+}
+
 /* ================= START ================= */
 
 const PORT = process.env.PORT || 8080;

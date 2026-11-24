@@ -8,7 +8,7 @@ const MODELS = new Set([
 
 export function createUsOdooReadOnlyClient({
   baseUrl, database, username, apiKey,
-  fetchImpl = globalThis.fetch, timeoutMs = 12000,
+  fetchImpl = globalThis.fetch, timeoutMs = 12000, observe = () => {},
 } = {}) {
   const url = new URL(baseUrl || "");
   if (url.protocol !== "https:" || url.username || url.password ||
@@ -22,6 +22,8 @@ export function createUsOdooReadOnlyClient({
   if (!Number.isInteger(timeoutMs) || timeoutMs < 2000 || timeoutMs > 60000) {
     throw new Error("US_ODOO_TIMEOUT_INVALID");
   }
+  // Diagnostics are fixed codes only; callbacks cannot change proof decisions.
+  function report(code){try{observe(code);}catch{}}
   let counter = 0;
   let authenticated = null;
 
@@ -39,13 +41,20 @@ export function createUsOdooReadOnlyClient({
         signal: controller.signal,
         redirect: "error",
       });
-      if (!response?.ok) throw new Error("ODOO_HTTP_FAILED");
+      if (!response?.ok) {
+        report(response?.status===429?"RATE_LIMIT":response?.status===401||response?.status===403?
+          "AUTH_REJECTED":"HTTP_ERROR");
+        throw new Error("ODOO_HTTP_FAILED");
+      }
       const envelope = await response.json();
       if (envelope?.error || !Object.hasOwn(envelope ?? {}, "result")) {
+        report("RPC_ERROR");
         throw new Error("ODOO_REMOTE_FAILED");
       }
+      report("RPC_OK");
       return envelope.result;
     } catch {
+      report(controller.signal.aborted?"TIMEOUT":"READBACK_ERROR");
       // Odoo exceptions may contain billing PII and internal configuration.
       throw new Error("US_ODOO_READBACK_UNAVAILABLE");
     } finally {
@@ -58,8 +67,10 @@ export function createUsOdooReadOnlyClient({
       authenticated = rpc("common", "authenticate",
         [database, username, apiKey, {}]).then(value => {
         if (!Number.isSafeInteger(value) || value <= 0) {
+          report("AUTH_REJECTED");
           throw new Error("US_ODOO_AUTH_FAILED");
         }
+        report("AUTH_OK");
         return value;
       }).catch(error => {
         authenticated = null;
