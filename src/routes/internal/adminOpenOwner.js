@@ -1,3 +1,4 @@
+import {usManualReleaseHold,inspectUsManualActivationWelcome} from "../../services/provision/usManualActivationWelcome.js";
 import {assertCanonicalUsProvisionResult} from "../../services/provision/usCanonicalSourceBoundary.js";
 import {validG3Seal,sameG3Seal} from "../../services/provision/usOdooG3SealProof.js";
 import {hasManualG3Envelope,prepareManualG3RequestReceipt,assertManualG3RequestReceipt,isManualG3Request,isScopedUsOdooRequest,assertUsOdooDispatchHold} from "../../services/provision/usG3ManualRequestReceipt.js";
@@ -2858,9 +2859,10 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         return res.status(policyError.statusCode).json({ ok: false, error: policyError.code });
       }
 
-      if(isScopedUsOdooRequest(current)){
+      const releaseHold=usManualReleaseHold(current,"activate");
+      if(releaseHold){
         await db.query("ROLLBACK");
-        return res.status(409).json({ok:false,error:"US_G3_COMMERCIAL_ACTIVATION_RELEASE_HOLD"});
+        return res.status(409).json({ok:false,error:releaseHold});
       }
 
       if(current.status === "activated"){
@@ -2969,9 +2971,10 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
-      if(isScopedUsOdooRequest(request)){
+      const releaseHold=usManualReleaseHold(request,"preview");
+      if(releaseHold){
         await db.query("ROLLBACK");
-        return res.status(409).json({ok:false,error:"US_G3_WELCOME_RELEASE_HOLD"});
+        return res.status(409).json({ok:false,error:releaseHold});
       }
 
       if (requestMarketCode(request) === "US") {
@@ -3073,9 +3076,10 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
-      if(isScopedUsOdooRequest(request)){
+      const releaseHold=usManualReleaseHold(request,"send");
+      if(releaseHold){
         await prepareDb.query("ROLLBACK");
-        return res.status(409).json({ok:false,error:"US_G3_WELCOME_RELEASE_HOLD"});
+        return res.status(409).json({ok:false,error:releaseHold});
       }
 
       if (requestMarketCode(request) === "US") {
@@ -3526,6 +3530,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         ok: true,
         request,
         ...(recovery?{recovery}:{}),
+        ...(isScopedUsOdooRequest(request)?{us_manual_release:await inspectUsManualActivationWelcome(pool,request)}:{}),
       });
     }catch(err){
       console.error("ADMIN_OPEN_OWNER_GET_REQUEST_ERROR", err);
