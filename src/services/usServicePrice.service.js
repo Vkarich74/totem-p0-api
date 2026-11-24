@@ -7,6 +7,11 @@ import {
 } from "./usServiceTaxSettings.service.js";
 
 import {readUsOwnSalonPriceAccess} from "../auth/usOwnSalonRoleContext.js";
+import {getUsSaasAccess,readUsSaasProjectionPolicy} from "./billing/usSaasEntitlementProjection.js";
+async function directPriceAllowed(db,ownerType,ownerId){
+  const a=await getUsSaasAccess(db,{ownerType,ownerId,policy:readUsSaasProjectionPolicy(),lock:true});
+  return a.managed===true&&a.can_write===true;
+}
 
 const OWNER_TYPES = new Set(["salon", "master"]);
 const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$/;
@@ -156,6 +161,8 @@ export async function saveUsOwnerServicePrice(pool, options = {}) {
     if (!scope || shared&&Number(scope.owner_id)!==shared.masterId || !await ownerServiceLink(
       db, ownerType, request.serviceLinkId, scope.owner_id, scope.market_id, true,shared
     )) return errorReply(404, "US_PRICE_SERVICE_NOT_FOUND");
+    if(!shared&&!await directPriceAllowed(db,ownerType,scope.owner_id))
+      return errorReply(403,"US_PRICE_BILLING_BLOCKED");
     // Legacy US service-creation routes leave currency_code NULL.
     // Only AFTER direct US owner authorization, mark that US-only link USD.
     // Never change an explicit non-USD currency or derive cents from price.
@@ -200,6 +207,8 @@ export async function saveUsOwnerServicePrice(pool, options = {}) {
       const final=await sharedPriceAccess(db,options,true);
       if(final.masterId!==shared.masterId||final.salonId!==shared.salonId)
         return errorReply(403,"US_PRICE_SHARED_SCOPE");
+    }else if(!await checkSession(db,request.actor,true)||!await directPriceAllowed(db,ownerType,scope.owner_id)){
+      return errorReply(403,"US_PRICE_BILLING_BLOCKED");
     }
     return scopedPrice(ownerType,ownerSlug,request.serviceLinkId,
       scope.market_id,result.rows[0]);

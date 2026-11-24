@@ -1,5 +1,6 @@
 import { pool } from "../db.js";
 import {readUsOwnSalonBookingAccess} from "../auth/usOwnSalonRoleContext.js";
+import {getUsSaasAccess,readUsSaasProjectionPolicy} from "../services/billing/usSaasEntitlementProjection.js";
 import crypto from "crypto";
 import { createNotification } from "../services/notifications/notificationService.js";
 import { dispatchNotificationPushDeliveries } from "../services/push/pushDeliveryService.js";
@@ -171,8 +172,21 @@ function normalizePublicStartAt(input, { marketTimeZone }) {
 }
 
 // Public HTTP requests never supply internal authorization or a DB handle.
+export function buildPublicCreateBooking(db){
+  if(!db||typeof db.connect!=="function")throw Error("BOOKING_DB_REQUIRED");
+  return (req,res)=>createCanonicalBooking(req,res,db,null);
+}
 export async function publicCreateBooking(req,res){
   return createCanonicalBooking(req,res,pool,null);
+}
+async function checkedUsHostBooking(db,slug,expectedId=null){
+  const found=await db.query("SELECT id FROM public.salons WHERE slug=$1 AND enabled=true AND status='active' LIMIT 1",[slug]);
+  const salonId=Number(found.rows[0]?.id);
+  const deny=()=>Object.assign(Error("US_SAAS_BOOKING_DISABLED"),{code:"US_SAAS_BOOKING_DISABLED",statusCode:403});
+  if(found.rows.length!==1||!Number.isSafeInteger(salonId)||salonId<1||expectedId!==null&&salonId!==expectedId)throw deny();
+  const access=await getUsSaasAccess(db,{ownerType:"salon",ownerId:salonId,policy:readUsSaasProjectionPolicy(),lock:true});
+  if(access.managed!==true||access.can_book!==true)throw deny();
+  return salonId;
 }
 export async function createUsSharedMasterBooking(req,res,{db,auth,masterSlug,salonId,masterId}={}){
   if(!db||typeof db.connect!=="function"||auth?.us_role_context!=="own_salon_master_v1"||
@@ -243,11 +257,13 @@ async function createCanonicalBooking(req,res,bookingPool,shared){
     }
 
     await client.query("BEGIN");
-    if(shared){
+    let usHostId=null;
+    if(marketContext.market_code==="US"){
       await client.query("SET LOCAL statement_timeout = '5000ms'");
       await client.query("SET LOCAL lock_timeout = '2000ms'");
-      // Locked proof BEFORE replay or any write; same authority as hours.
-      await checkedSharedBooking(client,shared,req);
+      // Locked proof BEFORE replay or any write, not just tenant middleware.
+      if(shared)await checkedSharedBooking(client,shared,req);
+      else usHostId=await checkedUsHostBooking(client,slug);
     }
 
     const existing = await client.query(
@@ -298,6 +314,8 @@ async function createCanonicalBooking(req,res,bookingPool,shared){
 
     const salonId = salonRes.rows[0].id;
     const salonSlug = salonRes.rows[0].slug;
+    if(usHostId!==null&&Number(salonId)!==usHostId)
+      throw Object.assign(Error("US_SAAS_BOOKING_DISABLED"),{code:"US_SAAS_BOOKING_DISABLED",statusCode:403});
 
     const serviceLinkRes = await client.query(
       `SELECT
@@ -386,9 +404,9 @@ async function createCanonicalBooking(req,res,bookingPool,shared){
         locationCode: req.body?.location_code,
         marketContext,
       });
-      if(shared){
+      if(marketContext.market_code==="US"){
         const location=await client.query("SELECT id FROM public.us_salon_locations WHERE id=$1 AND salon_id=$2 AND enabled=true AND timezone_name=$3 FOR SHARE",
-          [usLocation.id,shared.salonId,usLocation.timezone]);
+          [usLocation.id,Number(salonId),usLocation.timezone]);
         if(location.rows.length!==1)throw Object.assign(Error("US_LOCATION_INACTIVE"),{code:"US_LOCATION_INACTIVE",statusCode:409});
       }
       const selected = normalizeUsBookingStart(
@@ -690,7 +708,7 @@ async function createCanonicalBooking(req,res,bookingPool,shared){
         action_url: clientCabinetUrl,
         status: "sent",
         payload_json: bookingNotificationPayload
-      },{dispatchPush:!shared});
+      },{dispatchPush:marketContext.market_code!=="US"});
 
       const masterNotification=await createNotification(client, {
         target_type: "master",
@@ -702,7 +720,7 @@ async function createCanonicalBooking(req,res,bookingPool,shared){
         action_url: `/master/${master_id}/dashboard`,
         status: "sent",
         payload_json: bookingNotificationPayload
-      },{dispatchPush:!shared});
+      },{dispatchPush:marketContext.market_code!=="US"});
 
       const salonNotification=await createNotification(client, {
         target_type: "salon",
@@ -714,10 +732,10 @@ async function createCanonicalBooking(req,res,bookingPool,shared){
         action_url: `/salon/${salonSlug}/dashboard`,
         status: "sent",
         payload_json: bookingNotificationPayload
-      },{dispatchPush:!shared});
+      },{dispatchPush:marketContext.market_code!=="US"});
 
       await client.query("RELEASE SAVEPOINT booking_created_notifications");
-      if(shared)deferredNotifications.push(clientNotification,masterNotification,salonNotification);
+      if(marketContext.market_code==="US")deferredNotifications.push(clientNotification,masterNotification,salonNotification);
     } catch (error) {
       try {
         await client.query("ROLLBACK TO SAVEPOINT booking_created_notifications");
@@ -778,6 +796,7 @@ async function createCanonicalBooking(req,res,bookingPool,shared){
     // All client, slot, booking, price snapshot, token, audit and replay
     // records remain in this transaction until the final paid/session proof.
     if(shared)await checkedSharedBooking(client,shared,req);
+    else if(usHostId!==null)await checkedUsHostBooking(client,slug,usHostId);
     await client.query("COMMIT");
     // Shared booking may only dispatch notifications after commit. A rolled
     // back booking must never notify an external recipient.

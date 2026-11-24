@@ -398,11 +398,18 @@ test("shared Master service links, USD price, weekly hours and manual booking HT
  const {buildUsServicePricesRouter}=await import("../src/routes/internalUsServicePrices.js");
  const {default:buildMastersRouter}=await import("../src/routes/internal/masters.js");
  const {buildUsMasterManualBookingRouter}=await import("../src/routes/internalUsMasterManualBooking.js");
+ const {buildPublicCreateBooking}=await import("../src/routes/publicCreateBooking.js");
+ const {resolveBusinessMarketContext}=await import("../src/market-context/BusinessContext.js");
  const config={...env,TOTEM_US_SHARED_MASTER_SERVICES_ENABLED:"true",TOTEM_US_SHARED_MASTER_SERVICES_RELEASE_APPROVED:"true",TOTEM_US_SHARED_MASTER_PRICE_ENABLED:"false",TOTEM_US_SHARED_MASTER_PRICE_RELEASE_APPROVED:"false",TOTEM_US_SHARED_MASTER_HOURS_ENABLED:"false",TOTEM_US_SHARED_MASTER_HOURS_RELEASE_APPROVED:"false",TOTEM_US_SHARED_MASTER_BOOKING_ENABLED:"false",TOTEM_US_SHARED_MASTER_BOOKING_RELEASE_APPROVED:"false",TOTEM_US_SHARED_MASTER_PROFILE_ENABLED:"true",TOTEM_US_SHARED_MASTER_PROFILE_RELEASE_APPROVED:"true",VAPID_PUBLIC_KEY:"",VAPID_PRIVATE_KEY:"",VAPID_SUBJECT:""};
  const previous=Object.fromEntries(Object.keys(config).map(k=>[k,process.env[k]]));
  Object.assign(process.env,config);
  let beforeHandler=null;
  const app=express();app.use(express.json());
+ // Intentionally omit the early public access guard: prove the canonical
+ // booking writer itself denies revoked entitlement and rolls back.
+ app.post("/fixture-public/:slug/bookings",async(req,res,next)=>{
+   try{req.market_context=await resolveBusinessMarketContext(db,{salonSlug:req.params.slug});next();}catch(e){next(e);}
+ },buildPublicCreateBooking(db));
  app.use("/internal",(req,res,next)=>resolveAuth(req,res,next,{withClient:async fn=>{
    const c=await db.connect();try{return await fn(c);}finally{c.release();}
  }}),buildUsSaasCommercialGuard(db),async(_req,_res,next)=>{
@@ -622,6 +629,41 @@ test("shared Master service links, USD price, weekly hours and manual booking HT
    await q("UPDATE public.billing_subscriptions SET blocked_at=NULL");await restore();
    const recovered=await book(pending);assert.equal(recovered.status,201,JSON.stringify(recovered.body));
    assert.deepEqual(await bookingCounts(),[3,2,2,3,2,2,2,4,2,6,6]);
+   const directPrice=()=>call("/us-service-prices/salon/fixture-salon/"+link,"PUT",{amount_minor:1850,expected_version:3},salonToken);
+   const directLink=()=>call("/us-service-links/salon/fixture-salon","POST",{operation:"create",master_id:46,name:"Salon role rollback fixture",duration_min:30,amount_minor:500},salonToken);
+   const previousTotals=await totals();
+   const checkDirectPrice=async()=>{const r=(await q("SELECT amount_minor::text,price_version FROM public.us_service_price_amounts WHERE salon_master_service_id=$1",[link])).rows[0];assert.equal(r.amount_minor,"1750");assert.equal(Number(r.price_version),3);};
+   beforeHandler=()=>q("UPDATE public.billing_subscriptions SET current_period_end=clock_timestamp()");
+   let denied=await directPrice();assert.equal(denied.status,403,JSON.stringify(denied.body));assert.equal(beforeHandler,null);await checkDirectPrice();await restore();
+   await q("CREATE FUNCTION public.fixture_direct_price_expire() RETURNS trigger LANGUAGE plpgsql AS $direct_price$ BEGIN UPDATE public.billing_subscriptions SET current_period_end=clock_timestamp(); RETURN NEW; END; $direct_price$; CREATE TRIGGER fixture_direct_price_expire AFTER UPDATE ON public.us_service_price_amounts FOR EACH ROW EXECUTE FUNCTION public.fixture_direct_price_expire()");
+   denied=await directPrice();assert.equal(denied.status,403,JSON.stringify(denied.body));await checkDirectPrice();
+   await q("DROP TRIGGER fixture_direct_price_expire ON public.us_service_price_amounts; DROP FUNCTION public.fixture_direct_price_expire()");
+   beforeHandler=()=>q("UPDATE public.billing_subscriptions SET current_period_end=clock_timestamp()");
+   denied=await directLink();assert.equal(denied.status,403,JSON.stringify(denied.body));assert.equal(beforeHandler,null);assert.deepEqual(await totals(),previousTotals);await restore();
+   await q("CREATE FUNCTION public.fixture_direct_link_expire() RETURNS trigger LANGUAGE plpgsql AS $direct_link$ BEGIN UPDATE public.billing_subscriptions SET current_period_end=clock_timestamp(); RETURN NEW; END; $direct_link$; CREATE TRIGGER fixture_direct_link_expire AFTER INSERT ON public.us_service_price_amounts FOR EACH ROW EXECUTE FUNCTION public.fixture_direct_link_expire()");
+   denied=await directLink();assert.equal(denied.status,403,JSON.stringify(denied.body));assert.deepEqual(await totals(),previousTotals);
+   await q("DROP TRIGGER fixture_direct_link_expire ON public.us_service_price_amounts; DROP FUNCTION public.fixture_direct_link_expire()");
+   const publicBody={master_id:46,location_code:"main",service_id:link,date,time:"17:30",start_at:await at("17:30"),
+     client_payload:{name:"Synthetic Public",phone:"+12125550125"},expected_us_price_version:3,expected_us_amount_minor:"1750"};
+   const publicKey=randomUUID();
+   const publicBook=async(key=publicKey)=>{
+     const r=await fetch("http://127.0.0.1:"+server.address().port+"/fixture-public/fixture-salon/bookings",{method:"POST",headers:{"Content-Type":"application/json","idempotency-key":key},body:JSON.stringify(publicBody)});
+     return {status:r.status,body:await r.json()};
+   };
+   const beforePublic=await bookingCounts();
+   await q("UPDATE public.billing_subscriptions SET current_period_end=clock_timestamp()");
+   denied=await publicBook();assert.equal(denied.status,403,JSON.stringify(denied.body));assert.deepEqual(await bookingCounts(),beforePublic);await restore();
+   await q("CREATE FUNCTION public.fixture_public_expire() RETURNS trigger LANGUAGE plpgsql AS $public_fixture$ BEGIN UPDATE public.billing_subscriptions SET current_period_end=clock_timestamp(); RETURN NEW; END; $public_fixture$; CREATE TRIGGER fixture_public_expire AFTER INSERT ON public.us_booking_price_snapshots FOR EACH ROW EXECUTE FUNCTION public.fixture_public_expire()");
+   denied=await publicBook();assert.equal(denied.status,403,JSON.stringify(denied.body));assert.deepEqual(await bookingCounts(),beforePublic);
+   await q("DROP TRIGGER fixture_public_expire ON public.us_booking_price_snapshots; DROP FUNCTION public.fixture_public_expire()");
+   const published=await publicBook();assert.equal(published.status,201,JSON.stringify(published.body));
+   assert.deepEqual(await bookingCounts(),[4,3,3,4,3,3,3,6,3,9,9]);
+   await q("UPDATE public.billing_subscriptions SET provider_revoked_at=now(),subscription_status='blocked'");
+   denied=await publicBook();assert.equal(denied.status,403,JSON.stringify(denied.body));
+   denied=await directPrice();assert.equal(denied.status,403,JSON.stringify(denied.body));await checkDirectPrice();
+   await restore();
+   const directSaved=await directPrice();assert.equal(directSaved.status,200,JSON.stringify(directSaved.body));assert.equal(directSaved.body.price_version,4);
+   const directCreated=await directLink();assert.equal(directCreated.status,200,JSON.stringify(directCreated.body));
    assert.equal(await count("billing_subscriptions"),1);assert.equal(await count("auth_users"),1);assert.equal(await count("auth_sessions"),1);
   }
  }finally{

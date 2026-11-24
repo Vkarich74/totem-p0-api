@@ -330,18 +330,22 @@ duplicate_weekdays: [...duplicateWeekdays].sort((a, b) => a - b)
 };
 }
 
-async function getSalonBillingAccess(db, salonId){
+async function getSalonBillingAccess(db, salonId, lock=false){
 const billing = await getSalonBillingRow(db, salonId, false);
-const us=await getUsSaasAccess(db,{ownerType:"salon",ownerId:salonId,
-  policy:readUsSaasProjectionPolicy()});
-if(us.managed)return {exists:Boolean(billing),subscription_status:us.subscription_status,
+const policy=readUsSaasProjectionPolicy();
+let us=await getUsSaasAccess(db,{ownerType:"salon",ownerId:salonId,policy});
+if(us.managed&&lock){
+  const locked=await getUsSaasAccess(db,{ownerType:"salon",ownerId:salonId,policy,lock:true});
+  us=locked.managed?locked:{managed:true,subscription_status:"blocked",access_state:"blocked",can_write:false,can_withdraw:false};
+}
+if(us.managed)return {us_managed:true,exists:Boolean(billing),subscription_status:us.subscription_status,
   access_state:us.access_state,can_write:us.can_write,
   can_withdraw:us.can_withdraw,billing};
 return buildBillingAccessPayload(billing);
 }
 
 async function ensureSalonWriteAllowed(db, salonId){
-const access = await getSalonBillingAccess(db, salonId);
+const access = await getSalonBillingAccess(db, salonId,true);
 
 if(!access.can_write){
 const err = new Error("BILLING_BLOCKED");
@@ -1000,7 +1004,7 @@ r.patch("/salons/:slug", async(req,res)=>{
       await db.query("ROLLBACK");
       return res.status(403).json({ok:false,error:"PROFILE_OWNER_NOT_FOUND"});
     }
-    await ensureSalonWriteAllowed(db,row.id);
+    const access=await ensureSalonWriteAllowed(db,row.id);
     if(ownerProfileRevision("salon",row)!==input.revision){
       await db.query("ROLLBACK");
       return res.status(409).json({ok:false,error:"PROFILE_REVISION_CONFLICT"});
@@ -1032,6 +1036,7 @@ r.patch("/salons/:slug", async(req,res)=>{
     }
     const metadata=ownerProfilePayload("salon",req.params.slug,after.rows[0],
       direct.rows[0].email,true,true);
+    if(access.us_managed)await ensureSalonWriteAllowed(db,row.id);
     await db.query("COMMIT");
     return res.json({ok:true,salon:after.rows[0],...metadata});
   }catch(err){
@@ -1471,6 +1476,7 @@ masterId
 
 }
 
+if(access.us_managed)await ensureSalonWriteAllowed(db,salonId);
 await db.query("COMMIT");
 
 return res.json({
@@ -1810,6 +1816,7 @@ safeActive
 
 }
 
+if(access.us_managed)await ensureSalonWriteAllowed(db,salonId);
 await db.query("COMMIT");
 
 return res.json({
@@ -1995,6 +2002,7 @@ row.break_end
 insertedRows.push(inserted.rows[0]);
 }
 
+if(access.us_managed)await ensureSalonWriteAllowed(db,salonId);
 await db.query("COMMIT");
 
 return res.json({
@@ -2326,6 +2334,7 @@ salonId,
 masterId
 ]);
 
+if(access.us_managed)await ensureSalonWriteAllowed(db,salonId);
 await db.query("COMMIT");
 
 return res.json({

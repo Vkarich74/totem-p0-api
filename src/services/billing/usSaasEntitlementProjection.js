@@ -66,14 +66,17 @@ export function assessUsSaasProjection(row,{marketUs=false,source=null,
   });
 }
 /** Load trusted Core source and market, never trust req.body or user JWT market. */
-export async function getUsSaasAccess(db,{ownerType,ownerId,policy=null,now=new Date()}={}){
+// lock=true is ONLY for a transaction client. Reconciliation updates the
+// same source and billing rows; SHARE locks serialize a commercial write
+// with verified provider revocation. Re-read the database clock at commit.
+export async function getUsSaasAccess(db,{ownerType,ownerId,policy=null,now=new Date(),lock=false}={}){
   if(!TYPE.has(ownerType)||!number(ownerId))throw fail("US_SAAS_OWNER_INVALID");
   const id=number(ownerId);
   const sourceRows=await db.query(
     "SELECT id,status,source_namespace,source_company_id,source_website_id,"+
     "source_partner_id,source_request_id FROM public.owner_opening_requests "+
     "WHERE owner_type=$1 AND created_owner_id=$2 "+
-    "AND source_namespace='odoo_online' ORDER BY id DESC LIMIT 2",[ownerType,id]);
+    "AND source_namespace='odoo_online' ORDER BY id DESC LIMIT 2"+(lock?" FOR SHARE":""),[ownerType,id]);
   if(sourceRows.rows.length>1)return DENY("US_SAAS_DUPLICATE_OWNER_SOURCES");
   const source=sourceRows.rows[0]||null;
   const marketSql=ownerType==="salon"?
@@ -88,7 +91,8 @@ export async function getUsSaasAccess(db,{ownerType,ownerId,policy=null,now=new 
   const marketUs=market.rows[0]?.us===true;
   const rows=await db.query(
     "SELECT * FROM public.billing_subscriptions "+
-    "WHERE owner_type=$1 AND owner_id=$2 LIMIT 1",[ownerType,id]);
+    "WHERE owner_type=$1 AND owner_id=$2 LIMIT 2"+(lock?" FOR SHARE":""),[ownerType,id]);
+  if(rows.rows.length>1)return DENY("US_SAAS_DUPLICATE_PROJECTIONS");
   const row=rows.rows[0]||null;
   if(!marketUs&&!source&&row?.provider_namespace!=="odoo_online")
     return {managed:false};

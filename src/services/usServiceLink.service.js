@@ -70,7 +70,7 @@ async function writeAllowed(db,ownerType,ownerId) {
   // This route is US-only (ownerContext already verifies the exact US market).
   // An unresolved projection must NEVER fall back to KG wallet/missing=active.
   const us=await getUsSaasAccess(db,{ownerType,ownerId,
-    policy:readUsSaasProjectionPolicy()});
+    policy:readUsSaasProjectionPolicy(),lock:true});
   return us.managed===true && us.can_write===true;
 }
 
@@ -320,6 +320,8 @@ export async function saveUsServiceLink(pool,options={}) {
       const final=await sharedAccess(db,options,checked,true);
       if(final.masterId!==shared.masterId||final.salonId!==shared.salonId)
         return reply(403,"US_SERVICE_LINK_SHARED_SCOPE");
+    }else if(!await checkSession(db,checked.actor,true)||!await writeAllowed(db,options.ownerType,scope.owner_id)){
+      return reply(403,"US_SERVICE_LINK_BILLING_BLOCKED");
     }
     return {status:200,body:{
       ok:true,contract_version:"US-SERVICES-01-v1",
