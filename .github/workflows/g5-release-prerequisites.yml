@@ -35,7 +35,7 @@ permissions:
 jobs:
   release-qa:
     if: github.head_ref == 'g5-t1-existing-queue-lease-20261124'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     services:
       postgres:
