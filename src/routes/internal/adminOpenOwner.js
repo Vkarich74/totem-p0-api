@@ -1,3 +1,5 @@
+import { activateOwnerOpeningCanonical } from "../../services/provision/ownerOpeningCanonicalActivation.js";
+import { prepareUsPaidActivationEvidence } from "../../services/provision/usPaidOwnerOpeningGate.js";
 import { buildOwnerOpeningEmail, buildEmailMime } from "../../services/notifications/emailTemplates.js";
 import { resolveRecipientLocale } from "../../services/notifications/recipientLocale.js";
 import express from "express";
@@ -2489,114 +2491,66 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
 
   r.post("/requests/:id/activate", async (req,res)=>{
     const requestId = normalizeRequestId(req.params?.id);
-
     if(!requestId){
-      return res.status(400).json({
-        ok: false,
-        error: "REQUEST_ID_INVALID",
-      });
+      return res.status(400).json({ ok:false,error:"REQUEST_ID_INVALID" });
     }
+    const admin = getAdminActor(req);
 
-    const db = await pool.connect();
-
-    try{
-      const admin = getAdminActor(req);
-
-      await db.query("BEGIN");
-
-      const current = await getOwnerOpeningRequestForUpdate(db, requestId);
-
-      if(!current){
-        await db.query("ROLLBACK");
+    // Payment and commercial policy readback run BEFORE the SQL transaction.
+    // This endpoint remains protected by the existing AdminRuntimeGuard mount;
+    // an Odoo webhook has no Admin JWT and cannot use this HTTP route.
+    let paidEvidence = null;
+    try {
+      const preflight = await pool.query(
+        "SELECT * FROM public.owner_opening_requests WHERE id=$1 LIMIT 1",
+        [requestId]
+      );
+      const candidate = preflight.rows[0] || null;
+      if(!candidate){
         return res.status(404).json({
-          ok: false,
-          error: "OWNER_OPENING_REQUEST_NOT_FOUND",
+          ok:false,error:"OWNER_OPENING_REQUEST_NOT_FOUND"
         });
       }
-
-      // KZ stays inactive and legacy US opening cannot bypass stage-C readiness.
-      try {
-        assertAdminOpeningMarketPolicy(current);
-      } catch (policyError) {
-        await db.query("ROLLBACK");
-        return res.status(policyError.statusCode).json({ ok: false, error: policyError.code });
-      }
-
-      if(current.status === "activated"){
-        await db.query("COMMIT");
-        return res.status(200).json({
-          ok: true,
-          request: current,
-          idempotent: true,
-        });
-      }
-
-      if(current.status !== "provisioned"){
-        await db.query("ROLLBACK");
-        return res.status(409).json({
-          ok: false,
-          error: "OWNER_OPENING_REQUEST_STATUS_INVALID",
-          status: current.status,
-        });
-      }
-
-      if (requestMarketCode(current) === "US") await assertUsActivationReady(db,current,Number(current.created_owner_id));
-
-      const ownerActivation = await activateOwnerOpeningEntity(db, current);
-      if (requestMarketCode(current) === "US") {
-        // No US OTP/login until verified business activation; same transaction.
-        const userRole = current.owner_type === "salon" ? "salon_admin" : "master";
-        const unlocked = await db.query(
-          "UPDATE public.auth_users SET enabled=true WHERE id=$1 AND role=$2 AND enabled=false RETURNING id",
-          [current.created_auth_user_id,userRole]
-        );
-        if (unlocked.rows.length !== 1) {
-          const error = new Error("US_AUTH_ACTIVATION_READBACK_MISMATCH");
-          error.code = "US_AUTH_ACTIVATION_READBACK_MISMATCH";error.status=409;throw error;
+      assertAdminOpeningMarketPolicy(candidate);
+      if(requestMarketCode(candidate) === "US" &&
+         candidate.status === "provisioned"){
+        paidEvidence = await prepareUsPaidActivationEvidence(candidate);
+        if(paidEvidence?.status !== "PAID_VERIFIED" ||
+           paidEvidence.canActivate !== true){
+          return res.status(409).json({
+            ok:false,error:"US_ODOO_PAID_ENTITLEMENT_REQUIRED",
+            reason:paidEvidence?.reason || "US_ODOO_READBACK_UNAVAILABLE",
+          });
         }
       }
 
-      const updatedResult = await db.query(
-        `
-          UPDATE public.owner_opening_requests
-          SET status='activated',
-              activated_at=NOW(),
-              updated_at=NOW()
-          WHERE id=$1
-          RETURNING *
-        `,
-        [requestId]
-      );
-
-      const request = updatedResult.rows[0] || current;
-
-      const auditEvent = await writeOwnerOpeningAuditEvent(db, {
-        request,
-        eventType: "owner_opening.activated",
-        admin,
-        data: {
-          created_owner_id: Number(current.created_owner_id || 0),
-          owner_activation: ownerActivation,
-        },
+      // Exactly ONE canonical Core activation transaction for both markets.
+      // A concurrent Admin invocation or future trusted worker must use the
+      // same service; the service reacquires FOR UPDATE and rechecks source.
+      const done = await activateOwnerOpeningCanonical({
+        pool, requestId, admin, paidEvidence,
+        getMarketCode:requestMarketCode,
+        assertMarketPolicy:assertAdminOpeningMarketPolicy,
+        assertUsActivationReady,
+        activateEntity:activateOwnerOpeningEntity,
+        writeAudit:writeOwnerOpeningAuditEvent,
       });
-
-      await db.query("COMMIT");
-
       return res.status(200).json({
-        ok: true,
-        request,
-        owner_activation: ownerActivation,
-        audit_event_id: auditEvent?.id ? Number(auditEvent.id) : null,
+        ok:true,request:done.request,
+        ...(done.idempotent ? {idempotent:true} : {
+          owner_activation:done.owner_activation,
+          audit_event_id:done.audit_event_id,
+        }),
       });
     }catch(err){
-      try{ await db.query("ROLLBACK"); }catch(e){}
-      console.error("ADMIN_OPEN_OWNER_ACTIVATE_REQUEST_ERROR", err);
-      return res.status(resolveProvisionStatus(err)).json({
-        ok: false,
-        error: String(err?.code || err?.message || "ADMIN_OPEN_OWNER_ACTIVATE_REQUEST_FAILED"),
+      const status = Number(err?.status || err?.statusCode || 500);
+      const http = Number.isInteger(status) && status >= 400 &&
+        status <= 599 ? status : 500;
+      // Do not return raw payment/Odoo exceptions or external API payloads.
+      return res.status(http).json({
+        ok:false,
+        error:String(err?.code || "ADMIN_OPEN_OWNER_ACTIVATE_REQUEST_FAILED"),
       });
-    }finally{
-      db.release();
     }
   });
 
