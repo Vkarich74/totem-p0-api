@@ -1,5 +1,6 @@
 import { activateOwnerOpeningCanonical } from "../../services/provision/ownerOpeningCanonicalActivation.js";
 import { prepareUsPaidActivationEvidence } from "../../services/provision/usPaidOwnerOpeningGate.js";
+import { ownerQueueScope, ownerQueuePage, ownerQueueResult } from "../../services/provision/ownerOpeningQueueRead.js";
 import { reconcileUsSaasOpening } from "../../services/billing/usSaasReconciliation.js";
 import { buildOwnerOpeningEmail, buildEmailMime } from "../../services/notifications/emailTemplates.js";
 import {
@@ -1146,31 +1147,37 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
 
   r.get("/stats", async (req,res)=>{
     try{
+      const { scope, conditions, values } = ownerQueueScope(req.query || {});
+      const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
       const totalResult = await pool.query(`
         SELECT COUNT(*)::int AS count
         FROM public.owner_opening_requests
-      `);
+        ${where}
+      `, values);
 
       const statusResult = await pool.query(`
         SELECT status, COUNT(*)::int AS count
         FROM public.owner_opening_requests
+        ${where}
         GROUP BY status
         ORDER BY status
-      `);
+      `, values);
 
       const ownerTypeResult = await pool.query(`
         SELECT owner_type, COUNT(*)::int AS count
         FROM public.owner_opening_requests
+        ${where}
         GROUP BY owner_type
         ORDER BY owner_type
-      `);
+      `, values);
 
       const emailStatusResult = await pool.query(`
         SELECT email_status, COUNT(*)::int AS count
         FROM public.owner_opening_requests
+        ${where}
         GROUP BY email_status
         ORDER BY email_status
-      `);
+      `, values);
 
       const provisionResult = await pool.query(`
         SELECT
@@ -1180,7 +1187,8 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
           COUNT(*) FILTER (WHERE created_owner_id IS NOT NULL)::int AS owners_created,
           COUNT(*) FILTER (WHERE created_auth_user_id IS NOT NULL)::int AS auth_users_created
         FROM public.owner_opening_requests
-      `);
+        ${where}
+      `, values);
 
       const errorResult = await pool.query(`
         SELECT
@@ -1189,12 +1197,15 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
           COUNT(*) FILTER (WHERE email_status='failed')::int AS email_status_failed,
           COUNT(*) FILTER (WHERE email_error IS NOT NULL AND email_error <> '')::int AS email_errors
         FROM public.owner_opening_requests
-      `);
+        ${where}
+      `, values);
 
       return res.status(200).json({
         ok: true,
         feature: "admin_open_owner",
         engine: "db",
+        scope,
+        queue_contract: "g5_owner_queue_v1",
         total: Number(totalResult.rows[0]?.count || 0),
         counts: {
           by_status: toCountMap(statusResult.rows, "status"),
@@ -1221,6 +1232,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         },
       });
     }catch(err){
+      if(err.status===400) return res.status(400).json({ok:false,error:err.code});
       console.error("ADMIN_OPEN_OWNER_STATS_ERROR", err);
       return res.status(500).json({
         ok: false,
@@ -2919,13 +2931,14 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
 
   r.get("/requests", async (req,res)=>{
     try{
-      const limitRaw = Number(req.query?.limit || 100);
-      const limit = Number.isInteger(limitRaw) && limitRaw > 0 && limitRaw <= 200 ? limitRaw : 100;
+      const page = ownerQueuePage(req.query || {});
 
       const result = await pool.query(
         `
           SELECT
             id,
+            id::text AS queue_cursor_id,
+            created_at::text AS queue_cursor_at,
             owner_type,
             status,
             name,
@@ -2960,17 +2973,19 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
             suspended_at,
             activated_at
           FROM public.owner_opening_requests
-          ORDER BY created_at DESC, id DESC
-          LIMIT $1
+          ${page.where}
+          ORDER BY created_at DESC NULLS LAST, id DESC
+          LIMIT ${page.limitParam}
         `,
-        [limit]
+        page.values
       );
 
       return res.status(200).json({
         ok: true,
-        requests: result.rows,
+        ...ownerQueueResult(result.rows, page),
       });
     }catch(err){
+      if(err.status===400) return res.status(400).json({ok:false,error:err.code});
       console.error("ADMIN_OPEN_OWNER_LIST_REQUESTS_ERROR", err);
       return res.status(500).json({
         ok: false,
