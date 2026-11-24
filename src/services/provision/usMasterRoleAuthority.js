@@ -45,7 +45,7 @@ async function targetOwner(db,r){
  if(!id(p.target_salon_partner_id)||sameId(p.target_salon_partner_id,r.source_partner_id)||
     p.target_salon_slug!==r.salon_slug||!p.target_salon_write_date)
    throw fail("US_MASTER_TARGET_CHANGED");
- return one(db,`SELECT s.id AS salon_id,a.id AS auth_user_id,o.id AS target_request_id,
+ const target=await one(db,`SELECT s.id AS salon_id,a.id AS auth_user_id,o.id AS target_request_id,
    o.source_partner_id,o.precheck_result_json
  FROM public.owner_opening_requests o
  JOIN public.salons s ON s.id=o.created_owner_id
@@ -64,6 +64,12 @@ async function targetOwner(db,r){
  FOR UPDATE OF o,s,a,os,t,m`,[
  p.target_salon_partner_id,"odoo-us-partner-"+p.target_salon_partner_id,activeStates,r.salon_slug
  ],"US_MASTER_TARGET_OWNER_NOT_VERIFIED");
+ const q=target.precheck_result_json?.odoo_source_proof;
+ if(q?.entry_mode!=="salon"||q.source_request_id!=="odoo-us-partner-"+p.target_salon_partner_id||
+   !sameId(q.source_partner_id,p.target_salon_partner_id)||q.profile_write_date!==p.target_salon_write_date||
+   q.source_stage_id!==82||q.source_marker!=="totem_us_portal_approved_v1")
+   throw fail("US_MASTER_TARGET_SOURCE_REVIEW_REQUIRED");
+ return target;
 }
 async function sessionOwner(db,auth,target){
  if(auth?.source!=="session"||auth.role!=="salon_admin"||!sameId(auth.user_id,target.auth_user_id)||
@@ -89,7 +95,7 @@ export function usMasterConsentEnabled(env=process.env){
 }
 // Read and decide under the same locks. Only the direct owner's live session
 // may record or withdraw consent. Applicant, admin and indirect member cannot.
-export async function decideUsExistingSalonConsent({pool,requestId,auth,decision,env=process.env}={}){
+export async function decideUsExistingSalonConsent({pool,requestId,auth,decision,expectedFingerprint,env=process.env}={}){
  if(!usMasterConsentEnabled(env))throw fail("US_MASTER_CONSENT_HOLD");
  if(!["grant","revoke","read"].includes(decision))throw fail("US_MASTER_CONSENT_DECISION_INVALID",400);
  const db=await pool.connect();
@@ -105,11 +111,14 @@ export async function decideUsExistingSalonConsent({pool,requestId,auth,decision
   if(!Number.isFinite(now))throw fail("US_MASTER_CLOCK_INVALID");
   const current=r.precheck_result_json?.master_owner_consent;
   const isValid=valid(current,r,target,now);
+  const revision=fingerprint(r);
+  if(decision==="grant"&&expectedFingerprint!==revision)throw fail("US_MASTER_CONSENT_REVISION_REQUIRED");
   if(decision==="read"||decision==="grant"&&isValid||
       decision==="revoke"&&sameConsent(current,r,target)&&current.decision==="revoked"){
     await db.query("COMMIT");
     return {request_id:id(r.id),salon_id:id(target.salon_id),consent:isValid?"GRANTED":"REQUIRED",
-      expires_at:isValid?current.expires_at:null,idempotent:true};
+      expires_at:isValid?current.expires_at:null,idempotent:true,
+      ...(decision==="read"?{revision,applicant:{name:r.name,slug:r.slug_final,specialization:r.specialization}}:{})};
   }
   // No arbitrary expiry supplied by caller; one-day window for a pending
   // request, revalidate source and ownership before any future bind.
@@ -148,7 +157,7 @@ export async function readUsOwnSalonMasterAuthority(db,masterRequestId,{env=proc
  if(env.TOTEM_US_OWN_SALON_SHARED_ENTITLEMENT_ENABLED!=="true")throw fail("US_MASTER_SHARED_ENTITLEMENT_HOLD");
  let policy;try{policy=JSON.parse(env.TOTEM_US_ODOO_SAAS_COMMERCIAL_POLICY_JSON||"");}catch{throw fail("US_MASTER_SHARED_POLICY_REQUIRED");}
  const accessPolicy=readUsSaasProjectionPolicy(env);
- if(!accessPolicy||policy.ownSalonEntitlement!=="single_salon_subscription"||
+ if(!accessPolicy||!Array.isArray(policy.coveredOwnerTypes)||policy.ownSalonEntitlement!=="single_salon_subscription"||
     !policy.coveredOwnerTypes?.includes("salon")||!policy.coveredOwnerTypes?.includes("master"))
    throw fail("US_MASTER_SHARED_POLICY_REQUIRED");
  const r=await one(db,"SELECT * FROM public.owner_opening_requests WHERE id=$1",[id(masterRequestId)]);
