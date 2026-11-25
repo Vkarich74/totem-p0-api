@@ -65,8 +65,10 @@ async function isolatedGraph(){
  assert.equal(domain[0][2],701);
  return [{id:701,company_id:[4],website_id:[5],partner_id:[203],state:mode==="cancel"?"cancel":"sale",is_subscription:true,plan_id:[6],currency_id:[2],invoice_ids:[802]}];
  }})});
+ const sysAudit=await src("src/services/billing/usSaasReconciliationAudit.js");
+ await sysAudit.link(()=>{throw Error("UNEXPECTED_SYSTEM_AUDIT_IMPORT")});await sysAudit.evaluate();
  const r=await src("src/services/billing/usSaasReconciliation.js");
- await r.link(s=>s.endsWith("usCommercialWriterRelease.js")?fence:s.endsWith("usPaidOwnerOpeningGate.js")?gate:s.endsWith("ownerOpeningCanonicalActivation.js")?a:s.endsWith("usOdooG3SealProof.js")?seal:s.endsWith("usOdooReadOnlyClient.js")?client:p);await r.evaluate();reconciliation=r.namespace;
+ await r.link(s=>s.endsWith("usCommercialWriterRelease.js")?fence:s.endsWith("usPaidOwnerOpeningGate.js")?gate:s.endsWith("ownerOpeningCanonicalActivation.js")?a:s.endsWith("usOdooG3SealProof.js")?seal:s.endsWith("usOdooReadOnlyClient.js")?client:s.endsWith("usSaasReconciliationAudit.js")?sysAudit:p);await r.evaluate();reconciliation=r.namespace;
 }
 before(async()=>{
  const info=(await q("SELECT current_database() AS name,current_setting('server_version_num')::int AS version")).rows[0];

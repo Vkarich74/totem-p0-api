@@ -1,0 +1,70 @@
+name: C6 final held release - predeploy
+on:
+  pull_request:
+    branches: [c6-ledger-serialization-ci-20261125]
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+jobs:
+  predeploy:
+    if: github.head_ref == 'c6-final-held-release-20261125'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: g5_fixture
+          POSTGRES_PASSWORD: g5_fixture_only
+          POSTGRES_DB: c6_held_test
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U g5_fixture -d c6_held_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      NODE_ENV: test
+      DB_MODE: POSTGRES
+      DATABASE_URL: ""
+      REDIS_URL: ""
+      C6_PREDEPLOY_ISOLATED: "YES"
+      C6_ISOLATED: "YES"
+      G5_TEST_DATABASE_URL: postgresql://g5_fixture:g5_fixture_only@127.0.0.1:55432/c6_held_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Verify 42-file final release manifest
+        run: |
+          node --input-type=module <<'JS'
+          import {readFileSync} from 'node:fs';
+          import {createHash} from 'node:crypto';
+          import {execFileSync} from 'node:child_process';
+          import assert from 'node:assert/strict';
+          const m=JSON.parse(readFileSync('tests/c6-final-release-manifest.json','utf8'));
+          assert.equal(m.files.length,42);assert.equal(m.release,'HOLD');
+          for(const f of m.files){
+            assert.equal(createHash('sha256').update(readFileSync(f.path)).digest('hex'),f.sha256,f.path);
+            if(f.path.endsWith('.js'))execFileSync(process.execPath,['--check',f.path]);
+          }
+          console.log('C6_FINAL_42_OF_42_HASHES_VERIFIED');
+          JS
+      - name: Regressions of changed ledger and XPay sources
+        run: node --test test/money-core/ledger.test.js test/money-core/xpayLedgerBridge.test.js
+      - name: Real app startup and authorization mounts
+        run: timeout 45s node --experimental-test-module-mocks tests/c6-final-app-smoke.mjs
+      - name: Changed reconciliation module integration and necessary state prerequisites
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec -i "$PG_CONTAINER" psql -X -U g5_fixture -d c6_held_test -v ON_ERROR_STOP=1 < tests/sql/c6-held-schema.sql
+          node --experimental-vm-modules --test --test-name-pattern='exact production hard HOLD|T3 real transaction|T4 real PG|T5 real projection' tests/c6-held-postgres.test.mjs

@@ -31,6 +31,7 @@ function assertNoForbiddenSql(sql) {
 
 function createMockClient(handler) {
   const calls = [];
+  let businessIndex=0;
 
   return {
     calls,
@@ -40,7 +41,13 @@ function createMockClient(handler) {
       calls.push({ sql: normalizedSql, params: normalizedParams });
       assertNoForbiddenSql(normalizedSql);
 
-      const result = await handler(normalizedSql, normalizedParams, calls.length - 1);
+      if(normalizedSql.startsWith("SELECT pg_advisory_xact_lock(")){
+        assert.deepEqual(normalizedParams,['["master","35","KGS"]']);return {rows:[]};
+      }
+      if(normalizedSql.startsWith("SELECT id FROM public.money_owner_balances")&&normalizedSql.endsWith("FOR UPDATE")){
+        assert.deepEqual(normalizedParams,['master','35','KGS']);return {rows:[]};
+      }
+      const result = await handler(normalizedSql, normalizedParams, businessIndex++);
       if (!result || !Array.isArray(result.rows)) {
         return { rows: [] };
       }
@@ -293,7 +300,6 @@ test('skips no ledger amount due', async () => {
 
 test('creates ledger entries for eligible xpay split allocations', async () => {
   const restore = setMoneyCoreFlags();
-  const restoreGlobalAllocationOwnerId = setGlobalValue('allocationOwnerId', 35);
   try {
     const rebalanceCalls = [];
     const client = createMockClient(async (sql, params, callIndex) => {
@@ -324,7 +330,11 @@ test('creates ledger entries for eligible xpay split allocations', async () => {
         };
       }
 
-      if (callIndex === 3 && sql.startsWith('INSERT INTO public.money_ledger_entries')) {
+      if(callIndex===3){
+        assert.ok(sql.includes("source_type='xpay_split_allocation'")&&sql.endsWith("FOR SHARE"));
+        assert.deepEqual(params,[5001]);return {rows:[]};
+      }
+      if (callIndex === 4 && sql.startsWith('INSERT INTO public.money_ledger_entries')) {
         assert.equal(sql.includes("'available'"), true);
         assert.equal(sql.includes("'credit'"), true);
         assert.equal(sql.includes("'xpay_split_allocation'"), true);
@@ -339,7 +349,7 @@ test('creates ledger entries for eligible xpay split allocations', async () => {
         return { rows: [{ id: 7003 }] };
       }
 
-      if (callIndex === 4 && sql.startsWith('SELECT money_zone, direction, amount')) {
+      if (callIndex === 5 && sql.startsWith('SELECT money_zone, direction, amount')) {
         rebalanceCalls.push({ sql, params });
         return {
           rows: [
@@ -348,7 +358,7 @@ test('creates ledger entries for eligible xpay split allocations', async () => {
         };
       }
 
-      if (callIndex === 5 && sql.startsWith('INSERT INTO public.money_owner_balances')) {
+      if (callIndex === 6 && sql.startsWith('INSERT INTO public.money_owner_balances')) {
         return {
           rows: [
             {
@@ -376,14 +386,12 @@ test('creates ledger entries for eligible xpay split allocations', async () => {
     assert.equal(client.calls.some((call) => call.sql.includes('public.provider_settlements')), true);
     assert.equal(client.calls.some((call) => call.sql.includes('public.provider_settlement_items')), true);
   } finally {
-    restoreGlobalAllocationOwnerId();
     restore();
   }
 });
 
 test('idempotent existing ledger path', async () => {
   const restore = setMoneyCoreFlags();
-  const restoreGlobalAllocationOwnerId = setGlobalValue('allocationOwnerId', 35);
   try {
     const client = createMockClient(async (sql, params, callIndex) => {
       if (callIndex === 0) {
@@ -407,8 +415,9 @@ test('idempotent existing ledger path', async () => {
         };
       }
       if (callIndex === 3) {
-        assert.equal(sql.startsWith('INSERT INTO public.money_ledger_entries'), true);
-        return { rows: [] };
+        assert.ok(sql.includes("source_type='xpay_split_allocation'")&&sql.endsWith("FOR SHARE"));
+        assert.deepEqual(params,[5001]);
+        return {rows:[{owner_type:'master',owner_id:35,money_zone:'available',direction:'credit',amount:'3000',currency:'KGS',provider_code:'xpay'}]};
       }
       if (callIndex === 4) {
         assert.equal(sql.startsWith('SELECT money_zone, direction, amount'), true);
@@ -432,8 +441,8 @@ test('idempotent existing ledger path', async () => {
     assert.equal(result.ledger_inserted_count, 0);
     assert.equal(result.ledger_existing_count, 1);
     assert.equal(result.owners_rebuilt_count, 1);
+    assert.equal(client.calls.some(c=>c.sql.startsWith('INSERT INTO public.money_ledger_entries')),false);
   } finally {
-    restoreGlobalAllocationOwnerId();
     restore();
   }
 });
