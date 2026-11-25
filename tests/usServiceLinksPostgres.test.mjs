@@ -3,10 +3,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
-import {
-  readUsServiceLinkOptions,saveUsServiceLink,
-  rejectLegacyUsServiceMutation,rejectLegacyUsMasterServiceCreation,
-} from "../src/services/usServiceLink.service.js";
+import {installCiServiceAuthority} from "./c6-ci-service-authority.mjs";
+installCiServiceAuthority();
+const {readUsServiceLinkOptions,saveUsServiceLink,
+  rejectLegacyUsServiceMutation,rejectLegacyUsMasterServiceCreation}=await import("../src/services/usServiceLink.service.js");
 
 const URI=process.env.US_SERVICES_01_TEST_DB||"";
 if(!/^postgres(?:ql)?:\/\/[^@]+@127\.0\.0\.1:55432\/us_services_01_test$/.test(URI)) {
@@ -126,9 +126,7 @@ test("PostgreSQL17: explicit-owner create/attach, USD, duplicated and foreign sc
     assert.equal(kgSourceRejected.body.error,"US_SERVICE_LINK_SOURCE_NOT_FOUND");
     assert.equal(await count("services"),4);
 
-    await pool.query("INSERT INTO public.billing_subscriptions"+
-      "(owner_type,owner_id,subscription_status,blocked_at) "+
-      "VALUES('salon',32,'blocked',now())");
+    await pool.query("UPDATE public.c6_ci_service_entitlements SET can_write=false WHERE owner_type='salon' AND owner_id=32 AND market_id=4");
     const blocked=await saveUsServiceLink(pool,{...salon,body:{
       ...body,name:"BLOCKED should never appear",
     }});

@@ -252,6 +252,11 @@ CREATE TABLE public.owner_opening_requests (
     rejected_at timestamp with time zone,
     suspended_at timestamp with time zone,
     activated_at timestamp with time zone,
+    source_namespace text,
+    source_company_id integer,
+    source_website_id integer,
+    source_partner_id bigint,
+    source_request_id text,
     CONSTRAINT owner_opening_requests_email_status_check CHECK ((email_status = ANY (ARRAY['not_ready'::text, 'ready'::text, 'sent'::text, 'failed'::text]))),
     CONSTRAINT owner_opening_requests_owner_type_check CHECK ((owner_type = ANY (ARRAY['salon'::text, 'master'::text]))),
     CONSTRAINT owner_opening_requests_status_check CHECK ((status = ANY (ARRAY['draft'::text, 'validated'::text, 'validation_failed'::text, 'approved'::text, 'provisioning'::text, 'provisioned'::text, 'email_ready'::text, 'email_sent'::text, 'email_failed'::text, 'activated'::text, 'rejected'::text, 'suspended'::text, 'failed'::text]))),
@@ -368,3 +373,61 @@ ALTER TABLE ONLY public.billing_subscriptions
     ADD CONSTRAINT billing_subscriptions_owner_unique UNIQUE (owner_type, owner_id);
 ALTER TABLE ONLY public.billing_subscriptions
     ADD CONSTRAINT billing_subscriptions_pkey PRIMARY KEY (id);
+
+-- CI fixture parity with verified 24 Nov source schema and committed T5 structure. No production migration.
+CREATE UNIQUE INDEX ux_open_owner_odoo_source_role ON public.owner_opening_requests USING btree (source_namespace, source_company_id, source_website_id, source_request_id, owner_type) WHERE ((source_namespace = 'odoo_online'::text) AND (source_request_id IS NOT NULL));
+ALTER TABLE public.billing_subscriptions
+  ADD COLUMN provider_namespace TEXT,
+  ADD COLUMN provider_company_id INTEGER,
+  ADD COLUMN provider_website_id INTEGER,
+  ADD COLUMN provider_partner_id BIGINT,
+  ADD COLUMN provider_source_request_id TEXT,
+  ADD COLUMN provider_subscription_order_id BIGINT,
+  ADD COLUMN provider_invoice_id BIGINT,
+  ADD COLUMN provider_policy_version TEXT,
+  ADD COLUMN provider_verified_at TIMESTAMPTZ,
+  ADD COLUMN provider_revoked_at TIMESTAMPTZ;
+
+ALTER TABLE public.billing_subscriptions
+    ADD CONSTRAINT ck_billing_us_odoo_projection_exact
+    CHECK (
+      (
+        provider_namespace IS NULL AND provider_company_id IS NULL
+        AND provider_website_id IS NULL AND provider_partner_id IS NULL
+        AND provider_source_request_id IS NULL
+        AND provider_subscription_order_id IS NULL
+        AND provider_invoice_id IS NULL
+        AND provider_policy_version IS NULL
+        AND provider_verified_at IS NULL AND provider_revoked_at IS NULL
+      ) OR (
+        provider_namespace IS NOT NULL AND provider_namespace = 'odoo_online'
+        AND provider_company_id = 4 AND provider_company_id IS NOT NULL
+        AND provider_website_id = 5 AND provider_website_id IS NOT NULL
+        AND provider_partner_id IS NOT NULL AND provider_partner_id > 0
+        AND provider_source_request_id IS NOT NULL
+        AND provider_source_request_id = ('odoo-us-partner-' || provider_partner_id::text)
+        AND provider_subscription_order_id IS NOT NULL
+        AND provider_subscription_order_id > 0
+        AND provider_invoice_id IS NOT NULL AND provider_invoice_id > 0
+        AND provider_policy_version IS NOT NULL
+        AND length(provider_policy_version) BETWEEN 1 AND 40
+        AND provider_verified_at IS NOT NULL
+        AND wallet_only IS FALSE AND currency = 'USD' AND billing_model = 'subscription'
+        AND grace_until IS NULL
+        AND current_period_start IS NOT NULL
+        AND current_period_end IS NOT NULL
+        AND current_period_end > current_period_start
+      )
+    );
+
+CREATE UNIQUE INDEX ux_billing_odoo_source_role
+  ON public.billing_subscriptions (
+    provider_namespace,provider_company_id,provider_website_id,
+    provider_source_request_id,owner_type
+  )
+  WHERE provider_namespace='odoo_online';
+
+CREATE INDEX idx_billing_odoo_projection_due
+  ON public.billing_subscriptions (
+    current_period_end,provider_verified_at
+  ) WHERE provider_namespace='odoo_online';

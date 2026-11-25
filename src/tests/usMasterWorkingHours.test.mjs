@@ -1,7 +1,9 @@
 // Only in-memory SQL stubs, no real PostgreSQL or test salon creation.
 import test from "node:test";
 import assert from "node:assert/strict";
-import buildMastersRouter from "../routes/internal/masters.js";
+import {installCiServiceAuthority} from "../../tests/c6-ci-service-authority.mjs";
+installCiServiceAuthority();
+const {default:buildMastersRouter}=await import("../routes/internal/masters.js");
 import {
   normalizeUsWeeklyHours,validateUsHoursWriteBody,
   usHoursRevision,weeklyHoursDisplay,
@@ -95,6 +97,16 @@ class MemoryPool {
         : all;
       return {rows:selected};
     }
+    if(q.startsWith("SELECT mk.id AS market_id FROM public.tenant_market_settings")){
+      return {rows:this.hasUsRelation&&this.active?[{market_id:4}]:[]};
+    }
+    if(q.includes("FROM public.auth_sessions s"))return {rows:this.auth?[{}]:[]};
+    if(q.includes("FROM public.masters master")&&q.includes("master.slug=$1")){
+      return {rows:this.hasUsRelation&&this.active&&params[1]===17?[{owner_id:41,market_id:4}]:[]};
+    }
+    if(q.includes("FROM public.c6_ci_service_entitlements")){
+      assert.deepEqual(params,["master",41,4]);return {rows:[{can_write:!this.blocked}]};
+    }
     if(q.includes("FROM public.billing_subscriptions")){
       return {rows:this.blocked
         ? [{subscription_status:"blocked",blocked_at:"2026-01-01"}]
@@ -141,7 +153,7 @@ function params({
   return {method,
     params:{slug:"existing-master"},
     query:scope?{salon_slug:salonSlug,location_code:code}:{},
-    auth:{role:authRole,source,user_id:authUser},
+    auth:{role:authRole,source,user_id:authUser,session_id:"11111111-2222-4333-8444-555555555555"},
     identity:{masters:identity},
     body,
   };

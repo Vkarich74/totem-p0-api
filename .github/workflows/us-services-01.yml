@@ -51,7 +51,7 @@ jobs:
           set -euo pipefail
           test -z "$DATABASE_URL"
           test -z "$US_PAY_C11_LIVE_STRIPE_SECRET_KEY"
-          node --test src/tests/usServiceLinkScoped.test.mjs
+          node --experimental-test-module-mocks --test src/tests/usServiceLinkScoped.test.mjs
       - name: Disposable PostgreSQL17 owner transaction acceptance
         env:
           US_SERVICES_01_TEST_DB: postgres://usservices01:local_fake_secret@127.0.0.1:55432/us_services_01_test
@@ -71,7 +71,7 @@ jobs:
           docker exec -i us-services-01-pg17 psql -X -v ON_ERROR_STOP=1 \
             -U usservices01 -d us_services_01_test \
             < tests/sql/us_services_01_isolated_fixture.sql
-          node --test tests/usServiceLinksPostgres.test.mjs
+          node --experimental-test-module-mocks --test tests/usServiceLinksPostgres.test.mjs
           docker exec -i us-services-01-pg17 psql -X -v ON_ERROR_STOP=1 \
             -U usservices01 -d us_services_01_test -At -F '|' \
             < audits/us-services-01-production-schema-read-only.sql \
@@ -84,7 +84,7 @@ jobs:
       - name: Existing US catalog booking and owner regressions
         run: |
           set -euo pipefail
-          node --test src/tests/usCabinetBookingBoundary.test.mjs src/tests/usPublicServicePriceCatalog.test.mjs src/tests/usHoursServicesSlotsAvailability.test.mjs src/tests/bookingOwnerAllMarketsRegression.test.mjs src/tests/usMasterWorkingHours.test.mjs
+          node --experimental-test-module-mocks --test src/tests/usCabinetBookingBoundary.test.mjs src/tests/usPublicServicePriceCatalog.test.mjs src/tests/usHoursServicesSlotsAvailability.test.mjs src/tests/bookingOwnerAllMarketsRegression.test.mjs src/tests/usMasterWorkingHours.test.mjs
       - name: No migration or Stripe LIVE capabilities added
         run: |
           set -euo pipefail

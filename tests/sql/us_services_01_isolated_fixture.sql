@@ -131,4 +131,7 @@ INSERT INTO public.salon_master_services
 (salon_id,master_id,service_pk,price,duration_min,active,currency_code)
 VALUES (34,46,2,0,30,true,'KGS');
 
+-- Explicit synthetic authority for downstream atomicity tests; never a production table.
+CREATE TABLE public.c6_ci_service_entitlements(owner_type text NOT NULL,owner_id bigint NOT NULL,market_id bigint NOT NULL,can_write boolean NOT NULL,PRIMARY KEY(owner_type,owner_id,market_id));
+INSERT INTO public.c6_ci_service_entitlements VALUES ('salon',32,4,true),('master',46,4,true);
 COMMIT;

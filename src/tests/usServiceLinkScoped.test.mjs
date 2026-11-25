@@ -2,8 +2,10 @@
 // No real DB, network, bookings, user, payment, Stripe or Odoo writes.
 import test from "node:test";
 import assert from "node:assert/strict";
-import {readUsServiceLinkOptions,saveUsServiceLink,
-  rejectLegacyUsServiceMutation,rejectLegacyUsMasterServiceCreation} from "../services/usServiceLink.service.js";
+import {installCiServiceAuthority} from "../../tests/c6-ci-service-authority.mjs";
+installCiServiceAuthority();
+const {readUsServiceLinkOptions,saveUsServiceLink,
+  rejectLegacyUsServiceMutation,rejectLegacyUsMasterServiceCreation}=await import("../services/usServiceLink.service.js");
 
 const SESSION="11111111-2222-4333-8444-555555555555";
 const salonAuth={source:"session",role:"salon_admin",user_id:81,session_id:SESSION};
@@ -50,6 +52,10 @@ class MemoryPool {
         if(sql.includes("FROM public.masters master JOIN public.master_salon ms") &&
            sql.includes("master.slug=$1")) {
           return {rows:state.settings.owner===false?[]:[{owner_id:46,market_id:4}]};
+        }
+        if(sql.includes("FROM public.c6_ci_service_entitlements")) {
+          const scoped=values[2]===4&&((values[0]==="salon"&&values[1]===32)||(values[0]==="master"&&values[1]===46));
+          return {rows:scoped?[{can_write:!state.settings.billingBlocked}]:[]};
         }
         if(sql.includes("FROM public.billing_subscriptions")) {
           return {rows:state.settings.billingBlocked?
@@ -160,6 +166,7 @@ test("new salon service is atomic with explicit master and USD cents readback",a
   assert.equal(response.body.readback_verified,true);
   assert.equal(db.commits,1);
   assert.equal(db.writes,3);
+  assert.equal(db.calls.filter(x=>x.sql.includes("FROM public.c6_ci_service_entitlements")).length,2);
   assert.equal(db.calls.filter(x=>x.sql.includes("pg_advisory_xact_lock")).length,2);
   assert.ok(db.calls.some(x=>x.sql.includes("FOR SHARE OF ms,s,master,tm,market")));
 });
