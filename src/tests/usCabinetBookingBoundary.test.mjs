@@ -119,12 +119,13 @@ test("owner lifecycle auth middleware now covers US, KG and KZ",()=>{
   assert.match(route,/buildPublicAccessGuard\("booking_read"\),\s*resolveAuth/);
   const life=fs.readFileSync(new URL("../routes/publicLifecycle.js",import.meta.url),"utf8");
   const endpoint=life.slice(life.indexOf("export async function publicLifecycle("));
-  assert.ok(endpoint.indexOf("checkUsLifecycleSession(req.auth)")<
-    endpoint.indexOf("const { rows } = await pool.query("));
-  assert.ok(endpoint.indexOf("authorizeUsLifecycleActor(")<
-    endpoint.indexOf("const currentStatus ="));
-  assert.ok(endpoint.indexOf("authorizeUsLifecycleActor(")<
-    endpoint.indexOf("UPDATE bookings"));
-  assert.match(endpoint, /WHERE b\.id = \$1\s+AND b\.salon_id = \$2/);
-  assert.doesNotMatch(endpoint, /OR ms\.id IS NOT NULL/);
+  const guard=life.slice(life.indexOf("async function authorizeLifecycleWrite("),
+    life.indexOf("export async function executeUsLifecycleTransaction("));
+  const tx=life.slice(life.indexOf("export async function executeUsLifecycleTransaction("),
+    life.indexOf("async function notifyUsLifecycleAfterCommit"));
+  assert.ok(endpoint.indexOf("checkUsLifecycleSession(req.auth)")<endpoint.indexOf("executeUsLifecycleTransaction(pool"));
+  assert.match(guard,/authorizeUsLifecycleActor\(db,auth,booking\.salon_id,booking\.master_id,true\)/);
+  assert.ok(tx.indexOf("authorizeLifecycleWrite(tx")<tx.indexOf("UPDATE public.bookings"));
+  assert.match(tx,/WHERE b\.id=\$1 AND b\.salon_id=\$2/);
+  assert.doesNotMatch(guard,/OR ms\.id IS NOT NULL/);
 });

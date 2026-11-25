@@ -1,4 +1,6 @@
 import express from "express";
+import { directFinanceOwnerIds, hasMoneyCorePrivilegedAccess,
+  requireMoneyCoreAuth, requireMoneyCoreOwnerAccess } from "./money-core.js";
 
 export default function buildWithdrawsRouter(pool, internalReadRateLimit){
 
@@ -81,6 +83,14 @@ r.get("/withdraws/:id/timeline", internalReadRateLimit, async (req,res)=>{
 const { id } = req.params;
 
 try{
+if(!requireMoneyCoreAuth(res,req))return;
+if(typeof id!=="string"||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))
+  return res.status(400).json({ok:false,error:"WITHDRAW_ID_INVALID"});
+const privileged=hasMoneyCorePrivilegedAccess(req);
+const salons=directFinanceOwnerIds(req,"salon");
+const masters=directFinanceOwnerIds(req,"master");
+if(!privileged&&!salons.length&&!masters.length)
+  return res.status(403).json({ok:false,error:"MONEY_CORE_OWNER_ACCESS_REQUIRED"});
 
 const withdraw = await pool.query(`
 SELECT
@@ -92,8 +102,10 @@ created_at,
 updated_at
 FROM public.withdraws
 WHERE id=$1
+AND ($2::boolean OR (owner_type='salon' AND owner_id=ANY($3::int[]))
+                  OR (owner_type='master' AND owner_id=ANY($4::int[])))
 LIMIT 1
-`,[id]);
+`,[id,privileged,salons,masters]);
 
 if(!withdraw.rows.length){
 return res.status(404).json({ok:false,error:"WITHDRAW_NOT_FOUND"});
@@ -173,6 +185,7 @@ r.get("/salons/:slug/withdraws/summary", internalReadRateLimit, async (req,res)=
 const { slug } = req.params;
 
 try{
+if(!requireMoneyCoreAuth(res,req))return;
 
 const salon = await pool.query(
 `SELECT id FROM salons WHERE slug=$1`,
@@ -184,6 +197,7 @@ return res.status(404).json({ok:false,error:"SALON_NOT_FOUND"});
 }
 
 const salonId = salon.rows[0].id;
+if(!requireMoneyCoreOwnerAccess(res,req,"salon",salonId))return;
 
 const summary = await pool.query(`
 SELECT

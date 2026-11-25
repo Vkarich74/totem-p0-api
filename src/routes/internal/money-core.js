@@ -263,68 +263,45 @@ async function resolveMoneyCoreOwnerById(pool, ownerType, ownerId) {
   };
 }
 
-function getIdentityOwnerIds(identity, ownerType) {
+// Financial authority is narrower than the scheduling identity graph.
+export function directFinanceOwnerIds(req, ownerType) {
   const ids = new Set();
-
-  if (!identity || !ownerType) {
-    return ids;
+  const auth = req?.auth, identity = req?.identity;
+  const type = String(ownerType || "");
+  if (!auth || auth.source !== "session" || !auth.user_id ||
+      !identity || Number(identity.user_id) !== Number(auth.user_id) ||
+      identity.role !== auth.role) return [];
+  const allowed = type === "salon" && auth.role === "salon_admin"
+    ? ["owner_salon.owner_id"]
+    : type === "master" && auth.role === "master"
+      ? ["masters.user_id", "auth_users.master_id -> masters.id",
+         "auth_users.master_slug -> masters.slug",
+         "requested_slug -> masters.user_id",
+         "requested_slug -> auth_users.master_id",
+         "requested_slug -> auth_users.master_slug",
+         ...(auth.kg_shared_master_request_id ? ["kg_shared_owner_master_v1"] : [])]
+      : [];
+  for (const item of Array.isArray(identity.ownership) ? identity.ownership : []) {
+    if (item?.owner_type !== type || !allowed.includes(item.relation)) continue;
+    const id = Number(item.owner_id);
+    if (/^[1-9][0-9]*$/.test(String(item.owner_id)) && Number.isSafeInteger(id)) ids.add(id);
   }
-
-  const normalizedOwnerType = String(ownerType || '').trim().toLowerCase();
-
-  const sources = [];
-  if (Array.isArray(identity?.ownership)) {
-    sources.push(...identity.ownership);
-  }
-
-  for (const item of sources) {
-    if (!item || typeof item !== 'object') {
-      continue;
-    }
-
-    const itemOwnerType = String(item.owner_type || item.type || '').trim().toLowerCase();
-    if (itemOwnerType !== normalizedOwnerType) {
-      continue;
-    }
-
-    const rawId = item.owner_id ?? item.salon_id ?? item.master_id ?? item.id;
-    const parsedId = Number.parseInt(String(rawId || '').trim(), 10);
-    if (Number.isInteger(parsedId) && parsedId > 0) {
-      ids.add(parsedId);
-    }
-  }
-
-  return ids;
+  return [...ids];
 }
 
-function hasMoneyCoreOwnerAccess(req, ownerType, ownerId) {
-  if (req?.auth?.role === 'system') {
-    return true;
-  }
-
-  const normalizedOwnerType = String(ownerType || '').trim().toLowerCase();
-  const normalizedOwnerId = Number.parseInt(String(ownerId || '').trim(), 10);
-
-  if (!normalizedOwnerType || !Number.isInteger(normalizedOwnerId) || normalizedOwnerId <= 0) {
-    return false;
-  }
-
-  if (normalizedOwnerType === 'system') {
-    return false;
-  }
-
-  const identityOwnerIds = getIdentityOwnerIds(req?.identity, normalizedOwnerType);
-  const authOwnerIds = getIdentityOwnerIds(req?.auth, normalizedOwnerType);
-
-  return identityOwnerIds.has(normalizedOwnerId) || authOwnerIds.has(normalizedOwnerId);
+export function hasMoneyCoreOwnerAccess(req, ownerType, ownerId) {
+  if (req?.auth?.role === "system" && req.auth.user_id) return true;
+  const id = Number(ownerId);
+  if (!/^[1-9][0-9]*$/.test(String(ownerId)) || !Number.isSafeInteger(id)) return false;
+  return directFinanceOwnerIds(req, ownerType).includes(id);
 }
 
-function hasMoneyCorePrivilegedAccess(req) {
+export function hasMoneyCorePrivilegedAccess(req) {
   const role = String(req?.auth?.role || '').trim().toLowerCase();
-  return role === 'system' || role === 'owner';
+  return Boolean(req?.auth?.user_id) && (role === 'system' || role === 'owner');
 }
 
-function requireMoneyCoreAuth(res, req) {
+export function requireMoneyCoreAuth(res, req) {
   if (!req?.auth || !req.auth.user_id || !req.auth.role) {
     safeJson(res, 401, {
       ok: false,
@@ -352,7 +329,7 @@ function requireMoneyCorePrivilegedAccess(res, req) {
   return true;
 }
 
-function requireMoneyCoreOwnerAccess(res, req, ownerType, ownerId) {
+export function requireMoneyCoreOwnerAccess(res, req, ownerType, ownerId) {
   if (!requireMoneyCoreAuth(res, req)) {
     return false;
   }
@@ -1219,6 +1196,7 @@ function buildMoneyCoreRouter(pool) {
 
     r.get(`${basePath}/money-core/owner-qr-destinations`, async (req, res, next) => {
       try {
+        if (!requireMoneyCoreAuth(res, req)) return;
         const owner = await resolveMoneyCoreOwnerBySlug(pool, ownerType, req.params.slug);
 
         if (!owner.ok) {
@@ -1227,6 +1205,7 @@ function buildMoneyCoreRouter(pool) {
             error: owner.error,
           });
         }
+        if (!requireMoneyCoreOwnerAccess(res, req, owner.owner_type, owner.owner_id)) return;
 
         const destinations = await listOwnerQrDestinations(pool, {
           ownerType: owner.owner_type,
@@ -1244,6 +1223,7 @@ function buildMoneyCoreRouter(pool) {
 
     r.get(`${basePath}/money-core/owner-qr-destinations/active`, async (req, res, next) => {
       try {
+        if (!requireMoneyCoreAuth(res, req)) return;
         const owner = await resolveMoneyCoreOwnerBySlug(pool, ownerType, req.params.slug);
 
         if (!owner.ok) {
@@ -1252,6 +1232,7 @@ function buildMoneyCoreRouter(pool) {
             error: owner.error,
           });
         }
+        if (!requireMoneyCoreOwnerAccess(res, req, owner.owner_type, owner.owner_id)) return;
 
         const destination = await getActiveOwnerQrDestination(pool, {
           ownerType: owner.owner_type,
@@ -1575,6 +1556,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.get('/money-core/provider-events', async (req, res, next) => {
     try {
+      if (!requireMoneyCorePrivilegedAccess(res, req)) return;
       const events = await listProviderEvents(pool, {
         provider_code: req.query?.provider_code,
         payment_id: req.query?.payment_id,
@@ -1597,6 +1579,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.get('/money-core/provider-events/:id', async (req, res, next) => {
     try {
+      if (!requireMoneyCorePrivilegedAccess(res, req)) return;
       const event = await getProviderEventById(pool, req.params.id);
 
       if (!event) {
@@ -1642,6 +1625,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/provider-events/:id/reprocess', async (req, res, next) => {
     try {
+      if (!requireMoneyCorePrivilegedAccess(res, req)) return;
       const event = await getProviderEventById(pool, req.params.id);
 
       if (!event) {
@@ -1884,6 +1868,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/settlements/:id/split/preview', async (req, res, next) => {
     try {
+      if (!requireMoneyCorePrivilegedAccess(res, req)) return;
       const preview = await previewSettlementSplit(pool, req.params.id, req.body || {});
 
       if (!preview) {
@@ -2074,6 +2059,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.post('/money-core/owners/:ownerType/:ownerId/balance/rebuild', async (req, res, next) => {
     try {
+      if (!requireMoneyCorePrivilegedWriteAccess(res, req)) return;
       const currency = await resolveOwnerCurrencyCode(pool, {
         ownerType: req.params.ownerType,
         ownerId: req.params.ownerId,
@@ -2357,6 +2343,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.get('/money-core/owners/:ownerType/:ownerId/withdraw-settings', async (req, res, next) => {
     try {
+      if (!requireMoneyCoreOwnerAccess(res, req, req.params.ownerType, req.params.ownerId)) return;
       const settings = await getWithdrawSettings(pool, req.params.ownerType, req.params.ownerId);
 
       return safeJson(res, 200, {
@@ -2714,6 +2701,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.get('/money-core/reconciliation', async (req, res, next) => {
     try {
+      if (!requireMoneyCorePrivilegedAccess(res, req)) return;
       const runs = await listReconciliationRuns(pool, {
         run_type: req.query?.run_type,
         status: req.query?.status,
@@ -2757,6 +2745,7 @@ function buildMoneyCoreRouter(pool) {
 
   r.get('/money-core/reconciliation-mismatches', async (req, res, next) => {
     try {
+      if (!requireMoneyCorePrivilegedAccess(res, req)) return;
       const mismatches = await listReconciliationMismatches(pool, {
         run_id: req.query?.run_id,
         severity: req.query?.severity,
@@ -3518,6 +3507,7 @@ RETURNING
 
   r.get('/salons/:slug/money-core/withdraw-settings', async (req, res, next) => {
     try {
+      if (!requireMoneyCoreAuth(res, req)) return;
       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'salon', req.params.slug);
 
       if (!owner.ok) {
@@ -3526,6 +3516,7 @@ RETURNING
           error: owner.error,
         });
       }
+      if (!requireMoneyCoreOwnerAccess(res, req, owner.owner_type, owner.owner_id)) return;
 
       const settings = await getWithdrawSettings(pool, owner.owner_type, owner.owner_id);
 
@@ -3583,6 +3574,7 @@ RETURNING
 
   r.get('/salons/:slug/money-core/withdraw-requests', async (req, res, next) => {
     try {
+      if (!requireMoneyCoreAuth(res, req)) return;
       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'salon', req.params.slug);
 
       if (!owner.ok) {
@@ -3591,6 +3583,7 @@ RETURNING
           error: owner.error,
         });
       }
+      if (!requireMoneyCoreOwnerAccess(res, req, owner.owner_type, owner.owner_id)) return;
 
       const requests = await listWithdrawRequests(pool, owner.owner_type, owner.owner_id, {
         status: req.query?.status,
@@ -3743,6 +3736,7 @@ RETURNING
 
   r.get('/masters/:slug/money-core/withdraw-settings', async (req, res, next) => {
     try {
+      if (!requireMoneyCoreAuth(res, req)) return;
       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'master', req.params.slug);
 
       if (!owner.ok) {
@@ -3751,6 +3745,7 @@ RETURNING
           error: owner.error,
         });
       }
+      if (!requireMoneyCoreOwnerAccess(res, req, owner.owner_type, owner.owner_id)) return;
 
       const settings = await getWithdrawSettings(pool, owner.owner_type, owner.owner_id);
 
@@ -3808,6 +3803,7 @@ RETURNING
 
   r.get('/masters/:slug/money-core/withdraw-requests', async (req, res, next) => {
     try {
+      if (!requireMoneyCoreAuth(res, req)) return;
       const owner = await resolveMoneyCoreOwnerBySlug(pool, 'master', req.params.slug);
 
       if (!owner.ok) {
@@ -3816,6 +3812,7 @@ RETURNING
           error: owner.error,
         });
       }
+      if (!requireMoneyCoreOwnerAccess(res, req, owner.owner_type, owner.owner_id)) return;
 
       const requests = await listWithdrawRequests(pool, owner.owner_type, owner.owner_id, {
         status: req.query?.status,

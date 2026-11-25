@@ -2091,6 +2091,14 @@ b.id,
 b.status,
 b.start_at,
 b.end_at,
+${usLocationScope ? "" : `b.master_id,
+b.salon_id,
+(SELECT sl.slug FROM public.salons sl WHERE sl.id=b.salon_id) AS salon_slug,
+(SELECT CASE WHEN count(*)=1 AND bool_and(mk.active IS TRUE)
+             THEN min(mk.code) ELSE NULL END
+   FROM public.tenant_market_settings t
+   JOIN public.markets mk ON mk.id=t.market_id
+  WHERE t.salon_id=b.salon_id) AS booking_market_code,`}
 c.name AS client_name,
 c.phone,
 pay.id AS payment_id,

@@ -119,7 +119,7 @@ test("invalid scope denied with no database query",async()=>{
 });
 
 test("both public booking endpoints require authenticated owner session",()=>{
-  const route=fs.readFileSync(new URL("../routes/public.js",import.meta.url),"utf8");
+  const route=fs.readFileSync(new URL("../routes/public.js",import.meta.url),"utf8").replace(/\r\n/g,"\n");
   const getter=route.indexOf('"/salons/:slug/bookings",\n    resolveTenant');
   const lifecycle=route.indexOf('"/salons/:slug/bookings/:id/lifecycle"');
   assert.ok(getter>=0 && lifecycle>=0);
@@ -134,14 +134,16 @@ test("both public booking endpoints require authenticated owner session",()=>{
 
 test("US/KG/KZ all verify actor BEFORE booking/payment mutation",()=>{
   const life=fs.readFileSync(new URL("../routes/publicLifecycle.js",import.meta.url),"utf8");
-  const code=life.slice(life.indexOf("export async function publicLifecycle("));
-  const beforeSelect=code.indexOf("checkBookingOwnerSession(req.auth)");
-  const select=code.indexOf("const { rows } = await pool.query(");
-  const beforeMutation=code.indexOf("authorizeBookingLifecycleActor(");
-  const mutation=code.indexOf("UPDATE bookings");
-  assert.ok(beforeSelect>=0 && beforeSelect<select);
-  assert.ok(beforeMutation>=0 && beforeMutation<mutation);
-  assert.match(code,/WHERE b\.id = \$1\s+AND b\.salon_id = \$2/);
-  assert.doesNotMatch(code,/OR ms\.id IS NOT NULL/);
-  assert.match(code,/Number\.isSafeInteger\(bookingId\)/);
+  const route=life.slice(life.indexOf("export async function publicLifecycle("));
+  const tx=life.slice(life.indexOf("export async function executeUsLifecycleTransaction("),
+    life.indexOf("async function notifyUsLifecycleAfterCommit"));
+  const guard=life.slice(life.indexOf("async function authorizeLifecycleWrite("),
+    life.indexOf("export async function executeUsLifecycleTransaction("));
+  assert.ok(route.indexOf("checkBookingOwnerSession(req.auth)")<route.indexOf("executeUsLifecycleTransaction(pool"));
+  assert.ok(tx.indexOf("authorizeLifecycleWrite(tx")<tx.indexOf("UPDATE public.bookings"));
+  assert.ok(tx.indexOf("const commitAuthority=await authorizeLifecycleWrite(tx")<tx.lastIndexOf('await tx.query("COMMIT")'));
+  assert.match(guard,/authorizeBookingLifecycleActor\(db,auth,booking\.salon_id,booking\.master_id,true\)/);
+  assert.match(tx,/WHERE b\.id=\$1 AND b\.salon_id=\$2/);
+  assert.doesNotMatch(guard,/OR ms\.id IS NOT NULL/);
+  assert.match(route,/Number\.isSafeInteger\(bookingId\)/);
 });

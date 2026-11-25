@@ -4,7 +4,18 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
 import fs from "node:fs";
-import {executeUsLifecycleTransaction} from "../routes/publicLifecycle.js";
+// Test-only source substitution for the hypothetical released commercial
+// path. The production export is separately exercised with its real HOLD
+// by lifecycleServerAuthority.test.mjs. Existing ownership check stays real.
+const routeUrl=new URL("../routes/publicLifecycle.js",import.meta.url);
+const source=fs.readFileSync(routeUrl,"utf8");
+const start=source.indexOf("async function authorizeLifecycleWrite(");
+const end=source.indexOf("// Historical exported name retained.",start);
+assert.ok(start>=0&&end>start);
+const synthetic=source.slice(0,start)+
+  'async function authorizeLifecycleWrite(db,auth,booking){ const ownership=await authorizeUsLifecycleActor(db,auth,booking.salon_id,booking.master_id); return ownership.ok?null:denied(ownership.error,ownership.status); }\n'+source.slice(end);
+const absolute=synthetic.replace(/from "([^"]+)";/g,(all,spec)=>spec.startsWith(".")?'from "'+new URL(spec,routeUrl).href+'";':all);
+const {executeUsLifecycleTransaction}=await import("data:text/javascript;base64,"+Buffer.from(absolute).toString("base64"));
 
 const auth={source:"session",session_id:"offline-only",role:"salon_admin",user_id:81};
 class OfflinePostgres {
@@ -27,6 +38,7 @@ class OfflinePostgres {
       const q=String(sql).replace(/\s+/g," ").trim();
       db.events.push(q);
       if(q==="BEGIN"){inTx=true;return {rowCount:0,rows:[]};}
+      if(q.startsWith("SET LOCAL ")){assert.equal(inTx,true);return {rowCount:0,rows:[]};}
       if(q==="COMMIT" || q==="ROLLBACK"){
         if(q==="ROLLBACK" && snapshot){
           db.row={...snapshot.row};db.slot={...snapshot.slot};
@@ -107,7 +119,7 @@ test("US confirm holds row lock and uses status compare-and-swap",async()=>{
   assert.equal(first.notify,false);
   assert.equal(db.row.status,"confirmed");
   assert.ok(db.events.some(s=>s.includes("FOR UPDATE OF b")));
-  assert.ok(db.events.some(s=>s.includes("AND status=$3 RETURNING id")));
+  assert.ok(db.events.some(s=>s.includes("AND status IS NOT DISTINCT FROM $3 RETURNING id")));
   assert.equal(db.events.filter(s=>s==="COMMIT").length,1);
 });
 
@@ -206,20 +218,15 @@ test("confirm after cancellation and cancel after completion fail closed",async(
   }
 });
 
-test("only US branch calls new transaction; existing KG/KZ path remains inline",()=>{
+test("all markets use existing transaction and notify only after commit",()=>{
   const s=fs.readFileSync(new URL("../routes/publicLifecycle.js",import.meta.url),"utf8");
   const route=s.slice(s.indexOf("export async function publicLifecycle("));
-  const us=route.indexOf("if(isUsMarket){");
-  const transaction=route.indexOf("executeUsLifecycleTransaction(pool");
-  const legacySelect=route.indexOf("const { rows } = await pool.query(");
-  assert.ok(us>=0 && transaction>us && legacySelect>transaction);
+  assert.match(route,/executeUsLifecycleTransaction\(pool/);
+  assert.match(route,/marketCode,marketId/);
   assert.match(s,/FOR UPDATE OF b/);
-  assert.match(s,/WHERE id=\$1 AND salon_id=\$2 AND status=\$3 RETURNING id/);
+  assert.match(s,/WHERE id=\$1 AND salon_id=\$2 AND status IS NOT DISTINCT FROM \$3 RETURNING id/);
   assert.match(s,/if\(result.notify\)/);
   assert.match(s,/notifyUsLifecycleAfterCommit\(result.booking,result.action\)/);
-  assert.match(route,/const ownership=isUsMarket/);
-  assert.ok(route.includes('if (action === "complete")'));
-  assert.ok(route.includes('if (action === "cancel")'));
 });
 
 
