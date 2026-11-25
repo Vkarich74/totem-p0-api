@@ -1,0 +1,97 @@
+{
+  "production_deploy": "NOT_RUN",
+  "prior": "4dadd9ec149fefc8d1bc31ad66854f044a4d7619",
+  "queue_ddl": "NOT_APPLIED",
+  "release": "HOLD",
+  "t5_ddl": "CLOSED",
+  "base": "7f10ce2e56dd9601f2e9ed6b0f07de2cfa35cf0e",
+  "files": [
+    {
+      "path": "utils/enqueueJob.js",
+      "prior_blob": "6797ab222a0c98f2b07f17ce9bdbf9af086b8860",
+      "candidate_sha256": "9ce6af57930506e1b44709b54a1184578784cc60c6d43a96c215a7b3a8a4e89c",
+      "original_blob": "61543f305fff2fd5f42793d94571a5a5607943f6"
+    },
+    {
+      "path": "src/services/billing/usSaasReconciliationAudit.js",
+      "prior_blob": "500bfb995669d4b8fcfa58e92a3b3add24a3574e",
+      "candidate_sha256": "48902ad0a1c2437a07fade456b76093dcf7494e08f489c9be2c6ea39b54f7cce",
+      "original_blob": "ABSENT"
+    },
+    {
+      "path": "src/services/billing/usSaasRuntimeMonitoring.js",
+      "prior_blob": "d1a42be96c65fe7c5e953db83586dc1efcf398d0",
+      "candidate_sha256": "10885b6c347eaa8ab3c6eec144a2f4490c3f5cecda10306fbe49e5a3da438e2a",
+      "original_blob": "ABSENT"
+    },
+    {
+      "path": "jobs/usSaasRuntimeWatchdog.js",
+      "prior_blob": "bb27b375270828bf340ff7f58550294890be3597",
+      "candidate_sha256": "990a9ccc9928c3618f662a6ef90e83e083750b01659fca20de6c284f2092ed70",
+      "original_blob": "ABSENT"
+    },
+    {
+      "path": "migrations/g5_async_jobs_lease_v2.sql",
+      "prior_blob": "87a4b72fbd7923523a25a7cebfaf64481dc0bc53",
+      "candidate_sha256": "90ffe75ffc2e5ce9dfc87b5890c00d239290b27412dd2bf602fe68770a1281db",
+      "original_blob": "ABSENT"
+    },
+    {
+      "path": "migrations/g5_us_saas_runtime_control_v1.sql",
+      "prior_blob": "af806ae152a76a516e22448a2f4c03ab2ddac9a6",
+      "candidate_sha256": "246521843ee20ea5ecf1e86b5c70ab3c92bb8a12d2f2a355b3e6af8c51157a6d",
+      "original_blob": "ABSENT"
+    },
+    {
+      "path": "jobs/queueWorker.js",
+      "prior_blob": "7174414903c64a74b5bedc1549021bc911d5953b",
+      "candidate_sha256": "67c31fcc003a54b762186d40574ac7486105bc0d7c6f959f2eed938e872a4e55",
+      "original_blob": "a3e1d0b91bd12b9906defedeeca779acc7d42d1b"
+    },
+    {
+      "path": "src/services/billing/usSaasReconciliation.js",
+      "prior_blob": "ABSENT",
+      "candidate_sha256": "1ce7af01e06f9deddaa9f10afbd97bfb84639e167804d6b4d05bd8e0b5bbe742",
+      "original_blob": "39bf5a2ae0de7786956130219af68801c229e725"
+    },
+    {
+      "path": "jobs/usSaasReconciliationTick.js",
+      "prior_blob": "1578633ecf07b007c12ebc396c4546b567747e77",
+      "candidate_sha256": "c81218a42a06d1b45f04d0f245bac9a8a27caf5bb1b88002e5e6a5676daaaa7a",
+      "original_blob": "ABSENT"
+    },
+    {
+      "path": "src/services/billing/usSaasRuntime.js",
+      "prior_blob": "a076a0938dd507f14fe97416c17670023ee22500",
+      "candidate_sha256": "8794048f1cca5331535ff9a14aedeab230010a35d6480779ceb6cdac1f78fa51",
+      "original_blob": "ABSENT"
+    },
+    {
+      "path": "src/app.js",
+      "prior_blob": "ABSENT",
+      "candidate_sha256": "ed9098d7f62c3b82862ea179bc73b1dfde50527ca8335ad1e0abd34eb756219c",
+      "original_blob": "2480db069ffffea22fb1ca019edb89f35b4b9415"
+    },
+    {
+      "path": "src/services/usPayC11LiveDirectCharge.service.js",
+      "prior_blob": "ABSENT",
+      "candidate_sha256": "e40e0339802a65025046d169c5c0a34428241a6d3f09581e539c3903a8dff0e1",
+      "original_blob": "d63637f2f5f3420e65e71b271473065979197a36"
+    },
+    {
+      "path": "src/services/usPayC11LiveSellerOnboarding.service.js",
+      "prior_blob": "ABSENT",
+      "candidate_sha256": "f26c76c45e55f965c9f31096bb0d629bee7e97fa528663101d432a9604a7acc6",
+      "original_blob": "d92bf1cd6724086ece05a337aba59a5c1333e3fb"
+    },
+    {
+      "path": "src/services/usPayC11LiveExistingOAuth.service.js",
+      "prior_blob": "ABSENT",
+      "candidate_sha256": "b090878124e65f8fe495abbc9fa4f396dd5c08f4b000764c1743bb585c97ef9c",
+      "original_blob": "b228019ad6ba4858b03c296d57e0891c8afd661b"
+    }
+  ],
+  "runtime_capacity": "NOT_APPROVED",
+  "status": "FINANCE_QUEUE_CANDIDATE_STAGED",
+  "finance": "DIRECT_CHARGE_ONBOARDING_OAUTH_CANDIDATE"
+}

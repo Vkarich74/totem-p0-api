@@ -13,6 +13,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { verifyClientCabinetAccess } from "./clientCabinetTokenAccess.js";
+import {checkUsSaasTransactionalWrite} from "./billing/usSaasTransactionalWriteGuard.js";
 import {
   createLiveUsDirectChargeIntent,
   retrieveLiveUsDirectChargeIntent,
@@ -114,10 +115,17 @@ async function verifiedUsdBooking(db,clientId,bookingId) {
       AND sb.owner_type=col.collector_owner_type
       AND sb.owner_id=col.collector_owner_id AND sb.stripe_mode='LIVE'
      WHERE b.id=$1 AND b.client_id=$2
-     FOR UPDATE OF b`,
+     FOR UPDATE OF b FOR SHARE OF salon,master,tm,m,snap,tq,sms,col,sb`,
     [bookingId,clientId]
   );
-  return r.rows[0]||null;
+  return r.rows.length===1?r.rows[0]:null;
+}
+async function checkChargeAuthority(db,row){
+  const salon=await checkUsSaasTransactionalWrite(db,"salon",{owner_id:row.salon_id,market_id:row.market_id});
+  if(salon)return salon;
+  if(row.collector_owner_type==="master")
+    return checkUsSaasTransactionalWrite(db,"master",{owner_id:row.master_id,market_id:row.market_id});
+  return null;
 }
 
 function eligible(row) {
@@ -221,6 +229,7 @@ export async function prepareUsC11LiveDirectCharge(pool,{
     const row=await verifiedUsdBooking(db,client,booking);
     if(!row)return reject(404,"US_C11_LIVE_BOOKING_NOT_FOUND");
     if(!eligible(row))return reject(409,"US_C11_LIVE_BOOKING_NOT_PAYABLE");
+    const denied=await checkChargeAuthority(db,row);if(denied)return denied;
 
     const old=await db.query(
       `SELECT * FROM public.us_stripe_live_payment_intents
@@ -256,6 +265,7 @@ export async function prepareUsC11LiveDirectCharge(pool,{
       );
       attempt=inserted.rows[0];
     }
+    const commitDenied=await checkChargeAuthority(db,row);if(commitDenied)return commitDenied;
     return reservationResponse(row,attempt);
   });
   if(reserved.status!==200)return reserved;
@@ -298,13 +308,16 @@ export async function prepareUsC11LiveDirectCharge(pool,{
        !["reserved","confirmed"].includes(currentBooking.rows[0].status)){
       return reject(409,"US_C11_LIVE_BOOKING_CHANGED_RECONCILIATION_REQUIRED");
     }
+    const current=await verifiedUsdBooking(db,client,booked);
+    if(!eligible(current))return reject(409,"US_C11_LIVE_BOOKING_CHANGED_RECONCILIATION_REQUIRED");
+    const denied=await checkChargeAuthority(db,current);if(denied)return denied;
     const locked=await db.query(
       `SELECT * FROM public.us_stripe_live_payment_intents
         WHERE booking_id=$1 LIMIT 1 FOR UPDATE`,
       [booked]
     );
     const attempt=locked.rows[0];
-    if(!attempt || String(attempt.reservation_token)!==reservationToken ||
+    if(!attempt || !sameReservation(attempt,current) || String(attempt.reservation_token)!==reservationToken ||
        attempt.stripe_account_id!==stripeAccountId ||
        String(attempt.amount_minor)!==String(amountMinor) ||
        (attempt.stripe_payment_intent_id&&
@@ -326,6 +339,7 @@ export async function prepareUsC11LiveDirectCharge(pool,{
                stripe_payment_intent_id=$2)`,
       [booked,intent.id,intent.status]
     );
+    const commitDenied=await checkChargeAuthority(db,current);if(commitDenied)return commitDenied;
     return {status:200,body:{ok:true}};
   });
   if(committed.status!==200)return committed;

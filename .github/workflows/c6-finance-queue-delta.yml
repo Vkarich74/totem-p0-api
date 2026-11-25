@@ -1,0 +1,66 @@
+name: C6 finance and lease delta - PostgreSQL 17
+on:
+  pull_request:
+    branches: [c6-t5-integrated-held-ci-20261125]
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+jobs:
+  delta:
+    if: github.head_ref == 'c6-finance-queue-held-delta-20261125'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: g5_fixture
+          POSTGRES_PASSWORD: g5_fixture_only
+          POSTGRES_DB: c6_delta
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U g5_fixture -d c6_delta"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      NODE_ENV: test
+      DB_MODE: POSTGRES
+      DATABASE_URL: ""
+      C6_DELTA_ISOLATED: "YES"
+      G5_TEST_DATABASE_URL: postgresql://g5_fixture:g5_fixture_only@127.0.0.1:55432/c6_delta
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Verify exact delta
+        run: |
+          node --input-type=module <<'JS'
+          import {readFileSync} from 'node:fs';
+          import {createHash} from 'node:crypto';
+          import {execFileSync} from 'node:child_process';
+          import assert from 'node:assert/strict';
+          const m=JSON.parse(readFileSync('tests/c6-finance-delta-manifest.json','utf8'));
+          assert.equal(m.files.length,14);assert.equal(m.release,'HOLD');
+          for(const f of m.files){
+            assert.equal(createHash('sha256').update(readFileSync(f.path)).digest('hex'),f.candidate_sha256,f.path);
+            if(f.path.endsWith('.js'))execFileSync(process.execPath,['--check',f.path]);
+          }
+          console.log('C6_FINANCE_DELTA_14_OF_14_VERIFIED');
+          JS
+      - name: Apply disposable schema and exercise only new delta
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          for f in tests/sql/c6-held-schema.sql migrations/create_async_queue_v1.sql migrations/g5_async_jobs_lease_v2.sql migrations/g5_us_saas_runtime_control_v1.sql migrations/2026_11_17__us_pay_c11_live_seller_onboarding.sql migrations/2026_11_17__us_pay_c11_live_existing_oauth.sql; do
+            docker exec -i "$PG_CONTAINER" psql -X -U g5_fixture -d c6_delta -v ON_ERROR_STOP=1 < "$f"
+          done
+          node --test tests/c6-finance-queue-delta.test.mjs
