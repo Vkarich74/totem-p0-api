@@ -9,7 +9,7 @@ const {createWithdrawRequest:withdraw}=await import("../src/money-core/withdrawR
 const {createPayoutExecution,submitManualPayoutExecution,completePayoutExecution,failPayoutExecution}=await import("../src/money-core/payoutExecutions.service.js");
 const {createSettlementSplitAllocations}=await import("../src/money-core/split.service.js");
 const {createLedgerEntriesForXpaySettlement:bridge}=await import("../src/money-core/xpayLedgerBridge.service.js");
-const {confirmBankReceived}=await import("../src/money-core/settlements.service.js");
+const {confirmBankReceived,failProviderSettlement}=await import("../src/money-core/settlements.service.js");
 const url=new URL(process.env.G5_TEST_DATABASE_URL||"");
 assert.equal(process.env.C6_LEDGER_ISOLATED,"YES");assert.equal(process.env.DATABASE_URL||"","");
 assert.equal(url.hostname,"127.0.0.1");assert.equal(url.port,"55432");assert.equal(url.pathname,"/c6_ledger");
@@ -113,4 +113,44 @@ test("parallel first split application creates one set; existing settlement row 
  const r=await Promise.all(Array.from({length:8},()=>createSettlementSplitAllocations(db,id,input,admin)));
  assert.equal(r.filter(x=>!x.already_exists).length,1);
  assert.equal(Number((await q("SELECT count(*) AS n FROM public.money_split_allocations WHERE provider_settlement_id=$1",[id])).rows[0].n),1);
+});
+
+test("XPay allocation recipient change on replay cannot create a second recipient credit",async()=>{
+ const id=await settlement(),a=o(112,"KGS"),allocation=await splitFixture(id,a,35,806);
+ await tx(c=>bridge(c,{providerSettlementId:id,actor:admin}));await check(a,35);
+ await q("UPDATE public.money_split_allocations SET owner_id=113 WHERE id=$1",[allocation]);
+ await assert.rejects(()=>tx(c=>bridge(c,{providerSettlementId:id,actor:admin})),e=>e.code==="XPAY_LEDGER_REPLAY_CONFLICT");
+ await check(a,35);
+ const r=await q("SELECT count(*) AS n FROM public.money_ledger_entries WHERE source_type='xpay_split_allocation' AND source_id=$1",[allocation]);
+ assert.equal(Number(r.rows[0].n),1);
+ assert.equal(Number((await q("SELECT count(*) AS n FROM public.money_owner_balances WHERE owner_id=113 AND currency='KGS'")).rows[0].n),0);
+});
+test("confirmed receipt cannot be changed to failure without separate financial reversal",async()=>{
+ const id=await settlement("draft"),a=o(114,"KGS");await splitFixture(id,a,45,807);
+ await confirmBankReceived(db,id,{bank_reference:"ci-receipt"},admin);
+ await assert.rejects(()=>failProviderSettlement(db,id,{failure_reason:"ci"},admin),e=>e.code==="MONEY_CORE_SETTLEMENT_REVERSAL_REQUIRED"&&e.statusCode===409);
+ assert.equal((await q("SELECT status,bank_reference FROM public.provider_settlements WHERE id=$1",[id])).rows[0].status,"bank_received");
+ await check(a,45);
+ assert.equal(Number((await q("SELECT count(*) AS n FROM public.money_audit_events WHERE source_type='provider_settlement' AND source_id=$1 AND event_type='provider_settlement_failed'",[id])).rows[0].n),0);
+ const other=await settlement("draft");
+ assert.equal((await failProviderSettlement(db,other,{failure_reason:"ci"},admin)).status,"failed");
+ assert.equal(await failProviderSettlement(db,999999,{},admin),null);
+});
+test("settlement failure waits on concurrent bank confirmation row lock and observes committed status",async()=>{
+ const id=await settlement("draft"),c=await db.connect();let pending;
+ try{
+  await c.query("BEGIN");
+  await c.query("UPDATE public.provider_settlements SET status='bank_received',bank_received_at=now() WHERE id=$1",[id]);
+  pending=failProviderSettlement(db,id,{failure_reason:"ci"},admin).then(value=>({value}),error=>({error}));
+  let waiting=false;
+  for(let i=0;i<60;i++){
+   const x=await q("SELECT count(*) AS n FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT status FROM public.provider_settlements%'");
+   if(Number(x.rows[0].n)>0){waiting=true;break;}
+   await new Promise(r=>setTimeout(r,30));
+  }
+  assert.equal(waiting,true);
+  await c.query("COMMIT");
+  assert.equal((await pending).error?.code,"MONEY_CORE_SETTLEMENT_REVERSAL_REQUIRED");
+ }finally{await c.query("ROLLBACK").catch(()=>{});c.release();if(pending)await pending;}
+ assert.equal((await q("SELECT status FROM public.provider_settlements WHERE id=$1",[id])).rows[0].status,"bank_received");
 });

@@ -52,13 +52,13 @@ jobs:
           import {execFileSync} from 'node:child_process';
           import assert from 'node:assert/strict';
           const m=JSON.parse(readFileSync('tests/c6-ledger-manifest.json','utf8'));
-          assert.equal(m.files.length,6);assert.equal(m.release,'HOLD');
+          assert.equal(m.files.length,7);assert.equal(m.release,'HOLD');
           for(const f of m.files){
             assert.equal(createHash('sha256').update(readFileSync(f.path)).digest('hex'),f.candidate_sha256,f.path);
             execFileSync(process.execPath,['--check',f.path]);
           }
           assert.equal(createHash('sha256').update(readFileSync('tests/sql/c6-ledger-schema.sql')).digest('hex'),'82ea8f71566da69bc907dba330ebef13b928cc12fe7cb836502f0fa1e95eb7ae');
-          console.log('C6_LEDGER_6_OF_6_VERIFIED');
+          console.log('C6_LEDGER_7_OF_7_VERIFIED');
           JS
       - name: New real PG cross-writer concurrency tests
         env:

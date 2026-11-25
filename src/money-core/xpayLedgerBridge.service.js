@@ -318,7 +318,20 @@ async function createLedgerEntriesForXpaySettlement(client, input = {}) {
       allocationRow: allocation,
     });
 
-    candidateSourceIds.push(normalizePositiveInt(allocation.id));
+    const sourceId=normalizePositiveInt(allocation.id);
+    if(!sourceId)throw createError('INVALID_SPLIT_ALLOCATION','Split allocation id is invalid',409);
+    candidateSourceIds.push(sourceId);
+    const ownerType=normalizeText(allocation.owner_type);
+    const matches=rows=>rows.length===1&&rows[0].owner_type===ownerType&&
+      Number(rows[0].owner_id)===allocationOwnerId&&rows[0].money_zone==='available'&&
+      rows[0].direction==='credit'&&Number(rows[0].amount)===normalizeAmount(allocation.owner_net_amount)&&
+      rows[0].currency===XPAY_CURRENCY&&rows[0].provider_code==='xpay';
+    const readExisting=()=>client.query(`SELECT owner_type,owner_id,money_zone,direction,amount,currency,provider_code FROM public.money_ledger_entries WHERE source_type='xpay_split_allocation' AND source_id=$1 FOR SHARE`,[sourceId]);
+    const prior=await readExisting();
+    if(prior.rows.length){
+      if(!matches(prior.rows))throw createError('XPAY_LEDGER_REPLAY_CONFLICT','Existing settlement ledger does not match allocation',409);
+      continue;
+    }
 
     const insertResult = await client.query(
       `
@@ -373,8 +386,8 @@ RETURNING id
     );
 
     if (!insertResult.rows[0]) {
-      const existing=await client.query(`SELECT amount,currency,provider_code FROM public.money_ledger_entries WHERE source_type='xpay_split_allocation' AND source_id=$1 AND owner_type=$2 AND owner_id=$3 AND money_zone='available' AND direction='credit' FOR SHARE`,[normalizePositiveInt(allocation.id),normalizeText(allocation.owner_type),allocationOwnerId]);
-      if(existing.rows.length!==1||Number(existing.rows[0].amount)!==normalizeAmount(allocation.owner_net_amount)||existing.rows[0].currency!==XPAY_CURRENCY||existing.rows[0].provider_code!=='xpay')throw createError('XPAY_LEDGER_REPLAY_CONFLICT','Existing settlement ledger does not match allocation',409);
+      const existing=await readExisting();
+      if(!matches(existing.rows))throw createError('XPAY_LEDGER_REPLAY_CONFLICT','Existing settlement ledger does not match allocation',409);
     }
     if (insertResult.rows[0]) {
       insertedRows.push({

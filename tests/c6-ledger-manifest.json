@@ -20,7 +20,7 @@
     },
     {
       "path": "src/money-core/xpayLedgerBridge.service.js",
-      "candidate_sha256": "d7410dd9d69d4a41749d7d939cc7a7f632707415d79c53e4ca63300ab975e0c0",
+      "candidate_sha256": "83978e96bdd452759108eb232310fc72b2331b3ba037bd77c54d14a2b201df71",
       "original_blob": "92d230dcf82c62de1344b9b0d3f25159b9668f59"
     },
     {
@@ -32,8 +32,13 @@
       "path": "src/money-core/split.service.js",
       "candidate_sha256": "225efdf91a13f0fcd5567ae642a1a9cbe0cdfe0bdd134d8cd61d3716209f98c2",
       "original_blob": "efbdb26d79efad0bb789ec9a8af8d230fb15b615"
+    },
+    {
+      "path": "src/money-core/settlements.service.js",
+      "candidate_sha256": "4d16244bbe36517f7575d061a21386f3d11022ad25febcdd1f5837205e7a0c58",
+      "original_blob": "6dd983a497e08e8a771efb387641721132ccfa7a"
     }
   ],
   "release": "HOLD",
-  "status": "LEDGER_SERIALIZATION_STAGED"
+  "status": "LEDGER_SETTLEMENT_INTEGRITY_STAGED"
 }

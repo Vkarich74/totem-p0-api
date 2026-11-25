@@ -392,6 +392,16 @@ async function failProviderSettlement(pool, id, input = {}, actor = {}) {
   try {
     await client.query('BEGIN');
 
+    // A confirmed bank receipt is an existing financial obligation. This
+    // status-only failure handler cannot reverse posted funds. Serialize with
+    // confirmation under the same settlement row lock.
+    const current=await client.query("SELECT status FROM public.provider_settlements WHERE id=$1 FOR UPDATE",[settlementId]);
+    if(!current.rows.length){await client.query('COMMIT');return null;}
+    if(current.rows[0].status==='bank_received'){
+      throw Object.assign(new Error('Confirmed settlement requires a separate financial reversal'),{
+        code:'MONEY_CORE_SETTLEMENT_REVERSAL_REQUIRED',statusCode:409
+      });
+    }
     const settlementResult = await client.query(
       `
       UPDATE public.provider_settlements
