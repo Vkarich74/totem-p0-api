@@ -3,7 +3,7 @@
 // inferred salon, legacy timezone, conversion, Stripe or payment operation.
 import express from "express";
 import { requireAuth } from "../middleware/requireAuth.js";
-import { publicCreateBooking } from "./publicCreateBooking.js";
+import { manualUsCreateBooking } from "./publicCreateBooking.js";
 import { resolveBusinessMarketContext } from "../market-context/BusinessContext.js";
 import { resolveUsSalonLocation } from "../services/usLocation.service.js";
 import { actorFor,checkSession,ownerContext,transact } from
@@ -84,26 +84,6 @@ async function authorize(pool,{auth,identity,masterSlug,body}) {
     ]);
     if(target.rows.length!==1)
       return deny(404,"US_MANUAL_SERVICE_SCOPE_NOT_FOUND");
-    const billing=await db.query(
-      "SELECT subscription_status,blocked_at,next_charge_at,grace_until "+
-      "FROM public.billing_subscriptions "+
-      "WHERE owner_type='master' AND owner_id=$1 LIMIT 1",
-      [Number(owner.owner_id)]
-    );
-    const sub=billing.rows[0];
-    if(sub){
-      const now=Date.now();
-      const nextCharge=sub.next_charge_at
-        ? new Date(sub.next_charge_at).getTime():null;
-      const graceUntil=sub.grace_until
-        ? new Date(sub.grace_until).getTime():null;
-      const state=sub.blocked_at?"blocked"
-        : nextCharge&&nextCharge<now
-          ? graceUntil&&graceUntil>=now?"grace":"overdue"
-          : String(sub.subscription_status||"active");
-      if(state!=="active"&&state!=="grace")
-        return deny(403,"US_MANUAL_MASTER_BILLING_BLOCKED");
-    }
     const row=target.rows[0];
     await resolveUsSalonLocation(db,{
       salonId:Number(row.salon_id),locationCode:body.location_code,
@@ -151,7 +131,7 @@ export function buildUsMasterManualBookingRouter(pool) {
         return res.status(permission.status).json(permission.body);
       // The existing canonical transaction independently rechecks the
       // location, service, USD price revision, occupied slots and DST.
-      return publicCreateBooking({
+      return manualUsCreateBooking({
         ...req,
         params:{...req.params,slug:permission.body.salon_slug},
         market_context:permission.body.market_context,
@@ -165,7 +145,7 @@ export function buildUsMasterManualBookingRouter(pool) {
           expected_us_price_version:body.expected_us_price_version,
           expected_us_amount_minor:body.expected_us_amount_minor,
         },
-      },res);
+      },res,masterSlug);
     } catch(problem) {
       const known=Number.isSafeInteger(problem?.statusCode)&&
         String(problem?.code||"").startsWith("US_");

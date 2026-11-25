@@ -1,5 +1,6 @@
 import {readUsOwnerQueueStats,readUsOwnerQueuePage} from "../../services/provision/ownerOpeningQueueRead.js";
 import {usManualReleaseHold,inspectUsManualActivationWelcome} from "../../services/provision/usManualActivationWelcome.js";
+import {isUsAdminCommercialRoute,activateUsAdminRequest,assertUsAdminWelcomePreview,sendUsAdminWelcome,reconcileUsAdminWelcome} from "./usAdminCommercialRoutes.js";
 import {assertCanonicalUsProvisionResult} from "../../services/provision/usCanonicalSourceBoundary.js";
 import {validG3Seal,sameG3Seal} from "../../services/provision/usOdooG3SealProof.js";
 import {hasManualG3Envelope,prepareManualG3RequestReceipt,assertManualG3RequestReceipt,isManualG3Request,isScopedUsOdooRequest,assertUsOdooDispatchHold} from "../../services/provision/usG3ManualRequestReceipt.js";
@@ -7,6 +8,8 @@ import {prepareUsImportedMasterReceipt} from "../../services/provision/usImporte
 import {isUsOdooIntakeHint,registerApprovedUsOdooSalon} from "../../services/provision/usApprovedOdooSalonIntake.js";
 import {kgSharedMasterEnabled,isKgSharedMasterCandidate,readKgSharedMasterCandidate,kgSharedMasterProof,assertKgSharedMasterPending,assertKgSharedMasterActivation} from "../../services/provision/kgSharedMasterIdentity.js";
 import { buildOwnerOpeningEmail, buildEmailMime } from "../../services/notifications/emailTemplates.js";
+import {verifyUsWelcomeGmailSent} from "../../services/notifications/usWelcomeGmailReadback.js";
+import {reconcileUsSaasOpening} from "../../services/billing/usSaasReconciliation.js";
 import { resolveRecipientLocale } from "../../services/notifications/recipientLocale.js";
 import express from "express";
 import { mapOdooBridgeCrmForm } from "../../services/odooBridgeCrmForm.js";
@@ -1102,11 +1105,11 @@ function buildOwnerOpeningEmailPreview(request, locale){
   };
 }
 
-async function sendOwnerOpeningEmail(preview){
+async function sendOwnerOpeningEmail(preview,messageId){ 
   assertGmailConfig();
 
   const gmail = google.gmail({ version: "v1", auth: gmailClient });
-  const message = buildEmailMime({ to: preview.to, from: `Totem <${GMAIL_SENDER_EMAIL}>`, subject: preview.subject, html: preview.html, text: preview.text, locale: preview.locale });
+  const message = buildEmailMime({ to: preview.to, from: `Totem <${GMAIL_SENDER_EMAIL}>`, subject: preview.subject, html: preview.html, text: preview.text, locale: preview.locale, ...(messageId?{messageId}:{}) });
 
   const raw = Buffer.from(message)
     .toString("base64")
@@ -2840,6 +2843,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
     }
 
     const db = await pool.connect();
+    let releasedForUs=false;
 
     try{
       const admin = getAdminActor(req);
@@ -2864,10 +2868,18 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         return res.status(policyError.statusCode).json({ ok: false, error: policyError.code });
       }
 
-      const releaseHold=usManualReleaseHold(current,"activate");
-      if(releaseHold){
+      if(isUsAdminCommercialRoute(current)){
+        // Release the discovery lock before the canonical transaction.
+        // The canonical writer re-locks and verifies exact US scope.
         await db.query("ROLLBACK");
-        return res.status(409).json({ok:false,error:releaseHold});
+        db.release();
+        releasedForUs=true;
+        const done=await activateUsAdminRequest({
+          pool,request:current,requestId,sourceAdmin:req.admin,admin,raw:req.usG3RawBody,
+          callbacks:{getMarketCode:requestMarketCode,assertMarketPolicy:assertAdminOpeningMarketPolicy,
+            assertUsActivationReady,activateEntity:activateOwnerOpeningEntity,writeAudit:writeOwnerOpeningAuditEvent}
+        });
+        return res.status(200).json({ok:true,...done});
       }
 
       if(current.status === "activated"){
@@ -2938,6 +2950,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         audit_event_id: auditEvent?.id ? Number(auditEvent.id) : null,
       });
     }catch(err){
+      if(releasedForUs)return res.status(resolveProvisionStatus(err)).json({ok:false,error:err?.code||"US_G3_ACTIVATION_FAILED"});
       try{ await db.query("ROLLBACK"); }catch(e){}
       console.error("ADMIN_OPEN_OWNER_ACTIVATE_REQUEST_ERROR", err);
       return res.status(resolveProvisionStatus(err)).json({
@@ -2945,7 +2958,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         error: String(err?.code || err?.message || "ADMIN_OPEN_OWNER_ACTIVATE_REQUEST_FAILED"),
       });
     }finally{
-      db.release();
+      if(!releasedForUs)db.release();
     }
   });
 
@@ -2976,10 +2989,13 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
-      const releaseHold=usManualReleaseHold(request,"preview");
-      if(releaseHold){
-        await db.query("ROLLBACK");
-        return res.status(409).json({ok:false,error:releaseHold});
+      if(isUsAdminCommercialRoute(request)){
+        try{
+          assertUsAdminWelcomePreview({request,requestId,sourceAdmin:req.admin});
+        }catch(err){
+          await db.query("ROLLBACK");
+          return res.status(resolveProvisionStatus(err)).json({ok:false,error:err?.code||"US_G3_WELCOME_PREVIEW_FAILED"});
+        }
       }
 
       if (requestMarketCode(request) === "US") {
@@ -2997,7 +3013,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       }
 
       const { locale } = await resolveRecipientLocale(db, { userId: request.created_auth_user_id, ownerType: request.owner_type, ownerId: request.created_owner_id });
-      const preview = buildOwnerOpeningEmailPreview(request, locale);
+      const preview = buildOwnerOpeningEmailPreview(request, isUsAdminCommercialRoute(request)?"en-US":locale);
 
       const updatedResult = await db.query(
         `
@@ -3067,6 +3083,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
     let message = null;
 
     const prepareDb = await pool.connect();
+    let releasedForUs=false;
 
     try{
       await prepareDb.query("BEGIN");
@@ -3081,10 +3098,18 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
-      const releaseHold=usManualReleaseHold(request,"send");
-      if(releaseHold){
+      if(isUsAdminCommercialRoute(request)){
         await prepareDb.query("ROLLBACK");
-        return res.status(409).json({ok:false,error:releaseHold});
+        prepareDb.release();
+        releasedForUs=true;
+        const done=await sendUsAdminWelcome({
+          pool,request,requestId,sourceAdmin:req.admin,admin,raw:req.usG3RawBody,
+          callbacks:{getMarketCode:requestMarketCode,assertMarketPolicy:assertAdminOpeningMarketPolicy,
+            assertUsActivationReady,createPreview:async(_db,row)=>buildOwnerOpeningEmailPreview(row,"en-US"),
+            createTrace:createOwnerOpeningTrace,writeAudit:writeOwnerOpeningAuditEvent},
+          sendEmail:sendOwnerOpeningEmail
+        });
+        return res.status(200).json({ok:true,...done});
       }
 
       if (requestMarketCode(request) === "US") {
@@ -3147,6 +3172,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
 
       await prepareDb.query("COMMIT");
     }catch(err){
+      if(releasedForUs)return res.status(resolveProvisionStatus(err)).json({ok:false,error:err?.code||"US_G3_WELCOME_FAILED",...(err?.requires_reconciliation?{requires_reconciliation:true,message_id:err.message_id}:{})});
       try{ await prepareDb.query("ROLLBACK"); }catch(e){}
       prepareDb.release();
       console.error("ADMIN_OPEN_OWNER_EMAIL_PREPARE_ERROR", err);
@@ -3320,6 +3346,45 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
     }, res);
   });
 
+
+  // Protected Admin mount. Only an existing typed US projection may change.
+  // No browser-supplied order, invoice, amount, expiry or revocation proof.
+  r.post("/requests/:id/billing-reconcile",async(req,res)=>{
+    const requestId=normalizeRequestId(req.params?.id);
+    const body=req.body??{};
+    if(!requestId||typeof body!=="object"||Array.isArray(body)||Object.keys(body).length)
+      return res.status(400).json({ok:false,error:"US_SAAS_RECONCILIATION_INPUT_INVALID"});
+    try{
+      const result=await reconcileUsSaasOpening({pool,requestId,sourceAdmin:req.admin,operator:getAdminActor(req),writeAudit:writeOwnerOpeningAuditEvent});
+      return res.status(result.status==="WAIT"?409:200).json({ok:result.status!=="WAIT",...result});
+    }catch(err){
+      return res.status(resolveProvisionStatus(err)).json({ok:false,error:err?.code||"US_SAAS_RECONCILIATION_UNAVAILABLE"});
+    }
+  });
+
+  // US-only positive Gmail readback. AdminRuntimeGuard protects the mount.
+  r.post("/requests/:id/email-reconcile", async(req,res)=>{
+    const requestId=normalizeRequestId(req.params?.id);
+    const input=req.body??{};
+    if(!requestId||typeof input!=="object"||Array.isArray(input)||
+       Object.keys(input).some(k=>k!=="gmail_message_id")||
+       (input.gmail_message_id!=null&&(typeof input.gmail_message_id!=="string"||!/^[a-zA-Z0-9_-]{1,200}$/.test(input.gmail_message_id))))
+      return res.status(400).json({ok:false,error:"OWNER_OPENING_WELCOME_RECONCILE_INPUT_INVALID"});
+    try{
+      const done=await reconcileUsAdminWelcome({pool,requestId,sourceAdmin:req.admin,admin:getAdminActor(req),
+        gmailMessageId:input.gmail_message_id??null,
+        verifyGmailSent:async proof=>{
+          assertGmailConfig();
+          return verifyUsWelcomeGmailSent(google.gmail({version:"v1",auth:gmailClient}),{...proof,sender:GMAIL_SENDER_EMAIL});
+        },
+        callbacks:{createTrace:createOwnerOpeningTrace,writeAudit:writeOwnerOpeningAuditEvent}
+      });
+      return res.status(200).json({ok:true,request:done.request,message_id:done.messageId,gmail_message_id:done.gmailMessageId,
+        audit_event_id:done.audit_event_id??null,idempotent:Boolean(done.idempotent)});
+    }catch(err){
+      return res.status(resolveProvisionStatus(err)).json({ok:false,error:err?.code||"US_G3_WELCOME_RECONCILIATION_UNAVAILABLE"});
+    }
+  });
 
   r.get("/requests/:id/audit", async (req,res)=>{
     try{

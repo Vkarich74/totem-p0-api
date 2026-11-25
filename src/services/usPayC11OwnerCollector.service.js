@@ -3,6 +3,7 @@
 // Stripe Connect onboarding are a later, independent contract.
 // Selection is persisted as PENDING, never auto-verified and never payable.
 // No trust in req.identity.salons (which may include master_salon relations).
+import {checkUsSaasTransactionalWrite} from "./billing/usSaasTransactionalWriteGuard.js";
 const ALLOWED_ROLES = new Set(["salon_admin"]);
 const ALLOWED_OWNER_TYPES = new Set(["salon", "master"]);
 
@@ -59,7 +60,8 @@ async function readOwnerScopedBooking(db, bookingId, userId, lock) {
         AND m.code = 'US' AND m.active = TRUE
         AND m.default_currency = 'USD'
         AND b.currency_code = 'USD'
-      LIMIT 1${lock ? " FOR UPDATE OF b" : ""}`,
+      ${lock ? " AND os.status='active' AND m.country_code='US' AND COALESCE(tms.currency_override,m.default_currency)='USD'" : ""}
+      LIMIT 1${lock ? " FOR UPDATE OF b FOR SHARE OF os,tms,m" : ""}`,
     [bookingId, String(userId)]
   );
   return query.rows[0] || null;
@@ -224,6 +226,14 @@ export async function chooseUsC11OwnerCollector(pool, {
     const selectedOwnerId = body.collector_owner_type === "salon"
       ? Number(scope.salon_id) : Number(scope.master_id);
 
+    const checkEntitlements=async()=>{
+      const salon=await checkUsSaasTransactionalWrite(db,"salon",{owner_id:scope.salon_id,market_id:scope.market_id});
+      if(salon)return salon;
+      if(body.collector_owner_type==="master")return checkUsSaasTransactionalWrite(db,"master",{owner_id:selectedOwnerId,market_id:scope.market_id});
+      return null;
+    };
+    const denied=await checkEntitlements();
+    if(denied)return denied;
     const values = [
       booking, scope.market_id, body.collector_owner_type,
       selectedOwnerId, actor.userId,
@@ -276,6 +286,8 @@ export async function chooseUsC11OwnerCollector(pool, {
       ]
     );
 
+    const commitDenied=await checkEntitlements();
+    if(commitDenied)return commitDenied;
     return {
       status: current ? 200 : 201,
       body: {

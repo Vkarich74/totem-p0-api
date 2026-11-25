@@ -1,3 +1,4 @@
+import {checkUsSaasTransactionalWrite} from "./billing/usSaasTransactionalWriteGuard.js";
 // TOTEM USA / TAX-02 — owner-scoped tax SETTINGS ONLY.
 // Never calculates/charges a payment or applies tax outside US beauty services.
 // Missing setting means 0.00% (rate_bps=0, revision=0) until the owner saves.
@@ -193,6 +194,8 @@ export async function saveUsOwnerServiceTax(pool, options = {}) {
       db, ownerType, ownerSlug, request.actor.userId, true
     );
     if (!scope) return fail(404, "US_TAX_OWNER_NOT_FOUND");
+    const entitlement=await checkUsSaasTransactionalWrite(db,ownerType,scope);
+    if(entitlement)return entitlement;
     const prior = await db.query(
       `SELECT rate_bps, revision FROM public.us_owner_service_tax_settings
         WHERE owner_type=$1 AND owner_id=$2 AND market_id=$3
@@ -224,6 +227,8 @@ export async function saveUsOwnerServiceTax(pool, options = {}) {
     if (updated.rows.length !== 1) {
       return fail(409, "US_TAX_SETTING_REVISION_CONFLICT");
     }
+    const commitEntitlement=await checkUsSaasTransactionalWrite(db,ownerType,scope);
+    if(commitEntitlement)return commitEntitlement;
     return success(ownerType,ownerSlug,scope.owner_id,updated.rows[0],scope.market_id);
   });
 }

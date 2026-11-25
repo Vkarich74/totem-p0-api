@@ -1,4 +1,6 @@
 import express from "express";
+import {assertLegacyWalletSubscriptionAuthority} from "../../services/billing/usSaasWalletBoundary.js";
+import {assertProfileWriteScope,assertUsHoursWriteScope,assertLegacySalonHoursScope,isUsProfileGuardError} from "../../services/billing/usSaasProfileHoursGuard.js";
 import crypto from "crypto";
 import {
 countUnread,
@@ -523,6 +525,7 @@ await db.query("ROLLBACK");
 return res.status(403).json({ok:false,error:"FORBIDDEN"});
 }
 
+await assertLegacyWalletSubscriptionAuthority(db,"master",master.id);
 const billing = await ensureMasterBillingSubscription(db, master.id);
 
 if(billing.subscription_status !== "active"){
@@ -627,6 +630,7 @@ billing_access
 }catch(err){
 
 try{ await db.query("ROLLBACK"); }catch(e){}
+if(err.code==="US_SAAS_ODOO_BILLING_AUTHORITY_REQUIRED")return res.status(409).json({ok:false,error:err.code});
 
 if(err.code === "SYSTEM_WALLET_NOT_FOUND"){
 return res.status(500).json({
@@ -727,6 +731,7 @@ await db.query("ROLLBACK");
 return res.status(403).json({ok:false,error:"FORBIDDEN"});
 }
 
+await assertLegacyWalletSubscriptionAuthority(db,"master",master.id);
 const billing = await ensureMasterBillingSubscription(db, master.id);
 
 await db.query(`
@@ -758,6 +763,7 @@ billing:access.billing
 }catch(err){
 
 try{ await db.query("ROLLBACK"); }catch(e){}
+if(err.code==="US_SAAS_ODOO_BILLING_AUTHORITY_REQUIRED")return res.status(409).json({ok:false,error:err.code});
 
 console.error("MASTER_BILLING_BLOCK_ERROR",err);
 
@@ -795,6 +801,7 @@ await db.query("ROLLBACK");
 return res.status(403).json({ok:false,error:"FORBIDDEN"});
 }
 
+await assertLegacyWalletSubscriptionAuthority(db,"master",master.id);
 const billing = await ensureMasterBillingSubscription(db, master.id);
 
 await db.query(`
@@ -826,6 +833,7 @@ billing:access.billing
 }catch(err){
 
 try{ await db.query("ROLLBACK"); }catch(e){}
+if(err.code==="US_SAAS_ODOO_BILLING_AUTHORITY_REQUIRED")return res.status(409).json({ok:false,error:err.code});
 
 console.error("MASTER_BILLING_UNBLOCK_ERROR",err);
 
@@ -1008,13 +1016,16 @@ async function selectLockedUsHoursLocation(db,masterId,scope){
   const result=await db.query(
     US_MASTER_LOCATION_ROWS+
     " AND s.slug=$2 AND l.location_code=$3 LIMIT 1"+
-    " FOR UPDATE OF l FOR SHARE OF ms,s",
+    " FOR UPDATE OF l FOR SHARE OF ms,s,t,mk,z",
     [masterId,scope.salon_slug,scope.location_code]
   );
   if(result.rows.length!==1){
     throw usHoursProblem("US_HOURS_LOCATION_RELATION_NOT_FOUND",404);
   }
-  return validateUsLocationHoursRow(result.rows[0]);
+  const location=validateUsLocationHoursRow(result.rows[0]);
+  const market=await db.query("SELECT mk.id AS market_id FROM public.tenant_market_settings t JOIN public.markets mk ON mk.id=t.market_id WHERE t.salon_id=$1 AND mk.code='US' AND mk.country_code='US' AND mk.active=true AND COALESCE(t.currency_override,mk.default_currency)='USD' FOR SHARE OF t,mk",[location.salon_id]);
+  if(market.rows.length!==1)throw usHoursProblem("US_HOURS_MARKET_SCOPE_INVALID",409);
+  return {...location,market_id:Number(market.rows[0].market_id)};
 }
 
 function usMasterHoursPayload(actor,location,stored,saved=false){
@@ -1072,7 +1083,6 @@ r.put("/masters/:slug/us-working-hours",async(req,res)=>{
     await client.query("SET LOCAL statement_timeout = '5000ms'");
     await client.query("SET LOCAL lock_timeout = '2000ms'");
     const actor=await checkedUsMasterHoursActor(client,req);
-    await ensureMasterWriteAllowed(client,actor.master_id);
     // Reuse the EXACT US public-booking transaction advisory lock (master
     // key 973103); acquire before location row locks for consistent order.
     // No KG/KZ endpoint acquires this lock.
@@ -1082,14 +1092,17 @@ r.put("/masters/:slug/us-working-hours",async(req,res)=>{
     );
     const location=await selectLockedUsHoursLocation(
       client,actor.master_id,scope);
+    await assertUsHoursWriteScope(client,{req,masterId:actor.master_id,location});
     const saved=await replaceUsMasterWeeklyHours(client,{
       locationId:location.location_id,masterId:actor.master_id,
       revision:desired.revision,hours:desired.hours,
       timezone:location.timezone,
     });
+    await assertUsHoursWriteScope(client,{req,masterId:actor.master_id,location});
     await client.query("COMMIT");
     started=false;
-    return res.json(usMasterHoursPayload(actor,location,saved,true));
+    const {market_id:_internalMarketId,...publicLocation}=location;
+    return res.json(usMasterHoursPayload(actor,publicLocation,saved,true));
   }catch(err){
     if(client && started){
       try{await client.query("ROLLBACK");}catch(_ignored){}
@@ -1136,7 +1149,8 @@ r.patch("/masters/:slug", async(req,res)=>{
       await db.query("ROLLBACK");
       return res.status(403).json({ok:false,error:"PROFILE_SESSION_INVALID"});
     }
-    await ensureMasterWriteAllowed(db,master.id);
+    const profileScope=await assertProfileWriteScope(db,{req,ownerType:"master",ownerId:master.id});
+    if(profileScope==="legacy")await ensureMasterWriteAllowed(db,master.id);
     if(ownerProfileRevision("master",master)!==input.revision){
       await db.query("ROLLBACK");
       return res.status(409).json({ok:false,error:"PROFILE_REVISION_CONFLICT"});
@@ -1153,10 +1167,12 @@ r.patch("/masters/:slug", async(req,res)=>{
     }
     const profile=ownerProfilePayload("master",req.params.slug,after.rows[0],
       auth.rows[0].email,true,true);
+    await assertProfileWriteScope(db,{req,ownerType:"master",ownerId:master.id,expectedKind:profileScope});
     await db.query("COMMIT");
     return res.json({ok:true,master:after.rows[0],...profile});
   }catch(err){
     try{await db.query("ROLLBACK");}catch(_ignored){}
+    if(isUsProfileGuardError(err))return res.status(err.statusCode).json({ok:false,error:err.code});
     if(err.code==="BILLING_BLOCKED"){
       return res.status(403).json({ok:false,error:"PROFILE_BILLING_BLOCKED"});
     }

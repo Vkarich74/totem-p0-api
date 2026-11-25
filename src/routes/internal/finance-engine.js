@@ -62,6 +62,8 @@ export default function buildFinanceEngineRouter(pool){
       SELECT *
       FROM public.billing_subscriptions
       WHERE subscription_status IN ('active','grace','blocked')
+      AND provider_namespace IS NULL
+AND NOT EXISTS (SELECT 1 FROM public.owner_opening_requests req WHERE req.owner_type=billing_subscriptions.owner_type AND req.created_owner_id=billing_subscriptions.owner_id AND req.source_namespace='odoo_online' AND (req.source_company_id=4 OR req.source_website_id=5))
       FOR UPDATE
     `);
 

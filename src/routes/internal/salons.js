@@ -1,4 +1,6 @@
 import express from "express";
+import {assertLegacyWalletSubscriptionAuthority} from "../../services/billing/usSaasWalletBoundary.js";
+import {assertProfileWriteScope,assertUsHoursWriteScope,assertLegacySalonHoursScope,isUsProfileGuardError} from "../../services/billing/usSaasProfileHoursGuard.js";
 import {
 countUnread,
 listNotificationsForTarget,
@@ -578,6 +580,7 @@ await db.query("ROLLBACK");
 return res.status(403).json({ok:false,error:"FORBIDDEN"});
 }
 
+await assertLegacyWalletSubscriptionAuthority(db,"salon",salonId);
 const billing = await getSalonBillingRow(db, salonId, true);
 
 if(!billing){
@@ -694,6 +697,7 @@ billing:access.billing
 }catch(err){
 
 try{ await db.query("ROLLBACK"); }catch(e){}
+if(err.code==="US_SAAS_ODOO_BILLING_AUTHORITY_REQUIRED")return res.status(409).json({ok:false,error:err.code});
 
 if(err.code === "SYSTEM_WALLET_NOT_FOUND"){
 return res.status(500).json({
@@ -791,6 +795,7 @@ await db.query("ROLLBACK");
 return res.status(403).json({ok:false,error:"FORBIDDEN"});
 }
 
+await assertLegacyWalletSubscriptionAuthority(db,"salon",salon.id);
 const billing = await getSalonBillingRow(db, salon.id, true);
 
 if(!billing){
@@ -827,6 +832,7 @@ billing:access.billing
 }catch(err){
 
 try{ await db.query("ROLLBACK"); }catch(e){}
+if(err.code==="US_SAAS_ODOO_BILLING_AUTHORITY_REQUIRED")return res.status(409).json({ok:false,error:err.code});
 
 console.error("SALON_BILLING_BLOCK_ERROR",err);
 
@@ -864,6 +870,7 @@ await db.query("ROLLBACK");
 return res.status(403).json({ok:false,error:"FORBIDDEN"});
 }
 
+await assertLegacyWalletSubscriptionAuthority(db,"salon",salon.id);
 const billing = await getSalonBillingRow(db, salon.id, true);
 
 if(!billing){
@@ -900,6 +907,7 @@ billing:access.billing
 }catch(err){
 
 try{ await db.query("ROLLBACK"); }catch(e){}
+if(err.code==="US_SAAS_ODOO_BILLING_AUTHORITY_REQUIRED")return res.status(409).json({ok:false,error:err.code});
 
 console.error("SALON_BILLING_UNBLOCK_ERROR",err);
 
@@ -994,7 +1002,8 @@ r.patch("/salons/:slug", async(req,res)=>{
       await db.query("ROLLBACK");
       return res.status(403).json({ok:false,error:"PROFILE_OWNER_NOT_FOUND"});
     }
-    await ensureSalonWriteAllowed(db,row.id);
+    const profileScope=await assertProfileWriteScope(db,{req,ownerType:"salon",ownerId:row.id});
+    if(profileScope==="legacy")await ensureSalonWriteAllowed(db,row.id);
     if(ownerProfileRevision("salon",row)!==input.revision){
       await db.query("ROLLBACK");
       return res.status(409).json({ok:false,error:"PROFILE_REVISION_CONFLICT"});
@@ -1026,10 +1035,12 @@ r.patch("/salons/:slug", async(req,res)=>{
     }
     const metadata=ownerProfilePayload("salon",req.params.slug,after.rows[0],
       direct.rows[0].email,true,true);
+    await assertProfileWriteScope(db,{req,ownerType:"salon",ownerId:row.id,expectedKind:profileScope});
     await db.query("COMMIT");
     return res.json({ok:true,salon:after.rows[0],...metadata});
   }catch(err){
     try{await db.query("ROLLBACK");}catch(_ignored){}
+    if(isUsProfileGuardError(err))return res.status(err.statusCode).json({ok:false,error:err.code});
     if(err.code==="BILLING_BLOCKED"){
       return res.status(403).json({ok:false,error:"PROFILE_BILLING_BLOCKED"});
     }
@@ -1904,6 +1915,7 @@ await db.query("ROLLBACK");
 return res.status(403).json({ok:false,error:"FORBIDDEN"});
 }
 
+await assertLegacySalonHoursScope(db,salonId);
 const access = await ensureSalonWriteAllowed(db, salonId);
 
 const master = await db.query(
@@ -1989,6 +2001,7 @@ row.break_end
 insertedRows.push(inserted.rows[0]);
 }
 
+await assertLegacySalonHoursScope(db,salonId);
 await db.query("COMMIT");
 
 return res.json({
@@ -2003,6 +2016,7 @@ count:insertedRows.length
 
 try{ await db.query("ROLLBACK"); }catch(e){}
 
+if(isUsProfileGuardError(err))return res.status(err.statusCode).json({ok:false,error:err.code});
 if(err.code === "BILLING_BLOCKED"){
 return res.status(403).json({
 ok:false,

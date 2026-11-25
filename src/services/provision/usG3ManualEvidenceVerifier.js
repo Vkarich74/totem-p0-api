@@ -25,7 +25,7 @@ export function manualG3EvidenceEnabled(env=process.env){
 export async function verifyManualG3Evidence(raw,{purpose,requestId=null,headers,query,env=process.env,now=()=>Date.now(),readVerifiedTargetGeo}={}){
  if(!manualG3EvidenceEnabled(env))throw problem("RELEASE_HOLD");
  if(purpose==="intake")assertUsOdooIntakeHeader(headers,query,env);
- req(["intake","approve","provision"].includes(purpose),"PURPOSE");
+ req(["intake","approve","provision","activate","welcome"].includes(purpose),"PURPOSE");
  const b=parseCanonical(raw),u=unsignedBody(b),e=exact(b.evidence,EVIDENCE_KEYS);
  req(b._model==="crm.lead"&&b.market_code==="US"&&b.evidence_version===VERSION&&isId(b._id),"SCOPE");
  req(typeof b.signature==="string"&&/^[A-Za-z0-9_-]{86}$/.test(b.signature),"SIGNATURE");

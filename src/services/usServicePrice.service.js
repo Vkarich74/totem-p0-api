@@ -1,3 +1,4 @@
+import {checkUsSaasTransactionalWrite} from "./billing/usSaasTransactionalWriteGuard.js";
 // TOTEM USA / TAX-03 — USD cents service-price authorization and booking snapshot.
 // Never derive USD cents from legacy salon_master_services.price, services.price
 // or bookings.price_snapshot. Service price is independent of tax or Stripe.
@@ -145,6 +146,8 @@ export async function saveUsOwnerServicePrice(pool, options = {}) {
     if (!scope || !await ownerServiceLink(
       db, ownerType, request.serviceLinkId, scope.owner_id, scope.market_id, true
     )) return errorReply(404, "US_PRICE_SERVICE_NOT_FOUND");
+    const entitlement=await checkUsSaasTransactionalWrite(db,ownerType,scope);
+    if(entitlement)return entitlement;
     // Legacy US service-creation routes leave currency_code NULL.
     // Only AFTER direct US owner authorization, mark that US-only link USD.
     // Never change an explicit non-USD currency or derive cents from price.
@@ -180,6 +183,8 @@ export async function saveUsOwnerServicePrice(pool, options = {}) {
     if (result.rows.length !== 1) {
       return errorReply(409, "US_PRICE_VERSION_CONFLICT");
     }
+    const commitEntitlement=await checkUsSaasTransactionalWrite(db,ownerType,scope);
+    if(commitEntitlement)return commitEntitlement;
     return scopedPrice(ownerType,ownerSlug,request.serviceLinkId,
       scope.market_id,result.rows[0]);
   });

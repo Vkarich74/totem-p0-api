@@ -112,7 +112,7 @@ app.post(
 );
 
 app.use(express.json({verify(req,res,buf){
-  if(req.method==="POST"&&/^\/internal\/admin\/open-owner\/(?:odoo-intake|requests\/[0-9]+\/(?:approve|provision))\/?$/.test(String(req.originalUrl||req.url||"").split("?")[0]))
+  if(req.method==="POST"&&/^\/internal\/admin\/open-owner\/(?:odoo-intake|requests\/[0-9]+\/(?:approve|provision|activate|send-email|resend-email))\/?$/.test(String(req.originalUrl||req.url||"").split("?")[0]))
     req.usG3RawBody=Buffer.from(buf);
 }}));
 app.use(cookieParser());

@@ -1,4 +1,5 @@
 import { pool } from "../db.js";
+import {assertUsBookingAuthority,assertUsManualBookingSession} from "../services/billing/usSaasBookingGuard.js";
 import crypto from "crypto";
 import { createNotification } from "../services/notifications/notificationService.js";
 import { buildBookingCreatedNotificationTemplate } from "../services/notifications/notificationTemplates.js";
@@ -168,7 +169,9 @@ function normalizePublicStartAt(input, { marketTimeZone }) {
   return localDateTimeToUtcIso(localParts.date, localParts.time, targetTimeZone);
 }
 
-export async function publicCreateBooking(req, res) {
+export async function publicCreateBooking(req,res){return createCanonicalBooking(req,res,null);}
+export async function manualUsCreateBooking(req,res,masterSlug){return createCanonicalBooking(req,res,{masterSlug});}
+async function createCanonicalBooking(req, res, manual) {
   const client = await pool.connect();
 
   try {
@@ -218,6 +221,10 @@ export async function publicCreateBooking(req, res) {
     }
 
     await client.query("BEGIN");
+    if(manual){
+      if(marketContext.market_code!=="US")throw Object.assign(Error("US_MANUAL_MARKET_CONTRACT_INVALID"),{code:"US_MANUAL_MARKET_CONTRACT_INVALID",statusCode:409});
+      await assertUsManualBookingSession(client,req,master_id,manual.masterSlug);
+    }
 
     const existing = await client.query(
       `SELECT request_hash, response_code, response_body
@@ -355,6 +362,7 @@ export async function publicCreateBooking(req, res) {
         locationCode: req.body?.location_code,
         marketContext,
       });
+      await assertUsBookingAuthority(client,{salonId,masterId:master_id,serviceLinkId:serviceLink.id,marketContext,location:usLocation});
       const selected = normalizeUsBookingStart(
         { start_at, date, time }, usLocation.timezone
       );
@@ -737,6 +745,10 @@ export async function publicCreateBooking(req, res) {
       [idempotencyKey, idempotencyResponseBody]
     );
 
+    if(usLocation){
+      if(manual)await assertUsManualBookingSession(client,req,master_id,manual.masterSlug);
+      await assertUsBookingAuthority(client,{salonId,masterId:master_id,serviceLinkId:serviceLink.id,marketContext,location:usLocation});
+    }
     await client.query("COMMIT");
 
     return res.status(201).json(responseBody);

@@ -1388,6 +1388,8 @@ WHERE owner_type IN ('salon','master')
 AND billing_model='subscription'
 AND subscription_status='active'
 AND wallet_only=true
+AND provider_namespace IS NULL
+AND NOT EXISTS (SELECT 1 FROM public.owner_opening_requests req WHERE req.owner_type=billing_subscriptions.owner_type AND req.created_owner_id=billing_subscriptions.owner_id AND req.source_namespace='odoo_online' AND (req.source_company_id=4 OR req.source_website_id=5))
 AND next_charge_at IS NOT NULL
 AND next_charge_at <= NOW()
 FOR UPDATE

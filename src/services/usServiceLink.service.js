@@ -1,3 +1,4 @@
+import {checkUsSaasTransactionalWrite} from "./billing/usSaasTransactionalWriteGuard.js";
 // TOTEM USA — US-SERVICES-01. Explicit US salon/master service binding.
 // No legacy price conversion, payments, bookings, Stripe, schema changes or
 // inferred "latest salon" binding. New catalog + link + USD cents are atomic.
@@ -47,24 +48,6 @@ function validatePayload(ownerType, body) {
     salonSlug:ownerType==="master"?body.salon_slug:null,
     name:operation==="create"?body.name.trim():null,
     servicePk:operation==="attach"?body.service_pk:null};
-}
-
-async function writeAllowed(db,ownerType,ownerId) {
-  const result=await db.query(
-    "SELECT subscription_status,blocked_at,next_charge_at,grace_until "+
-    "FROM public.billing_subscriptions WHERE owner_type=$1 AND owner_id=$2 LIMIT 1",
-    [ownerType,ownerId]
-  );
-  const billing=result.rows[0];
-  if (!billing) return true; // Existing owner billing contract: missing = active.
-  if (billing.blocked_at) return false;
-  const now=Date.now();
-  const next=billing.next_charge_at?new Date(billing.next_charge_at).getTime():null;
-  const grace=billing.grace_until?new Date(billing.grace_until).getTime():null;
-  if (next && (!Number.isFinite(next) || next<now)) {
-    return Boolean(grace && Number.isFinite(grace) && grace>=now);
-  }
-  return ["active","grace"].includes(String(billing.subscription_status||"active"));
 }
 
 async function exactTarget(db,ownerType,scope,input) {
@@ -192,9 +175,8 @@ export async function saveUsServiceLink(pool,options={}) {
     const scope=await ownerContext(
       db,options.ownerType,options.ownerSlug,checked.actor.userId,true);
     if (!scope) return reply(404,"US_SERVICE_LINK_OWNER_NOT_FOUND");
-    if (!await writeAllowed(db,options.ownerType,scope.owner_id)) {
-      return reply(403,"US_SERVICE_LINK_BILLING_BLOCKED");
-    }
+    const entitlement=await checkUsSaasTransactionalWrite(db,options.ownerType,scope);
+    if(entitlement)return entitlement;
     const target=await exactTarget(db,options.ownerType,scope,input);
     if (!target) return reply(404,"US_SERVICE_LINK_TARGET_NOT_FOUND");
 
@@ -297,6 +279,8 @@ export async function saveUsServiceLink(pool,options={}) {
         Number(row.price_version)!==1) {
       throw Error("US_SERVICE_LINK_READBACK_MISMATCH");
     }
+    const commitEntitlement=await checkUsSaasTransactionalWrite(db,options.ownerType,scope);
+    if(commitEntitlement)return commitEntitlement;
     return {status:200,body:{
       ok:true,contract_version:"US-SERVICES-01-v1",
       market_code:"US",currency_code:"USD",

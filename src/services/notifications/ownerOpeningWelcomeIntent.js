@@ -1,4 +1,5 @@
 import {assertUsCommercialWriterReleased} from "../provision/usCommercialWriterRelease.js";
+import {assertManualG3RequestReceipt,isScopedUsOdooRequest} from "../provision/usG3ManualRequestReceipt.js";
 // G5-T4: one durable welcome intent in EXISTING Core messages/traces.
 // Google Gmail is not transactional with PostgreSQL. Ambiguous delivery
 // is NEVER automatically retried; operators may reconcile POSITIVE Gmail proof.
@@ -44,7 +45,64 @@ function checkMarket(r,market){
   if(market!=="US"&&r.source_namespace==="odoo_online")
     throw error("US_ODOO_SOURCE_MARKET_MISMATCH");
 }
-function requireReconcile(){throw error("OWNER_OPENING_WELCOME_RECONCILIATION_REQUIRED");}
+function checkUsScope(r,required){
+  if(required&&(!isScopedUsOdooRequest(r)||Number(r.source_company_id)!==4||Number(r.source_website_id)!==5||r.precheck_result_json?.normalized?.market_code!=="US"))throw error("US_G3_ADMIN_SOURCE_SCOPE_CHANGED");
+}
+function requireReconcile(){throw Object.assign(error("OWNER_OPENING_WELCOME_RECONCILIATION_REQUIRED"),{requires_reconciliation:true});}
+const email=v=>typeof v==="string"?v.trim().toLowerCase():"";
+function exactIntent(req,msg){
+ const key=welcomeIntentKey(req.id),d=msg?.data;
+ return !!msg&&toId(msg.id)>0&&toId(req.message_id)===toId(msg.id)&&
+ msg.idempotency_key===key&&d?.logical_intent_key===key&&d.rfc_message_id===welcomeRfcMessageId(req.id)&&
+ d.entity_type==="owner_opening_request"&&toId(d.entity_id)===toId(req.id)&&
+ d.owner_type===req.owner_type&&d.slug===req.slug_final&&email(d.to)!==""&&email(d.to)===email(req.email);
+}
+async function relatedMessages(db,req){
+ const q=await db.query("SELECT id,status,idempotency_key,data FROM public.messages "+
+ "WHERE idempotency_key LIKE $1 OR id=$2 OR (data->>'entity_type'='owner_opening_request' AND data->>'entity_id'=$3) "+
+ "ORDER BY id LIMIT 2 FOR UPDATE",["owner_opening:"+toId(req.id)+":%",req.message_id??null,String(req.id)]);
+ return q.rows;
+}
+export function classifyUsWelcomeDecision(req,rows){
+ if(!req||!Array.isArray(rows))requireReconcile();
+ if(rows.length===0&&req.message_id==null&&!req.email_sent_at&&!["sent","failed"].includes(req.email_status)&&!["email_sent","email_failed"].includes(req.status)){
+   if(req.status!=="email_ready")throw error("OWNER_OPENING_REQUEST_STATUS_INVALID");
+   return {kind:"unclaimed"};
+ }
+ if(rows.length!==1||!exactIntent(req,rows[0]))requireReconcile();
+ const msg=rows[0],d=msg.data;
+ if(req.status==="email_sent"&&req.email_status==="sent"&&req.email_sent_at&&msg.status==="sent"&&d.delivery_state==="sent"&&GMAIL_ID.test(String(d.gmail_message_id||"")))
+   return {kind:"already_sent",request:req,messageId:toId(msg.id),gmailMessageId:d.gmail_message_id};
+ requireReconcile();
+}
+async function assertAdminSession(db,a,required){
+ if(!required)return;
+ if(a?.role!=="admin"||!toId(a.user_id)||typeof a.session_id!=="string"||!a.session_id)throw error("US_G3_ADMIN_SESSION_REQUIRED",403);
+ const q=await db.query("SELECT s.id FROM public.auth_sessions s JOIN public.auth_users u ON u.id=s.user_id "+
+ "WHERE s.id=$1 AND s.user_id=$2 AND s.revoked_at IS NULL AND s.expires_at>clock_timestamp() "+
+ "AND (s.last_seen_at IS NULL OR s.last_seen_at>clock_timestamp()-interval '24 hours') AND u.role='admin' AND u.enabled=true FOR SHARE OF s,u",[a.session_id,toId(a.user_id)]);
+ if(q.rows.length!==1)throw error("US_G3_ADMIN_SESSION_INVALID",403);
+}
+async function inspectLockedWelcome(db,id,requireUsScope,sourceAdmin){
+ const req=await lockRequest(db,id);
+ if(!req)throw error("OWNER_OPENING_REQUEST_NOT_FOUND",404);
+ checkUsScope(req,requireUsScope);
+ await assertAdminSession(db,sourceAdmin,requireUsScope);
+ const rows=await relatedMessages(db,req);
+ return {req,rows};
+}
+function reconcileCandidate(req,rows,provider){
+ if(rows.length!==1||!exactIntent(req,rows[0]))requireReconcile();
+ const msg=rows[0],d=msg.data,old=d.gmail_message_id;
+ if(old!=null&&(!GMAIL_ID.test(String(old))||(provider&&old!==provider)))requireReconcile();
+ if(req.status==="email_sent"){
+   classifyUsWelcomeDecision(req,rows);
+ }else if(!["email_ready","email_failed"].includes(req.status)||!["pending","failed"].includes(msg.status)||!["claimed","uncertain"].includes(d.delivery_state)||req.email_sent_at)requireReconcile();
+ return {id:toId(msg.id),key:msg.idempotency_key,recipient:d.to,rfcMessageId:d.rfc_message_id,oldProvider:old??null,ownerType:req.owner_type,ownerId:toId(req.created_owner_id),authId:toId(req.created_auth_user_id),partnerId:toId(req.source_partner_id),sourceRequestId:req.source_request_id};
+}
+function sameCandidate(a,b){
+ return Object.keys(a).every(k=>a[k]===b[k]);
+}
 function checkCallbacks(o,names){
   if(names.some(name=>typeof o?.[name]!=="function"))
     throw error("WELCOME_CALLBACK_CONTRACT_INVALID",500);
@@ -56,19 +114,43 @@ export async function claimOwnerOpeningWelcome(o={}){
     "preparePaidEvidence","createPreview","createTrace","writeAudit"]);
   const {pool,requestId,admin,getMarketCode,assertMarketPolicy,
     assertUsActivationReady,preparePaidEvidence,createPreview,
-    createTrace,writeAudit}=o;
+    createTrace,writeAudit,sourceReceipt=null,sourceAdmin=null,requireUsScope=false,prepareSourceReceipt=null}=o;
   const id=toId(requestId),key=welcomeIntentKey(id);
   if(typeof pool?.query!=="function")throw error("WELCOME_POSTGRES_POOL_REQUIRED",500);
   const first=await pool.query(
     "SELECT * FROM public.owner_opening_requests WHERE id=$1",[id]);
   const snapshot=first.rows[0];
   if(!snapshot)throw error("OWNER_OPENING_REQUEST_NOT_FOUND",404);
+  checkUsScope(snapshot,requireUsScope);
   assertMarketPolicy(snapshot);
   const initialMarket=getMarketCode(snapshot);
   checkMarket(snapshot,initialMarket);
-  if(snapshot.status==="email_sent")return {kind:"already_sent",request:snapshot};
-  if(snapshot.message_id!=null||snapshot.status==="email_failed")requireReconcile();
-  if(snapshot.status!=="email_ready")throw error("OWNER_OPENING_REQUEST_STATUS_INVALID");
+  if(requireUsScope){
+    const decision=await transaction(pool,async db=>{
+      const {req,rows}=await inspectLockedWelcome(db,id,true,sourceAdmin);
+      return classifyUsWelcomeDecision(req,rows);
+    });
+    if(decision.kind==="already_sent")return decision;
+  }else{
+    if(snapshot.status==="email_sent")return {kind:"already_sent",request:snapshot};
+    if(snapshot.message_id!=null||snapshot.status==="email_failed")requireReconcile();
+    if(snapshot.status!=="email_ready")throw error("OWNER_OPENING_REQUEST_STATUS_INVALID");
+  }
+  // Only an unclaimed intent requires new signed source and paid evidence.
+  let receipt=sourceReceipt;
+  if(requireUsScope){
+    if(typeof prepareSourceReceipt!=="function")throw error("US_G3_WELCOME_FRESH_SOURCE_REQUIRED");
+    try{receipt=await prepareSourceReceipt();}
+    catch(e){
+      // A concurrent winner may have claimed or completed between reads.
+      const decision=await transaction(pool,async db=>{
+        const {req,rows}=await inspectLockedWelcome(db,id,true,sourceAdmin);
+        return classifyUsWelcomeDecision(req,rows);
+      });
+      if(decision.kind==="already_sent")return decision;
+      throw e;
+    }
+  }
   let paid=null;
   if(initialMarket==="US"){
     paid=await preparePaidEvidence(snapshot);
@@ -78,21 +160,30 @@ export async function claimOwnerOpeningWelcome(o={}){
   return transaction(pool,async db=>{
     const req=await lockRequest(db,id);
     if(!req)throw error("OWNER_OPENING_REQUEST_NOT_FOUND",404);
+    checkUsScope(req,requireUsScope);
     assertMarketPolicy(req);
     const market=getMarketCode(req);
     checkMarket(req,market);
-    if(req.status==="email_sent")return {kind:"already_sent",request:req};
-    if(req.message_id!=null||req.status==="email_failed")requireReconcile();
-    if(await lockMessage(db,key))requireReconcile();
-    if(req.status!=="email_ready")throw error("OWNER_OPENING_REQUEST_STATUS_INVALID");
+    if(requireUsScope){
+      await assertAdminSession(db,sourceAdmin,true);
+      const decision=classifyUsWelcomeDecision(req,await relatedMessages(db,req));
+      if(decision.kind==="already_sent")return decision;
+    }else{
+      if(req.status==="email_sent")return {kind:"already_sent",request:req};
+      if(req.message_id!=null||req.status==="email_failed")requireReconcile();
+      if(await lockMessage(db,key))requireReconcile();
+      if(req.status!=="email_ready")throw error("OWNER_OPENING_REQUEST_STATUS_INVALID");
+    }
     if(market!==initialMarket)throw error("OWNER_OPENING_MARKET_CHANGED");
     if(market==="US"){
+      if(assertManualG3RequestReceipt(req,receipt,{purpose:"welcome",admin:sourceAdmin})!==true)
+        throw error("US_G3_WELCOME_FRESH_SOURCE_REQUIRED");
       const now=await db.query("SELECT clock_timestamp() AS now");
       assertUsPaidEvidenceForLockedRequest(req,paid,now.rows[0]?.now);
       await assertUsActivationReady(db,req,toId(req.created_owner_id));
     }
     const preview=await createPreview(db,req,market);
-    if(!preview?.to||!preview?.subject||!preview?.html)
+    if(!preview?.to||!preview?.subject||!preview?.html||(requireUsScope&&email(preview.to)!==email(req.email)))
       throw error("OWNER_OPENING_WELCOME_PREVIEW_INVALID");
     const rfcMessageId=welcomeRfcMessageId(id);
     const data={entity_type:"owner_opening_request",entity_id:id,
@@ -126,10 +217,17 @@ export async function claimOwnerOpeningWelcome(o={}){
   });
 }
 async function finalizeTx(db,{requestId,messageId,key,gmailMessageId,
-  admin,createTrace,writeAudit,reconciled}){
+  admin,createTrace,writeAudit,reconciled,requireUsScope=false,sourceAdmin=null,expectedCandidate=null}){
   const req=await lockRequest(db,requestId);
   if(!req)throw error("OWNER_OPENING_REQUEST_NOT_FOUND",404);
-  const msg=await lockMessage(db,key);
+  checkUsScope(req,requireUsScope);
+  await assertAdminSession(db,sourceAdmin,requireUsScope);
+  const related=requireUsScope?await relatedMessages(db,req):null;
+  const msg=requireUsScope?related[0]:await lockMessage(db,key);
+  if(requireUsScope){
+    const current=reconcileCandidate(req,related,gmailMessageId);
+    if(expectedCandidate&&!sameCandidate(expectedCandidate,current))requireReconcile();
+  }
   if(!msg||toId(msg.id)!==messageId||toId(req.message_id)!==messageId||msg.data?.logical_intent_key!==key||msg.data?.rfc_message_id!==welcomeRfcMessageId(requestId))
     throw error("OWNER_OPENING_WELCOME_INTENT_MISMATCH");
   if(req.status==="email_sent"&&msg.status==="sent"){
@@ -169,7 +267,7 @@ async function finalizeTx(db,{requestId,messageId,key,gmailMessageId,
     audit_event_id:audit?.id?Number(audit.id):null};
 }
 export async function finalizeOwnerOpeningWelcomeSent({
-  pool,requestId,messageId,gmailMessageId,admin,createTrace,writeAudit}={}){
+  pool,requestId,messageId,gmailMessageId,admin,createTrace,writeAudit,requireUsScope=false,sourceAdmin=null}={}){
   assertUsCommercialWriterReleased("welcome");
   if(!GMAIL_ID.test(String(gmailMessageId||"")))
     throw error("GMAIL_MESSAGE_ID_UNVERIFIED");
@@ -177,19 +275,23 @@ export async function finalizeOwnerOpeningWelcomeSent({
   if(!id||!mid)throw error("OWNER_OPENING_WELCOME_INTENT_MISMATCH");
   return transaction(pool,db=>finalizeTx(db,{requestId:id,messageId:mid,
     key:welcomeIntentKey(id),gmailMessageId,admin,createTrace,writeAudit,
-    reconciled:false}));
+    reconciled:false,requireUsScope,sourceAdmin}));
 }
 // If provider outcome/SQL commit is unknown, mark uncertain best-effort.
 // If this marker also fails, the previously committed UNIQUE intent remains.
 export async function markOwnerOpeningWelcomeUncertain({
-  pool,requestId,messageId,gmailMessageId=null,admin,createTrace,writeAudit}={}){
+  pool,requestId,messageId,gmailMessageId=null,admin,createTrace,writeAudit,requireUsScope=false,sourceAdmin=null}={}){
   assertUsCommercialWriterReleased("welcome");
   const id=toId(requestId),mid=toId(messageId);
   if(!id||!mid)throw error("OWNER_OPENING_WELCOME_INTENT_MISMATCH");
   const key=welcomeIntentKey(id);
   return transaction(pool,async db=>{
     const req=await lockRequest(db,id);
-    const msg=await lockMessage(db,key);
+    checkUsScope(req,requireUsScope);
+    await assertAdminSession(db,sourceAdmin,requireUsScope);
+    const related=requireUsScope?await relatedMessages(db,req):null;
+    const msg=requireUsScope?related[0]:await lockMessage(db,key);
+    if(requireUsScope)reconcileCandidate(req,related,gmailMessageId);
     if(!req||!msg||toId(msg.id)!==mid||toId(req.message_id)!==mid)
       throw error("OWNER_OPENING_WELCOME_INTENT_MISMATCH");
     if(req.status==="email_sent"&&msg.status==="sent")
@@ -225,22 +327,23 @@ export async function markOwnerOpeningWelcomeUncertain({
 // Gmail metadata must positively match Gmail SENT, RFC Message-ID AND recipient.
 // Neither timeout nor absence of an id proves non-delivery.
 export async function reconcileOwnerOpeningWelcomeSent({
-  pool,requestId,gmailMessageId,verifyGmailSent,admin,createTrace,writeAudit}={}){
+  pool,requestId,gmailMessageId=null,verifyGmailSent,admin,sourceAdmin,createTrace,writeAudit,requireUsScope=true}={}){
   assertUsCommercialWriterReleased("welcome");
-  const id=toId(requestId),provider=String(gmailMessageId||"");
-  if(!id||!GMAIL_ID.test(provider)||typeof verifyGmailSent!=="function")
+  const id=toId(requestId),provider=gmailMessageId==null?null:String(gmailMessageId);
+  if(!id||(provider!==null&&!GMAIL_ID.test(provider))||typeof verifyGmailSent!=="function"||requireUsScope!==true)
     throw error("OWNER_OPENING_WELCOME_RECONCILE_INPUT_INVALID",400);
-  const key=welcomeIntentKey(id);
-  const result=await pool.query(
-    "SELECT id,status,idempotency_key,data FROM public.messages "+
-    "WHERE idempotency_key=$1",[key]);
-  const msg=result.rows[0];
-  if(!msg||!toId(msg.id)||
-     msg.data?.rfc_message_id!==welcomeRfcMessageId(id))
-    throw error("OWNER_OPENING_WELCOME_INTENT_NOT_FOUND",404);
-  const verified=await verifyGmailSent(provider,welcomeRfcMessageId(id),msg.data?.to);
-  if(verified!==true)throw error("GMAIL_SENT_READBACK_UNVERIFIED");
+  // Snapshot exact existing intent under locks. No provider call inside SQL.
+  const expected=await transaction(pool,async db=>{
+    const {req,rows}=await inspectLockedWelcome(db,id,true,sourceAdmin);
+    return reconcileCandidate(req,rows,provider);
+  });
+  const result=await verifyGmailSent({providerId:provider??expected.oldProvider,rfcMessageId:expected.rfcMessageId,recipient:expected.recipient});
+  const verifiedId=result?.providerId;
+  if(!GMAIL_ID.test(String(verifiedId||""))||result?.verified!==true||
+     (provider&&provider!==verifiedId)||(expected.oldProvider&&expected.oldProvider!==verifiedId))
+    throw error("GMAIL_SENT_READBACK_UNVERIFIED");
+  // Re-lock exact intent; reject changed recipient, identity, source or provider.
   return transaction(pool,db=>finalizeTx(db,{
-    requestId:id,messageId:toId(msg.id),key,gmailMessageId:provider,
-    admin,createTrace,writeAudit,reconciled:true}));
+    requestId:id,messageId:expected.id,key:expected.key,gmailMessageId:verifiedId,
+    admin,sourceAdmin,createTrace,writeAudit,reconciled:true,requireUsScope:true,expectedCandidate:expected}));
 }

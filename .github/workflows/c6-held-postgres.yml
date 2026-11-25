@@ -1,0 +1,83 @@
+name: C6 integrated held candidate - isolated PostgreSQL 17
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '.github/workflows/c6-held-postgres.yml'
+      - 'tests/c6-held-*'
+      - 'tests/sql/c6-held-schema.sql'
+      - 'src/**'
+permissions:
+  contents: read
+jobs:
+  postgres:
+    if: github.head_ref == 'c6-t5-integrated-held-ci-20261125'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: g5_fixture
+          POSTGRES_PASSWORD: g5_fixture_only
+          POSTGRES_DB: c6_held_test
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U g5_fixture -d c6_held_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      NODE_ENV: test
+      DB_MODE: POSTGRES
+      DATABASE_URL: ""
+      C6_ISOLATED: "YES"
+      G5_TEST_DATABASE_URL: postgresql://g5_fixture:g5_fixture_only@127.0.0.1:55432/c6_held_test
+      PG_CONTAINER: ${{ job.services.postgres.id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Verify exact 23-file package and selected schema
+        run: |
+          set -euo pipefail
+          test -z "${DATABASE_URL:-}"
+          node --input-type=module <<'JS'
+          import {readFileSync} from 'node:fs';
+          import {createHash} from 'node:crypto';
+          import {execFileSync} from 'node:child_process';
+          import assert from 'node:assert/strict';
+          const m=JSON.parse(readFileSync('tests/c6-held-manifest.json','utf8'));
+          assert.equal(m.files.length,23);
+          assert.equal(m.release,'HOLD');
+          for(const f of m.files){
+            assert.equal(createHash('sha256').update(readFileSync(f.path)).digest('hex'),f.candidate_sha256,f.path);
+            execFileSync(process.execPath,['--check',f.path]);
+          }
+          assert.equal(createHash('sha256').update(readFileSync('tests/sql/c6-held-schema.sql')).digest('hex'),'72e5fb1ed45a05b8c84dac37965818ea24cc6dbcb7f73d35631323bf3f20b34e');
+          console.log('C6_EXACT_PACKAGE_23_OF_23_VERIFIED');
+          JS
+      - name: Selected schema and real SQL concurrency
+        run: |
+          set -euo pipefail
+          docker exec -i "$PG_CONTAINER" psql -X -U g5_fixture -d c6_held_test -v ON_ERROR_STOP=1 < tests/sql/c6-held-schema.sql
+          node --experimental-vm-modules --test tests/c6-held-postgres.test.mjs
+      - name: Synthetic full archive restore in separate disposable database
+        run: |
+          set -euo pipefail
+          docker exec "$PG_CONTAINER" pg_dump -U g5_fixture -d c6_held_test --no-owner --no-acl -Fc > "$RUNNER_TEMP/c6-ci.dump"
+          docker exec "$PG_CONTAINER" createdb -U g5_fixture c6_held_restore
+          docker exec -i "$PG_CONTAINER" pg_restore -U g5_fixture -d c6_held_restore --no-owner --no-acl --exit-on-error --single-transaction < "$RUNNER_TEMP/c6-ci.dump"
+          readback="SELECT (SELECT count(*) FROM public.billing_subscriptions),(SELECT count(*) FROM public.owner_opening_requests),(SELECT count(*) FROM public.messages),(SELECT count(*) FROM public.audit_events),(SELECT count(*) FROM pg_constraint WHERE conname='ck_billing_us_odoo_projection_exact' AND convalidated),(SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='billing_subscriptions');"
+          a=$(docker exec "$PG_CONTAINER" psql -XAt -U g5_fixture -d c6_held_test -c "$readback")
+          b=$(docker exec "$PG_CONTAINER" psql -XAt -U g5_fixture -d c6_held_restore -c "$readback")
+          test "$a" = "$b"
+          echo "C6_SYNTHETIC_ARCHIVE_RESTORE_PASS $b"

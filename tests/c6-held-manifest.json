@@ -1,0 +1,126 @@
+{
+  "release": "HOLD",
+  "base": "aa068b718806213a7aa59a2aca17034eab44d2ab",
+  "files": [
+    {
+      "path": "src/app.js",
+      "candidate_sha256": "8ecc4b49414e4dbb3a75f660f07f79908aa0d5c1497221823eafcbf86f4479cb",
+      "original_blob": "0918945a18cd21803fa494119d8b9ad5c46245b1"
+    },
+    {
+      "path": "src/routes/internal.js",
+      "candidate_sha256": "12fe39d59f6bae39276a5306c27d297cfefffd95b1d869ccbf2e43a401c12fa0",
+      "original_blob": "c760e47056b1c215f8c2775b0fdae850ccbb9195"
+    },
+    {
+      "path": "src/routes/internal/adminOpenOwner.js",
+      "candidate_sha256": "170a2eae348ca2f039c6a32ca854398f78c05cafbfec51b81859e1009aed0bbd",
+      "original_blob": "6db5ba790f2f9cc3db0c21af75c2b1bb7147fa19"
+    },
+    {
+      "path": "src/routes/internal/finance-engine.js",
+      "candidate_sha256": "285623ee3d319a0541634766f49b2587d0fb30288cc0476b595a568cca3be679",
+      "original_blob": "4804a9ddd0c7cd66ee4691e757e50ba4cb7f73f4"
+    },
+    {
+      "path": "src/routes/internal/masters.js",
+      "candidate_sha256": "6872d10ce9364a734a6355da92e72baf314f3ca0e9e5cabacfb8f397a88dfe9e",
+      "original_blob": "b3e9ecc06b50268dbf0189503b0b2fa9c87c18a1"
+    },
+    {
+      "path": "src/routes/internal/salons.js",
+      "candidate_sha256": "4e319b9f8b26909294c128c4f8bf0d7055f8c8b16195109fe5bdb8320c22c74f",
+      "original_blob": "34cac2ade7ef06cd7903390e7d479c5455d16bc0"
+    },
+    {
+      "path": "src/routes/internal/usAdminCommercialRoutes.js",
+      "candidate_sha256": "ebbc67be9b121e678d6f982984d16bf8b7b1882e59608c31a9b750bd513157d5",
+      "original_blob": "ABSENT"
+    },
+    {
+      "path": "src/routes/internalUsMasterManualBooking.js",
+      "candidate_sha256": "7875f582d3d93dfeabe85621f5e4940a229e575de284ce75aa6bdd5cf6ebe607",
+      "original_blob": "3445599cd0eea126d2686295331501c4ff2f3425"
+    },
+    {
+      "path": "src/routes/publicCreateBooking.js",
+      "candidate_sha256": "5b951d6aeca07d2edede234e230ef5ce68b6c7527c13b460ebe0892ad7a387e9",
+      "original_blob": "ab976be52509df07448da258267635b54211ca9b"
+    },
+    {
+      "path": "src/services/billing/usSaasBookingGuard.js",
+      "candidate_sha256": "3499ddd58ea6138ed53cae1a1c96d6444132b370a5daa6dbdb6282ba92c0648e",
+      "original_blob": "ABSENT"
+    },
+    {
+      "path": "src/services/billing/usSaasProfileHoursGuard.js",
+      "candidate_sha256": "96aac453715e5ca8a864ad9d4ca2d36a48e87334f0c4f1968084e9f535ff4759",
+      "original_blob": "ABSENT"
+    },
+    {
+      "path": "src/services/billing/usSaasTransactionalWriteGuard.js",
+      "candidate_sha256": "542bc34ec2a8a0bd6665ae8bf1c620ee7338b471ce493ae0da93dea494857934",
+      "original_blob": "ABSENT"
+    },
+    {
+      "path": "src/services/billing/usSaasWalletBoundary.js",
+      "candidate_sha256": "d255d140ebae07cbfc4955a5d1169ad7b570d63dcc25c654cf6c29a564219771",
+      "original_blob": "ABSENT"
+    },
+    {
+      "path": "src/services/notifications/ownerOpeningWelcomeIntent.js",
+      "candidate_sha256": "08a701f720bd9c4519b78039f604383ebef0af0be80a6cbb9abeabb71e5dedd0",
+      "original_blob": "977aafaf3d3aaff5834ddd050a4a8512dae6c883"
+    },
+    {
+      "path": "src/services/notifications/usWelcomeGmailReadback.js",
+      "candidate_sha256": "bac6349c8c16c1f9f588c4e481f805dd6acfb3dbc16aec6c31b496d903c646d8",
+      "original_blob": "ABSENT"
+    },
+    {
+      "path": "src/services/provision/ownerOpeningCanonicalActivation.js",
+      "candidate_sha256": "8e2a0d01b4a02b4bab977ed5564773465530249785c23e2e68634007245a68fa",
+      "original_blob": "cbc09b55e9d599193356e2d21974a136811c10d1"
+    },
+    {
+      "path": "src/services/provision/usG3ManualEvidenceVerifier.js",
+      "candidate_sha256": "3d8f7a97cef67846fa2d1b8ccef347d7cd69f7d0b9e5cfa39e6c3175b7ccee24",
+      "original_blob": "f9af3a60e89ca440ccbfd305c37bdad420b76373"
+    },
+    {
+      "path": "src/services/provision/usG3ManualRequestReceipt.js",
+      "candidate_sha256": "4a6d90d64630126e7f1e9563929eb1fe4f27684bf055b8ad73b03c7859736432",
+      "original_blob": "ea40018136b9bb9b0d579f2f4031afe18d656b25"
+    },
+    {
+      "path": "src/services/usPayC11OwnerCollector.service.js",
+      "candidate_sha256": "b3c80598612b6c2dfcff80ee57b1664d864336adb71ebab97fe4932bdd463974",
+      "original_blob": "1c26115ea14cc398cd9dffa08e0269b37c49b9ce"
+    },
+    {
+      "path": "src/services/usServiceLink.service.js",
+      "candidate_sha256": "a03d766e3c1bce954083ec0f0a0a01a5038d54748637d698d63f5544761d0d8c",
+      "original_blob": "1a3189177383c1d7c69a0b34491cb784a0c594e6"
+    },
+    {
+      "path": "src/services/usServicePrice.service.js",
+      "candidate_sha256": "af549eb63d91fd8e3ce78a7366f24b370df9e9bd62a58f042393738adca810bb",
+      "original_blob": "a630916769e6ffc4004b8c1c2d14989cbd5626a0"
+    },
+    {
+      "path": "src/services/usServiceTaxSettings.service.js",
+      "candidate_sha256": "4e1a6d6ffc2d1aedc59f5d5f1845e8a9361e5350d8f18631f11a6306874954ef",
+      "original_blob": "cced8b76208ef9f91f75e38bb068e77171e1bc4a"
+    },
+    {
+      "path": "src/services/billing/usSaasReconciliation.js",
+      "candidate_sha256": "d358a539c2ec9edeec53b2efdd67d87cd76d9ba220d43e45c96111d4fdcfc6de",
+      "original_blob": "ABSENT"
+    }
+  ],
+  "production_deploy": "NOT_RUN",
+  "t5_ddl": "CLOSED",
+  "status": "FINAL_HELD_CANDIDATE_STAGED",
+  "finance": "WALLET_BOUNDARY_AND_COLLECTOR_ONLY",
+  "reconciliation": "PROTECTED_ADMIN_ROUTE_AND_EXISTING_PROJECTION_HANDLER_WORKER_NOT_SCHEDULED"
+}

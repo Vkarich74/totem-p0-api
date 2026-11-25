@@ -1,4 +1,5 @@
 import {assertUsCommercialWriterReleased} from "./usCommercialWriterRelease.js";
+import {assertManualG3RequestReceipt,isScopedUsOdooRequest} from "./usG3ManualRequestReceipt.js";
 import {kgSharedMasterProof,assertKgSharedMasterActivation} from "./kgSharedMasterIdentity.js";
 import {isUsOwnSalonMaster,assertUsOwnSalonActivationReady} from "./usOwnSalonCanonicalActivation.js";
 import { persistUsSaasPaidProjection } from "../billing/usSaasEntitlementProjection.js";
@@ -64,7 +65,7 @@ export function assertUsPaidEvidenceForLockedRequest(request, evidence, now) {
  * Takes a fresh FOR UPDATE lock and revalidates the verified Odoo receipt.
  */
 export async function activateOwnerOpeningCanonical({
-  pool, requestId, admin, paidEvidence = null, masterReceipt = null,
+  pool, requestId, admin, paidEvidence = null, masterReceipt = null, sourceReceipt = null, sourceAdmin = null, requireUsScope = false,
   getMarketCode, assertMarketPolicy, assertUsActivationReady,
   activateEntity, writeAudit,
 } = {}) {
@@ -90,6 +91,7 @@ export async function activateOwnerOpeningCanonical({
     // Legacy policies remain authoritative for KG/KZ and frozen US.
     assertMarketPolicy(current);
     const market = getMarketCode(current);
+    if(requireUsScope&&(!isScopedUsOdooRequest(current)||market!=="US"||Number(current.source_company_id)!==4||Number(current.source_website_id)!==5))throw fail("US_G3_ADMIN_SOURCE_SCOPE_CHANGED");
     // A trusted US Odoo source may never be treated as legacy KG/KZ by a
     // malformed, changed or stale precheck market field.
     if (market !== "US" &&
@@ -104,6 +106,8 @@ export async function activateOwnerOpeningCanonical({
       throw fail("OWNER_OPENING_REQUEST_STATUS_INVALID");
     }
 
+    if(market==="US"&&assertManualG3RequestReceipt(current,sourceReceipt,{purpose:"activate",admin:sourceAdmin})!==true)
+      throw fail("US_G3_ACTIVATION_FRESH_SOURCE_REQUIRED");
     if(kgSharedMasterProof(current)){
       if(market!=="KG")throw fail("KG_SHARED_MASTER_MARKET_MISMATCH");
       await assertKgSharedMasterActivation(db,current);

@@ -37,12 +37,21 @@ function compare(r,v){
  (r.owner_type==="master"&&(r.salon_slug!==i.salon_slug||r.work_mode!=="attached_to_salon"||str(r.specialization)!==str(i.specialization)))||
  (r.owner_type==="salon"&&(n.state_code!==i.state_code||n.postal_code!==i.postal_code)))fail();
 }
+// Activation and welcome consume distinct signed purposes; never reinterpret provision evidence.
+function eligibleStatus(purpose,status,canonicalProvision=false){
+ if(purpose==="approve")return !canonicalProvision&&["validated","approved"].includes(status);
+ if(purpose==="provision")return canonicalProvision?status==="provisioning":["approved","provisioned"].includes(status);
+ if(purpose==="activate")return !canonicalProvision&&status==="provisioned";
+ if(purpose==="welcome")return !canonicalProvision&&status==="email_ready";
+ return false;
+}
 export async function prepareManualG3RequestReceipt(db,requestId,{raw,purpose,admin,env=process.env}={}){
  if(!manualG3EvidenceEnabled(env)||!id(requestId)||!id(admin?.user_id)||admin?.role!=="admin"||!admin?.session_id)fail();
  const roles=await verifyManualG3Evidence(raw,{purpose,requestId,env,readVerifiedTargetGeo:createG3TargetGeoReader(db)});
  const r=(await db.query("SELECT * FROM public.owner_opening_requests WHERE id=$1",[requestId])).rows[0];
- if(!isManualG3Request(r)||!(purpose==="approve"?["validated","approved"].includes(r.status):["approved","provisioned"].includes(r.status)))fail();
+ if(!isManualG3Request(r)||!eligibleStatus(purpose,r.status))fail();
  const v=roles.find(x=>x.proof.owner_type===r.owner_type);compare(r,v);
+ if(["activate","welcome"].includes(purpose)&&(v.provenance.purpose!==purpose||Number(v.provenance.request_id)!==Number(requestId)))fail();
  const receipt=Object.freeze({requestId,adminId:id(admin.user_id),sessionId:String(admin.session_id),purpose,verified:v,at:Date.now()});
  receipts.add(receipt);return receipt;
 }
@@ -54,7 +63,6 @@ export function assertManualG3RequestReceipt(r,receipt,{purpose,admin,env=proces
  receipt.adminId!==id(admin?.user_id)||receipt.sessionId!==String(admin?.session_id??"")||admin?.role!=="admin"||
  receipt.purpose!==purpose||now<receipt.at||now-receipt.at>15000||
  now-receipt.verified.provenance.observed_end_ms>15000||
- !(purpose==="approve"?(!canonicalProvision&&["validated","approved"].includes(r.status)):
-    purpose==="provision"&&(canonicalProvision?r.status==="provisioning":["approved","provisioned"].includes(r.status))))fail();
+ !eligibleStatus(purpose,r.status,canonicalProvision))fail();
  compare(r,receipt.verified);return true;
 }
