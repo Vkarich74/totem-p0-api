@@ -1,0 +1,234 @@
+{
+  "status": "RELEASE_CANDIDATE_HELD",
+  "production_base": "aa068b718806213a7aa59a2aca17034eab44d2ab",
+  "source_head": "8bfc4a86aa278fe370e940269f46429aa70726b1",
+  "source_tree": "d303ac569e8707f0b9f2c0feba8a42b0de9c545f",
+  "release": "HOLD",
+  "files": [
+    {
+      "path": "jobs/queueWorker.js",
+      "sha256": "67c31fcc003a54b762186d40574ac7486105bc0d7c6f959f2eed938e872a4e55",
+      "manifest": "tests/c6-finance-delta-manifest.json"
+    },
+    {
+      "path": "jobs/usSaasReconciliationTick.js",
+      "sha256": "c81218a42a06d1b45f04d0f245bac9a8a27caf5bb1b88002e5e6a5676daaaa7a",
+      "manifest": "tests/c6-finance-delta-manifest.json"
+    },
+    {
+      "path": "jobs/usSaasRuntimeWatchdog.js",
+      "sha256": "990a9ccc9928c3618f662a6ef90e83e083750b01659fca20de6c284f2092ed70",
+      "manifest": "tests/c6-finance-delta-manifest.json"
+    },
+    {
+      "path": "migrations/g5_async_jobs_lease_v2.sql",
+      "sha256": "90ffe75ffc2e5ce9dfc87b5890c00d239290b27412dd2bf602fe68770a1281db",
+      "manifest": "tests/c6-finance-delta-manifest.json"
+    },
+    {
+      "path": "migrations/g5_us_saas_runtime_control_v1.sql",
+      "sha256": "246521843ee20ea5ecf1e86b5c70ab3c92bb8a12d2f2a355b3e6af8c51157a6d",
+      "manifest": "tests/c6-finance-delta-manifest.json"
+    },
+    {
+      "path": "src/app.js",
+      "sha256": "ed9098d7f62c3b82862ea179bc73b1dfde50527ca8335ad1e0abd34eb756219c",
+      "manifest": "tests/c6-finance-delta-manifest.json"
+    },
+    {
+      "path": "src/money-core/ledger.service.js",
+      "sha256": "130c0522c4a0917c00c70239fa0b8850e25b133ca07f89f6dbb9d74eb38865ee",
+      "manifest": "tests/c6-ledger-manifest.json"
+    },
+    {
+      "path": "src/money-core/ownerBalanceLock.js",
+      "sha256": "b48c1815bd63291a988fbbde6b210921a1036b8321a4d7b4bcc67630a53f88a9",
+      "manifest": "tests/c6-ledger-manifest.json"
+    },
+    {
+      "path": "src/money-core/payoutExecutions.service.js",
+      "sha256": "ced936c94523fd019052b0e8461e843b2f384468ce1c7edf420d093c40f8f08e",
+      "manifest": "tests/c6-ledger-manifest.json"
+    },
+    {
+      "path": "src/money-core/settlements.service.js",
+      "sha256": "4d16244bbe36517f7575d061a21386f3d11022ad25febcdd1f5837205e7a0c58",
+      "manifest": "tests/c6-ledger-manifest.json"
+    },
+    {
+      "path": "src/money-core/split.service.js",
+      "sha256": "225efdf91a13f0fcd5567ae642a1a9cbe0cdfe0bdd134d8cd61d3716209f98c2",
+      "manifest": "tests/c6-ledger-manifest.json"
+    },
+    {
+      "path": "src/money-core/withdrawRequests.service.js",
+      "sha256": "78d5c43be2b497e5fea8d47151ee7d910bdab56d298cfc3896d394221002e4d2",
+      "manifest": "tests/c6-ledger-manifest.json"
+    },
+    {
+      "path": "src/money-core/xpayLedgerBridge.service.js",
+      "sha256": "83978e96bdd452759108eb232310fc72b2331b3ba037bd77c54d14a2b201df71",
+      "manifest": "tests/c6-ledger-manifest.json"
+    },
+    {
+      "path": "src/routes/internal.js",
+      "sha256": "12fe39d59f6bae39276a5306c27d297cfefffd95b1d869ccbf2e43a401c12fa0",
+      "manifest": "tests/c6-held-manifest.json"
+    },
+    {
+      "path": "src/routes/internal/adminOpenOwner.js",
+      "sha256": "170a2eae348ca2f039c6a32ca854398f78c05cafbfec51b81859e1009aed0bbd",
+      "manifest": "tests/c6-held-manifest.json"
+    },
+    {
+      "path": "src/routes/internal/finance-engine.js",
+      "sha256": "285623ee3d319a0541634766f49b2587d0fb30288cc0476b595a568cca3be679",
+      "manifest": "tests/c6-held-manifest.json"
+    },
+    {
+      "path": "src/routes/internal/masters.js",
+      "sha256": "6872d10ce9364a734a6355da92e72baf314f3ca0e9e5cabacfb8f397a88dfe9e",
+      "manifest": "tests/c6-held-manifest.json"
+    },
+    {
+      "path": "src/routes/internal/salons.js",
+      "sha256": "4e319b9f8b26909294c128c4f8bf0d7055f8c8b16195109fe5bdb8320c22c74f",
+      "manifest": "tests/c6-held-manifest.json"
+    },
+    {
+      "path": "src/routes/internal/usAdminCommercialRoutes.js",
+      "sha256": "ebbc67be9b121e678d6f982984d16bf8b7b1882e59608c31a9b750bd513157d5",
+      "manifest": "tests/c6-held-manifest.json"
+    },
+    {
+      "path": "src/routes/internalUsMasterManualBooking.js",
+      "sha256": "7875f582d3d93dfeabe85621f5e4940a229e575de284ce75aa6bdd5cf6ebe607",
+      "manifest": "tests/c6-held-manifest.json"
+    },
+    {
+      "path": "src/routes/publicCreateBooking.js",
+      "sha256": "5b951d6aeca07d2edede234e230ef5ce68b6c7527c13b460ebe0892ad7a387e9",
+      "manifest": "tests/c6-held-manifest.json"
+    },
+    {
+      "path": "src/services/billing/usSaasBookingGuard.js",
+      "sha256": "3499ddd58ea6138ed53cae1a1c96d6444132b370a5daa6dbdb6282ba92c0648e",
+      "manifest": "tests/c6-held-manifest.json"
+    },
+    {
+      "path": "src/services/billing/usSaasProfileHoursGuard.js",
+      "sha256": "96aac453715e5ca8a864ad9d4ca2d36a48e87334f0c4f1968084e9f535ff4759",
+      "manifest": "tests/c6-held-manifest.json"
+    },
+    {
+      "path": "src/services/billing/usSaasReconciliation.js",
+      "sha256": "1ce7af01e06f9deddaa9f10afbd97bfb84639e167804d6b4d05bd8e0b5bbe742",
+      "manifest": "tests/c6-finance-delta-manifest.json"
+    },
+    {
+      "path": "src/services/billing/usSaasReconciliationAudit.js",
+      "sha256": "48902ad0a1c2437a07fade456b76093dcf7494e08f489c9be2c6ea39b54f7cce",
+      "manifest": "tests/c6-finance-delta-manifest.json"
+    },
+    {
+      "path": "src/services/billing/usSaasRuntime.js",
+      "sha256": "8794048f1cca5331535ff9a14aedeab230010a35d6480779ceb6cdac1f78fa51",
+      "manifest": "tests/c6-finance-delta-manifest.json"
+    },
+    {
+      "path": "src/services/billing/usSaasRuntimeMonitoring.js",
+      "sha256": "10885b6c347eaa8ab3c6eec144a2f4490c3f5cecda10306fbe49e5a3da438e2a",
+      "manifest": "tests/c6-finance-delta-manifest.json"
+    },
+    {
+      "path": "src/services/billing/usSaasTransactionalWriteGuard.js",
+      "sha256": "542bc34ec2a8a0bd6665ae8bf1c620ee7338b471ce493ae0da93dea494857934",
+      "manifest": "tests/c6-held-manifest.json"
+    },
+    {
+      "path": "src/services/billing/usSaasWalletBoundary.js",
+      "sha256": "d255d140ebae07cbfc4955a5d1169ad7b570d63dcc25c654cf6c29a564219771",
+      "manifest": "tests/c6-held-manifest.json"
+    },
+    {
+      "path": "src/services/notifications/ownerOpeningWelcomeIntent.js",
+      "sha256": "08a701f720bd9c4519b78039f604383ebef0af0be80a6cbb9abeabb71e5dedd0",
+      "manifest": "tests/c6-held-manifest.json"
+    },
+    {
+      "path": "src/services/notifications/usWelcomeGmailReadback.js",
+      "sha256": "bac6349c8c16c1f9f588c4e481f805dd6acfb3dbc16aec6c31b496d903c646d8",
+      "manifest": "tests/c6-held-manifest.json"
+    },
+    {
+      "path": "src/services/provision/ownerOpeningCanonicalActivation.js",
+      "sha256": "8e2a0d01b4a02b4bab977ed5564773465530249785c23e2e68634007245a68fa",
+      "manifest": "tests/c6-held-manifest.json"
+    },
+    {
+      "path": "src/services/provision/usG3ManualEvidenceVerifier.js",
+      "sha256": "3d8f7a97cef67846fa2d1b8ccef347d7cd69f7d0b9e5cfa39e6c3175b7ccee24",
+      "manifest": "tests/c6-held-manifest.json"
+    },
+    {
+      "path": "src/services/provision/usG3ManualRequestReceipt.js",
+      "sha256": "4a6d90d64630126e7f1e9563929eb1fe4f27684bf055b8ad73b03c7859736432",
+      "manifest": "tests/c6-held-manifest.json"
+    },
+    {
+      "path": "src/services/usPayC11LiveDirectCharge.service.js",
+      "sha256": "e40e0339802a65025046d169c5c0a34428241a6d3f09581e539c3903a8dff0e1",
+      "manifest": "tests/c6-finance-delta-manifest.json"
+    },
+    {
+      "path": "src/services/usPayC11LiveExistingOAuth.service.js",
+      "sha256": "b090878124e65f8fe495abbc9fa4f396dd5c08f4b000764c1743bb585c97ef9c",
+      "manifest": "tests/c6-finance-delta-manifest.json"
+    },
+    {
+      "path": "src/services/usPayC11LiveSellerOnboarding.service.js",
+      "sha256": "f26c76c45e55f965c9f31096bb0d629bee7e97fa528663101d432a9604a7acc6",
+      "manifest": "tests/c6-finance-delta-manifest.json"
+    },
+    {
+      "path": "src/services/usPayC11OwnerCollector.service.js",
+      "sha256": "b3c80598612b6c2dfcff80ee57b1664d864336adb71ebab97fe4932bdd463974",
+      "manifest": "tests/c6-held-manifest.json"
+    },
+    {
+      "path": "src/services/usServiceLink.service.js",
+      "sha256": "a03d766e3c1bce954083ec0f0a0a01a5038d54748637d698d63f5544761d0d8c",
+      "manifest": "tests/c6-held-manifest.json"
+    },
+    {
+      "path": "src/services/usServicePrice.service.js",
+      "sha256": "af549eb63d91fd8e3ce78a7366f24b370df9e9bd62a58f042393738adca810bb",
+      "manifest": "tests/c6-held-manifest.json"
+    },
+    {
+      "path": "src/services/usServiceTaxSettings.service.js",
+      "sha256": "4e1a6d6ffc2d1aedc59f5d5f1845e8a9361e5350d8f18631f11a6306874954ef",
+      "manifest": "tests/c6-held-manifest.json"
+    },
+    {
+      "path": "utils/enqueueJob.js",
+      "sha256": "9ce6af57930506e1b44709b54a1184578784cc60c6d43a96c215a7b3a8a4e89c",
+      "manifest": "tests/c6-finance-delta-manifest.json"
+    }
+  ],
+  "accepted_runs": [
+    45517080117,
+    45517080080,
+    45517080185,
+    45517080202,
+    45517080050,
+    45517080115,
+    45519462499,
+    45519952763,
+    45520993339
+  ],
+  "t5_schema": "COMMITTED_DO_NOT_REPEAT",
+  "queue_schema": "REQUIRED_BEFORE_ANY_LEASE_WORKER_RUN_NOT_APPLIED",
+  "archive_restore": "NOT_VERIFIED",
+  "deploy": "NOT_AUTHORIZED_BY_GATE"
+}

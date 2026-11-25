@@ -36,6 +36,7 @@ function assertNoForbiddenSql(sql) {
 
 function createMockClient(handler) {
   const calls = [];
+  let businessIndex=0;
   const client = {
     calls,
     releaseCalls: 0,
@@ -44,7 +45,13 @@ function createMockClient(handler) {
       const normalizedParams = Array.isArray(params) ? [...params] : [];
       calls.push({ sql: normalizedSql, params: normalizedParams });
       assertNoForbiddenSql(normalizedSql);
-      const result = await handler(normalizedSql, normalizedParams, calls.length - 1, client);
+      if(normalizedSql.startsWith("SELECT pg_advisory_xact_lock(")){
+        assert.deepEqual(normalizedParams,['["master","35","KGS"]']);return {rows:[]};
+      }
+      if(normalizedSql.startsWith("SELECT id FROM public.money_owner_balances")&&normalizedSql.endsWith("FOR UPDATE")){
+        assert.deepEqual(normalizedParams,['master','35','KGS']);return {rows:[]};
+      }
+      const result = await handler(normalizedSql, normalizedParams, businessIndex++, client);
       if (!result || !Array.isArray(result.rows)) {
         return { rows: [] };
       }
@@ -60,6 +67,7 @@ function createMockClient(handler) {
 
 function createMockPool(handler, { withConnect = false } = {}) {
   const calls = [];
+  let businessIndex=0;
   const pool = {
     calls,
     async query(sql, params = []) {
@@ -67,7 +75,13 @@ function createMockPool(handler, { withConnect = false } = {}) {
       const normalizedParams = Array.isArray(params) ? [...params] : [];
       calls.push({ sql: normalizedSql, params: normalizedParams });
       assertNoForbiddenSql(normalizedSql);
-      const result = await handler(normalizedSql, normalizedParams, calls.length - 1, pool);
+      if(normalizedSql.startsWith("SELECT pg_advisory_xact_lock(")){
+        assert.deepEqual(normalizedParams,['["master","35","KGS"]']);return {rows:[]};
+      }
+      if(normalizedSql.startsWith("SELECT id FROM public.money_owner_balances")&&normalizedSql.endsWith("FOR UPDATE")){
+        assert.deepEqual(normalizedParams,['master','35','KGS']);return {rows:[]};
+      }
+      const result = await handler(normalizedSql, normalizedParams, businessIndex++, pool);
       if (!result || !Array.isArray(result.rows)) {
         return { rows: [] };
       }
@@ -244,9 +258,11 @@ test('rebuildOwnerBalanceFromLedger calculates zone balances and upserts owner b
     assert.equal(balance.available, 3000);
     assert.equal(balance.locked, 500);
     assert.equal(balance.paid_out, 0);
-    assert.equal(pool.calls.length, 2);
-    assert.equal(pool.calls[0].sql.startsWith('SELECT money_zone, direction, amount'), true);
-    assert.equal(pool.calls[1].sql.startsWith('INSERT INTO public.money_owner_balances'), true);
+    assert.equal(pool.calls.length, 4);
+    assert.equal(pool.calls[0].sql.startsWith('SELECT pg_advisory_xact_lock'), true);
+    assert.equal(pool.calls[1].sql.endsWith('FOR UPDATE'), true);
+    assert.equal(pool.calls[2].sql.startsWith('SELECT money_zone, direction, amount'), true);
+    assert.equal(pool.calls[3].sql.startsWith('INSERT INTO public.money_owner_balances'), true);
   } finally {
     restoreFlags();
   }
