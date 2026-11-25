@@ -6,7 +6,7 @@ import {prepareUsImportedMasterReceipt} from "../../services/provision/usImporte
 import {isUsOwnSalonMaster} from "../../services/provision/usOwnSalonCanonicalActivation.js";
 import {prepareUsPaidActivationEvidence} from "../../services/provision/usPaidOwnerOpeningGate.js";
 import {activateOwnerOpeningCanonical} from "../../services/provision/ownerOpeningCanonicalActivation.js";
-import {claimOwnerOpeningWelcome,finalizeOwnerOpeningWelcomeSent,markOwnerOpeningWelcomeUncertain,reconcileOwnerOpeningWelcomeSent} from "../../services/notifications/ownerOpeningWelcomeIntent.js";
+import {assertUsWelcomeRole,claimOwnerOpeningWelcome,finalizeOwnerOpeningWelcomeSent,markOwnerOpeningWelcomeUncertain,reconcileOwnerOpeningWelcomeSent} from "../../services/notifications/ownerOpeningWelcomeIntent.js";
 import {requestMarketCode} from "../../services/provision/usOpenOwnerGuards.js";
 
 const fail=(code,status=409)=>Object.assign(Error(code),{code,status});
@@ -24,7 +24,7 @@ function assertScope(r,requestId,sourceAdmin){
 export function assertUsAdminWelcomePreview({request,requestId,sourceAdmin}={}){
  assertUsCommercialWriterReleased("welcome");
  assertScope(request,requestId,sourceAdmin);
- if(request.owner_type==="master")throw fail("US_ODOO_MASTER_ROLE_COMMERCIAL_CONTRACT_HOLD");
+ assertUsWelcomeRole(request);
  if(!["activated","email_ready"].includes(request.status))throw fail("OWNER_OPENING_REQUEST_STATUS_INVALID");
  if(request.message_id!=null||request.email_sent_at||["sent","failed"].includes(request.email_status))
    throw fail("OWNER_OPENING_WELCOME_RECONCILIATION_REQUIRED");
@@ -52,7 +52,7 @@ export async function activateUsAdminRequest({pool,request,requestId,sourceAdmin
 export async function sendUsAdminWelcome({pool,request,requestId,sourceAdmin,admin,raw,callbacks,sendEmail}={}){
  assertUsCommercialWriterReleased("welcome");
  assertScope(request,requestId,sourceAdmin);
- if(request.owner_type==="master")throw fail("US_ODOO_MASTER_ROLE_COMMERCIAL_CONTRACT_HOLD");
+ // The locked claim boundary also checks role eligibility before any new send.
  const claim=await claimOwnerOpeningWelcome({...callbacks,pool,requestId,admin,sourceAdmin,requireUsScope:true,
    prepareSourceReceipt:()=>prepareManualG3RequestReceipt(pool,requestId,{raw,purpose:"welcome",admin:sourceAdmin}),
    preparePaidEvidence:prepareUsPaidActivationEvidence});

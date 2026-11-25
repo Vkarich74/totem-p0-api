@@ -33,7 +33,7 @@ async function transaction(pool,fn){
 async function lockRequest(db,id){
   const r=await db.query(
     "SELECT * FROM public.owner_opening_requests WHERE id=$1 FOR UPDATE",[id]);
-  return r.rows[0]||null;
+  return r.rows.length===1?r.rows[0]:null;
 }
 async function lockMessage(db,key){
   const r=await db.query(
@@ -46,27 +46,87 @@ function checkMarket(r,market){
     throw error("US_ODOO_SOURCE_MARKET_MISMATCH");
 }
 function checkUsScope(r,required){
-  if(required&&(!isScopedUsOdooRequest(r)||Number(r.source_company_id)!==4||Number(r.source_website_id)!==5||r.precheck_result_json?.normalized?.market_code!=="US"))throw error("US_G3_ADMIN_SOURCE_SCOPE_CHANGED");
+  if(!r)throw error("OWNER_OPENING_REQUEST_NOT_FOUND",404);
+  if((isScopedUsOdooRequest(r)&&!required)||
+     (required&&(!isScopedUsOdooRequest(r)||Number(r.source_company_id)!==4||Number(r.source_website_id)!==5||r.precheck_result_json?.normalized?.market_code!=="US")))
+    throw error("US_G3_ADMIN_SOURCE_SCOPE_CHANGED");
 }
 function requireReconcile(){throw Object.assign(error("OWNER_OPENING_WELCOME_RECONCILIATION_REQUIRED"),{requires_reconciliation:true});}
 const email=v=>typeof v==="string"?v.trim().toLowerCase():"";
+// The existing one-intent-per-request key remains immutable. An own-salon
+// master shares a paid salon projection, not a second mail authorization.
+// Consent for an existing-salon master likewise does not establish a paid grant.
+export function usWelcomeRoleStatus(r){
+ const p=r?.precheck_result_json?.odoo_source_proof;
+ if(!isScopedUsOdooRequest(r)||Number(r.source_company_id)!==4||
+    Number(r.source_website_id)!==5||r.precheck_result_json?.normalized?.market_code!=="US")
+   return "SOURCE_SCOPE_INVALID";
+ if(r.owner_type==="salon"&&((p?.entry_mode==="salon"&&p.role_set==="salon")||
+    (p?.entry_mode==="own_salon"&&p.role_set==="salon,master")))return "SALON_PAID_PROOF_REQUIRED";
+ if(r.owner_type==="master"&&p?.entry_mode==="own_salon"&&p.role_set==="salon,master")
+   return "OWN_SALON_MASTER_WELCOME_HOLD";
+ if(r.owner_type==="master"&&p?.entry_mode==="existing_salon"&&p.role_set==="master")
+   return "EXISTING_SALON_MASTER_WELCOME_HOLD";
+ return "SOURCE_SCOPE_INVALID";
+}
+export function assertUsWelcomeRole(r){
+ const role=usWelcomeRoleStatus(r);
+ if(role==="SOURCE_SCOPE_INVALID")throw error("US_G3_ADMIN_SOURCE_SCOPE_CHANGED");
+ if(role!=="SALON_PAID_PROOF_REQUIRED")throw error("US_ODOO_MASTER_ROLE_COMMERCIAL_CONTRACT_HOLD");
+ if(!toId(r.created_owner_id)||!toId(r.created_auth_user_id))throw error("US_G3_WELCOME_IDENTITY_REQUIRED");
+}
+// JSONB key order is not stable; compare exact field values. This is a
+// durable source-identity snapshot, not payment proof or a release switch.
+function sourceBinding(r){
+ const p=r?.precheck_result_json?.odoo_source_proof;
+ if(usWelcomeRoleStatus(r)==="SOURCE_SCOPE_INVALID"||!toId(r.id)||
+    !toId(r.created_owner_id)||!toId(r.created_auth_user_id)||!toId(r.source_partner_id)||
+    r.source_request_id!=="odoo-us-partner-"+toId(r.source_partner_id)||
+    toId(p?.source_partner_id)!==toId(r.source_partner_id)||p?.source_request_id!==r.source_request_id||
+    p?.source_stage_id!==82||p?.source_marker!=="totem_us_portal_approved_v1"||
+    p?.source!=="odoo_us_approved_profile_v1"||
+    p?.source_schema!=="g3_source_v1"||p?.source_revision!=="1"||
+    typeof p?.source_approved_at!=="string"||
+    !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(p.source_approved_at)||
+    !Number.isFinite(Date.parse(p.source_approved_at))||
+    new Date(p.source_approved_at).toISOString().replace(".000Z","Z")!==p.source_approved_at||
+    !/^[a-f0-9]{64}$/.test(p?.source_hash??"")||!toId(p?.odoo_lead_id)||
+    !toId(p?.source_approved_by_id)||p?.source_external_id!=="totem_us_bridge.company4_site5_partner_"+toId(r.source_partner_id))
+   return null;
+ return {contract:"us_welcome_source_binding_v1",company_id:4,website_id:5,
+  partner_id:toId(r.source_partner_id),source_request_id:r.source_request_id,
+  request_id:toId(r.id),owner_id:toId(r.created_owner_id),auth_user_id:toId(r.created_auth_user_id),
+  owner_type:r.owner_type,entry_mode:p.entry_mode,role_set:p.role_set,lead_id:toId(p.odoo_lead_id),
+  source_revision:p.source_revision,source_hash:p.source_hash,source_external_id:p.source_external_id,
+  source_approved_by_id:toId(p.source_approved_by_id),source_approved_at:p.source_approved_at??null};
+}
+function sameBinding(req,value){
+ const expected=sourceBinding(req);
+ return !!expected&&!!value&&typeof value==="object"&&!Array.isArray(value)&&
+   Object.keys(expected).length===Object.keys(value).length&&
+   Object.keys(expected).every(k=>expected[k]===value[k]);
+}
 function exactIntent(req,msg){
  const key=welcomeIntentKey(req.id),d=msg?.data;
  return !!msg&&toId(msg.id)>0&&toId(req.message_id)===toId(msg.id)&&
  msg.idempotency_key===key&&d?.logical_intent_key===key&&d.rfc_message_id===welcomeRfcMessageId(req.id)&&
  d.entity_type==="owner_opening_request"&&toId(d.entity_id)===toId(req.id)&&
- d.owner_type===req.owner_type&&d.slug===req.slug_final&&email(d.to)!==""&&email(d.to)===email(req.email);
+ d.owner_type===req.owner_type&&d.slug===req.slug_final&&email(d.to)!==""&&email(d.to)===email(req.email)&&
+ sameBinding(req,d.us_source_binding);
 }
-async function relatedMessages(db,req){
+export async function readUsWelcomeRelatedMessages(db,req,{lock=false}={}){
  const q=await db.query("SELECT id,status,idempotency_key,data FROM public.messages "+
  "WHERE idempotency_key LIKE $1 OR id=$2 OR (data->>'entity_type'='owner_opening_request' AND data->>'entity_id'=$3) "+
- "ORDER BY id LIMIT 2 FOR UPDATE",["owner_opening:"+toId(req.id)+":%",req.message_id??null,String(req.id)]);
+ "ORDER BY id LIMIT 2"+(lock?" FOR UPDATE":""),["owner_opening:"+toId(req.id)+":%",req.message_id??null,String(req.id)]);
  return q.rows;
 }
+const relatedMessages=(db,req)=>readUsWelcomeRelatedMessages(db,req,{lock:true});
 export function classifyUsWelcomeDecision(req,rows){
  if(!req||!Array.isArray(rows))requireReconcile();
  if(rows.length===0&&req.message_id==null&&!req.email_sent_at&&!["sent","failed"].includes(req.email_status)&&!["email_sent","email_failed"].includes(req.status)){
    if(req.status!=="email_ready")throw error("OWNER_OPENING_REQUEST_STATUS_INVALID");
+   assertUsWelcomeRole(req);
+   if(!sourceBinding(req))throw error("US_G3_WELCOME_FRESH_SOURCE_REQUIRED");
    return {kind:"unclaimed"};
  }
  if(rows.length!==1||!exactIntent(req,rows[0]))requireReconcile();
@@ -80,7 +140,7 @@ async function assertAdminSession(db,a,required){
  if(a?.role!=="admin"||!toId(a.user_id)||typeof a.session_id!=="string"||!a.session_id)throw error("US_G3_ADMIN_SESSION_REQUIRED",403);
  const q=await db.query("SELECT s.id FROM public.auth_sessions s JOIN public.auth_users u ON u.id=s.user_id "+
  "WHERE s.id=$1 AND s.user_id=$2 AND s.revoked_at IS NULL AND s.expires_at>clock_timestamp() "+
- "AND (s.last_seen_at IS NULL OR s.last_seen_at>clock_timestamp()-interval '24 hours') AND u.role='admin' AND u.enabled=true FOR SHARE OF s,u",[a.session_id,toId(a.user_id)]);
+ "AND s.last_seen_at>clock_timestamp()-interval '24 hours' AND u.role='admin' AND u.enabled=true FOR SHARE OF s,u",[a.session_id,toId(a.user_id)]);
  if(q.rows.length!==1)throw error("US_G3_ADMIN_SESSION_INVALID",403);
 }
 async function inspectLockedWelcome(db,id,requireUsScope,sourceAdmin){
@@ -186,7 +246,10 @@ export async function claimOwnerOpeningWelcome(o={}){
     if(!preview?.to||!preview?.subject||!preview?.html||(requireUsScope&&email(preview.to)!==email(req.email)))
       throw error("OWNER_OPENING_WELCOME_PREVIEW_INVALID");
     const rfcMessageId=welcomeRfcMessageId(id);
+    const binding=requireUsScope?sourceBinding(req):null;
+    if(requireUsScope&&!binding)throw error("US_G3_WELCOME_FRESH_SOURCE_REQUIRED");
     const data={entity_type:"owner_opening_request",entity_id:id,
+      ...(binding?{us_source_binding:binding}:{}),
       owner_type:req.owner_type,slug:req.slug_final,
       to:preview.to,subject:preview.subject,text:preview.text||"",
       html:preview.html,links:preview.links||{},status:"pending",

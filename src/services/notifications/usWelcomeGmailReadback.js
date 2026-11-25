@@ -12,13 +12,13 @@ export async function verifyUsWelcomeGmailSent(gmail,{providerId=null,rfcMessage
  const deny=()=>({verified:false});
  if(!RFC.test(String(rfcMessageId||""))||!mailbox(recipient)||!mailbox(sender)||(providerId!==null&&!ID.test(String(providerId))))return deny();
  try{
-   let id=providerId;
-   if(!id){
-     const found=await gmail.users.messages.list({userId:"me",labelIds:["SENT"],q:"rfc822msgid:"+rfcMessageId,maxResults:2});
-     const data=found?.data;
-     if(!Array.isArray(data?.messages)||data.messages.length!==1||data.nextPageToken||!ID.test(String(data.messages[0]?.id||"")))return deny();
-     id=data.messages[0].id;
-   }
+   // A supplied provider ID cannot hide another SENT message with the same
+   // logical RFC ID. Always prove the unique positive match before readback.
+   const listed=await gmail.users.messages.list({userId:"me",labelIds:["SENT"],q:"rfc822msgid:"+rfcMessageId,maxResults:2});
+   const listing=listed?.data;
+   if(!Array.isArray(listing?.messages)||listing.messages.length!==1||listing.nextPageToken||!ID.test(String(listing.messages[0]?.id||"")))return deny();
+   const id=listing.messages[0].id;
+   if(providerId!==null&&providerId!==id)return deny();
    const found=await gmail.users.messages.get({userId:"me",id,format:"metadata",metadataHeaders:["Message-ID","From","To"]});
    const d=found?.data,headers=d?.payload?.headers;
    if(d?.id!==id||!Array.isArray(d.labelIds)||!d.labelIds.includes("SENT")||!Array.isArray(headers))return deny();

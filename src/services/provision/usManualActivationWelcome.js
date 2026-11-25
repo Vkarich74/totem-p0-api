@@ -1,5 +1,5 @@
 import {commercialWriterRelease} from "./usCommercialWriterRelease.js";
-import {welcomeIntentKey,welcomeRfcMessageId} from "../notifications/ownerOpeningWelcomeIntent.js";
+import {welcomeIntentKey,welcomeRfcMessageId,classifyUsWelcomeDecision,readUsWelcomeRelatedMessages,usWelcomeRoleStatus} from "../notifications/ownerOpeningWelcomeIntent.js";
 export {welcomeIntentKey,welcomeRfcMessageId};
 import {inspectUsPaidAuthorityContract} from "./usPaidOwnerOpeningGate.js";
 // US G3 manual release contract. This module performs read-only readiness checks.
@@ -31,15 +31,16 @@ function exactSource(r){
 // A persisted message is not proof of delivery. A missing Gmail acknowledgement
 // or legacy/ambiguous intent must never be treated as permission to retry.
 export function classifyWelcomeIntent(r,rows){
- const key=welcomeIntentKey(r.id);
- if(!Array.isArray(rows))return "RECONCILIATION_REQUIRED";
- if(!rows.length)return r.message_id==null&&!r.email_sent_at&&r.status!=="email_sent"&&r.status!=="email_failed"&&!["sent","failed"].includes(r.email_status)?"NOT_CLAIMED":"RECONCILIATION_REQUIRED";
- if(rows.length!==1)return "RECONCILIATION_REQUIRED";
- const m=rows[0];
- if(!id(m.id)||id(r.message_id)!==id(m.id)||m.idempotency_key!==key||
- m.rfc_message_id!==welcomeRfcMessageId(r.id)||m.logical_intent_key!==key)return "RECONCILIATION_REQUIRED";
- if(m.status==="sent"&&m.delivery_state==="sent"&&r.status==="email_sent"&&r.email_status==="sent"&&r.email_sent_at&&m.has_provider_id===true)return "SENT_RECORDED";
- return "RECONCILIATION_REQUIRED";
+ // Admin detail uses the same exact intent classifier as the writer.
+ // Absence of an intent is not permission to send. Pending/held roles
+ // must not be mislabeled as delivery uncertainty in the Admin detail.
+ if(r&&Array.isArray(rows)&&rows.length===0&&r.message_id==null&&!r.email_sent_at&&
+    !["email_sent","email_failed"].includes(r.status)&&!["sent","failed"].includes(r.email_status))
+  return "NOT_CLAIMED";
+ try{
+  const d=classifyUsWelcomeDecision(r,rows);
+  return d.kind==="already_sent"?"SENT_RECORDED":"NOT_CLAIMED";
+ }catch{return "RECONCILIATION_REQUIRED";}
 }
 async function inspectCanonical(db,r){
  if(!id(r.created_owner_id)||!id(r.created_auth_user_id)||!["provisioned",...states].includes(r.status))return {identity:false,geo:false,reason:"PROVISION_REQUIRED"};
@@ -113,14 +114,12 @@ export async function inspectUsManualActivationWelcome(pool,request){
   if(q.rows.length!==1||!isScopedUsOdooRequest(r))throw fail("US_G3_RELEASE_READBACK_CHANGED");
   const source=exactSource(r);
   const c=source?await inspectCanonical(db,r):{identity:false,geo:false,reason:"SOURCE_SEAL_OR_SCOPE_UNVERIFIED"};
-  const m=await db.query(`SELECT id,status,idempotency_key,data->>'rfc_message_id' AS rfc_message_id,
-    data->>'logical_intent_key' AS logical_intent_key,data->>'delivery_state' AS delivery_state,
-    COALESCE((data->>'gmail_message_id') ~ '^[a-zA-Z0-9_-]{1,200}$',false) AS has_provider_id
-   FROM public.messages WHERE idempotency_key LIKE $1 ORDER BY id LIMIT 2`,["owner_opening:"+id(r.id)+":%"]);
+  const messages=await readUsWelcomeRelatedMessages(db,r);
   const paid=await inspectUsPaidAuthorityContract(db);
   const result={...base,paid_authority_contract:paid,owner_mode:proof(r)?.entry_mode??null,source_seal_valid:source,
     canonical_identity_ready:c.identity,geo_ready:c.geo,technical_reason:c.reason,
-    welcome_intent:classifyWelcomeIntent(r,m.rows),welcome_intent_key:welcomeIntentKey(r.id),
+    welcome_role_status:usWelcomeRoleStatus(r),
+    welcome_intent:classifyWelcomeIntent(r,messages),welcome_intent_key:welcomeIntentKey(r.id),
     welcome_rfc_message_id:welcomeRfcMessageId(r.id)};
   await db.query("COMMIT");
   return result;
