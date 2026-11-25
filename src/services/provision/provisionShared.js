@@ -76,7 +76,19 @@ export async function ensureUniqueMasterSlug(db, slugBase){
   return ensureUniqueSlug(db, "masters", slugBase, "slug");
 }
 
+// G3-05: verified USA sources are correlated by role-scoped opening request.
+ // A CRM lead is not an auth identity. Never route a US subject through the
+ // historical single-lead upsert; preserve the existing non-US contract.
+function assertLegacyOnboardingLeadAllowed(payload){
+  if(normalizeText(payload?.market_code).toUpperCase()==="US"&&normalizeText(payload?.lead_id)){
+    throw Object.assign(Error("US_ODOO_LEGACY_IDENTITY_WRITE_DENIED"),{
+      code:"US_ODOO_LEGACY_IDENTITY_WRITE_DENIED",status:409
+    });
+  }
+}
+
 export function validateSalonProvisionInput(payload = {}){
+  assertLegacyOnboardingLeadAllowed(payload);
   const email = normalizeText(payload.email).toLowerCase();
   const name = normalizeText(payload.name) || null;
   const salonName = normalizeText(payload.salon_name);
@@ -119,6 +131,7 @@ export function validateSalonProvisionInput(payload = {}){
 }
 
 export function validateMasterProvisionInput(payload = {}){
+  assertLegacyOnboardingLeadAllowed(payload);
   const email = normalizeText(payload.email).toLowerCase();
   const name = normalizeText(payload.name);
   const requestedRole = normalizeText(payload.requested_role || "master");
@@ -245,6 +258,7 @@ export async function upsertOwnerSalonLink(db, ownerId, salonId){
 }
 
 export async function createOnboardingIdentityIfNeeded(db, payload = {}){
+  assertLegacyOnboardingLeadAllowed(payload);
   const leadId = normalizeText(payload.lead_id);
   const email = normalizeText(payload.email).toLowerCase();
   const requestedRole = normalizeText(payload.requested_role);

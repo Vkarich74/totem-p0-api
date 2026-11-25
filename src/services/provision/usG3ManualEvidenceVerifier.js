@@ -23,17 +23,18 @@ export function manualG3EvidenceEnabled(env=process.env){
 // This module does not register routes or perform writes. Downstream callers MUST check
 // authenticated admin session and lock/bind the current request before consuming roles.
 export async function verifyManualG3Evidence(raw,{purpose,requestId=null,headers,query,env=process.env,now=()=>Date.now(),readVerifiedTargetGeo}={}){
- const scope=purpose==="intake"?firstManualG3IntakeScope(env):null;
- if(purpose==="intake"?!scope:!manualG3EvidenceEnabled(env))throw problem("RELEASE_HOLD");
- if(purpose==="intake")assertUsOdooIntakeHeader(headers,query,env);
- req(["intake","approve","provision","activate","welcome"].includes(purpose),"PURPOSE");
+ const sourceRead=["intake","reconcile"].includes(purpose);
+ const scope=sourceRead?firstManualG3IntakeScope(env):null;
+ if(sourceRead?!scope:!manualG3EvidenceEnabled(env))throw problem("RELEASE_HOLD");
+ if(sourceRead)assertUsOdooIntakeHeader(headers,query,env);
+ req(["intake","reconcile","approve","provision","activate","welcome"].includes(purpose),"PURPOSE");
  const b=parseCanonical(raw),u=unsignedBody(b),e=exact(b.evidence,EVIDENCE_KEYS);
- if(purpose==="intake")req(firstManualG3IntakeMatches(b,env),"FIRST_SOURCE_SCOPE");
+ if(sourceRead)req(firstManualG3IntakeMatches(b,env,purpose),"FIRST_SOURCE_SCOPE");
  req(b._model==="crm.lead"&&b.market_code==="US"&&b.evidence_version===VERSION&&isId(b._id),"SCOPE");
  req(typeof b.signature==="string"&&/^[A-Za-z0-9_-]{86}$/.test(b.signature),"SIGNATURE");
  const sig=Buffer.from(b.signature,"base64url");
  req(sig.length===64&&sig.toString("base64url")===b.signature&&verify(null,signingBytes(u),signedKey(env,b.kid),sig),"SIGNATURE");
- req(e.purpose===purpose&&e.request_id===requestId&&(purpose==="intake"?requestId===null:isId(requestId)),"PURPOSE");
+ req(e.purpose===purpose&&e.request_id===requestId&&(sourceRead?requestId===null:isId(requestId)),"PURPOSE");
  req(e.installation==="totem-platform"&&e.company_id===4&&e.website_id===5&&e.team_id===8&&e.actor_uid===2,"SCOPE");
  const a=e.observed_start_ms,z=e.observed_end_ms,t=now();
  req(isId(a)&&isId(z)&&isId(t)&&z>=a&&z-a<=15000&&z<=t+2000&&t-z<=15000,"FRESHNESS");
@@ -44,7 +45,7 @@ export async function verifyManualG3Evidence(raw,{purpose,requestId=null,headers
  // No other approver accepted in this one-admin model.
  const d=canonicalG3Projection(p,{reviewerIds:[2],now:a,env}),h=hashG3Projection(d);
  req(d.approved_by_id===2,"APPROVER");
- if(purpose==="intake")req(d.partner_id===scope.partnerId&&b._id===scope.leadId&&h===scope.sourceHash,"FIRST_SOURCE_HASH");
+ if(sourceRead)req(d.partner_id===scope.partnerId&&b._id===scope.leadId&&h===scope.sourceHash,"FIRST_SOURCE_HASH");
  const w=exact(e.witness,W),wr=exact(e.witness_repeat,W);
  req(w.module==="totem_us_bridge"&&w.name==="company4_site5_partner_"+pid&&w.model==="crm.lead"&&w.res_id===b._id&&w.noupdate===true&&same(w,wr)&&same(e.witness_reference,["crm.lead",b._id])&&same(e.witness_reference_repeat,e.witness_reference),"WITNESS");
  let target=null,targetSeal=null,state=null,country=null,geo=null;

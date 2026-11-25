@@ -5,7 +5,7 @@ import {assertCanonicalUsProvisionResult} from "../../services/provision/usCanon
 import {validG3Seal,sameG3Seal} from "../../services/provision/usOdooG3SealProof.js";
 import {hasManualG3Envelope,prepareManualG3RequestReceipt,assertManualG3RequestReceipt,isManualG3Request,isScopedUsOdooRequest,assertUsOdooDispatchHold} from "../../services/provision/usG3ManualRequestReceipt.js";
 import {prepareUsImportedMasterReceipt} from "../../services/provision/usImportedMasterProvision.js";
-import {isUsOdooIntakeHint,registerApprovedUsOdooSalon,firstManualG3IntakeScope} from "../../services/provision/usApprovedOdooSalonIntake.js";
+import {isUsOdooIntakeHint,registerApprovedUsOdooSalon,firstManualG3IntakeScope,readCommittedManualG3Intake} from "../../services/provision/usApprovedOdooSalonIntake.js";
 import {kgSharedMasterEnabled,isKgSharedMasterCandidate,readKgSharedMasterCandidate,kgSharedMasterProof,assertKgSharedMasterPending,assertKgSharedMasterActivation} from "../../services/provision/kgSharedMasterIdentity.js";
 import { buildOwnerOpeningEmail, buildEmailMime } from "../../services/notifications/emailTemplates.js";
 import {verifyUsWelcomeGmailSent} from "../../services/notifications/usWelcomeGmailReadback.js";
@@ -1719,6 +1719,10 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
     const incoming = req.body || {};
     if(isUsOdooIntakeHint(incoming)){
       try{
+        if(incoming.evidence?.purpose==="reconcile"){
+          const result=await readCommittedManualG3Intake({pool,body:incoming,raw:req.usG3RawBody,headers:req.headers,query:req.query});
+          return res.status(200).json({ok:true,...result});
+        }
         const result=await registerApprovedUsOdooSalon({pool,body:incoming,raw:req.usG3RawBody,headers:req.headers,
           query:req.query,createExistingOpeningRequest:createVerifiedUsIntakeRequest});
         return res.status(result.duplicate?200:201).json({ok:true,...result});

@@ -46,10 +46,11 @@ export function firstManualG3IntakeScope(env=process.env){
  if(typeof token!=="string"||!/^[\x21-\x7e]{32,4096}$/.test(token)||token===str(env.ODOO_BRIDGE_TOKEN))return null;
  return Object.freeze({partnerId:Number(m[1]),leadId:Number(m[2]),sourceHash:m[3]});
 }
-export function firstManualG3IntakeMatches(body,env=process.env){
+export function firstManualG3IntakeMatches(body,env=process.env,purpose="intake"){
+ if(!["intake","reconcile"].includes(purpose))return false;
  const scope=firstManualG3IntakeScope(env),e=body?.evidence,l=e?.lead,p=e?.partner;
  return Boolean(scope&&body?._model==="crm.lead"&&body.market_code==="US"&&body.evidence_version==="g3_owner_admin_evidence_v2"&&
- body._id===scope.leadId&&e?.purpose==="intake"&&e.request_id===null&&
+ body._id===scope.leadId&&e?.purpose===purpose&&e.request_id===null&&
  e.company_id===4&&e.website_id===5&&e.team_id===8&&e.actor_uid===2&&
  l?.id===scope.leadId&&relation(l.x_totem_us_source_partner_id)===scope.partnerId&&
  relation(l.partner_id)===scope.partnerId&&p?.id===scope.partnerId&&
@@ -279,14 +280,9 @@ export async function registerApprovedUsOdooSalon({pool,body,raw,headers,query,
     assertFresh();return verified.map(v=>v.proof);
    },
    assertExisting:async (existing,proof)=>{
-    const v=verified.find(v=>v.proof.owner_type===proof.owner_type),saved=existing.precheck_result_json?.odoo_source_proof;
+    const v=verified.find(v=>v.proof.owner_type===proof.owner_type);
     assertFresh();
-    if((saved?.authority_mode??null)!==(v.provenance.authority_mode??null)||(saved?.authority_kid??null)!==(v.provenance.authority_kid??null)||saved?.odoo_lead_id!==v.provenance.odoo_lead_id||saved?.source_request_id!==v.proof.source_request_id||
-       (saved.entry_mode??"salon")!==v.provenance.entry_mode||(saved.role_set??"salon")!==v.provenance.role_set||
-       (saved.target_salon_partner_id??null)!==v.provenance.target_salon_partner_id||
-       (saved.target_salon_slug??null)!==v.provenance.target_salon_slug||
-       ["source_schema","source_revision","source_hash","source_approved_at","source_approved_by_id","source_external_id","target_source_revision","target_source_hash"].some(k=>saved[k]!==v.provenance[k]))
-      throw problem("US_ODOO_EXISTING_SOURCE_REVIEW_REQUIRED");
+    assertSameG3CommittedSource(existing,v);
    },
    createExistingOpeningRequest:async(db,proof)=>{
     assertFresh();
@@ -298,4 +294,58 @@ export async function registerApprovedUsOdooSalon({pool,body,raw,headers,query,
  if(results.length===1)return results[0];
  return Object.freeze({request_id:results[0].request_id,status:results[0].status,
    duplicate:results.every(r=>r.duplicate),owner_type:"salon",requests:results});
+}
+
+// G3-06: signed reconciliation can only observe an already committed first intake.
+// This purpose is distinct from intake and has no creation callback or fallback.
+function assertSameG3CommittedSource(existing,v){
+ const saved=existing?.precheck_result_json?.odoo_source_proof;
+ if(!saved||!v?.provenance||
+    (saved.authority_mode??null)!==(v.provenance.authority_mode??null)||(saved.authority_kid??null)!==(v.provenance.authority_kid??null)||saved.odoo_lead_id!==v.provenance.odoo_lead_id||saved.source_request_id!==v.proof.source_request_id||
+    (saved.entry_mode??"salon")!==v.provenance.entry_mode||(saved.role_set??"salon")!==v.provenance.role_set||
+    (saved.target_salon_partner_id??null)!==v.provenance.target_salon_partner_id||
+    (saved.target_salon_slug??null)!==v.provenance.target_salon_slug||
+    ["source_schema","source_revision","source_hash","source_approved_at","source_approved_by_id","source_external_id","target_source_revision","target_source_hash"].some(k=>saved[k]!==v.provenance[k]))
+  throw problem("US_ODOO_EXISTING_SOURCE_REVIEW_REQUIRED");
+}
+export async function readCommittedManualG3Intake({pool,body,raw,headers,query,env=process.env}={}){
+ if(!firstManualG3IntakeMatches(body,env,"reconcile"))throw problem("ADMIN_US_ODOO_INTAKE_HOLD");
+ assertUsOdooIntakeHeader(headers,query,env);
+ const scope=firstManualG3IntakeScope(env);
+ const db=await pool.connect();
+ let discard=false;
+ const unresolved=()=>{throw problem("US_ODOO_G3_RECOVERY_NOT_CONFIRMED");};
+ try{
+  await db.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+  await db.query("SET LOCAL statement_timeout='3s'");
+  await db.query("SET LOCAL lock_timeout='1s'");
+  await db.query("SET LOCAL idle_in_transaction_session_timeout='6s'");
+  const {verifyManualG3Evidence}=await import("./usG3ManualEvidenceVerifier.js");
+  const verified=await verifyManualG3Evidence(raw,{purpose:"reconcile",headers,query,env,readVerifiedTargetGeo:createG3TargetGeoReader(db)});
+  if(!verified.length||verified.some(v=>v.provenance.odoo_lead_id!==scope.leadId||v.provenance.source_hash!==scope.sourceHash||v.proof.partner_id!==scope.partnerId))unresolved();
+  const rows=(await db.query(
+   "SELECT id,owner_type,status,source_partner_id,source_request_id,moderation_case_id,created_owner_id,created_auth_user_id,precheck_result_json FROM public.owner_opening_requests WHERE source_namespace='odoo_online' AND source_company_id=4 AND source_website_id=5 AND (source_request_id=$1 OR source_partner_id=$2) LIMIT 3",
+   [sourceKey(scope.partnerId),scope.partnerId])).rows;
+  if(rows.length!==verified.length)unresolved();
+  const requests=verified.map(v=>{
+   const candidates=rows.filter(r=>r.owner_type===v.proof.owner_type);
+   if(candidates.length!==1)unresolved();
+   const r=candidates[0],saved=r.precheck_result_json?.odoo_source_proof;
+   if(!id(Number(r.id))||!id(Number(r.moderation_case_id))||Number(r.source_partner_id)!==scope.partnerId||
+      r.source_request_id!==sourceKey(scope.partnerId)||r.status!=="validated"||r.created_owner_id!==null||r.created_auth_user_id!==null||
+      r.precheck_result_json?.normalized?.market_code!=="US"||saved?.purpose!=="intake"||saved.request_id!==null||
+      saved.source_partner_id!==scope.partnerId||saved.source_stage_id!==82||saved.source_marker!==MARKER||
+      !/^[a-f0-9]{64}$/.test(saved.evidence_digest??""))unresolved();
+   assertSameG3CommittedSource(r,v);
+   return {request_id:Number(r.id),owner_type:r.owner_type,status:r.status,duplicate:true};
+  });
+  if(new Set(requests.map(r=>r.request_id)).size!==requests.length||
+     !firstManualG3IntakeMatches(body,env,"reconcile")||
+     verified.some(v=>Date.now()-v.provenance.observed_end_ms>15000))unresolved();
+  await db.query("COMMIT");
+  return {outcome:"COMMITTED_READBACK",lead_id:scope.leadId,source_partner_id:scope.partnerId,source_hash:scope.sourceHash,requests,retryAllowed:false};
+ }catch(e){
+  try{await db.query("ROLLBACK");}catch{discard=true;}
+  throw e;
+ }finally{db.release(discard);}
 }

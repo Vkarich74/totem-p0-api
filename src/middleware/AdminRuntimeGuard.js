@@ -45,7 +45,8 @@ export default async function AdminRuntimeGuard(req, res, next) {
   if (requestPath.endsWith("/internal/admin/open-owner/odoo-intake")) {
     if(isUsOdooIntakeHint(req.body)){
       const manual=["evidence_version","evidence","kid","signature"].some(k=>Object.hasOwn(req.body??{},k));
-      if(req.method!=="POST"||(manual?!firstManualG3IntakeMatches(req.body):!usOdooIntakeEnabled()))
+      const purpose=req.body?.evidence?.purpose==="reconcile"?"reconcile":"intake";
+      if(req.method!=="POST"||(manual?!firstManualG3IntakeMatches(req.body,process.env,purpose):!usOdooIntakeEnabled()))
         return res.status(409).json({ok:false,error:"ADMIN_US_ODOO_INTAKE_HOLD"});
       try{assertUsOdooIntakeHeader(req.headers,req.query);}
       catch(e){return res.status(401).json({ok:false,error:"UNAUTHORIZED"});}
