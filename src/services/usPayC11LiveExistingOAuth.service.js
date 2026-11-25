@@ -13,6 +13,8 @@
  */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { verifyUsLiveSellerOwnerScope } from "./usPayC11LiveSellerOnboarding.service.js";
+import {checkUsSaasTransactionalWrite} from "./billing/usSaasTransactionalWriteGuard.js";
+const checkCommercial=(db,scope)=>checkUsSaasTransactionalWrite(db,scope.ownerType,{owner_id:scope.ownerId,market_id:scope.marketId});
 import {
   verifyUsConnectPlatform,
   getUsStandardSeller,
@@ -51,6 +53,7 @@ async function tx(pool,cb) {
     await db.query("SET LOCAL statement_timeout='5000ms'");
     await db.query("SET LOCAL lock_timeout='2000ms'");
     const r=await cb(db);
+    if(r?.status>=400){await db.query("ROLLBACK");open=false;return r;}
     await db.query("COMMIT");
     open=false;
     return r;
@@ -110,8 +113,9 @@ export async function beginExistingUsStripeOAuth(pool,{
 
   // Verify actual owner and US market before any LIVE Stripe API request.
   const checked=await tx(pool,async db=>{
-    const scope=await verifyUsLiveSellerOwnerScope(db,{auth,ownerType,ownerId});
-    return scope?{status:200,body:scope}:reject(404,"US_CONNECT_US_OWNER_NOT_FOUND");
+    const scope=await verifyUsLiveSellerOwnerScope(db,{auth,ownerType,ownerId,lock:true});
+    if(!scope)return reject(404,"US_CONNECT_US_OWNER_NOT_FOUND");
+    return (await checkCommercial(db,scope))||{status:200,body:scope};
   });
   if(checked.status!==200) return checked;
   await verifyUsConnectPlatform({secretKey,fetchImpl});
@@ -120,12 +124,13 @@ export async function beginExistingUsStripeOAuth(pool,{
   const stateHash=sha256(state);
 
   const r=await tx(pool,async db=>{
-    const scope=await verifyUsLiveSellerOwnerScope(db,{auth,ownerType,ownerId});
+    const scope=await verifyUsLiveSellerOwnerScope(db,{auth,ownerType,ownerId,lock:true});
     if(!scope || String(scope.marketId)!==String(checked.body.marketId) ||
        scope.slug!==checked.body.slug) {
       return reject(403,"US_CONNECT_OWNER_SESSION_CHANGED");
     }
 
+    const denied=await checkCommercial(db,scope);if(denied)return denied;
     let binding=await bindingForOwner(db,scope,true);
     if(!binding) {
       const created=await db.query(
@@ -147,6 +152,8 @@ export async function beginExistingUsStripeOAuth(pool,{
       return reject(409,"US_CONNECT_BINDING_MARKET_CHANGED");
     }
 
+    const uncertain=await db.query("SELECT 1 FROM public.us_stripe_live_oauth_attempts WHERE binding_id=$1 AND result='exchange_pending' LIMIT 1",[binding.id]);
+    if(uncertain.rows.length)return reject(409,"US_CONNECT_OAUTH_RECONCILIATION_REQUIRED");
     const attempts=await db.query(
       `SELECT COUNT(*)::int AS n
          FROM public.us_stripe_live_oauth_attempts
@@ -180,7 +187,7 @@ export async function beginExistingUsStripeOAuth(pool,{
        VALUES($1,$2,'owner_consent','LIVE')`,
       [binding.id,scope.userId]
     );
-    return {status:200,body:ownerPayload(scope)};
+    return (await checkCommercial(db,scope))||{status:200,body:ownerPayload(scope)};
   });
   if(r.status!==200)return r;
 
@@ -218,7 +225,7 @@ async function consumeOAuthAttempt(pool, stateHash, requestedOutcome) {
         source:"session",user_id:row.actor_user_id,session_id:row.session_id,
         role:row.owner_type==="salon"?"salon_admin":"master",
       },
-      ownerType:row.owner_type,ownerId:row.owner_id,
+      ownerType:row.owner_type,ownerId:row.owner_id,lock:true,
     });
     const matches=scope &&
       scope.userId===row.actor_user_id &&
@@ -226,14 +233,15 @@ async function consumeOAuthAttempt(pool, stateHash, requestedOutcome) {
       scope.slug===row.owner_slug &&
       row.bound_account_id==null &&
       row.binding_status==="initiated";
-    const outcome=matches?requestedOutcome:"invalidated";
+    const commercialDenied=matches&&requestedOutcome==="exchange_pending"?await checkCommercial(db,scope):null;
+    const outcome=matches&&!commercialDenied?requestedOutcome:"invalidated";
     await db.query(
       `UPDATE public.us_stripe_live_oauth_attempts
           SET consumed_at=now(),result=$2
         WHERE state_hash=$1 AND consumed_at IS NULL`,
       [stateHash,outcome]
     );
-    if(!matches) return null;
+    if(!matches||commercialDenied) return null;
     return {scope,bindingId:row.binding_id,stateHash};
   });
 }
@@ -331,12 +339,14 @@ export async function finishExistingUsStripeOAuth(pool,{
           role:started.scope.ownerType==="salon"?"salon_admin":"master",
         },
         ownerType:started.scope.ownerType,
-        ownerId:started.scope.ownerId,
+        ownerId:started.scope.ownerId,lock:true,
       });
       if(!scope || scope.slug!==started.scope.slug ||
          String(scope.marketId)!==String(started.scope.marketId)) {
         throw new Error("US_CONNECT_OAUTH_OWNER_REVOKED");
       }
+      const denied=await checkCommercial(db,scope);
+      if(denied)throw Error(denied.body.error);
       const locked=await db.query(
         `SELECT id,stripe_account_id,verification_status
            FROM public.us_stripe_live_seller_bindings
@@ -410,14 +420,16 @@ export async function finishExistingUsStripeOAuth(pool,{
           [scope.marketId,scope.ownerType,scope.ownerId]
         );
       }
+      const commitDenied=await checkCommercial(db,scope);
+      if(commitDenied)throw Error(commitDenied.body.error);
       return {linked:true};
     });
     return {redirectTo:callbackRedirect(started.scope,
       result.linked?"linked":"failed"),result:"linked"};
   } catch {
-    // Do NOT retry a spent authorization code; a second exchange can revoke
-    // the connection. Report safe failure; the seller may restart OAuth.
-    try {await markAttempt(pool,stateHash,"failed");} catch {}
+    // Exchange may already have succeeded remotely. Retain exchange_pending;
+    // both onboarding and OAuth initiation block until controlled readback.
+    // Never retry or discard an uncertain external binding.
     return {redirectTo:callbackRedirect(started.scope,"failed"),result:"failed"};
   }
 }

@@ -7,6 +7,7 @@ import {assertUsPaidEvidenceForLockedRequest} from "../provision/ownerOpeningCan
 import {validG3Seal} from "../provision/usOdooG3SealProof.js";
 import {createUsOdooReadOnlyClient} from "./usOdooReadOnlyClient.js";
 import {persistUsSaasPaidProjection,revokeUsSaasProjection} from "./usSaasEntitlementProjection.js";
+import {US_SAAS_SYSTEM_ACTOR,writeSystemUsSaasReconciliationAudit} from "./usSaasReconciliationAudit.js";
 
 const CURRENT=new Set(["activated","email_ready","email_sent","email_failed"]);
 const id=v=>Number.isSafeInteger(Number(v))&&Number(v)>0?Number(v):0;
@@ -41,11 +42,11 @@ function policyFor(r,env){
 // A WAIT reason alone is not proof of revocation. Read ONLY the exact
 // existing provider order, corroborate scope, and use a definitive reversal
 // or explicitly cancelled sale order. Unknown, timeout, missing -> WAIT.
-async function readNegative(r,b,policy,env){
+async function readNegative(r,b,policy,env,createClient){
  if(env.TOTEM_US_ODOO_URL!=="https://totem-platform.odoo.com"||env.TOTEM_US_ODOO_DB!=="totem-platform"||!env.TOTEM_US_ODOO_USER||!env.TOTEM_US_ODOO_API_KEY)return null;
  const orderId=id(b.provider_subscription_order_id);
  try{
-  const client=createUsOdooReadOnlyClient({baseUrl:env.TOTEM_US_ODOO_URL,database:env.TOTEM_US_ODOO_DB,username:env.TOTEM_US_ODOO_USER,apiKey:env.TOTEM_US_ODOO_API_KEY});
+  const client=createClient({baseUrl:env.TOTEM_US_ODOO_URL,database:env.TOTEM_US_ODOO_DB,username:env.TOTEM_US_ODOO_USER,apiKey:env.TOTEM_US_ODOO_API_KEY});
   const readOrder=async()=>{
    const rows=await client.searchRead("sale.order",[["id","=",orderId],["company_id","=",4],["website_id","=",5],["partner_id","=",id(r.source_partner_id)]],["id","company_id","website_id","partner_id","state","is_subscription","plan_id","currency_id","invoice_ids"],2);
    const q=rows[0];
@@ -78,11 +79,28 @@ async function assertOperatorSession(db,a,operator,lock){
  const q=await db.query("SELECT s.id FROM public.auth_sessions s JOIN public.auth_users u ON u.id=s.user_id WHERE s.id=$1 AND s.user_id=$2 AND s.revoked_at IS NULL AND s.expires_at>clock_timestamp() AND s.last_seen_at>clock_timestamp()-interval '24 hours' AND u.role='admin' AND u.enabled=true LIMIT 1"+(lock?" FOR SHARE OF s,u":""),[a.session_id,id(a.user_id)]);
  if(q.rows.length!==1)throw Object.assign(fail("US_SAAS_RECONCILIATION_ADMIN_SESSION_INVALID"),{status:403});
 }
-export async function reconcileUsSaasOpening({pool,requestId,writeAudit,operator,sourceAdmin,env=process.env}={}){
+export async function reconcileUsSaasOpening(options={}){
+ return reconcileOpening(options,null);
+}
+// Internal queue-only path. Fixed actor, no synthetic admin/session or external
+// payload credentials. The leased worker supplies the in-transaction fence.
+export async function reconcileUsSaasOpeningFromQueue({pool,requestId,env=process.env,assertLease,signal,createClient}={}){
  assertUsCommercialWriterReleased("projection");
- if(!pool||typeof pool.connect!=="function"||!id(requestId)||typeof writeAudit!=="function"||!id(operator?.id))
+ if(typeof assertLease!=="function"||!signal||typeof createClient!=="function")throw fail("US_SAAS_QUEUE_AUTHORITY_INVALID");
+ return reconcileOpening({pool,requestId,env,writeAudit:writeSystemUsSaasReconciliationAudit,operator:US_SAAS_SYSTEM_ACTOR},{assertLease,signal,createClient});
+}
+async function reconcileOpening({pool,requestId,writeAudit,operator,sourceAdmin,env=process.env}={},queue){
+ assertUsCommercialWriterReleased("projection");
+ if(!pool||typeof pool.connect!=="function"||!id(requestId)||typeof writeAudit!=="function"||(!queue&&!id(operator?.id)))
    throw fail("US_SAAS_RECONCILIATION_CONTRACT_INVALID");
- await assertOperatorSession(pool,sourceAdmin,operator,false);
+ const assertQueue=async db=>{
+   if(queue.signal.aborted)throw fail("US_SAAS_QUEUE_LEASE_LOST");
+   await queue.assertLease(db);
+   if(queue.signal.aborted)throw fail("US_SAAS_QUEUE_LEASE_LOST");
+ };
+ const createClient=queue?.createClient??createUsOdooReadOnlyClient;
+ if(queue){if(queue.signal.aborted)throw fail("US_SAAS_QUEUE_LEASE_LOST");}
+ else await assertOperatorSession(pool,sourceAdmin,operator,false);
  const pre=await pool.query("SELECT * FROM public.owner_opening_requests WHERE id=$1",[id(requestId)]);
  const r=pre.rows.length===1?pre.rows[0]:null;
  if(!r||r.source_namespace!=="odoo_online"||!CURRENT.has(r.status))return wait("US_SAAS_ACTIVE_SOURCE_REQUIRED");
@@ -92,16 +110,17 @@ export async function reconcileUsSaasOpening({pool,requestId,writeAudit,operator
  const policy=policyFor(r,env);
  if(!policy||old.provider_policy_version!==policy.version)return wait("US_SAAS_COMMERCIAL_POLICY_UNAPPROVED");
  // Network I/O precedes all SQL row locks.
- const evidence=await prepareUsPaidActivationEvidence(r,{env});
+ const evidence=await prepareUsPaidActivationEvidence(r,{env,createClient});
  const paid=evidence?.status==="PAID_VERIFIED"&&evidence.canActivate===true;
- const negative=paid?null:await readNegative(r,old,policy,env);
+ const negative=paid?null:await readNegative(r,old,policy,env,createClient);
  if(!paid&&!negative)return wait(evidence?.reason||"ODOO_READBACK_UNAVAILABLE");
  const db=await pool.connect();
  try{
   await db.query("BEGIN");
   await db.query("SET LOCAL lock_timeout = '2000ms'");
   await db.query("SET LOCAL statement_timeout = '5000ms'");
-  await assertOperatorSession(db,sourceAdmin,operator,true);
+  if(queue)await assertQueue(db);
+  else await assertOperatorSession(db,sourceAdmin,operator,true);
   const locked=(await db.query("SELECT * FROM public.owner_opening_requests WHERE id=$1 FOR UPDATE",[id(requestId)])).rows[0];
   if(!locked||sourceKey(locked)!==sourceKey(r))throw fail("US_SAAS_RECONCILIATION_SOURCE_CHANGED");
   const current=await readProjection(db,locked,true);
@@ -117,7 +136,7 @@ export async function reconcileUsSaasOpening({pool,requestId,writeAudit,operator
    const result=await persistUsSaasPaidProjection(db,locked,evidence,clock,assertUsPaidEvidenceForLockedRequest);
    if(id(result.id)!==id(current.id))throw fail("US_SAAS_RECONCILIATION_NEW_ROW_FORBIDDEN");
    status="PAID_VERIFIED";eventType="owner_opening.odoo_paid_entitlement_reconciled";
-   data={billing_id:id(current.id),subscription_order_id:id(evidence.subscriptionOrderId),invoice_id:id(evidence.invoiceId),effective_until:evidence.periodEndExclusiveUtc};
+   data={billing_id:id(current.id),subscription_order_id:id(evidence.subscriptionOrderId),invoice_id:id(evidence.invoiceId),effective_until:evidence.periodEndExclusiveUtc,commercial_policy_version:policy.version};
   }else{
    if(negative.orderId!==id(current.provider_subscription_order_id))throw fail("US_SAAS_REVOCATION_SCOPE_CHANGED");
    if(!await revokeUsSaasProjection(db,locked,negative))throw fail("US_SAAS_REVOKE_PROJECTION_MISSING");
@@ -125,6 +144,7 @@ export async function reconcileUsSaasOpening({pool,requestId,writeAudit,operator
    data={billing_id:id(current.id),reason:negative.reason,subscription_order_id:negative.orderId};
   }
   const audit=await writeAudit(db,{request:locked,admin:operator,eventType,data});
+  if(queue)await assertQueue(db);
   await db.query("COMMIT");
   return {status,ownerId:id(locked.created_owner_id),ownerType:locked.owner_type,audit_event_id:audit?.id||null};
  }catch(e){await db.query("ROLLBACK").catch(()=>{});throw e;}

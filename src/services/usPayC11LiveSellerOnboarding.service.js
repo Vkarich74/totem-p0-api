@@ -4,6 +4,7 @@
 // A salon owner can only onboard THEIR salon; a master only THEIR master.
 // Backend and migrations must ship together, behind an OFF-by-default flag.
 import { randomUUID } from "node:crypto";
+import {checkUsSaasTransactionalWrite} from "./billing/usSaasTransactionalWriteGuard.js";
 import {
   verifyUsConnectPlatform, createUsStandardSeller, getUsStandardSeller,
   createUsStandardOnboardingLink, liveSellerReadiness,
@@ -77,7 +78,7 @@ async function withTx(pool, cb, readOnly = false) {
   }
 }
 
-async function ownerScope(db, actor, ownerType, ownerId) {
+async function ownerScope(db, actor, ownerType, ownerId, lock=false) {
   // Revalidate against real auth_users + unrevoked auth_sessions on EVERY
   // operation. JWT alone and req.identity.ownership are never sufficient.
   const session = await db.query(
@@ -87,7 +88,7 @@ async function ownerScope(db, actor, ownerType, ownerId) {
         AND sess.revoked_at IS NULL AND sess.expires_at>now()
         AND sess.last_seen_at>now()-interval '24 hours'
         AND usr.enabled IS TRUE AND usr.role=$3
-      LIMIT 1`,
+      LIMIT 1${lock?' FOR SHARE OF sess,usr':''}`,
     [actor.sessionId,actor.userId,
       ownerType === "salon" ? "salon_admin" : "master"]
   );
@@ -105,7 +106,8 @@ async function ownerScope(db, actor, ownerType, ownerId) {
           AND os.status='active' AND s.enabled IS TRUE AND s.status='active'
           AND m.code='US' AND m.active IS TRUE
           AND m.default_currency='USD'
-        LIMIT 1`,
+          AND m.country_code='US' AND COALESCE(tms.currency_override,m.default_currency)='USD'
+        LIMIT 1${lock?' FOR SHARE OF s,os,tms,m':''}`,
       [ownerId,String(actor.userId)]
     );
   } else {
@@ -118,8 +120,9 @@ async function ownerScope(db, actor, ownerType, ownerId) {
         WHERE mas.id=$1 AND mas.user_id=$2 AND mas.active IS TRUE
           AND ms.status='active' AND m.code='US'
           AND m.active IS TRUE AND m.default_currency='USD'
+          AND m.country_code='US' AND COALESCE(tms.currency_override,m.default_currency)='USD'
         ORDER BY m.id
-        LIMIT 1`,
+        LIMIT 1${lock?' FOR SHARE OF mas,ms,tms,m':''}`,
       [ownerId,actor.userId]
     );
   }
@@ -194,18 +197,21 @@ export async function startLiveSellerOnboarding(pool,{
   }
   // Reject non-owners in PostgreSQL before spending any Stripe API quota.
   const eligibility=await withTx(pool,async db=>{
-    const scope=await ownerScope(db,actor,ownerType,id);
+    const scope=await ownerScope(db,actor,ownerType,id,true);
     if(!scope) return reject(404,"US_CONNECT_US_OWNER_NOT_FOUND");
-    return {status:200,body:{ok:true}};
-  },true);
+    const denied=await checkUsSaasTransactionalWrite(db,ownerType,{owner_id:id,market_id:scope.market_id});
+    return denied||{status:200,body:{ok:true}};
+  });
   if(eligibility.status!==200) return eligibility;
 
   // Independently pin the configured LIVE key to TOTEM USA Connect.
   await verifyUsConnectPlatform({secretKey,fetchImpl});
 
   const reservation=await withTx(pool,async db=>{
-    const scope=await ownerScope(db,actor,ownerType,id);
+    const scope=await ownerScope(db,actor,ownerType,id,true);
     if(!scope) return reject(404,"US_CONNECT_US_OWNER_NOT_FOUND");
+    const denied=await checkUsSaasTransactionalWrite(db,ownerType,{owner_id:id,market_id:scope.market_id});
+    if(denied)return denied;
     const urls=callbackUrls(ownerType,scope.slug);
     const token=randomUUID();
 
@@ -232,13 +238,12 @@ export async function startLiveSellerOnboarding(pool,{
     if(!binding.stripe_account_id) {
       const pendingOAuth=await db.query(
         `SELECT 1 FROM public.us_stripe_live_oauth_attempts
-          WHERE binding_id=$1 AND result='pending'
-            AND consumed_at IS NULL AND expires_at>now()
+          WHERE binding_id=$1 AND ((result='pending' AND consumed_at IS NULL AND expires_at>now()) OR result='exchange_pending')
           LIMIT 1`,
         [binding.id]
       );
       if(pendingOAuth.rows.length) {
-        return reject(409,"US_CONNECT_EXISTING_OAUTH_IN_PROGRESS");
+        return reject(409,"US_CONNECT_EXISTING_OAUTH_IN_PROGRESS_OR_RECONCILIATION_REQUIRED");
       }
     }
     if(!binding.stripe_account_id &&
@@ -247,6 +252,8 @@ export async function startLiveSellerOnboarding(pool,{
       // of duplicate REAL sellers: require controlled reconciliation.
       return reject(409,"US_CONNECT_PROVISION_RECONCILIATION_REQUIRED");
     }
+    const commitDenied=await checkUsSaasTransactionalWrite(db,ownerType,{owner_id:id,market_id:scope.market_id});
+    if(commitDenied)return commitDenied;
     return {
       status:200,body:{ok:true,
         bindingId:String(binding.id),
@@ -263,16 +270,17 @@ export async function startLiveSellerOnboarding(pool,{
     accountId=await createUsStandardSeller({
       secretKey,provisioningToken:reservation.body.token,fetchImpl,
     });
-    await withTx(pool,async db=>{
-      const scope=await ownerScope(db,actor,ownerType,id);
+    const recorded=await withTx(pool,async db=>{
+      const scope=await ownerScope(db,actor,ownerType,id,true);
       if(!scope) return reject(403,"US_CONNECT_OWNER_SESSION_INVALID");
       const updated=await db.query(
         `UPDATE public.us_stripe_live_seller_bindings
             SET stripe_account_id=$2, verification_status='onboarding'
           WHERE id=$1 AND stripe_account_id IS NULL
+            AND provisioning_token=$3 AND market_id=$4 AND owner_type=$5 AND owner_id=$6
             AND verification_status='initiated'
           RETURNING id`,
-        [reservation.body.bindingId,accountId]
+        [reservation.body.bindingId,accountId,reservation.body.token,scope.market_id,ownerType,id]
       );
       if(updated.rows.length===1) {
         await event(db,reservation.body.bindingId,actor.userId,"account_provisioned");
@@ -284,29 +292,39 @@ export async function startLiveSellerOnboarding(pool,{
       }
       return {status:200,body:{ok:true}};
     });
+    if(recorded.status!==200)return recorded;
   }
   if(!ACCOUNT.test(accountId)) throw new Error("US_CONNECT_ACCOUNT_ID_UNEXPECTED");
 
   // Recheck session/owner before issuing ephemeral sensitive account link.
   const stillOwner=await withTx(pool,async db=>{
-    const scope=await ownerScope(db,actor,ownerType,id);
-    const row=await getBinding(db,ownerType,id);
+    const scope=await ownerScope(db,actor,ownerType,id,true);
+    if(!scope)return reject(403,"US_CONNECT_OWNER_SESSION_INVALID");
+    const denied=await checkUsSaasTransactionalWrite(db,ownerType,{owner_id:id,market_id:scope.market_id});
+    if(denied)return denied;
+    const row=await getBinding(db,ownerType,id,true);
     return {status:scope && row?.stripe_account_id===accountId &&
         row.verification_status!=="revoked" ? 200:403,
       body:{ok:Boolean(scope),error:"US_CONNECT_OWNER_SESSION_INVALID"}};
-  },true);
+  });
   if(stillOwner.status!==200) return stillOwner;
 
   const link=await createUsStandardOnboardingLink({
     secretKey,stripeAccountId:accountId,...reservation.body.urls,
     idempotencyKey:"totem-c11-link-"+randomUUID(),fetchImpl,
   });
-  await withTx(pool,async db=>{
-    const scope=await ownerScope(db,actor,ownerType,id);
+  const issued=await withTx(pool,async db=>{
+    const scope=await ownerScope(db,actor,ownerType,id,true);
     if(!scope) return reject(403,"US_CONNECT_OWNER_SESSION_INVALID");
+    const current=await getBinding(db,ownerType,id,true);
+    if(!current||String(current.id)!==reservation.body.bindingId||current.stripe_account_id!==accountId||current.verification_status==="revoked")return reject(409,"US_CONNECT_BINDING_CHANGED");
+    const denied=await checkUsSaasTransactionalWrite(db,ownerType,{owner_id:id,market_id:scope.market_id});
+    if(denied)return denied;
     await event(db,reservation.body.bindingId,actor.userId,"onboarding_link_issued");
-    return {status:200,body:{ok:true}};
+    const commitDenied=await checkUsSaasTransactionalWrite(db,ownerType,{owner_id:id,market_id:scope.market_id});
+    return commitDenied||{status:200,body:{ok:true}};
   });
+  if(issued.status!==200)return issued;
 
   return {
     status:200,
@@ -353,7 +371,7 @@ export async function refreshLiveSellerVerification(pool,{
   const ready=liveSellerReadiness(account,current.body.stripeAccountId);
 
   return withTx(pool,async db=>{
-    const scope=await ownerScope(db,actor,ownerType,id);
+    const scope=await ownerScope(db,actor,ownerType,id,true);
     if(!scope || String(scope.market_id)!==current.body.marketId)
       return reject(403,"US_CONNECT_OWNER_SESSION_INVALID");
     const binding=await getBinding(db,ownerType,id,true);
@@ -388,7 +406,8 @@ export async function refreshLiveSellerVerification(pool,{
 
     // Bind ONLY an already owner-authorized selection for this seller.
     // No payment status, payout, price, booking or KG/KZ money is changed.
-    if(ready.ready) {
+    const commercialDenied=ready.ready?await checkUsSaasTransactionalWrite(db,ownerType,{owner_id:id,market_id:scope.market_id}):null;
+    if(ready.ready&&!commercialDenied) {
       await db.query(
         `UPDATE public.us_booking_payment_collectors col
             SET verification_status='verified',verified_at=now()
@@ -406,7 +425,7 @@ export async function refreshLiveSellerVerification(pool,{
             )`,
         [scope.market_id,ownerType,id]
       );
-    } else {
+    } else if(!ready.ready) {
       await db.query(
         `UPDATE public.us_booking_payment_collectors
             SET verification_status='pending',verified_at=NULL
@@ -425,11 +444,11 @@ export async function refreshLiveSellerVerification(pool,{
  * master relations or JWT data alone never prove merchant ownership.
  */
 export async function verifyUsLiveSellerOwnerScope(db,{
-  auth,ownerType,ownerId,
+  auth,ownerType,ownerId,lock=false,
 }={}) {
   const {id,actor,valid}=validRequest(ownerType,ownerId,auth);
   if (!valid) return null;
-  const scope=await ownerScope(db,actor,ownerType,id);
+  const scope=await ownerScope(db,actor,ownerType,id,lock);
   if (!scope) return null;
   return {
     ownerType,ownerId:id,userId:actor.userId,sessionId:actor.sessionId,
