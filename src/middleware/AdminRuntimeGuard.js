@@ -1,6 +1,6 @@
 import {isVerifiedSessionClaim} from "../auth/verifiedSessionContract.js";
 import jwt from "jsonwebtoken";
-import {isUsOdooIntakeHint,usOdooIntakeEnabled,assertUsOdooIntakeHeader} from "../services/provision/usApprovedOdooSalonIntake.js";
+import {isUsOdooIntakeHint,usOdooIntakeEnabled,assertUsOdooIntakeHeader,firstManualG3IntakeMatches} from "../services/provision/usApprovedOdooSalonIntake.js";
 import { pool } from "../db.js";
 import {
   isAuthResolveSessionExpired,
@@ -44,7 +44,9 @@ export default async function AdminRuntimeGuard(req, res, next) {
   const requestPath = String(req.originalUrl || req.url || "").split("?")[0];
   if (requestPath.endsWith("/internal/admin/open-owner/odoo-intake")) {
     if(isUsOdooIntakeHint(req.body)){
-      if(!usOdooIntakeEnabled())return res.status(409).json({ok:false,error:"ADMIN_US_ODOO_INTAKE_HOLD"});
+      const manual=["evidence_version","evidence","kid","signature"].some(k=>Object.hasOwn(req.body??{},k));
+      if(req.method!=="POST"||(manual?!firstManualG3IntakeMatches(req.body):!usOdooIntakeEnabled()))
+        return res.status(409).json({ok:false,error:"ADMIN_US_ODOO_INTAKE_HOLD"});
       try{assertUsOdooIntakeHeader(req.headers,req.query);}
       catch(e){return res.status(401).json({ok:false,error:"UNAUTHORIZED"});}
       return next();

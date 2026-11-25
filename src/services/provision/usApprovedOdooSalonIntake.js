@@ -32,6 +32,31 @@ export function usOdooIntakeEnabled(env=process.env){
    env.TOTEM_US_ADMIN_MANUAL_ACTIVATION==="true" &&
    env.TOTEM_US_ODOO_G3_SEAL_RELEASE_APPROVED==="true";
 }
+// First real source only. Intake authorization is never a provision/activation grant.
+export function firstManualG3IntakeScope(env=process.env){
+ const raw=env.TOTEM_US_ODOO_G3_FIRST_INTAKE_SCOPE;
+ const m=typeof raw==="string"?/^([1-9][0-9]{0,15}):([1-9][0-9]{0,15}):([a-f0-9]{64})$/.exec(raw):null;
+ if(!m||!id(Number(m[1]))||!id(Number(m[2]))||
+    env.TOTEM_US_ODOO_INTAKE_ENABLED!=="true"||env.TOTEM_US_ODOO_INTAKE_RELEASE_APPROVED!=="true"||
+    env.TOTEM_US_ODOO_G3_SEAL_RELEASE_APPROVED!=="true"||
+    env.TOTEM_US_ODOO_G3_OWNER_ADMIN_REVIEW_APPROVED!=="true"||
+    env.TOTEM_US_ODOO_G3_REVIEWER_UIDS!=="2"||
+    env.TOTEM_US_ODOO_G3_MANUAL_EVIDENCE_RELEASE_APPROVED!=="true")return null;
+ const token=env.TOTEM_US_ODOO_G3_INTAKE_TOKEN;
+ if(typeof token!=="string"||!/^[\x21-\x7e]{32,4096}$/.test(token)||token===str(env.ODOO_BRIDGE_TOKEN))return null;
+ return Object.freeze({partnerId:Number(m[1]),leadId:Number(m[2]),sourceHash:m[3]});
+}
+export function firstManualG3IntakeMatches(body,env=process.env){
+ const scope=firstManualG3IntakeScope(env),e=body?.evidence,l=e?.lead,p=e?.partner;
+ return Boolean(scope&&body?._model==="crm.lead"&&body.market_code==="US"&&body.evidence_version==="g3_owner_admin_evidence_v2"&&
+ body._id===scope.leadId&&e?.purpose==="intake"&&e.request_id===null&&
+ e.company_id===4&&e.website_id===5&&e.team_id===8&&e.actor_uid===2&&
+ l?.id===scope.leadId&&relation(l.x_totem_us_source_partner_id)===scope.partnerId&&
+ relation(l.partner_id)===scope.partnerId&&p?.id===scope.partnerId&&
+ p.x_totem_us_profile_status==="approved"&&p.x_totem_us_approval_revision==="1"&&
+ l.x_totem_us_source_hash===scope.sourceHash&&l.x_totem_us_source_revision==="1");
+}
+
 // Existing legacy bridge can use query token. The new US branch cannot.
 // No query-token authentication or caller-supplied profile/payment fields.
 export function assertUsOdooIntakeHeader(headers,query,env=process.env){
@@ -221,9 +246,10 @@ export function createG3TargetGeoReader(db){
 }
 export async function registerApprovedUsOdooSalon({pool,body,raw,headers,query,
  env=process.env,createClient=createUsOdooApprovedSourceClient,createExistingOpeningRequest,readVerifiedTargetGeo}={}){
- if(!usOdooIntakeEnabled(env))throw problem("ADMIN_US_ODOO_INTAKE_HOLD");
- assertUsOdooIntakeHeader(headers,query,env);
  const manual=["evidence_version","evidence","kid","signature"].some(k=>Object.hasOwn(body??{},k));
+ // General release stays HOLD; scoped intake never enables the ID-only reader.
+ if(manual?!firstManualG3IntakeMatches(body,env):!usOdooIntakeEnabled(env))throw problem("ADMIN_US_ODOO_INTAKE_HOLD");
+ assertUsOdooIntakeHeader(headers,query,env);
  if(typeof createExistingOpeningRequest!=="function")throw problem("US_ODOO_INTAKE_CALLBACK_REQUIRED",500);
  const targetGeo=readVerifiedTargetGeo??createG3TargetGeoReader(pool);
  let verified,leadId,readerUid,reviewerIds;
@@ -242,7 +268,7 @@ export async function registerApprovedUsOdooSalon({pool,body,raw,headers,query,
   ({readerUid,reviewerIds}=readG3SourceReaderPolicy(env));
  }
  const assertFresh=()=>{
-  if(manual&&(!verified?.length||verified.some(v=>Date.now()-v.provenance.observed_end_ms>15000)))
+  if(manual&&(!firstManualG3IntakeMatches(body,env)||!verified?.length||verified.some(v=>Date.now()-v.provenance.observed_end_ms>15000)))
    fail("MANUAL_FRESHNESS");
  };
  const results=await registerVerifiedUsOdooSources({pool,candidate:leadId,

@@ -5,7 +5,7 @@ import {assertCanonicalUsProvisionResult} from "../../services/provision/usCanon
 import {validG3Seal,sameG3Seal} from "../../services/provision/usOdooG3SealProof.js";
 import {hasManualG3Envelope,prepareManualG3RequestReceipt,assertManualG3RequestReceipt,isManualG3Request,isScopedUsOdooRequest,assertUsOdooDispatchHold} from "../../services/provision/usG3ManualRequestReceipt.js";
 import {prepareUsImportedMasterReceipt} from "../../services/provision/usImportedMasterProvision.js";
-import {isUsOdooIntakeHint,registerApprovedUsOdooSalon} from "../../services/provision/usApprovedOdooSalonIntake.js";
+import {isUsOdooIntakeHint,registerApprovedUsOdooSalon,firstManualG3IntakeScope} from "../../services/provision/usApprovedOdooSalonIntake.js";
 import {kgSharedMasterEnabled,isKgSharedMasterCandidate,readKgSharedMasterCandidate,kgSharedMasterProof,assertKgSharedMasterPending,assertKgSharedMasterActivation} from "../../services/provision/kgSharedMasterIdentity.js";
 import { buildOwnerOpeningEmail, buildEmailMime } from "../../services/notifications/emailTemplates.js";
 import {verifyUsWelcomeGmailSent} from "../../services/notifications/usWelcomeGmailReadback.js";
@@ -261,6 +261,9 @@ async function checkSalonSlug(pool, salonSlug){
   };
 }
 
+// Module-private capability: a verified first-source intake may validate a request,
+ // not activate a business. Public JSON/precheck callers cannot supply this symbol.
+const VERIFIED_US_FIRST_INTAKE=Symbol("VERIFIED_US_FIRST_INTAKE");
 export async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
   const checks = [];
   const errors = [];
@@ -276,7 +279,8 @@ export async function buildOpenOwnerPrecheck(pool, body = {}, options = {}){
   const phoneRaw = normalizeText(body.phone || body.phone_raw || body.phone_normalized);
   const marketCode = normalizeText(body.market_code).toUpperCase();
   try {
-    assertAdminOpeningMarketPolicy(marketCode);
+    if(!(marketCode==="US"&&options?.[VERIFIED_US_FIRST_INTAKE]===true))
+      assertAdminOpeningMarketPolicy(marketCode);
     if (marketCode === "US") await requireActiveAdminMarket(pool, marketCode);
   } catch (policyError) {
     return { ok: true, valid: false, error: "PRECHECK_FAILED", errors: [policyError.code || "ADMIN_MARKET_UNAVAILABLE"], normalized: { market_code: marketCode || null }, checks: [] };
@@ -1398,7 +1402,17 @@ export async function createVerifiedUsIntakeRequest(db,verified,proof){
      verified.proof.owner_type!==proof.owner_type||proof.source_company_id!==4||proof.source_website_id!==5||
      verified.proof.partner_id!==proof.source_partner_id||verified.proof.source_request_id!==proof.source_request_id)
     throw Object.assign(new Error("US_ODOO_SOURCE_SCOPE_INVALID"),{code:"US_ODOO_SOURCE_SCOPE_INVALID",status:409});
+  const scope=firstManualG3IntakeScope(),p=verified.provenance;
+  const manual=p?.authority_mode==="owner_admin_attested_readback_v2";
+  const firstIntake=Boolean(manual&&scope&&verified.intake.market_code==="US"&&
+    p.purpose==="intake"&&p.request_id===null&&p.odoo_lead_id===scope.leadId&&
+    p.source_partner_id===scope.partnerId&&proof.source_partner_id===scope.partnerId&&
+    p.source_revision==="1"&&p.source_hash===scope.sourceHash&&
+    p.authority_kid===process.env.TOTEM_US_ODOO_G3_MANUAL_EVIDENCE_KID);
+  if(manual&&!firstIntake)
+    throw Object.assign(new Error("US_ODOO_G3_FIRST_SOURCE_SCOPE_REQUIRED"),{code:"US_ODOO_G3_FIRST_SOURCE_SCOPE_REQUIRED",status:409});
   const precheck=await buildOpenOwnerPrecheck(db,verified.intake,{
+    [VERIFIED_US_FIRST_INTAKE]:firstIntake,
     deferVerifiedUsMasterBinding:proof.owner_type==="master"&&["own_salon","existing_salon"].includes(verified.provenance.entry_mode)});
   if(!precheck.valid)throw Object.assign(new Error("US_ODOO_INTAKE_PRECHECK_FAILED"),{code:"US_ODOO_INTAKE_PRECHECK_FAILED",status:409});
   const stored={...precheck,source:"odoo_us_approved_profile_v1",
