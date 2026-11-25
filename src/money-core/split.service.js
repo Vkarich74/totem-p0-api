@@ -264,6 +264,9 @@ async function createSettlementSplitAllocations(pool, settlementId, input = {}, 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    // Serialize first-time split creation on the existing settlement row.
+    const locked=await client.query("SELECT id FROM public.provider_settlements WHERE id=$1 FOR UPDATE",[resolvedSettlementId]);
+    if(locked.rows.length!==1){await client.query('ROLLBACK');return null;}
 
     const existingResult = await client.query(
       `

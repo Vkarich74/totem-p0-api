@@ -2,6 +2,7 @@
 
 import { randomUUID } from 'crypto';
 import { assertMoneyCoreWriteAllowed } from './config.js';
+import { lockMoneyOwnerBalances } from './ownerBalanceLock.js';
 import { requireCurrencyCode } from '../market-context/BusinessContext.js';
 
 const ALLOWED_OWNER_TYPES = new Set(['salon', 'master', 'platform', 'system']);
@@ -334,13 +335,22 @@ async function resolveDbClient(poolOrClient) {
 }
 
 async function rebuildOwnerBalanceFromLedger(pool, ownerType, ownerId, currency, actor = {}) {
+  return rebuildBalance(pool, ownerType, ownerId, currency, actor, false);
+}
+// Existing XPay allocation producer uses ('platform',0,'KGS').
+// Dedicated internal bridge path; generic C17 API still rejects owner id 0.
+async function rebuildXpayPlatformBalanceFromLedger(client, actor = {}) {
+  if(!client||typeof client.release!=='function')throw Object.assign(new Error('MONEY_LEDGER_DB_HANDLE_INVALID'),{code:'MONEY_LEDGER_DB_HANDLE_INVALID',statusCode:500});
+  return rebuildBalance(client,'platform',0,'KGS',actor,true);
+}
+async function rebuildBalance(pool, ownerType, ownerId, currency, actor, platformZero) {
   assertMoneyCoreWriteAllowed();
 
   const normalizedOwnerType = normalizeText(ownerType);
   const normalizedOwnerId = normalizeInt(ownerId);
   const normalizedCurrency = requireCurrencyCode(currency, 'MONEY_LEDGER_CURRENCY_INVALID');
 
-  if (!normalizedOwnerType || !ALLOWED_OWNER_TYPES.has(normalizedOwnerType) || !normalizedOwnerId || normalizedOwnerId <= 0) {
+  if (!normalizedOwnerType || !ALLOWED_OWNER_TYPES.has(normalizedOwnerType) || ((!normalizedOwnerId || normalizedOwnerId <= 0) && !(platformZero && normalizedOwnerType==='platform' && normalizedOwnerId===0 && normalizedCurrency==='KGS'))) {
     const error = new Error('Invalid owner reference');
     error.code = 'MONEY_LEDGER_OWNER_INVALID';
     error.statusCode = 400;
@@ -353,6 +363,7 @@ async function rebuildOwnerBalanceFromLedger(pool, ownerType, ownerId, currency,
       await client.query('BEGIN');
     }
 
+    await lockMoneyOwnerBalances(client,[{owner_type:normalizedOwnerType,owner_id:normalizedOwnerId,currency:normalizedCurrency}]);
     const rowsResult = await client.query(
       `
       SELECT money_zone, direction, amount
@@ -518,6 +529,7 @@ async function createMoneyLedgerMovement(pool, movement = {}, actor = {}) {
 
   try {
     await client.query('BEGIN');
+    await lockMoneyOwnerBalances(client,preparedEntries);
 
     const insertedRows = [];
     for (const entry of preparedEntries) {
@@ -629,5 +641,6 @@ export {
   getMoneyLedgerEntryById,
   getOwnerMoneyLedger,
   rebuildOwnerBalanceFromLedger,
+  rebuildXpayPlatformBalanceFromLedger,
   createMoneyLedgerMovement,
 };

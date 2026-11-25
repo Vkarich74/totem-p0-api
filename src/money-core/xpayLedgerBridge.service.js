@@ -2,7 +2,8 @@
 
 import { randomUUID } from 'node:crypto';
 import { getMoneyCoreFlags } from './config.js';
-import { rebuildOwnerBalanceFromLedger } from './ledger.service.js';
+import { rebuildOwnerBalanceFromLedger,rebuildXpayPlatformBalanceFromLedger } from './ledger.service.js';
+import { lockMoneyOwnerBalances } from './ownerBalanceLock.js';
 import { XPAY_CURRENCY } from './providers/xpay.adapter.js';
 
 const ALLOWED_OWNER_TYPES = new Set(['salon', 'master', 'platform']);
@@ -116,7 +117,7 @@ SELECT
   ps.updated_at
 FROM public.provider_settlements ps
 WHERE ps.id = $1
-LIMIT 1
+LIMIT 1 FOR SHARE OF ps
     `,
     [providerSettlementId]
   );
@@ -142,7 +143,7 @@ SELECT
   psi.created_at
 FROM public.provider_settlement_items psi
 WHERE psi.provider_settlement_id = $1
-ORDER BY psi.id ASC
+ORDER BY psi.id ASC FOR SHARE OF psi
     `,
     [providerSettlementId]
   );
@@ -168,7 +169,7 @@ SELECT
   msa.updated_at
 FROM public.money_split_allocations msa
 WHERE msa.provider_settlement_id = $1
-ORDER BY msa.id ASC
+ORDER BY msa.id ASC FOR SHARE OF msa
     `,
     [providerSettlementId]
   );
@@ -285,7 +286,7 @@ async function createLedgerEntriesForXpaySettlement(client, input = {}) {
       throw createError('INVALID_SPLIT_ALLOCATION', 'Split allocation payment is invalid', 409);
     }
 
-    if (allocationOwnerId === null) {
+    if (allocationOwnerId === null || (allocationOwnerId===0 && allocation.owner_type!=='platform')) {
       throw createError('INVALID_SPLIT_ALLOCATION', 'Split allocation owner is invalid', 409);
     }
 
@@ -302,11 +303,13 @@ async function createLedgerEntriesForXpaySettlement(client, input = {}) {
     }
   }
 
+  await lockMoneyOwnerBalances(client,eligibleAllocations.map(a=>({owner_type:normalizeText(a.owner_type),owner_id:normalizeOwnerId(a.owner_id),currency:XPAY_CURRENCY})));
   const entryGroupId = randomUUID();
   const insertedRows = [];
   const candidateSourceIds = [];
 
   for (const allocation of eligibleAllocations) {
+    const allocationOwnerId=normalizeOwnerId(allocation.owner_id);
     const metadata = buildBridgeMetadata({
       route: normalizeText(input.route) || '/money-core/settlements/:id/confirm-bank-received',
       reason: normalizeText(input.reason) || 'xpay_provider_settlement_available',
@@ -369,6 +372,10 @@ RETURNING id
       ]
     );
 
+    if (!insertResult.rows[0]) {
+      const existing=await client.query(`SELECT amount,currency,provider_code FROM public.money_ledger_entries WHERE source_type='xpay_split_allocation' AND source_id=$1 AND owner_type=$2 AND owner_id=$3 AND money_zone='available' AND direction='credit' FOR SHARE`,[normalizePositiveInt(allocation.id),normalizeText(allocation.owner_type),allocationOwnerId]);
+      if(existing.rows.length!==1||Number(existing.rows[0].amount)!==normalizeAmount(allocation.owner_net_amount)||existing.rows[0].currency!==XPAY_CURRENCY||existing.rows[0].provider_code!=='xpay')throw createError('XPAY_LEDGER_REPLAY_CONFLICT','Existing settlement ledger does not match allocation',409);
+    }
     if (insertResult.rows[0]) {
       insertedRows.push({
         source_id: normalizePositiveInt(allocation.id),
@@ -396,16 +403,11 @@ RETURNING id
 
   const rebuiltBalances = [];
   for (const owner of touchedOwners) {
-    const balance = await rebuildOwnerBalanceFromLedger(
-      client,
-      owner.owner_type,
-      owner.owner_id,
-      owner.currency,
-      {
-        user_type: normalizeText(input.actor?.user_type) || 'system',
-        user_id: Number.isInteger(Number(input.actor?.user_id)) && Number(input.actor?.user_id) > 0 ? Number(input.actor.user_id) : null,
-      }
-    );
+    const actor={user_type:normalizeText(input.actor?.user_type)||'system',
+      user_id:Number.isInteger(Number(input.actor?.user_id))&&Number(input.actor?.user_id)>0?Number(input.actor.user_id):null};
+    const balance=owner.owner_type==='platform'&&owner.owner_id===0
+      ?await rebuildXpayPlatformBalanceFromLedger(client,actor)
+      :await rebuildOwnerBalanceFromLedger(client,owner.owner_type,owner.owner_id,owner.currency,actor);
     rebuiltBalances.push(balance);
   }
 
