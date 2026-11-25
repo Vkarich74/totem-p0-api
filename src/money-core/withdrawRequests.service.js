@@ -1046,17 +1046,38 @@ async function createWithdrawRequest(pool, ownerType, ownerId, input = {}, actor
     await client.query('BEGIN');
 
     if (idempotencyKey) {
+      // Keep the global partial UNIQUE index. Serialize the key across owners.
+      // Never return another owner's request or metadata on key reuse.
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended('money-core:withdraw:' || $1::text, 0))",
+        [idempotencyKey]
+      );
       const existingResult = await client.query(
         `
         SELECT *
         FROM public.withdraw_requests
         WHERE idempotency_key = $1
-        LIMIT 1
+        LIMIT 1 FOR SHARE
         `,
         [idempotencyKey]
       );
 
       if (existingResult.rows[0]) {
+        const existing = existingResult.rows[0];
+        if (
+          existing.owner_type !== owner.owner_type ||
+          String(existing.owner_id) !== String(owner.owner_id) ||
+          existing.currency !== currency ||
+          Number(existing.amount) !== amount ||
+          existing.creation_mode !== creationMode ||
+          (existing.destination_id == null ? null : String(existing.destination_id)) !==
+            (destinationId == null ? null : String(destinationId))
+        ) {
+          const error = new Error('Withdraw request idempotency conflict');
+          error.code = 'WITHDRAW_REQUEST_IDEMPOTENCY_CONFLICT';
+          error.statusCode = 409;
+          throw error;
+        }
         await client.query('COMMIT');
         return {
           already_exists: true,
@@ -1073,7 +1094,7 @@ async function createWithdrawRequest(pool, ownerType, ownerId, input = {}, actor
         SELECT id, owner_type, owner_id, status
         FROM public.withdraw_destinations
         WHERE id = $1
-        LIMIT 1
+        LIMIT 1 FOR SHARE
         `,
         [destinationId]
       );
@@ -1101,14 +1122,15 @@ async function createWithdrawRequest(pool, ownerType, ownerId, input = {}, actor
       WHERE owner_type = $1
         AND owner_id = $2
         AND currency = $3
-      LIMIT 1
+      LIMIT 1 FOR UPDATE
       `,
       [owner.owner_type, owner.owner_id, currency]
     );
 
+    // Hold the balance row through COMMIT/ROLLBACK. No row means zero funds.
     const availableSnapshot = availableBalanceResult.rows[0] ? Number(availableBalanceResult.rows[0].available) : 0;
 
-    if (amount > availableSnapshot) {
+    if (!Number.isFinite(availableSnapshot) || amount > availableSnapshot) {
       const error = new Error('Insufficient available balance');
       error.code = 'INSUFFICIENT_AVAILABLE_BALANCE';
       error.statusCode = 400;

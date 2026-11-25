@@ -1,0 +1,64 @@
+name: C6 withdraw atomicity - PostgreSQL 17
+on:
+  pull_request:
+    branches: [c6-finance-queue-held-delta-20261125]
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+jobs:
+  withdraw:
+    if: github.head_ref == 'c6-withdraw-atomicity-ci-20261125'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: g5_fixture
+          POSTGRES_PASSWORD: g5_fixture_only
+          POSTGRES_DB: c6_withdraw
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U g5_fixture -d c6_withdraw"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      NODE_ENV: test
+      DB_MODE: POSTGRES
+      DATABASE_URL: ""
+      C6_WITHDRAW_ISOLATED: "YES"
+      G5_TEST_DATABASE_URL: postgresql://g5_fixture:g5_fixture_only@127.0.0.1:55432/c6_withdraw
+      MONEY_CORE_ENABLED: "true"
+      MONEY_CORE_READ_ONLY: "false"
+      MONEY_CORE_WRITE_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Verify exact source and schema
+        run: |
+          node --input-type=module <<'JS'
+          import {readFileSync} from 'node:fs';
+          import {createHash} from 'node:crypto';
+          import assert from 'node:assert/strict';
+          const hash=p=>createHash('sha256').update(readFileSync(p)).digest('hex');
+          assert.equal(hash('src/money-core/withdrawRequests.service.js'),'60c8c3d67d5dc2680307dfdc4af2fa311032b7bc0fe9a1be7dde2c0aa278cc7d');
+          assert.equal(hash('tests/sql/c6-withdraw-schema.sql'),'098c9d6f39cd965ac38159e326e1ace41bbaeaa72ab4566d3a670b5f545145d1');
+          console.log('C6_WITHDRAW_SOURCE_SCHEMA_VERIFIED');
+          JS
+      - name: Targeted new withdrawal tests on actual PostgreSQL
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec -i "$PG_CONTAINER" psql -X -U g5_fixture -d c6_withdraw -v ON_ERROR_STOP=1 < tests/sql/c6-held-schema.sql
+          docker exec -i "$PG_CONTAINER" psql -X -U g5_fixture -d c6_withdraw -v ON_ERROR_STOP=1 < tests/sql/c6-withdraw-schema.sql
+          node --experimental-test-module-mocks --test tests/c6-withdraw-atomicity.test.mjs
