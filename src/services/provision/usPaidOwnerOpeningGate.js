@@ -4,7 +4,7 @@ import {validG3Seal} from "./usOdooG3SealProof.js";
 // Never read event/browser payload as payment proof and never do Odoo HTTP
 // inside a PostgreSQL activation transaction. Default = WAIT (no grant).
 import { createUsOdooReadOnlyClient } from "../billing/usOdooReadOnlyClient.js";
-import { verifyUsOdooPaidEntitlement } from "../billing/usOdooPaidEntitlement.js";
+import { verifyUsOdooPaidEntitlement, isUsOdooServicePeriodPolicy } from "../billing/usOdooPaidEntitlement.js";
 
 // Installation is deliberately independent of approval. This hard code gate
 // must remain false until paid authority, source receipt, projection and T5
@@ -66,7 +66,7 @@ export async function prepareUsPaidActivationEvidence(request, {
   } catch {
     return WAIT("US_ODOO_COMMERCIAL_POLICY_MISSING");
   }
-  if (policy?.approved !== true ||
+  if (!isUsOdooServicePeriodPolicy(policy) ||
       !Array.isArray(policy.coveredOwnerTypes) ||
       !policy.coveredOwnerTypes.includes(request.owner_type) ||
       !policy.coveredOwnerTypes.every(type => ["salon", "master"].includes(type))) {

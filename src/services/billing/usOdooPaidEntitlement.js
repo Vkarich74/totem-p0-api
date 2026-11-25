@@ -25,9 +25,54 @@ function dayUTC(value) {
   return Number.isFinite(day.getTime()) && day.toISOString().slice(0, 10) === value ?
     day : null;
 }
-function firstDayOfNextMonth(day) {
-  if (day.getUTCDate() !== 1) return null;
-  return new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth() + 1, 1));
+// USD amounts are compared in minor units, not against a Core tariff.
+// Reject non-numeric, non-cent-precision and unsafe amounts.
+function cents(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  const n = Math.round(value * 100);
+  return Number.isSafeInteger(n) && Math.abs(value * 100 - n) < 0.000001 ? n : null;
+}
+function positiveMoney(value) {
+  const n = cents(value);
+  return n !== null && n > 0;
+}
+function exactSingleId(value, expected) {
+  const ids = manyIds(value);
+  return ids?.length === 1 && ids[0] === expected;
+}
+// The service interval comes from Odoo's invoice lines, under an explicitly
+// approved mapping. No inferred first-of-month or rolling-month assumption.
+function sameCommercialLine(line, orderLine, currencyId) {
+  return !!orderLine && id(line.product_id) === id(orderLine.product_id) &&
+    id(line.currency_id) === currencyId && id(orderLine.currency_id) === currencyId &&
+    id(line.product_uom_id) > 0 && id(line.product_uom_id) === id(orderLine.product_uom_id) &&
+    typeof line.quantity === "number" && line.quantity > 0 &&
+    line.quantity === orderLine.product_uom_qty &&
+    typeof line.price_unit === "number" && Number.isFinite(line.price_unit) &&
+    line.price_unit === orderLine.price_unit &&
+    typeof line.discount === "number" && Number.isFinite(line.discount) &&
+    line.discount >= 0 && line.discount < 100 && line.discount === orderLine.discount &&
+    positiveMoney(line.price_subtotal) &&
+    cents(line.price_subtotal) === cents(orderLine.price_subtotal);
+}
+// Conservative v2 scope: only fully attributable inbound cash for this invoice.
+// Mixed-invoice payments, split tenders, child operations, credit-note/write-off
+// settlements are not presumed equivalent to full payment.
+function exactInvoiceCash(rows, invoice, partnerId, currencyId, channel) {
+  if (!Array.isArray(rows) || rows.length !== 1) return false;
+  const p = rows[0], invoiceId = id(invoice.id);
+  if (!id(p.id) || id(p.company_id) !== COMPANY_ID ||
+      id(p.partner_id) !== partnerId || id(p.currency_id) !== currencyId ||
+      !exactSingleId(p.invoice_ids, invoiceId) ||
+      !positiveMoney(p.amount) || cents(p.amount) !== cents(invoice.amount_total)) return false;
+  if (channel === "manual") {
+    return exactSingleId(invoice.payment_ids, id(p.id)) &&
+      ["paid","reconciled"].includes(p.state) && p.payment_type === "inbound";
+  }
+  return p.state === "done" &&
+    ["online_redirect","online_direct","online_token","offline"].includes(p.operation) &&
+    p.source_transaction_id === false && Array.isArray(p.child_transaction_ids) &&
+    p.child_transaction_ids.length === 0;
 }
 function WAIT(reason) {
   return Object.freeze({ status: "WAIT", canActivate: false, reason });
@@ -37,25 +82,34 @@ function validPolicy(p) {
   return p?.approved === true &&
     typeof p.version === "string" && /^[a-zA-Z0-9_.-]{1,40}$/.test(p.version) &&
     p.companyId === COMPANY_ID && p.websiteId === WEBSITE_ID &&
-    Number.isSafeInteger(p.planId) && p.planId > 0 &&
-    Number.isSafeInteger(p.productTemplateId) && p.productTemplateId > 0 &&
-    Number.isSafeInteger(p.currencyId) && p.currencyId > 0 &&
-    p.billingPeriodUnit === "month" && p.billingPeriodValue === 1 &&
+    p.planId === 6 && p.productTemplateId === 29 && p.currencyId === 1 &&
+    ["week", "month", "year"].includes(p.billingPeriodUnit) &&
+    Number.isSafeInteger(p.billingPeriodValue) && p.billingPeriodValue > 0 &&
     ["manual", "online"].includes(p.paymentChannel);
+}
+// Shared validation for activation, reconciliation and runtime gates. The
+// existing approved Odoo IDs are scope, not a Core price list.
+export function isUsOdooServicePeriodPolicy(p) {
+  return validPolicy(p) && p.allowDeferredRevenuePeriod === true &&
+    p.periodSource === "odoo_invoice_line_service_dates_v2";
 }
 async function one(client, model, entityId, fields) {
   const rows = await client.searchRead(model, [["id", "=", entityId]], fields, 2);
   return rows.length === 1 && id(rows[0].id) === entityId ? rows[0] : null;
 }
-function signedAndCurrentPeriod(line, order, clock) {
+function signedAndCurrentPeriod(line, order, clock, policy) {
   const start = dayUTC(line.deferred_start_date);
   const lastDay = dayUTC(line.deferred_end_date);
   const orderStart = dayUTC(order.start_date);
   if (!start || !lastDay || !orderStart) return null;
-  const end = firstDayOfNextMonth(start);
-  if (!end || start < orderStart || lastDay.getTime() + 86400000 !== end.getTime()) {
-    return null;
-  }
+  const end = new Date(lastDay.getTime() + 86400000);
+  if (!Number.isFinite(end.getTime()) || start < orderStart || start >= end) return null;
+  // Sanity bound derived from the approved Odoo plan. It does not calculate
+  // a renewal date or require a particular day of the calendar month.
+  const daysPerUnit = {week:7, month:31, year:366}[policy.billingPeriodUnit];
+  const maxDays = daysPerUnit * policy.billingPeriodValue;
+  if (!Number.isSafeInteger(maxDays) ||
+      (end.getTime() - start.getTime()) / 86400000 > maxDays) return null;
   return { start, end, current: start <= clock && clock < end };
 }
 
@@ -87,7 +141,7 @@ export async function verifyUsOdooPaidEntitlement({
   if (!validPolicy(policy)) return WAIT("ODOO_COMMERCIAL_POLICY_UNAPPROVED");
   // Odoo metadata does NOT establish that deferred accounting dates are
   // service-period bounds. The owner must approve this mapping explicitly.
-  if (policy.allowDeferredRevenuePeriod !== true) {
+  if (!isUsOdooServicePeriodPolicy(policy)) {
     return WAIT("ODOO_PERIOD_MAPPING_UNAPPROVED");
   }
 
@@ -113,7 +167,8 @@ export async function verifyUsOdooPaidEntitlement({
     const plan = await one(client, "sale.subscription.plan", policy.planId,
       ["id", "company_id", "billing_period_unit", "billing_period_value"]);
     if (!plan || id(plan.company_id) !== COMPANY_ID ||
-        plan.billing_period_unit !== "month" || plan.billing_period_value !== 1) {
+        plan.billing_period_unit !== policy.billingPeriodUnit ||
+        plan.billing_period_value !== policy.billingPeriodValue) {
       return WAIT("ODOO_PLAN_SCOPE_OR_PERIOD_MISMATCH");
     }
 
@@ -124,7 +179,8 @@ export async function verifyUsOdooPaidEntitlement({
     const orderLines = await read("sale.order.line", [
       ["id", "in", orderLineIds],
     ], ["id", "company_id", "order_id", "product_id",
-        "recurring_invoice", "price_unit"], MAX_LINKS);
+        "recurring_invoice", "price_unit", "price_subtotal", "discount",
+        "product_uom_qty", "product_uom_id", "currency_id"], MAX_LINKS);
     if (!exactRows(orderLines,orderLineIds)) {
       return WAIT("ODOO_ORDER_LINES_INCOMPLETE");
     }
@@ -132,7 +188,9 @@ export async function verifyUsOdooPaidEntitlement({
       orderLineIds.includes(id(line.id)) &&
       id(line.company_id) === COMPANY_ID && id(line.order_id) === orderId &&
       id(line.product_id) > 0 && line.recurring_invoice === true &&
-      Number.isFinite(Number(line.price_unit)) && Number(line.price_unit) > 0);
+      typeof line.price_unit === "number" && Number.isFinite(line.price_unit) &&
+      line.price_unit > 0 && positiveMoney(line.price_subtotal) &&
+      id(line.currency_id) === policy.currencyId);
     if (!recurring.length) return WAIT("ODOO_SUBSCRIPTION_PRODUCT_UNVERIFIED");
 
     const variantIds = [...new Set(recurring.map(line => id(line.product_id)))];
@@ -145,8 +203,8 @@ export async function verifyUsOdooPaidEntitlement({
       (v.company_id === false || id(v.company_id) === COMPANY_ID) &&
       id(v.product_tmpl_id) === policy.productTemplateId &&
       v.recurring_invoice === true).map(v => id(v.id)));
-    const validOrderLines = new Set(recurring.filter(line =>
-      validVariants.has(id(line.product_id))).map(line => id(line.id)));
+    const validOrderLines = new Map(recurring.filter(line =>
+      validVariants.has(id(line.product_id))).map(line => [id(line.id), line]));
     if (!validOrderLines.size) return WAIT("ODOO_SUBSCRIPTION_PRODUCT_UNVERIFIED");
 
     const invoiceIds = manyIds(order.invoice_ids);
@@ -182,9 +240,7 @@ export async function verifyUsOdooPaidEntitlement({
       }
       if (invoice.move_type !== "out_invoice" || invoice.state !== "posted" ||
           invoice.payment_state !== "paid" ||
-          !(Number(invoice.amount_total) > 0) ||
-          !Number.isFinite(Number(invoice.amount_residual)) ||
-          Math.abs(Number(invoice.amount_residual)) > 0.0001) continue;
+          !positiveMoney(invoice.amount_total) || cents(invoice.amount_residual) !== 0) continue;
       settled = true;
       const reversals=manyIds(invoice.reversal_move_ids);
       if(!reversals)return WAIT("ODOO_REVERSAL_LINKS_INVALID");
@@ -199,8 +255,11 @@ export async function verifyUsOdooPaidEntitlement({
     const lineQueries=withLines.map(({lineIds})=>["account.move.line",[
         ["id","in",lineIds],
       ],["id","move_id","company_id","product_id","subscription_id","sale_line_ids",
-        "deferred_start_date","deferred_end_date","price_subtotal"],MAX_LINKS]);
+        "deferred_start_date","deferred_end_date","price_subtotal","price_unit",
+        "discount","quantity","product_uom_id","currency_id"],MAX_LINKS]);
     const dependencies=await readMany([...refundQueries,...lineQueries]);
+    if (!Array.isArray(dependencies) || dependencies.length !== refundQueries.length + lineQueries.length ||
+        dependencies.some(rows => !Array.isArray(rows))) return WAIT("ODOO_DEPENDENCY_READBACK_INCOMPLETE");
     if(dependencies.slice(0,refundQueries.length).some(rows=>rows.length))return WAIT("ODOO_INVOICE_REVERSED");
     const payable=[];
     for(let i=0;i<withLines.length;i++){
@@ -210,7 +269,7 @@ export async function verifyUsOdooPaidEntitlement({
       const linked=lines.filter(line=>
         lineIds.includes(id(line.id))&&id(line.move_id)===invoiceId&&
         id(line.company_id)===COMPANY_ID&&validVariants.has(id(line.product_id))&&
-        Number.isFinite(Number(line.price_subtotal))&&Number(line.price_subtotal)>0&&
+        positiveMoney(line.price_subtotal)&&
         id(line.subscription_id)===orderId&&
         manyIds(line.sale_line_ids)?.some(item=>validOrderLines.has(item)));
       if(!linked.length)continue;
@@ -222,28 +281,35 @@ export async function verifyUsOdooPaidEntitlement({
       payable.push({invoiceId,linked,paymentIds});
     }
     const paymentQueries=payable.map(({invoiceId,paymentIds})=>policy.paymentChannel==="manual"?
-      ["account.payment",[["id","in",paymentIds]],["id","state","company_id","partner_id","currency_id","payment_type","invoice_ids"],MAX_LINKS]:
-      ["payment.transaction",[["invoice_ids","in",[invoiceId]]],["id","state","company_id","partner_id","currency_id","invoice_ids"],MAX_LINKS]);
+      ["account.payment",[["id","in",paymentIds]],["id","state","company_id","partner_id","currency_id","payment_type","invoice_ids","amount"],MAX_LINKS]:
+      ["payment.transaction",[["invoice_ids","in",[invoiceId]]],["id","state","company_id","partner_id","currency_id","invoice_ids","amount","operation","source_transaction_id","child_transaction_ids"],MAX_LINKS]);
     const paymentResults=await readMany(paymentQueries);
+    if (!Array.isArray(paymentResults) || paymentResults.length !== payable.length ||
+        paymentResults.some(rows => !Array.isArray(rows))) return WAIT("ODOO_PAYMENT_READBACK_INCOMPLETE");
     for(let i=0;i<payable.length;i++){
-      const {invoiceId,linked,paymentIds}=payable[i],rows=paymentResults[i];
-      const validPayment=rows.some(p=>
-        (policy.paymentChannel==="manual"?
-          paymentIds.includes(id(p.id))&&["paid","reconciled"].includes(p.state)&&p.payment_type==="inbound":
-          p.state==="done")&&
-        id(p.company_id)===COMPANY_ID&&id(p.partner_id)===partnerId&&
-        id(p.currency_id)===policy.currencyId&&manyIds(p.invoice_ids)?.includes(invoiceId));
-      if(!validPayment)continue;
+      const {invoiceId,linked}=payable[i],rows=paymentResults[i];
+      const invoice = invoices.find(x => id(x.id) === invoiceId);
+      if (!exactInvoiceCash(rows, invoice, partnerId, policy.currencyId, policy.paymentChannel)) continue;
       for(const line of linked){
-        const interval=signedAndCurrentPeriod(line,order,clock);
+        const interval=signedAndCurrentPeriod(line,order,clock,policy);
         if(!interval)continue;
         covered=true;if(!interval.current)continue;
+        // Never grant against a partial, substituted or ambiguous recurring line.
+        // Historic invoice prices can differ after a legitimate tariff change.
+        const sourceIds = manyIds(line.sale_line_ids);
+        const sourceLine = sourceIds?.length === 1 ? validOrderLines.get(sourceIds[0]) : null;
+        if (validOrderLines.size !== 1 || linked.length !== 1 ||
+            !exactSingleId(invoice.invoice_line_ids, id(line.id)) ||
+            !sameCommercialLine(line, sourceLine, policy.currencyId) ||
+            cents(line.price_subtotal) > cents(invoice.amount_total)) {
+          return WAIT("ODOO_CURRENT_COMMERCIAL_LINE_UNVERIFIED");
+        }
         currentProofs.set(invoiceId,Object.freeze({
           status:"PAID_VERIFIED",canActivate:true,companyId:COMPANY_ID,websiteId:WEBSITE_ID,
           partnerId,subscriptionOrderId:orderId,invoiceId,
           periodStartUtc:interval.start.toISOString(),periodEndExclusiveUtc:interval.end.toISOString(),
           commercialPolicyVersion:policy.version,
-          evidence:"posted_paid_invoice_linked_line_approved_deferred_period",
+          evidence:"posted_paid_invoice_exact_order_line_cash_approved_service_dates_v2",
         }));
       }
     }

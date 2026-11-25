@@ -6,6 +6,7 @@ import {prepareUsPaidActivationEvidence} from "../provision/usPaidOwnerOpeningGa
 import {assertUsPaidEvidenceForLockedRequest} from "../provision/ownerOpeningCanonicalActivation.js";
 import {validG3Seal} from "../provision/usOdooG3SealProof.js";
 import {createUsOdooReadOnlyClient} from "./usOdooReadOnlyClient.js";
+import {isUsOdooServicePeriodPolicy} from "./usOdooPaidEntitlement.js";
 import {persistUsSaasPaidProjection,revokeUsSaasProjection} from "./usSaasEntitlementProjection.js";
 import {US_SAAS_SYSTEM_ACTOR,writeSystemUsSaasReconciliationAudit} from "./usSaasReconciliationAudit.js";
 
@@ -34,9 +35,8 @@ async function readProjection(db,r,lock){
 function policyFor(r,env){
  if(env.TOTEM_US_ODOO_SAAS_ACTIVATION_ENABLED!=="true"||env.TOTEM_US_ODOO_SAAS_ACCESS_ENABLED!=="true")return null;
  let p;try{p=JSON.parse(env.TOTEM_US_ODOO_SAAS_COMMERCIAL_POLICY_JSON||"");}catch{return null;}
- if(p?.approved!==true||p.companyId!==4||p.websiteId!==5||!Array.isArray(p.coveredOwnerTypes)||!p.coveredOwnerTypes.includes(r.owner_type)||
-  p.allowDeferredRevenuePeriod!==true||!id(p.planId)||!id(p.productTemplateId)||!id(p.currencyId)||p.billingPeriodUnit!=="month"||p.billingPeriodValue!==1||!["manual","online"].includes(p.paymentChannel)||
-  typeof p.version!=="string"||!/^[a-zA-Z0-9_.-]{1,40}$/.test(p.version))return null;
+ if(!isUsOdooServicePeriodPolicy(p)||!Array.isArray(p.coveredOwnerTypes)||
+  !p.coveredOwnerTypes.includes(r.owner_type)||!p.coveredOwnerTypes.every(t=>["salon","master"].includes(t)))return null;
  return p;
 }
 // A WAIT reason alone is not proof of revocation. Read ONLY the exact

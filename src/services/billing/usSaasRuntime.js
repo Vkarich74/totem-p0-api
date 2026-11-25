@@ -3,6 +3,7 @@
 import {performance} from "node:perf_hooks";
 import {setTimeout as delay} from "node:timers/promises";
 import {createUsOdooReadOnlyClient} from "./usOdooReadOnlyClient.js";
+import {isUsOdooServicePeriodPolicy} from "./usOdooPaidEntitlement.js";
 import {reconcileUsSaasOpeningFromQueue} from "./usSaasReconciliation.js";
 import {commercialWriterRelease} from "../provision/usCommercialWriterRelease.js";
 import {readUsSaasRuntimeHealth} from "./usSaasRuntimeMonitoring.js";
@@ -21,10 +22,7 @@ export function usSaasRuntimeGate(env){
  if(url.origin!=="https://totem-platform.odoo.com"||url.pathname!=="/"||url.search||url.hash||url.username||url.password||
    env.TOTEM_US_ODOO_DB!=="totem-platform"||
    !["TOTEM_US_ODOO_USER","TOTEM_US_ODOO_API_KEY"].every(k=>typeof env[k]==="string"&&env[k].trim())||
-   p?.approved!==true||!/^[A-Za-z0-9_.-]{1,40}$/.test(p.version||"")||
-   p.companyId!==4||p.websiteId!==5||p.planId!==6||p.productTemplateId!==29||p.currencyId!==1||
-   p.billingPeriodUnit!=="month"||p.billingPeriodValue!==1||p.allowDeferredRevenuePeriod!==true||
-   !["manual","online"].includes(p.paymentChannel)||!Array.isArray(p.coveredOwnerTypes)||
+   !isUsOdooServicePeriodPolicy(p)||!Array.isArray(p.coveredOwnerTypes)||
    !p.coveredOwnerTypes.length||!p.coveredOwnerTypes.every(t=>["salon","master"].includes(t)))return "CONFIG_INVALID";
  return "READY";
 }
