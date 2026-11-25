@@ -1,0 +1,44 @@
+{
+  "migration": "NONE",
+  "production_deploy": "NOT_RUN",
+  "base": "641a758519ec5c86d79dcb6bdf6dd0ae64c11729",
+  "files": [
+    {
+      "path": "src/money-core/ownerBalanceLock.js",
+      "candidate_sha256": "b48c1815bd63291a988fbbde6b210921a1036b8321a4d7b4bcc67630a53f88a9",
+      "original_blob": "ABSENT"
+    },
+    {
+      "path": "src/money-core/ledger.service.js",
+      "candidate_sha256": "130c0522c4a0917c00c70239fa0b8850e25b133ca07f89f6dbb9d74eb38865ee",
+      "original_blob": "f9305ce83b0fce70bb3f81fde3233cb488172c02"
+    },
+    {
+      "path": "src/money-core/payoutExecutions.service.js",
+      "candidate_sha256": "ced936c94523fd019052b0e8461e843b2f384468ce1c7edf420d093c40f8f08e",
+      "original_blob": "bc57a86db712f290c9c549a8b093eb408e528a2e"
+    },
+    {
+      "path": "src/money-core/xpayLedgerBridge.service.js",
+      "candidate_sha256": "83978e96bdd452759108eb232310fc72b2331b3ba037bd77c54d14a2b201df71",
+      "original_blob": "92d230dcf82c62de1344b9b0d3f25159b9668f59"
+    },
+    {
+      "path": "src/money-core/withdrawRequests.service.js",
+      "candidate_sha256": "78d5c43be2b497e5fea8d47151ee7d910bdab56d298cfc3896d394221002e4d2",
+      "original_blob": "407d72249437c92280b8aa32ebada45f7f86e3ad"
+    },
+    {
+      "path": "src/money-core/split.service.js",
+      "candidate_sha256": "225efdf91a13f0fcd5567ae642a1a9cbe0cdfe0bdd134d8cd61d3716209f98c2",
+      "original_blob": "efbdb26d79efad0bb789ec9a8af8d230fb15b615"
+    },
+    {
+      "path": "src/money-core/settlements.service.js",
+      "candidate_sha256": "4d16244bbe36517f7575d061a21386f3d11022ad25febcdd1f5837205e7a0c58",
+      "original_blob": "6dd983a497e08e8a771efb387641721132ccfa7a"
+    }
+  ],
+  "release": "HOLD",
+  "status": "LEDGER_SETTLEMENT_INTEGRITY_STAGED"
+}

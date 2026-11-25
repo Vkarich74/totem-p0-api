@@ -2,6 +2,7 @@
 
 import { randomUUID } from 'crypto';
 import { assertMoneyCoreWriteAllowed } from './config.js';
+import { lockMoneyOwnerBalances } from './ownerBalanceLock.js';
 import { createNotification } from '../services/notifications/notificationService.js';
 import { buildWithdrawRequestLockedNotificationTemplate } from '../services/notifications/notificationTemplates.js';
 import { requireCurrencyCode, resolveOwnerCurrencyCode } from '../market-context/BusinessContext.js';
@@ -1115,6 +1116,7 @@ async function createWithdrawRequest(pool, ownerType, ownerId, input = {}, actor
       resolvedDestinationId = destination.id;
     }
 
+    await lockMoneyOwnerBalances(client,[{owner_type:owner.owner_type,owner_id:owner.owner_id,currency}]);
     const availableBalanceResult = await client.query(
       `
       SELECT available

@@ -2,6 +2,7 @@
 
 import { randomUUID } from 'crypto';
 import { assertMoneyCoreWriteAllowed } from './config.js';
+import { lockMoneyOwnerBalances } from './ownerBalanceLock.js';
 import { createNotification } from '../services/notifications/notificationService.js';
 import { buildPayoutExecutionNotificationTemplate } from '../services/notifications/notificationTemplates.js';
 import { requireCurrencyCode } from '../market-context/BusinessContext.js';
@@ -327,6 +328,7 @@ async function insertLedgerEntriesAndRebuildBalance(
 ) {
   const entryGroupId = randomUUID();
   const normalizedCurrency = requireCurrencyCode(currency, 'PAYOUT_CURRENCY_INVALID');
+  await lockMoneyOwnerBalances(client,[{owner_type:ownerType,owner_id:ownerId,currency:normalizedCurrency}]);
   const sanitizedMetadata = sanitizeJson(metadata ?? {});
   const createdByType = normalizeText(actor?.user_type) || 'system';
   const createdById = normalizeInt(actor?.user_id);
@@ -727,6 +729,7 @@ async function submitManualPayoutExecution(pool, id, input = {}, actor = {}) {
 
     const payout = await loadPayoutForUpdate(client, payoutId);
     if (!payout) {
+      await client.query('ROLLBACK');
       return null;
     }
 
@@ -838,6 +841,7 @@ async function completePayoutExecution(pool, id, input = {}, actor = {}) {
 
     const payout = await loadPayoutForUpdate(client, payoutId);
     if (!payout) {
+      await client.query('ROLLBACK');
       return null;
     }
 
@@ -991,6 +995,7 @@ async function failPayoutExecution(pool, id, input = {}, actor = {}) {
 
     const payout = await loadPayoutForUpdate(client, payoutId);
     if (!payout) {
+      await client.query('ROLLBACK');
       return null;
     }
 
