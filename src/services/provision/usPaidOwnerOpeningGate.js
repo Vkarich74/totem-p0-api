@@ -47,6 +47,8 @@ export async function prepareUsPaidActivationEvidence(request, {
   if(request?.owner_type==="master"&&request.source_namespace==="odoo_online"&&
      request.precheck_result_json?.odoo_source_proof?.entry_mode==="own_salon")
     return WAIT("US_OWN_SALON_SHARED_SUBSCRIPTION_NO_SECOND_PAID_RECEIPT");
+  if(request?.owner_type==="master"&&request.source_namespace==="odoo_online")
+    return WAIT("US_ODOO_MASTER_ROLE_COMMERCIAL_CONTRACT_HOLD");
   if (!request || request.source_namespace !== "odoo_online" ||
       positive(request.source_company_id) !== 4 ||
       positive(request.source_website_id) !== 5 ||

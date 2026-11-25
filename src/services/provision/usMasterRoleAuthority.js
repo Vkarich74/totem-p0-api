@@ -158,12 +158,14 @@ export async function assertUsExistingSalonConsent(db,locked){
 // enables a user or grants a session. Both role bindings must already exist.
 export async function readUsOwnSalonMasterAuthority(db,masterRequestId,{env=process.env,lock=false}={}){
  if(env.TOTEM_US_OWN_SALON_SHARED_ENTITLEMENT_ENABLED!=="true")throw fail("US_MASTER_SHARED_ENTITLEMENT_HOLD");
- let policy;try{policy=JSON.parse(env.TOTEM_US_ODOO_SAAS_COMMERCIAL_POLICY_JSON||"");}catch{throw fail("US_MASTER_SHARED_POLICY_REQUIRED");}
  const accessPolicy=readUsSaasProjectionPolicy(env);
- if(!accessPolicy||!Array.isArray(policy.coveredOwnerTypes)||policy.ownSalonEntitlement!=="single_salon_subscription"||
-    !policy.coveredOwnerTypes?.includes("salon")||!policy.coveredOwnerTypes?.includes("master"))
+ if(!accessPolicy||accessPolicy.ownSalonEntitlement!=="single_salon_subscription"||
+    !accessPolicy.coveredOwnerTypes.includes("salon")||!accessPolicy.coveredOwnerTypes.includes("master"))
    throw fail("US_MASTER_SHARED_POLICY_REQUIRED");
+ if(!id(masterRequestId))throw fail("US_MASTER_REQUEST_INVALID",400);
  const r=await one(db,"SELECT * FROM public.owner_opening_requests WHERE id=$1"+(lock?" FOR UPDATE":""),[id(masterRequestId)]);
+ if(!sameId(r.id,masterRequestId)||!["provisioned",...activeStates].includes(r.status))
+   throw fail("US_MASTER_SHARED_REQUEST_NOT_READY");
  const p=source(r,"master","own_salon");
  if(p.role_set!=="salon,master"||!id(r.created_owner_id)||!id(r.created_auth_user_id))throw fail("US_MASTER_SHARED_IDENTITY_REQUIRED");
  const salon=await one(db,`SELECT o.* FROM public.owner_opening_requests o

@@ -2,6 +2,7 @@
 // Odoo is the only payment authority. This code NEVER charges a wallet/Stripe.
 
 
+import {isUsOdooServicePeriodPolicy} from "./usOdooPaidEntitlement.js";
 const TYPE=new Set(["salon","master"]);
 const MAX_EVIDENCE_AGE_MS=5*60*1000;
 const REVOKE_REASONS=new Set([
@@ -11,7 +12,7 @@ const REVOKE_REASONS=new Set([
 ]);
 const number=x=>{const n=Number(x);return Number.isSafeInteger(n)&&n>0?n:0;};
 function fail(code){const e=new Error(code);e.code=code;e.status=409;return e;}
-function date(x){const d=new Date(x);return Number.isFinite(d.getTime())?d:null;}
+function date(x){if(x==null)return null;const d=new Date(x);return Number.isFinite(d.getTime())?d:null;}
 function DENY(reason,us=true){return Object.freeze({
   managed:us,can_write:false,can_withdraw:false,can_book:false,reason,
   subscription_status:"blocked",access_state:"blocked",
@@ -20,9 +21,12 @@ export function readUsSaasProjectionPolicy(env=process.env){
   if(env.TOTEM_US_ODOO_SAAS_ACCESS_ENABLED!=="true")return null;
   let x;
   try{x=JSON.parse(env.TOTEM_US_ODOO_SAAS_COMMERCIAL_POLICY_JSON||"");}catch{return null;}
-  if(x?.approved!==true||typeof x.version!=="string"||!/^[a-zA-Z0-9_.-]{1,40}$/.test(x.version))
-    return null;
-  return {version:x.version,maxEvidenceAgeMs:MAX_EVIDENCE_AGE_MS};
+  if(!isUsOdooServicePeriodPolicy(x)||!Array.isArray(x.coveredOwnerTypes)||
+     x.coveredOwnerTypes.length<1||!x.coveredOwnerTypes.every(t=>TYPE.has(t))||
+     new Set(x.coveredOwnerTypes).size!==x.coveredOwnerTypes.length)return null;
+  return Object.freeze({version:x.version,maxEvidenceAgeMs:MAX_EVIDENCE_AGE_MS,
+    coveredOwnerTypes:Object.freeze([...x.coveredOwnerTypes]),
+    ownSalonEntitlement:x.ownSalonEntitlement??null});
 }
 export function assessUsSaasProjection(row,{marketUs=false,source=null,
   now=new Date(),policy=null}={}){
@@ -31,17 +35,24 @@ export function assessUsSaasProjection(row,{marketUs=false,source=null,
   }
   const clock=date(now);
   if(!clock)return DENY("US_SAAS_CLOCK_INVALID");
-  if(!source||source.source_namespace!=="odoo_online"||
-     Number(source.source_company_id)!==4||Number(source.source_website_id)!==5)
+  if(!marketUs||!source||source.source_namespace!=="odoo_online"||
+     Number(source.source_company_id)!==4||Number(source.source_website_id)!==5||
+     !TYPE.has(source.owner_type)||!number(source.created_owner_id)||
+     !number(source.source_partner_id)||
+     source.source_request_id!=="odoo-us-partner-"+number(source.source_partner_id))
     return DENY("US_SAAS_TRUSTED_OWNER_SOURCE_MISSING");
-  if(!row||row.provider_namespace!=="odoo_online"||row.wallet_only!==false||
+  if(!row||row.owner_type!==source.owner_type||
+     number(row.owner_id)!==number(source.created_owner_id)||
+     row.provider_namespace!=="odoo_online"||row.wallet_only!==false||
      row.currency!=="USD"||Number(row.provider_company_id)!==4||
      Number(row.provider_website_id)!==5||
      Number(row.provider_partner_id)!==Number(source.source_partner_id)||
      String(row.provider_source_request_id)!==String(source.source_request_id)||
      !number(row.provider_subscription_order_id)||!number(row.provider_invoice_id))
     return DENY("US_SAAS_PROJECTION_MISSING_OR_MISMATCH");
-  if(!policy||row.provider_policy_version!==policy.version||
+  if(!policy||!Array.isArray(policy.coveredOwnerTypes)||
+     !policy.coveredOwnerTypes.includes(source.owner_type)||
+     row.provider_policy_version!==policy.version||
      !Number.isSafeInteger(policy.maxEvidenceAgeMs)||
      policy.maxEvidenceAgeMs<1||policy.maxEvidenceAgeMs>MAX_EVIDENCE_AGE_MS)
     return DENY("US_SAAS_COMMERCIAL_POLICY_UNAPPROVED");

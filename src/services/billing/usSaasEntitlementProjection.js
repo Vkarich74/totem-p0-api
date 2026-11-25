@@ -1,4 +1,5 @@
 import {assertUsCommercialWriterReleased} from "../provision/usCommercialWriterRelease.js";
+import {readUsSaasProjectionPolicy as readPolicy} from "./usSaasAuthorityReadOnly.js";
 // G5-T5: US-only Odoo SaaS entitlement projection on EXISTING Core billing_subscriptions.
 // Odoo is the only payment authority. This code NEVER charges a wallet/Stripe.
 
@@ -18,12 +19,7 @@ function DENY(reason,us=true){return Object.freeze({
   subscription_status:"blocked",access_state:"blocked",
 });}
 export function readUsSaasProjectionPolicy(env=process.env){
-  if(env.TOTEM_US_ODOO_SAAS_ACCESS_ENABLED!=="true")return null;
-  let x;
-  try{x=JSON.parse(env.TOTEM_US_ODOO_SAAS_COMMERCIAL_POLICY_JSON||"");}catch{return null;}
-  if(x?.approved!==true||typeof x.version!=="string"||!/^[a-zA-Z0-9_.-]{1,40}$/.test(x.version))
-    return null;
-  return {version:x.version,maxEvidenceAgeMs:MAX_EVIDENCE_AGE_MS};
+  return readPolicy(env);
 }
 export function assessUsSaasProjection(row,{marketUs=false,source=null,
   now=new Date(),policy=null}={}){
@@ -107,6 +103,11 @@ export async function getUsSaasAccess(db,{ownerType,ownerId,policy=null,now=new 
 /** Called inside the EXISTING T3 activation transaction, after FOR UPDATE source. */
 export async function persistUsSaasPaidProjection(db,lockedRequest,evidence,now,assertPaidEvidence){
   assertUsCommercialWriterReleased("projection");
+  // An imported master's membership never creates a separate paid projection.
+  // own_salon uses the salon projection; existing_salon needs its own approved
+  // commercial model before any independent writer can be enabled.
+  if(lockedRequest?.source_namespace==="odoo_online"&&lockedRequest.owner_type==="master")
+    throw fail("US_ODOO_MASTER_ROLE_COMMERCIAL_CONTRACT_HOLD");
   if(typeof assertPaidEvidence!=="function")throw fail("US_SAAS_VERIFIED_PROOF_CONTRACT_REQUIRED");
   assertPaidEvidence(lockedRequest,evidence,now);
   if(!TYPE.has(lockedRequest.owner_type))
