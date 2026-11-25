@@ -49,7 +49,9 @@ function age(value){if(value===null)return null;const n=Number(value);if(!Number
 export async function readUsSaasRuntimeHealth(db){
  const {rows}=await db.query(US_SAAS_RUNTIME_HEALTH_SQL);
  if(rows.length!==1)throw Error("US_SAAS_MONITOR_INVALID");
- const row=rows[0],time=new Date(row.sampled_at);
+ const row=rows[0];
+ if(row.sampled_at==null)throw Error("US_SAAS_MONITOR_INVALID");
+ const time=new Date(row.sampled_at);
  if(!Number.isFinite(time.getTime()))throw Error("US_SAAS_MONITOR_INVALID");
  const result={sampled_at:time.toISOString()};
  for(const k of countKeys)result[k]=number(row[k]);
@@ -63,7 +65,8 @@ export async function readUsSaasRuntimeHealth(db){
 
 // Independent READ ONLY watchdog, intended for a separate process/sink.
 // Does not require Odoo credentials or start the scheduler.
-export async function readUsSaasRuntimeWatchdog(db){
+export async function readUsSaasRuntimeWatchdog(db,{expectedMode="ACTIVE"}={}){
+ if(!["ACTIVE","HOLD"].includes(expectedMode))throw Error("US_SAAS_WATCHDOG_MODE_INVALID");
  const {rows}=await db.query(`SELECT statement_timestamp() AS sampled_at,
  last_outcome,consecutive_failures,
  extract(epoch FROM statement_timestamp()-last_heartbeat_at) AS heartbeat_age_s,
@@ -74,11 +77,53 @@ export async function readUsSaasRuntimeWatchdog(db){
  const allowed=["NEVER","RUNNING","OK","IDLE","PARTIAL","RATE_LIMIT","AUTH_REJECTED","PROVIDER_ERROR","TICK_ERROR"];
  if(!allowed.includes(r.last_outcome)||typeof r.cooling!=="boolean"||failures>20)throw Error("US_SAAS_WATCHDOG_INVALID");
  const health=await readUsSaasRuntimeHealth(db);
- const dead=heartbeat===null||heartbeat< -1||heartbeat>60;
+ // An intentional initial HOLD must not be reported as a dead worker.
+ // Never infer HOLD from this independent process's missing worker flags.
+ // Any evidence of active work or a non-pristine runtime is an incident,
+ // not a reason to suppress alerts. Previously active systems need ACTIVE
+ // monitoring until an explicitly reviewed operational hold contract exists.
+ if(expectedMode==="HOLD"){
+   const pristine=r.last_outcome==="NEVER"&&heartbeat===null&&failures===0&&
+     r.cooling===false&&health.total===0&&health.pending===0&&health.processing===0&&
+     health.recent_failed===0&&health.recent_done===0&&health.severity==="OK";
+   return Object.freeze({severity:pristine?"OK":"CRITICAL",
+     expected_mode:"HOLD",runtime_health_ok:false,
+     reason:pristine?"EXPECTED_INITIAL_HOLD":"UNEXPECTED_ACTIVITY_OR_STATE_DURING_HOLD",
+     heartbeat_age_s:heartbeat,last_outcome:r.last_outcome,consecutive_failures:failures,
+     cooling:r.cooling,health});
+ }
+ const dead=r.last_outcome==="NEVER"||heartbeat===null||heartbeat< -1||heartbeat>60;
  const severity=dead||health.severity==="CRITICAL"||r.last_outcome==="AUTH_REJECTED"||r.last_outcome==="TICK_ERROR"?"CRITICAL":
    heartbeat>45||failures>0||r.cooling&&r.last_outcome!=="RUNNING"||health.severity==="WARN"?"WARN":"OK";
- return Object.freeze({severity,heartbeat_age_s:heartbeat,last_outcome:r.last_outcome,
+ return Object.freeze({severity,expected_mode:"ACTIVE",runtime_health_ok:severity==="OK",heartbeat_age_s:heartbeat,last_outcome:r.last_outcome,
    consecutive_failures:failures,cooling:r.cooling,
    reason:dead?"HEARTBEAT_MISSING_OR_STALE":severity==="OK"?"HEALTHY":"DEGRADED",
    health});
+}
+
+// Use a single read-only snapshot for the standalone monitor. Do not open
+// the worker, take job leases, touch Odoo or modify runtime control.
+export async function sampleUsSaasRuntimeWatchdog(pool,options={}){
+ if(!pool||typeof pool.connect!=="function")throw Error("US_SAAS_WATCHDOG_DB_REQUIRED");
+ if(options.expectedMode!==undefined&&!["ACTIVE","HOLD"].includes(options.expectedMode))
+   throw Error("US_SAAS_WATCHDOG_MODE_INVALID");
+ const db=await pool.connect();
+ let begun=false,discard=false;
+ try{
+   await db.query("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
+   begun=true;
+   await db.query("SET LOCAL statement_timeout = '5000ms'");
+   await db.query("SET LOCAL lock_timeout = '1000ms'");
+   await db.query("SET LOCAL idle_in_transaction_session_timeout = '10000ms'");
+   const check=await db.query("SHOW transaction_read_only");
+   if(check.rows.length!==1||check.rows[0].transaction_read_only!=="on")
+     throw Error("US_SAAS_WATCHDOG_READONLY_REQUIRED");
+   const result=await readUsSaasRuntimeWatchdog(db,options);
+   await db.query("ROLLBACK");begun=false;
+   return result;
+ }catch(e){
+   discard=true;
+   if(begun)try{await db.query("ROLLBACK");}catch{}
+   throw e;
+ }finally{db.release(discard);}
 }
