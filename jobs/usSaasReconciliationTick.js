@@ -23,6 +23,7 @@ const CANDIDATES_SQL = `
   WHERE b.provider_namespace='odoo_online'
     AND b.provider_company_id=4 AND b.provider_website_id=5
     AND b.wallet_only=false AND b.currency='USD'
+    AND b.subscription_status='active' AND b.blocked_at IS NULL AND b.provider_revoked_at IS NULL
     AND req.status IN ('activated','email_ready','email_failed','email_sent')
     AND (b.provider_verified_at IS NULL OR
          b.provider_verified_at < clock_timestamp() - interval '1 minute')
@@ -92,7 +93,10 @@ export async function runUsSaasReconciliationTick({db,env=process.env,limit=1,
           if(signal.aborted||!enabled(env))throw error("US_SAAS_RUNTIME_LOCK_LOST");
         }});
       lifecycle.observeResults?.([result]);
-      return [result?.status==="PAID_VERIFIED"||result?.status==="REVOKED"?null:error("US_SAAS_RECONCILIATION_WAIT")];
+      // A completed queue item is not a paid grant. Only the exact restoration
+      // HOLD is terminal for this item; the selectors exclude that row.
+      const held=result?.status==="HOLD"&&result.reason==="US_SAAS_RESTORATION_AUTHORITY_HOLD";
+      return [held||result?.status==="PAID_VERIFIED"||result?.status==="REVOKED"?null:error("US_SAAS_RECONCILIATION_WAIT")];
     }});
     const result={status:"RAN",enqueued,workers:[batch]};
     if(fence.signal.aborted)throw error("US_SAAS_RUNTIME_LOCK_LOST");

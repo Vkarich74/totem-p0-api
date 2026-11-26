@@ -78,6 +78,7 @@ const outcome=(report,stats)=>{
  if(report.codes.AUTH_REJECTED)return "AUTH_REJECTED";
  if(report.stopped||stats.provider_wait)return "PROVIDER_ERROR";
  if(stats.retried||stats.failed||stats.lost_lease)return "PARTIAL";
+ if(stats.held===stats.claimed&&stats.claimed>0)return "IDLE";
  return stats.claimed?"OK":"IDLE";
 };
 function cooldown(code,failures,retryAfterMs){
@@ -94,11 +95,12 @@ export async function runUsSaasRuntimeOnce({db,env=process.env,tick,logger=defau
  if(!db||typeof db.connect!=="function")throw Error("US_SAAS_RUNTIME_DB_REQUIRED");
  const runTick=tick??(await import("../../../jobs/usSaasReconciliationTick.js")).runUsSaasReconciliationTick;
  let guard,started=monotonic(),failures=0,health=null;
- const stats={claimed:0,done:0,retried:0,failed:0,lost_lease:0,paid:0,revoked:0,wait:0,provider_wait:0};
+ const stats={claimed:0,done:0,retried:0,failed:0,lost_lease:0,paid:0,revoked:0,held:0,wait:0,provider_wait:0};
  function observeResults(results){
    for(const x of results){
      if(x?.status==="PAID_VERIFIED")stats.paid++;
      else if(x?.status==="REVOKED")stats.revoked++;
+     else if(x?.status==="HOLD")stats.held++;
      else {stats.wait++;if(["US_ODOO_BATCH_INCOMPLETE","US_ODOO_PAID_READBACK_UNAVAILABLE",
        "ODOO_READBACK_UNAVAILABLE","US_SAAS_BATCH_RECEIPT_STALE"].includes(x?.reason))stats.provider_wait++;}
    }

@@ -2,7 +2,7 @@ import {assertUsCommercialWriterReleased} from "./usCommercialWriterRelease.js";
 import {assertManualG3RequestReceipt,isScopedUsOdooRequest} from "./usG3ManualRequestReceipt.js";
 import {kgSharedMasterProof,assertKgSharedMasterActivation} from "./kgSharedMasterIdentity.js";
 import {isUsOwnSalonMaster,assertUsOwnSalonActivationReady} from "./usOwnSalonCanonicalActivation.js";
-import { persistUsSaasPaidProjection } from "../billing/usSaasEntitlementProjection.js";
+import { persistUsSaasPaidProjection, readUsSaasTransactionClock, usSaasAuditId } from "../billing/usSaasEntitlementProjection.js";
 // G5-T3: one transactional Core Owner Opening activation for Admin and
 // future authenticated reconciliation workers. This is NOT an HTTP endpoint.
 // Existing Core canonical entity activation and audit callbacks are reused.
@@ -119,14 +119,14 @@ export async function activateOwnerOpeningCanonical({
       if(paidEvidence)throw fail("US_MASTER_SECOND_PAID_RECEIPT_FORBIDDEN");
       sharedAuthority=await assertUsOwnSalonActivationReady(db,current,masterReceipt);
     }else if (market === "US") {
-      const nowRow = await db.query("SELECT clock_timestamp() AS now");
+      const paidClock = await readUsSaasTransactionClock(db);
       assertUsPaidEvidenceForLockedRequest(
-        current, paidEvidence, nowRow.rows[0]?.now,
+        current, paidEvidence, paidClock,
       );
       await assertUsActivationReady(db, current, positive(current.created_owner_id));
       // Odoo-paid entitlement projection is committed atomically with owner/auth.
-      await persistUsSaasPaidProjection(db,current,paidEvidence,nowRow.rows[0]?.now,
-        assertUsPaidEvidenceForLockedRequest);
+      await persistUsSaasPaidProjection(db,current,paidEvidence,paidClock,
+        assertUsPaidEvidenceForLockedRequest,{operation:"INITIAL_ACTIVATION"});
     }
 
     const ownerActivation = await activateEntity(db, current);
@@ -174,7 +174,12 @@ export async function activateOwnerOpeningCanonical({
         } : {}),
       },
     });
-    if(market==="US"&&!auditEvent?.id)throw fail("US_ACTIVATION_AUDIT_REQUIRED");
+    if(market==="US"){
+      if(!usSaasAuditId(auditEvent?.id))throw fail("US_ACTIVATION_AUDIT_REQUIRED");
+      // Ordinary paid activation only. Shared-master authority has its own contract.
+      if(!sharedAuthority)
+        assertUsPaidEvidenceForLockedRequest(current,paidEvidence,await readUsSaasTransactionClock(db));
+    }
     await db.query("COMMIT");
     return {
       request, owner_activation: ownerActivation,

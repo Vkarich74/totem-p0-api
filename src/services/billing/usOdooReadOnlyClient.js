@@ -6,10 +6,81 @@ const MODELS = new Set([
   "account.payment", "payment.transaction",
 ]);
 
+// S01: no Billing reader UID has been approved. This immutable binding is
+// deliberately separate from the manual Bridge/source reader and environment.
+// An owner-approved exact existing internal UID requires a reviewed release.
+const APPROVED_BILLING_READER_UID = null;
+export function assertUsOdooBillingReaderUid(expectedUid,actualUid){
+  if(!Number.isSafeInteger(expectedUid)||expectedUid<=2||
+     !Number.isSafeInteger(actualUid)||actualUid!==expectedUid)
+    throw new Error("US_ODOO_BILLING_READER_UID_MISMATCH");
+  return actualUid;
+}
+
+// S02: exact current paid-verifier shapes, not a generic field union.
+// ID provenance and native effective record isolation are separate S03 gates.
+const POSITIVE_ID=Symbol("positive-id");
+const ID_SET=Symbol("unique-id-set");
+const SINGLE_ID_SET=Symbol("single-id-set");
+const eq=(field,value)=>[field,"=",value];
+const byId=[[ "id","=",POSITIVE_ID ]];
+const byIds=[[ "id","in",ID_SET ]];
+const shape=(id,model,domain,fields,limit)=>({id,model,domain,fields:fields.split(" "),limit});
+const BILLING_READ_SHAPES=[
+ shape("R01","sale.order",[eq("company_id",4),eq("website_id",5),eq("partner_id",POSITIVE_ID),eq("is_subscription",true),eq("subscription_state","3_progress"),eq("plan_id",6)],"id",100),
+ shape("R02","sale.order",byId,"id company_id website_id partner_id subscription_id",2),
+ shape("R03","sale.order",byId,"id company_id website_id partner_id currency_id is_subscription state subscription_state plan_id order_line invoice_ids payment_exception pending_transaction subscription_id start_date end_date next_invoice_date",2),
+ shape("R04","sale.subscription.plan",[eq("id",6)],"id company_id billing_period_unit billing_period_value",2),
+ shape("R05","sale.order.line",byIds,"id company_id order_id product_id recurring_invoice price_unit price_subtotal discount product_uom_qty product_uom_id currency_id",100),
+ shape("R06","product.product",byIds,"id company_id product_tmpl_id recurring_invoice",100),
+ shape("R07","account.move",byIds,"id company_id partner_id currency_id move_type state payment_state amount_total amount_residual invoice_date invoice_line_ids payment_ids reversal_move_ids",100),
+ shape("R08","account.move",[eq("reversed_entry_id",POSITIVE_ID),eq("move_type","out_refund"),eq("state","posted"),eq("company_id",4)],"id company_id reversed_entry_id state",100),
+ shape("R09","account.move.line",byIds,"id move_id company_id product_id subscription_id sale_line_ids deferred_start_date deferred_end_date price_subtotal price_unit discount quantity product_uom_id currency_id",100),
+ shape("R10","account.payment",byIds,"id state company_id partner_id currency_id payment_type invoice_ids amount",100),
+ shape("R11","payment.transaction",[["invoice_ids","in",SINGLE_ID_SET]],"id state company_id partner_id currency_id invoice_ids amount operation source_transaction_id child_transaction_ids",100),
+];
+// R12-R14 negative writer reads were removed in 7.03. Do not retain them.
+const positiveId=x=>Number.isSafeInteger(x)&&x>0;
+function snapshotArray(value,max){
+ if(!Array.isArray(value)||value.length<1||value.length>max)
+  throw Error("US_ODOO_BILLING_READ_SHAPE_DENIED");
+ const copy=[];
+ for(let i=0;i<value.length;i++){
+  const d=Object.getOwnPropertyDescriptor(value,String(i));
+  if(!d||!Object.hasOwn(d,"value"))throw Error("US_ODOO_BILLING_READ_SHAPE_DENIED");
+  copy.push(d.value);
+ }
+ return copy;
+}
+function valueMatches(actual,expected){
+ if(expected===POSITIVE_ID)return positiveId(actual);
+ if(expected===ID_SET||expected===SINGLE_ID_SET)
+  return Array.isArray(actual)&&(expected!==SINGLE_ID_SET||actual.length===1)&&
+   actual.every(positiveId)&&new Set(actual).size===actual.length;
+ return actual===expected;
+}
+export function validateUsOdooBillingReadShape(model,domain,fields,limit=100){
+ // Snapshot plain array values before authentication awaits. No caller-owned
+ // arrays are passed into RPC, and sparse/accessor arrays fail closed.
+ const safeDomain=snapshotArray(domain,6).map(clause=>{
+  const c=snapshotArray(clause,3);
+  if(c.length!==3)throw Error("US_ODOO_BILLING_READ_SHAPE_DENIED");
+  if(Array.isArray(c[2]))c[2]=snapshotArray(c[2],100);
+  return c;
+ });
+ const safeFields=snapshotArray(fields,17);
+ const match=BILLING_READ_SHAPES.find(s=>s.model===model&&s.limit===limit&&
+  s.fields.length===safeFields.length&&s.fields.every((f,i)=>f===safeFields[i])&&
+  s.domain.length===safeDomain.length&&s.domain.every((c,i)=>
+   c[0]===safeDomain[i][0]&&c[1]===safeDomain[i][1]&&valueMatches(safeDomain[i][2],c[2])));
+ if(!match)throw Error("US_ODOO_BILLING_READ_SHAPE_DENIED");
+ return {shapeId:match.id,model,domain:safeDomain,fields:safeFields,limit};
+}
+
 function createReadOnlyClient(models,context,{
   baseUrl, database, username, apiKey,
   fetchImpl = globalThis.fetch, timeoutMs = 12000, observe = () => {},
-} = {}) {
+} = {}, expectedBillingUid = null) {
   const url = new URL(baseUrl || "");
   if (url.protocol !== "https:" || url.username || url.password ||
       url.search || url.hash || (url.pathname !== "/" && url.pathname !== "")) {
@@ -70,6 +141,10 @@ function createReadOnlyClient(models,context,{
           report("AUTH_REJECTED");
           throw new Error("US_ODOO_AUTH_FAILED");
         }
+        if(expectedBillingUid!==null){
+          try{assertUsOdooBillingReaderUid(expectedBillingUid,value);}
+          catch(error){report("AUTH_REJECTED");throw error;}
+        }
         report("AUTH_OK");
         return value;
       }).catch(error => {
@@ -115,8 +190,15 @@ function createReadOnlyClient(models,context,{
 // Existing billing client remains CRM-free. The approved-source reader has
 // only fixed scoped read methods; no generic CRM query or write API is exposed.
 export function createUsOdooReadOnlyClient(options={}){
-  const c=createReadOnlyClient(MODELS,{allowed_company_ids:[4],company_id:4},options);
-  return Object.freeze({authenticate:c.authenticate,searchRead:c.searchRead});
+  if(!Number.isSafeInteger(APPROVED_BILLING_READER_UID)||APPROVED_BILLING_READER_UID<=2)
+    throw new Error("US_ODOO_BILLING_READER_APPROVAL_HOLD");
+  const c=createReadOnlyClient(MODELS,{allowed_company_ids:[4],company_id:4},options,APPROVED_BILLING_READER_UID);
+  return Object.freeze({authenticate:c.authenticate,
+    async searchRead(model,domain,fields,limit=100){
+      const q=validateUsOdooBillingReadShape(model,domain,fields,limit);
+      return c.searchRead(q.model,q.domain,q.fields,q.limit);
+    }
+  });
 }
 const SOURCE_MODELS=new Set(["res.partner","crm.lead","res.country.state"]);
 export const LEAD_FIELDS=Object.freeze(["id","active","type","company_id","team_id","stage_id","partner_id",

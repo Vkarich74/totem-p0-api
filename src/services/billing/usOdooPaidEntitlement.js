@@ -184,6 +184,18 @@ export async function verifyUsOdooPaidEntitlement({
     if (!exactRows(orderLines,orderLineIds)) {
       return WAIT("ODOO_ORDER_LINES_INCOMPLETE");
     }
+    // V05: validate every returned order line before selecting a product.
+    // The supported paid evidence is a single recurring commercial line.
+    // Do not silently discard foreign, unrelated or unsupported rows.
+    if (!orderLines.every(line =>
+        id(line.company_id) === COMPANY_ID &&
+        id(line.order_id) === orderId &&
+        id(line.currency_id) === policy.currencyId)) {
+      return WAIT("ODOO_ORDER_LINE_SCOPE_MISMATCH");
+    }
+    if (orderLines.length !== 1) {
+      return WAIT("ODOO_ORDER_COMPOSITION_UNSUPPORTED");
+    }
     const recurring = orderLines.filter(line =>
       orderLineIds.includes(id(line.id)) &&
       id(line.company_id) === COMPANY_ID && id(line.order_id) === orderId &&
@@ -191,7 +203,17 @@ export async function verifyUsOdooPaidEntitlement({
       typeof line.price_unit === "number" && Number.isFinite(line.price_unit) &&
       line.price_unit > 0 && positiveMoney(line.price_subtotal) &&
       id(line.currency_id) === policy.currencyId);
-    if (!recurring.length) return WAIT("ODOO_SUBSCRIPTION_PRODUCT_UNVERIFIED");
+    if (recurring.length !== orderLines.length)
+      return WAIT("ODOO_SUBSCRIPTION_PRODUCT_UNVERIFIED");
+    const soleLine = recurring[0];
+    if (typeof soleLine.product_uom_qty !== "number" ||
+        !Number.isFinite(soleLine.product_uom_qty) ||
+        soleLine.product_uom_qty <= 0 || !id(soleLine.product_uom_id) ||
+        typeof soleLine.discount !== "number" ||
+        !Number.isFinite(soleLine.discount) ||
+        soleLine.discount < 0 || soleLine.discount >= 100) {
+      return WAIT("ODOO_ORDER_COMPOSITION_UNSUPPORTED");
+    }
 
     const variantIds = [...new Set(recurring.map(line => id(line.product_id)))];
     const variants = await read("product.product", [

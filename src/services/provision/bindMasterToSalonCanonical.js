@@ -280,6 +280,12 @@ async function ensureContractState(db, payload){
 
 function buildBindResult({ salon, master, relationState, contractState }){
   const relationStatus = relationState.relation?.status || null;
+  const relationActive = relationStatus === "active";
+  // US membership is not a commercial entitlement or an access grant.
+  // Bind reports the relationship, not paid/session authority.
+  const isUsBind = salon.market_code === "US";
+  const lifecycleActive = relationActive && (!isUsBind || master.active === true);
+  const accessActive = relationActive && !isUsBind;
 
   return buildCanonicalProvisionResponse({
     ok: true,
@@ -287,10 +293,10 @@ function buildBindResult({ salon, master, relationState, contractState }){
     owner_type: "salon",
     owner_id: salon.id,
     canonical_slug: salon.slug,
-    lifecycle_state: relationStatus === "active" ? "active" : "onboarding",
-    access_state: relationStatus === "active" ? "active" : "none",
+    lifecycle_state: lifecycleActive ? "active" : "onboarding",
+    access_state: accessActive ? "active" : "none",
     relation_status: relationStatus,
-    readiness_flag: relationStatus === "active" ? "ready" : "pending_bind",
+    readiness_flag: relationActive ? (isUsBind ? "awaiting_activation" : "ready") : "pending_bind",
     result: {
       type: "bind",
       salon: {

@@ -6,11 +6,6 @@ import {readUsSaasProjectionPolicy as readPolicy} from "./usSaasAuthorityReadOnl
 
 const TYPE=new Set(["salon","master"]);
 const MAX_EVIDENCE_AGE_MS=5*60*1000;
-const REVOKE_REASONS=new Set([
-  "ODOO_INVOICE_REVERSED","ODOO_SUBSCRIPTION_NOT_ELIGIBLE",
-  "ODOO_PAID_INVOICE_NOT_FOUND","ODOO_PAID_PERIOD_NOT_CURRENT",
-  "ODOO_INVOICE_SCOPE_MISMATCH","ODOO_SUBSCRIPTION_SCOPE_MISMATCH",
-]);
 const number=x=>{const n=Number(x);return Number.isSafeInteger(n)&&n>0?n:0;};
 function fail(code){const e=new Error(code);e.code=code;e.status=409;return e;}
 function date(x){const d=new Date(x);return Number.isFinite(d.getTime())?d:null;}
@@ -100,9 +95,79 @@ export async function getUsSaasAccess(db,{ownerType,ownerId,policy=null,now=new 
     marketUs,source,now:clock.rows[0]?.now,policy,
   });
 }
-/** Called inside the EXISTING T3 activation transaction, after FOR UPDATE source. */
-export async function persistUsSaasPaidProjection(db,lockedRequest,evidence,now,assertPaidEvidence){
+// 7.03/7.05: decide only ordinary paid refresh/renewal. Restoration is a
+// distinct, currently unapproved authority; no caller-supplied flag can release it.
+const RECONCILE_STATES=new Set(["activated","email_ready","email_sent","email_failed"]);
+const time=v=>v==null||v===""?NaN:new Date(v).getTime();
+export function assertUsSaasPaidProjectionTransition(current,request,evidence,now,operation){
+  if(operation==="RESTORE")throw fail("US_SAAS_RESTORATION_AUTHORITY_HOLD");
+  if(operation!=="INITIAL_ACTIVATION"&&operation!=="RECONCILE")
+    throw fail("US_SAAS_PROJECTION_OPERATION_REQUIRED");
+  if(request?.owner_type!=="salon"||request.source_namespace!=="odoo_online"||
+     Number(request.source_company_id)!==4||Number(request.source_website_id)!==5||
+     !number(request.created_owner_id)||!number(request.created_auth_user_id)||
+     !number(request.source_partner_id)||
+     request.source_request_id!=="odoo-us-partner-"+number(request.source_partner_id))
+    throw fail("US_SAAS_PROJECTION_SCOPE_INVALID");
+  const start=time(evidence?.periodStartUtc),end=time(evidence?.periodEndExclusiveUtc);
+  const observed=time(evidence?.verifiedAtUtc),clock=time(now);
+  const order=number(evidence?.subscriptionOrderId),invoice=number(evidence?.invoiceId);
+  if(![start,end,observed,clock].every(Number.isFinite)||!(start<=clock&&clock<end)||
+     observed>clock+1000||clock-observed>10000||!order||!invoice||
+     typeof evidence?.commercialPolicyVersion!=="string"||
+     !/^[a-zA-Z0-9_.-]{1,40}$/.test(evidence.commercialPolicyVersion))
+    throw fail("US_SAAS_PROJECTION_EVIDENCE_INVALID");
+  if(operation==="INITIAL_ACTIVATION"){
+    if(request.status!=="provisioned")throw fail("US_SAAS_INITIAL_ACTIVATION_STATE_INVALID");
+    if(current)throw fail("US_SAAS_INITIAL_PROJECTION_ALREADY_EXISTS");
+    return "INITIAL_ACTIVATION";
+  }
+  if(!RECONCILE_STATES.has(request.status)||!current||!number(current.id))
+    throw fail("US_SAAS_EXISTING_PROJECTION_REQUIRED");
+  if(current.owner_type!==request.owner_type||
+     number(current.owner_id)!==number(request.created_owner_id)||
+     current.provider_namespace!=="odoo_online"||current.wallet_only!==false||
+     current.currency!=="USD"||current.billing_model!=="subscription"||
+     Number(current.provider_company_id)!==4||Number(current.provider_website_id)!==5||
+     number(current.provider_partner_id)!==number(request.source_partner_id)||
+     current.provider_source_request_id!==request.source_request_id)
+    throw fail("US_SAAS_EXISTING_PROJECTION_SOURCE_CHANGED");
+  if(current.subscription_status!=="active"||current.blocked_at!==null||
+     current.provider_revoked_at!==null)
+    throw fail("US_SAAS_RESTORATION_AUTHORITY_HOLD");
+  if(current.provider_policy_version!==evidence.commercialPolicyVersion)
+    throw fail("US_SAAS_RENEWAL_POLICY_CHANGED");
+  const oldStart=time(current.current_period_start),oldEnd=time(current.current_period_end);
+  const oldVerified=time(current.provider_verified_at);
+  const oldOrder=number(current.provider_subscription_order_id),oldInvoice=number(current.provider_invoice_id);
+  if(![oldStart,oldEnd,oldVerified].every(Number.isFinite)||oldStart>=oldEnd||
+     observed<=oldVerified||!oldOrder||!oldInvoice)
+    throw fail("US_SAAS_RECONCILIATION_EVIDENCE_STALE");
+  // A direct parent pointer is not full canonical agreement-root proof.
+  // Hold successor orders until the native lineage contract is accepted.
+  if(order!==oldOrder)throw fail("US_SAAS_RENEWAL_LINEAGE_NOT_PROVEN");
+  if(start===oldStart&&end===oldEnd&&invoice===oldInvoice)return "REFRESH";
+  if(start===oldEnd&&end>oldEnd&&invoice!==oldInvoice)return "RENEWAL";
+  throw fail("US_SAAS_RENEWAL_CYCLE_NOT_PROVEN");
+}
+
+// Read PostgreSQL wall clock after locks, never reuse the pre-lock snapshot.
+export async function readUsSaasTransactionClock(db){
+  const q=await db.query("SELECT clock_timestamp() AS now");
+  const v=q.rows.length===1?q.rows[0]?.now:null;
+  if((typeof v!=="string"&&Object.prototype.toString.call(v)!=="[object Date]")||
+     !Number.isFinite(time(v)))throw fail("US_SAAS_TRANSACTION_CLOCK_INVALID");
+  return new Date(v);
+}
+export function usSaasAuditId(value){
+  return (typeof value==="number"||
+    (typeof value==="string"&&/^[1-9][0-9]*$/.test(value)))?number(value):0;
+}
+/** Called inside the EXISTING T3 activation or T5 reconciliation transaction. */
+export async function persistUsSaasPaidProjection(db,lockedRequest,evidence,now,assertPaidEvidence,{operation}={}){
   assertUsCommercialWriterReleased("projection");
+  if(operation==="RESTORE")throw fail("US_SAAS_RESTORATION_AUTHORITY_HOLD");
+  if(operation!=="INITIAL_ACTIVATION"&&operation!=="RECONCILE")throw fail("US_SAAS_PROJECTION_OPERATION_REQUIRED");
   // An imported master's membership never creates a separate paid projection.
   // own_salon uses the salon projection; existing_salon needs its own approved
   // commercial model before any independent writer can be enabled.
@@ -116,42 +181,30 @@ export async function persistUsSaasPaidProjection(db,lockedRequest,evidence,now,
   const old=await db.query(
     "SELECT * FROM public.billing_subscriptions "+
     "WHERE owner_type=$1 AND owner_id=$2 FOR UPDATE",[role,id]);
+  if(old.rows.length>1)throw fail("US_SAAS_DUPLICATE_PROJECTIONS");
   const current=old.rows[0]||null;
-  if(current&&current.provider_namespace!=="odoo_online")
-    throw fail("US_SAAS_LEGACY_BILLING_TAKEOVER_FORBIDDEN");
-  if(current&&(Number(current.provider_partner_id)!==
-       Number(lockedRequest.source_partner_id)||
-       current.provider_source_request_id!==lockedRequest.source_request_id||
-       Number(current.provider_company_id)!==4||
-       Number(current.provider_website_id)!==5))
-    throw fail("US_SAAS_EXISTING_PROJECTION_SOURCE_CHANGED");
+  const lockedClock=await readUsSaasTransactionClock(db);
+  assertPaidEvidence(lockedRequest,evidence,lockedClock);
+  const transition=assertUsSaasPaidProjectionTransition(current,lockedRequest,evidence,lockedClock,operation);
   const orderId=number(evidence.subscriptionOrderId);
-  if(current&&Number(current.provider_subscription_order_id)!==orderId){
-    // New subscription order must be authenticated against a linked parent
-    // via Odoo readback. A foreign order belonging to the same partner
-    // may never be used to extend somebody else's Core entitlement.
-    if(Number(evidence.renewedFromOrderId)!==
-       Number(current.provider_subscription_order_id)||
-       !number(evidence.renewedFromOrderId)){
-      throw fail("US_SAAS_RENEWAL_LINEAGE_NOT_PROVEN");
-    }
-  }
   const args=[role,id,Number(lockedRequest.source_partner_id),
     lockedRequest.source_request_id,orderId,number(evidence.invoiceId),
     evidence.commercialPolicyVersion,evidence.periodStartUtc,
     evidence.periodEndExclusiveUtc,evidence.verifiedAtUtc];
-  if(current){
+  if(transition!=="INITIAL_ACTIVATION"){
     const updated=await db.query(
       "UPDATE public.billing_subscriptions SET "+
-      "subscription_status='active',blocked_at=NULL,"+
-      "provider_revoked_at=NULL,current_period_start=$8::timestamptz,"+
+      "current_period_start=$8::timestamptz,"+
       "current_period_end=$9::timestamptz,provider_verified_at=$10::timestamptz,"+
       "provider_subscription_order_id=$5,provider_invoice_id=$6,"+
       "provider_policy_version=$7,updated_at=NOW() "+
-      "WHERE owner_type=$1 AND owner_id=$2 AND provider_namespace='odoo_online' "+
+      "WHERE id=$11 AND owner_type=$1 AND owner_id=$2 AND provider_namespace='odoo_online' "+
+      "AND provider_company_id=4 AND provider_website_id=5 AND currency='USD' AND wallet_only=false "+
       "AND provider_partner_id=$3 AND provider_source_request_id=$4 "+
-      "RETURNING *",args);
-    if(updated.rows.length!==1)throw fail("US_SAAS_PROJECTION_UPDATE_RACE");
+      "AND subscription_status='active' AND blocked_at IS NULL AND provider_revoked_at IS NULL "+
+      "AND provider_policy_version=$7 AND provider_verified_at<$10::timestamptz "+
+      "RETURNING *",[...args,number(current.id)]);
+    if(updated.rows.length!==1||number(updated.rows[0].id)!==number(current.id))throw fail("US_SAAS_PROJECTION_UPDATE_RACE");
     return updated.rows[0];
   }
   const added=await db.query(
@@ -171,21 +224,10 @@ export async function persistUsSaasPaidProjection(db,lockedRequest,evidence,now,
   if(added.rows.length!==1)throw fail("US_SAAS_PROJECTION_INSERT_FAILED");
   return added.rows[0];
 }
-export async function revokeUsSaasProjection(db,lockedRequest,{reason,verifiedAtUtc}={}){
+// Negative disposition requires approved cutoff/refund authority. The old
+// cancellation/credit-note predicate is not that authority. Retain the export
+// as a fail-closed compatibility boundary, without a mutation path.
+export async function revokeUsSaasProjection(db,lockedRequest,evidence={}){
   assertUsCommercialWriterReleased("projection");
-  if(!REVOKE_REASONS.has(reason))throw fail("US_SAAS_REVOCATION_NOT_PROVEN");
-  if(lockedRequest?.source_namespace!=="odoo_online"||
-     Number(lockedRequest.source_company_id)!==4)
-    throw fail("US_SAAS_REVOCATION_SOURCE_INVALID");
-  const verified=date(verifiedAtUtc);
-  if(!verified)throw fail("US_SAAS_REVOCATION_CLOCK_INVALID");
-  const r=await db.query(
-    "UPDATE public.billing_subscriptions SET "+
-    "subscription_status='blocked',blocked_at=NOW(),"+
-    "provider_revoked_at=$3::timestamptz,provider_verified_at=$3::timestamptz,"+
-    "updated_at=NOW() WHERE owner_type=$1 AND owner_id=$2 "+
-    "AND provider_namespace='odoo_online' AND provider_source_request_id=$4 "+
-    "RETURNING id",[lockedRequest.owner_type,lockedRequest.created_owner_id,
-      verified.toISOString(),lockedRequest.source_request_id]);
-  return r.rows.length===1;
+  throw fail("US_SAAS_REVOCATION_POLICY_HOLD");
 }

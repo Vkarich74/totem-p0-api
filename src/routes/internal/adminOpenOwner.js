@@ -3374,7 +3374,8 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
       return res.status(400).json({ok:false,error:"US_SAAS_RECONCILIATION_INPUT_INVALID"});
     try{
       const result=await reconcileUsSaasOpening({pool,requestId,sourceAdmin:req.admin,operator:getAdminActor(req),writeAudit:writeOwnerOpeningAuditEvent});
-      return res.status(result.status==="WAIT"?409:200).json({ok:result.status!=="WAIT",...result});
+      const denied=result.status==="WAIT"||result.status==="HOLD";
+      return res.status(denied?409:200).json({ok:!denied,...result});
     }catch(err){
       return res.status(resolveProvisionStatus(err)).json({ok:false,error:err?.code||"US_SAAS_RECONCILIATION_UNAVAILABLE"});
     }

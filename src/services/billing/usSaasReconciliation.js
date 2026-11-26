@@ -7,15 +7,16 @@ import {assertUsPaidEvidenceForLockedRequest} from "../provision/ownerOpeningCan
 import {validG3Seal} from "../provision/usOdooG3SealProof.js";
 import {createUsOdooReadOnlyClient} from "./usOdooReadOnlyClient.js";
 import {isUsOdooServicePeriodPolicy} from "./usOdooPaidEntitlement.js";
-import {persistUsSaasPaidProjection,revokeUsSaasProjection} from "./usSaasEntitlementProjection.js";
+import {persistUsSaasPaidProjection,readUsSaasTransactionClock,usSaasAuditId} from "./usSaasEntitlementProjection.js";
 import {US_SAAS_SYSTEM_ACTOR,writeSystemUsSaasReconciliationAudit} from "./usSaasReconciliationAudit.js";
 
 const CURRENT=new Set(["activated","email_ready","email_sent","email_failed"]);
 const id=v=>Number.isSafeInteger(Number(v))&&Number(v)>0?Number(v):0;
 const ms=v=>v==null?NaN:new Date(v).getTime();
 const wait=reason=>({status:"WAIT",reason});
+const hold=()=>({status:"HOLD",reason:"US_SAAS_RESTORATION_AUTHORITY_HOLD"});
+const renewable=b=>b?.subscription_status==="active"&&b.blocked_at===null&&b.provider_revoked_at===null;
 const fail=code=>Object.assign(Error(code),{code,status:409});
-const relationId=v=>id(Array.isArray(v)?v[0]:v);
 const sourceKey=r=>JSON.stringify([r.id,r.owner_type,r.created_owner_id,r.created_auth_user_id,r.source_namespace,r.source_company_id,r.source_website_id,r.source_partner_id,r.source_request_id,r.status,r.precheck_result_json?.odoo_source_proof]);
 const rowKey=b=>JSON.stringify([b.id,b.owner_type,b.owner_id,b.provider_namespace,b.provider_company_id,b.provider_website_id,b.provider_partner_id,b.provider_source_request_id,b.provider_subscription_order_id,b.provider_invoice_id,b.provider_policy_version,b.provider_verified_at,b.provider_revoked_at,b.subscription_status,b.current_period_start,b.current_period_end,b.blocked_at,b.updated_at]);
 function exact(r,b){
@@ -39,39 +40,8 @@ function policyFor(r,env){
   !p.coveredOwnerTypes.includes(r.owner_type)||!p.coveredOwnerTypes.every(t=>["salon","master"].includes(t)))return null;
  return p;
 }
-// A WAIT reason alone is not proof of revocation. Read ONLY the exact
-// existing provider order, corroborate scope, and use a definitive reversal
-// or explicitly cancelled sale order. Unknown, timeout, missing -> WAIT.
-async function readNegative(r,b,policy,env,createClient){
- if(env.TOTEM_US_ODOO_URL!=="https://totem-platform.odoo.com"||env.TOTEM_US_ODOO_DB!=="totem-platform"||!env.TOTEM_US_ODOO_USER||!env.TOTEM_US_ODOO_API_KEY)return null;
- const orderId=id(b.provider_subscription_order_id);
- try{
-  const client=createClient({baseUrl:env.TOTEM_US_ODOO_URL,database:env.TOTEM_US_ODOO_DB,username:env.TOTEM_US_ODOO_USER,apiKey:env.TOTEM_US_ODOO_API_KEY});
-  const readOrder=async()=>{
-   const rows=await client.searchRead("sale.order",[["id","=",orderId],["company_id","=",4],["website_id","=",5],["partner_id","=",id(r.source_partner_id)]],["id","company_id","website_id","partner_id","state","is_subscription","plan_id","currency_id","invoice_ids"],2);
-   const q=rows[0];
-   return rows.length===1&&id(q.id)===orderId&&relationId(q.company_id)===4&&relationId(q.website_id)===5&&relationId(q.partner_id)===id(r.source_partner_id)&&q.is_subscription===true&&relationId(q.plan_id)===policy.planId&&relationId(q.currency_id)===policy.currencyId?q:null;
-  };
-  const first=await readOrder();
-  if(!first)return null;
-  let reason=null;
-  if(first.state==="cancel")reason="ODOO_SUBSCRIPTION_NOT_ELIGIBLE";
-  else{
-   const invoiceId=id(b.provider_invoice_id);
-   if(!Array.isArray(first.invoice_ids)||!first.invoice_ids.includes(invoiceId))return null;
-   const invoices=await client.searchRead("account.move",[["id","=",invoiceId],["company_id","=",4],["partner_id","=",id(r.source_partner_id)]],["id","company_id","partner_id","currency_id","move_type","state"],2);
-   const invoice=invoices[0];
-   if(invoices.length!==1||id(invoice.id)!==invoiceId||relationId(invoice.company_id)!==4||
-      relationId(invoice.partner_id)!==id(r.source_partner_id)||relationId(invoice.currency_id)!==policy.currencyId||invoice.move_type!=="out_invoice"||invoice.state!=="posted")return null;
-   const refunds=await client.searchRead("account.move",[["reversed_entry_id","=",invoiceId],["company_id","=",4],["partner_id","=",id(r.source_partner_id)],["move_type","=","out_refund"],["state","=","posted"]],["id","company_id","partner_id","currency_id","move_type","state","reversed_entry_id"],100);
-   if(refunds.length&&refunds.every(x=>id(x.id)>0&&relationId(x.company_id)===4&&relationId(x.partner_id)===id(r.source_partner_id)&&relationId(x.currency_id)===policy.currencyId&&x.move_type==="out_refund"&&x.state==="posted"&&relationId(x.reversed_entry_id)===invoiceId))reason="ODOO_INVOICE_REVERSED";
-  }
-  if(!reason)return null;
-  const last=await readOrder();
-  if(!last||last.state!==first.state||JSON.stringify(last.invoice_ids)!==JSON.stringify(first.invoice_ids))return null;
-  return Object.freeze({reason,orderId,verifiedAtUtc:new Date().toISOString()});
- }catch{return null;}
-}
+// 7.03: cancellation/credit-note readback alone is not an approved
+// revocation or refund/cutoff receipt. No negative writer is released.
 async function assertOperatorSession(db,a,operator,lock){
  if(a?.role!=="admin"||!id(a.user_id)||id(a.user_id)!==id(operator?.id)||typeof a.session_id!=="string"||
    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(a.session_id))
@@ -106,14 +76,14 @@ async function reconcileOpening({pool,requestId,writeAudit,operator,sourceAdmin,
  if(!r||r.source_namespace!=="odoo_online"||!CURRENT.has(r.status))return wait("US_SAAS_ACTIVE_SOURCE_REQUIRED");
  const old=await readProjection(pool,r,false);
  if(!exact(r,old))return wait("US_SAAS_EXISTING_PROJECTION_REQUIRED");
+ if(!renewable(old))return hold();
  if(r.owner_type==="master"&&["own_salon","existing_salon"].includes(r.precheck_result_json?.odoo_source_proof?.entry_mode))return wait("US_ODOO_MASTER_ROLE_COMMERCIAL_CONTRACT_HOLD");
  const policy=policyFor(r,env);
  if(!policy||old.provider_policy_version!==policy.version)return wait("US_SAAS_COMMERCIAL_POLICY_UNAPPROVED");
  // Network I/O precedes all SQL row locks.
  const evidence=await prepareUsPaidActivationEvidence(r,{env,createClient});
  const paid=evidence?.status==="PAID_VERIFIED"&&evidence.canActivate===true;
- const negative=paid?null:await readNegative(r,old,policy,env,createClient);
- if(!paid&&!negative)return wait(evidence?.reason||"ODOO_READBACK_UNAVAILABLE");
+ if(!paid)return {...wait(evidence?.reason||"ODOO_READBACK_UNAVAILABLE"),negativeDisposition:"US_SAAS_NEGATIVE_DISPOSITION_HOLD"};
  const db=await pool.connect();
  try{
   await db.query("BEGIN");
@@ -124,29 +94,29 @@ async function reconcileOpening({pool,requestId,writeAudit,operator,sourceAdmin,
   const locked=(await db.query("SELECT * FROM public.owner_opening_requests WHERE id=$1 FOR UPDATE",[id(requestId)])).rows[0];
   if(!locked||sourceKey(locked)!==sourceKey(r))throw fail("US_SAAS_RECONCILIATION_SOURCE_CHANGED");
   const current=await readProjection(db,locked,true);
+  if(exact(locked,current)&&!renewable(current)){
+    await db.query("ROLLBACK");
+    return hold();
+  }
   if(!exact(locked,current)||rowKey(current)!==rowKey(old))throw fail("US_SAAS_RECONCILIATION_REVISION_CHANGED");
-  const clock=(await db.query("SELECT clock_timestamp() AS now")).rows[0]?.now;
-  const observed=ms(paid?evidence.verifiedAtUtc:negative.verifiedAtUtc),now=ms(clock);
+  const clock=await readUsSaasTransactionClock(db);
+  const observed=ms(evidence.verifiedAtUtc),now=ms(clock);
   if(!Number.isFinite(observed)||!Number.isFinite(now)||observed>now+1000||now-observed>10000||
     (current.provider_verified_at!=null&&observed<=ms(current.provider_verified_at)))throw fail("US_SAAS_RECONCILIATION_EVIDENCE_STALE");
-  let status,eventType,data;
-  if(paid){
-   if(evidence.commercialPolicyVersion!==policy.version||ms(evidence.periodEndExclusiveUtc)<ms(current.current_period_end))throw fail("US_SAAS_RENEWAL_PERIOD_REGRESSION");
-   assertUsPaidEvidenceForLockedRequest(locked,evidence,clock);
-   const result=await persistUsSaasPaidProjection(db,locked,evidence,clock,assertUsPaidEvidenceForLockedRequest);
-   if(id(result.id)!==id(current.id))throw fail("US_SAAS_RECONCILIATION_NEW_ROW_FORBIDDEN");
-   status="PAID_VERIFIED";eventType="owner_opening.odoo_paid_entitlement_reconciled";
-   data={billing_id:id(current.id),subscription_order_id:id(evidence.subscriptionOrderId),invoice_id:id(evidence.invoiceId),effective_until:evidence.periodEndExclusiveUtc,commercial_policy_version:policy.version};
-  }else{
-   if(negative.orderId!==id(current.provider_subscription_order_id))throw fail("US_SAAS_REVOCATION_SCOPE_CHANGED");
-   if(!await revokeUsSaasProjection(db,locked,negative))throw fail("US_SAAS_REVOKE_PROJECTION_MISSING");
-   status="REVOKED";eventType="owner_opening.odoo_entitlement_revoked";
-   data={billing_id:id(current.id),reason:negative.reason,subscription_order_id:negative.orderId};
-  }
+  if(evidence.commercialPolicyVersion!==policy.version||ms(evidence.periodEndExclusiveUtc)<ms(current.current_period_end))throw fail("US_SAAS_RENEWAL_PERIOD_REGRESSION");
+  assertUsPaidEvidenceForLockedRequest(locked,evidence,clock);
+  const result=await persistUsSaasPaidProjection(db,locked,evidence,clock,assertUsPaidEvidenceForLockedRequest,{operation:"RECONCILE"});
+  if(id(result.id)!==id(current.id))throw fail("US_SAAS_RECONCILIATION_NEW_ROW_FORBIDDEN");
+  const status="PAID_VERIFIED",eventType="owner_opening.odoo_paid_entitlement_reconciled";
+  const data={billing_id:id(current.id),subscription_order_id:id(evidence.subscriptionOrderId),invoice_id:id(evidence.invoiceId),effective_until:evidence.periodEndExclusiveUtc,commercial_policy_version:policy.version};
   const audit=await writeAudit(db,{request:locked,admin:operator,eventType,data});
+  const auditId=usSaasAuditId(audit?.id);
+  if(!auditId)throw fail("US_SAAS_RECONCILIATION_AUDIT_REQUIRED");
   if(queue)await assertQueue(db);
+  // Last check after audit and lease work; rollback on stale or invalid proof.
+  assertUsPaidEvidenceForLockedRequest(locked,evidence,await readUsSaasTransactionClock(db));
   await db.query("COMMIT");
-  return {status,ownerId:id(locked.created_owner_id),ownerType:locked.owner_type,audit_event_id:audit?.id||null};
+  return {status,ownerId:id(locked.created_owner_id),ownerType:locked.owner_type,audit_event_id:auditId};
  }catch(e){await db.query("ROLLBACK").catch(()=>{});throw e;}
  finally{db.release();}
 }
@@ -155,6 +125,6 @@ async function reconcileOpening({pool,requestId,writeAudit,operator,sourceAdmin,
 export async function findUsSaasReconciliationCandidates(db,{limit=25}={}){
  assertUsCommercialWriterReleased("projection");
  if(!Number.isInteger(limit)||limit<1||limit>100)throw fail("US_SAAS_RECON_LIMIT_INVALID");
- const result=await db.query("SELECT req.id AS request_id FROM public.billing_subscriptions billing JOIN public.owner_opening_requests req ON req.owner_type=billing.owner_type AND req.created_owner_id=billing.owner_id AND req.source_namespace='odoo_online' AND req.source_company_id=4 AND req.source_website_id=5 AND req.source_partner_id=billing.provider_partner_id AND req.source_request_id=billing.provider_source_request_id WHERE billing.provider_namespace='odoo_online' AND billing.provider_company_id=4 AND billing.provider_website_id=5 AND billing.wallet_only=false AND billing.currency='USD' AND req.status IN ('activated','email_ready','email_sent','email_failed') AND (billing.provider_verified_at IS NULL OR billing.provider_verified_at<clock_timestamp()-interval '1 minute' OR billing.current_period_end<=clock_timestamp()) ORDER BY billing.provider_verified_at NULLS FIRST,billing.id LIMIT $1",[limit]);
+ const result=await db.query("SELECT req.id AS request_id FROM public.billing_subscriptions billing JOIN public.owner_opening_requests req ON req.owner_type=billing.owner_type AND req.created_owner_id=billing.owner_id AND req.source_namespace='odoo_online' AND req.source_company_id=4 AND req.source_website_id=5 AND req.source_partner_id=billing.provider_partner_id AND req.source_request_id=billing.provider_source_request_id WHERE billing.provider_namespace='odoo_online' AND billing.provider_company_id=4 AND billing.provider_website_id=5 AND billing.wallet_only=false AND billing.currency='USD' AND billing.subscription_status='active' AND billing.blocked_at IS NULL AND billing.provider_revoked_at IS NULL AND req.status IN ('activated','email_ready','email_sent','email_failed') AND (billing.provider_verified_at IS NULL OR billing.provider_verified_at<clock_timestamp()-interval '1 minute' OR billing.current_period_end<=clock_timestamp()) ORDER BY billing.provider_verified_at NULLS FIRST,billing.id LIMIT $1",[limit]);
  return result.rows.map(r=>id(r.request_id)).filter(Boolean);
 }
