@@ -1,7 +1,12 @@
 import {assertUsOdooDispatchHold,assertManualG3RequestReceipt,isScopedUsOdooRequest,isManualG3Request} from "./usG3ManualRequestReceipt.js";
 import {assertUsImportedMasterProvision} from "./usImportedMasterProvision.js";
 const err=code=>Object.assign(Error(code),{code,status:409});
-const same=(a,b)=>Number.isSafeInteger(Number(a))&&Number(a)>0&&Number(a)===Number(b);
+// Canonical numeric IDs and PostgreSQL bigint strings only; no coercion.
+const id=x=>{
+  if(typeof x!=="number"&&(typeof x!=="string"||!/^[1-9][0-9]*$/.test(x)))return 0;
+  const n=Number(x);return Number.isSafeInteger(n)&&n>0?n:0;
+};
+const same=(a,b)=>{const n=id(a);return n>0&&n===id(b);};
 const txt=v=>String(v??"").trim();
 const mode=r=>r?.precheck_result_json?.odoo_source_proof?.entry_mode;
 // Any explicit USA origin remains protected even if its market metadata was damaged.
