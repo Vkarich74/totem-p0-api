@@ -7,7 +7,11 @@ import { assertUsPaidEvidenceForLockedRequest } from "../provision/ownerOpeningC
 
 const UNCERTAIN="OWNER_OPENING_GMAIL_DELIVERY_UNCERTAIN";
 const GMAIL_ID=/^[a-zA-Z0-9_-]{1,200}$/;
-const toId=v=>{const n=Number(v);return Number.isSafeInteger(n)&&n>0?n:0;};
+// Canonical positive numeric IDs and PostgreSQL bigint strings only.
+const toId=v=>{
+  if(typeof v!=="number"&&(typeof v!=="string"||!/^[1-9][0-9]*$/.test(v)))return 0;
+  const n=Number(v);return Number.isSafeInteger(n)&&n>0?n:0;
+};
 function error(code,status=409){const e=new Error(code);e.code=code;e.status=status;return e;}
 export function welcomeIntentKey(v){
   const id=toId(v);
@@ -48,7 +52,7 @@ function checkMarket(r,market){
 function checkUsScope(r,required){
   if(!r)throw error("OWNER_OPENING_REQUEST_NOT_FOUND",404);
   if((isScopedUsOdooRequest(r)&&!required)||
-     (required&&(!isScopedUsOdooRequest(r)||Number(r.source_company_id)!==4||Number(r.source_website_id)!==5||r.precheck_result_json?.normalized?.market_code!=="US")))
+     (required&&(!isScopedUsOdooRequest(r)||toId(r.source_company_id)!==4||toId(r.source_website_id)!==5||r.precheck_result_json?.normalized?.market_code!=="US")))
     throw error("US_G3_ADMIN_SOURCE_SCOPE_CHANGED");
 }
 function requireReconcile(){throw Object.assign(error("OWNER_OPENING_WELCOME_RECONCILIATION_REQUIRED"),{requires_reconciliation:true});}
@@ -58,8 +62,8 @@ const email=v=>typeof v==="string"?v.trim().toLowerCase():"";
 // Consent for an existing-salon master likewise does not establish a paid grant.
 export function usWelcomeRoleStatus(r){
  const p=r?.precheck_result_json?.odoo_source_proof;
- if(!isScopedUsOdooRequest(r)||Number(r.source_company_id)!==4||
-    Number(r.source_website_id)!==5||r.precheck_result_json?.normalized?.market_code!=="US")
+ if(!isScopedUsOdooRequest(r)||toId(r.source_company_id)!==4||
+    toId(r.source_website_id)!==5||r.precheck_result_json?.normalized?.market_code!=="US")
    return "SOURCE_SCOPE_INVALID";
  if(r.owner_type==="salon"&&((p?.entry_mode==="salon"&&p.role_set==="salon")||
     (p?.entry_mode==="own_salon"&&p.role_set==="salon,master")))return "SALON_PAID_PROOF_REQUIRED";
@@ -115,9 +119,11 @@ function exactIntent(req,msg){
  sameBinding(req,d.us_source_binding);
 }
 export async function readUsWelcomeRelatedMessages(db,req,{lock=false}={}){
+ const requestId=toId(req?.id),messageId=req?.message_id==null?null:toId(req.message_id);
+ if(!requestId||messageId===0)requireReconcile();
  const q=await db.query("SELECT id,status,idempotency_key,data FROM public.messages "+
  "WHERE idempotency_key LIKE $1 OR id=$2 OR (data->>'entity_type'='owner_opening_request' AND data->>'entity_id'=$3) "+
- "ORDER BY id LIMIT 2"+(lock?" FOR UPDATE":""),["owner_opening:"+toId(req.id)+":%",req.message_id??null,String(req.id)]);
+ "ORDER BY id LIMIT 2"+(lock?" FOR UPDATE":""),["owner_opening:"+requestId+":%",messageId,String(requestId)]);
  return q.rows;
 }
 const relatedMessages=(db,req)=>readUsWelcomeRelatedMessages(db,req,{lock:true});
