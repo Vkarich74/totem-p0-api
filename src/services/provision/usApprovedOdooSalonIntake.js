@@ -14,7 +14,9 @@ const sourceKey=partner=>"odoo-us-partner-"+partner;
 const MARKER="totem_us_portal_approved_v1";
 const stamp=v=>{
  if(typeof v!=="string"||!/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/.test(v))return NaN;
- return Date.parse(v.replace(" ","T")+"Z");
+ const t=Date.parse(v.replace(" ","T")+"Z");
+ if(!Number.isFinite(t)||v.startsWith("0000-")||new Date(t).toISOString().slice(0,19).replace("T"," ")!==v)return NaN;
+ return t;
 };
 const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 function single(rows,code){if(!Array.isArray(rows)||rows.length!==1||!rows[0]||typeof rows[0]!=="object")throw problem(code);return rows[0];}
