@@ -3,8 +3,13 @@
 // No pool acquisition, caller market claims, wallet fallback or side effects.
 // Recheck after mutation before caller COMMIT: denial forces transaction rollback.
 import {getUsSaasAccess,readUsSaasProjectionPolicy} from "./usSaasEntitlementProjection.js";
+// Accept only canonical positive numeric IDs or PostgreSQL bigint strings.
+const scopeId=v=>{
+ if(typeof v!=="number"&&(typeof v!=="string"||!/^[1-9][0-9]*$/.test(v)))return 0;
+ const n=Number(v);return Number.isSafeInteger(n)&&n>0?n:0;
+};
 export async function checkUsSaasTransactionalWrite(db,ownerType,scope){
- const id=Number(scope?.owner_id),marketId=Number(scope?.market_id);
+ const id=scopeId(scope?.owner_id),marketId=scopeId(scope?.market_id);
  if(!db||typeof db.query!=="function"||!["salon","master"].includes(ownerType)||
     !Number.isSafeInteger(id)||id<1||!Number.isSafeInteger(marketId)||marketId<1)
    return {status:403,body:{ok:false,error:"US_SAAS_COMMERCIAL_SCOPE_INVALID"}};
