@@ -7,7 +7,11 @@ import {US_COUNTRY_PACK} from "../../market-context/country-packs/US.js";
 const MODE="owner_admin_attested_readback_v2";
 const receipts=new WeakSet();
 const fail=()=>{throw Object.assign(Error("US_ODOO_G3_MANUAL_REQUEST_PROOF_REQUIRED"),{code:"US_ODOO_G3_MANUAL_REQUEST_PROOF_REQUIRED",status:409});};
-const id=x=>Number.isSafeInteger(Number(x))&&Number(x)>0?Number(x):0;
+// Accept canonical PostgreSQL bigint strings, never coercible containers or booleans.
+const id=x=>{
+  if(typeof x!=="number"&&(typeof x!=="string"||!/^[1-9][0-9]*$/.test(x)))return 0;
+  const n=Number(x);return Number.isSafeInteger(n)&&n>0?n:0;
+};
 const str=x=>String(x??"");
 const proof=r=>r?.precheck_result_json?.odoo_source_proof;
 export const isManualG3Request=r=>proof(r)?.authority_mode===MODE||
@@ -27,7 +31,7 @@ function compare(r,v){
  const p=proof(r),a=v?.provenance,i=v?.intake;
  const n=r?.precheck_result_json?.normalized;
  if(!p||!a||!i||!n||p.authority_mode!==MODE||a.authority_mode!==MODE||
- r.source_namespace!=="odoo_online"||Number(r.source_company_id)!==4||Number(r.source_website_id)!==5||
+ r.source_namespace!=="odoo_online"||id(r.source_company_id)!==4||id(r.source_website_id)!==5||
  n.market_code!=="US"||r.owner_type!==i.owner_type||v.proof.owner_type!==r.owner_type||
  id(r.source_partner_id)!==v.proof.partner_id||r.source_request_id!==v.proof.source_request_id||
  !sameG3Seal(p,a)||keys.some(k=>(p[k]??null)!==(a[k]??null))||
