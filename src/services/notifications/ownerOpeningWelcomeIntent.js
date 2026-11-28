@@ -164,7 +164,7 @@ function reconcileCandidate(req,rows,provider){
  if(req.status==="email_sent"){
    classifyUsWelcomeDecision(req,rows);
  }else if(!["email_ready","email_failed"].includes(req.status)||!["pending","failed"].includes(msg.status)||!["claimed","uncertain"].includes(d.delivery_state)||req.email_sent_at)requireReconcile();
- return {id:toId(msg.id),key:msg.idempotency_key,recipient:d.to,rfcMessageId:d.rfc_message_id,oldProvider:old??null,ownerType:req.owner_type,ownerId:toId(req.created_owner_id),authId:toId(req.created_auth_user_id),partnerId:toId(req.source_partner_id),sourceRequestId:req.source_request_id};
+ return {id:toId(msg.id),key:msg.idempotency_key,recipient:d.to,rfcMessageId:d.rfc_message_id,oldProvider:old??null,ownerType:req.owner_type,ownerId:toId(req.created_owner_id),authId:toId(req.created_auth_user_id),partnerId:toId(req.source_partner_id),sourceRequestId:req.source_request_id,slug:d.slug,sourceBindingSnapshot:JSON.stringify(sourceBinding(req))};
 }
 function sameCandidate(a,b){
  return Object.keys(a).every(k=>a[k]===b[k]);

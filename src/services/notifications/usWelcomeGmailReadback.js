@@ -19,9 +19,10 @@ export async function verifyUsWelcomeGmailSent(gmail,{providerId=null,rfcMessage
    if(!Array.isArray(listing?.messages)||listing.messages.length!==1||listing.nextPageToken||!ID.test(String(listing.messages[0]?.id||"")))return deny();
    const id=listing.messages[0].id;
    if(providerId!==null&&providerId!==id)return deny();
-   const found=await gmail.users.messages.get({userId:"me",id,format:"metadata",metadataHeaders:["Message-ID","From","To"]});
+   const found=await gmail.users.messages.get({userId:"me",id,format:"metadata",metadataHeaders:["Message-ID","From","To","Cc","Bcc"]});
    const d=found?.data,headers=d?.payload?.headers;
    if(d?.id!==id||!Array.isArray(d.labelIds)||!d.labelIds.includes("SENT")||!Array.isArray(headers))return deny();
+   if(headers.some(h=>["cc","bcc"].includes(String(h?.name||"").toLowerCase())))return deny();
    const unique=name=>{
      const h=headers.filter(x=>String(x?.name||"").toLowerCase()===name);
      return h.length===1?h[0].value:null;
