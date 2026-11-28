@@ -1,4 +1,4 @@
-import {readUsOwnerQueueStats,readUsOwnerQueuePage} from "../../services/provision/ownerOpeningQueueRead.js";
+import {readUsOwnerQueueStats,readUsOwnerQueuePage,ownerQueueScope} from "../../services/provision/ownerOpeningQueueRead.js";
 import {usManualReleaseHold,inspectUsManualActivationWelcome} from "../../services/provision/usManualActivationWelcome.js";
 import {isUsAdminCommercialRoute,activateUsAdminRequest,assertUsAdminWelcomePreview,sendUsAdminWelcome,reconcileUsAdminWelcome} from "./usAdminCommercialRoutes.js";
 import {assertCanonicalUsProvisionResult} from "../../services/provision/usCanonicalSourceBoundary.js";
@@ -1457,6 +1457,29 @@ function ownerQueueWireError(req,keys,stats=false){
   return null;
 }
 
+// Only the explicit US queue read contract opts into exact bigint identity.
+// Existing unscoped reads and every write route retain their old ID contract.
+function ownerQueueDetailIdentity(req){
+  const dispatch=ownerQueueMarketDispatch(req);
+  const scoped=dispatch==="US";
+  if(!scoped)return {scoped:false,id:normalizeRequestId(req.params?.id)};
+  const raw=req.params?.id;
+  const id=typeof raw==="string"&&/^[1-9][0-9]{0,18}$/.test(raw)&&
+    BigInt(raw)<=9223372036854775807n?raw:null;
+  return {scoped:true,id};
+}
+async function readUsQueueDetailIdentity(pool,id,idOnly=false){
+  const scope=ownerQueueScope({market:"US"});
+  const result=await pool.query(
+    "SELECT "+(idOnly?"id::text AS id":"*")+" FROM public.owner_opening_requests WHERE "+
+    scope.conditions.join(" AND ")+" AND id=$2 LIMIT 1",[...scope.values,id]);
+  const row=result.rows[0];
+  if(!row)return result;
+  if((typeof row.id==="number"&&!Number.isSafeInteger(row.id))||String(row.id)!==id)
+    throw Error("ADMIN_QUEUE_DETAIL_IDENTITY_INVALID");
+  return {...result,rows:[{...row,id}]};
+}
+
 export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
   const r = express.Router();
 
@@ -2713,10 +2736,11 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
   // Read-only Admin readback for a SPECIFIC existing provisioned US salon.
   // Never infer a market from phone, locale, city, or request URL.
   r.get("/requests/:id/us-primary-location", async (req,res)=>{
-    const requestId=normalizeRequestId(req.params?.id);
+    const identity=ownerQueueDetailIdentity(req);
+    const requestId=identity.id;
     if(!requestId) return res.status(400).json({ok:false,error:"REQUEST_ID_INVALID"});
     try {
-      const found=await pool.query(
+      const found=identity.scoped?await readUsQueueDetailIdentity(pool,requestId,false):await pool.query(
         "SELECT * FROM public.owner_opening_requests WHERE id=$1 LIMIT 1",
         [requestId]
       );
@@ -3446,7 +3470,8 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
 
   r.get("/requests/:id/audit", async (req,res)=>{
     try{
-      const requestId = normalizeRequestId(req.params?.id);
+      const identity=ownerQueueDetailIdentity(req);
+    const requestId = identity.id;
 
       if(!requestId){
         return res.status(400).json({
@@ -3455,7 +3480,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
-      const requestResult = await pool.query(
+      const requestResult = identity.scoped?await readUsQueueDetailIdentity(pool,requestId,true):await pool.query(
         `
           SELECT id
           FROM public.owner_opening_requests
@@ -3629,7 +3654,8 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
 
   r.get("/requests/:id", async (req,res)=>{
     try{
-      const requestId = normalizeRequestId(req.params?.id);
+      const identity=ownerQueueDetailIdentity(req);
+    const requestId = identity.id;
 
       if(!requestId){
         return res.status(400).json({
@@ -3638,7 +3664,7 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
         });
       }
 
-      const result = await pool.query(
+      const result = identity.scoped?await readUsQueueDetailIdentity(pool,requestId,false):await pool.query(
         `
           SELECT *
           FROM public.owner_opening_requests
