@@ -13,6 +13,6 @@ export function validG3Seal(p){
  typeof p.source_hash!=="string"||!/^[0-9a-f]{64}$/.test(p.source_hash)||p.source_external_id!=="totem_us_bridge.company4_site5_partner_"+p.source_partner_id||
  typeof p.source_approved_at!=="string"||!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(p.source_approved_at))return false;
  const t=Date.parse(p.source_approved_at);
- return Number.isFinite(t)&&new Date(t).toISOString().replace(".000Z","Z")===p.source_approved_at;
+ return !p.source_approved_at.startsWith("0000-")&&Number.isFinite(t)&&new Date(t).toISOString().replace(".000Z","Z")===p.source_approved_at;
 }
 export function sameG3Seal(a,b){return validG3Seal(a)&&validG3Seal(b)&&a.source_partner_id===b.source_partner_id&&G3_SEAL_KEYS.every(k=>a[k]===b[k]);}
