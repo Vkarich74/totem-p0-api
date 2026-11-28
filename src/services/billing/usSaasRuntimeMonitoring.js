@@ -108,6 +108,11 @@ export async function readUsSaasRuntimeWatchdog(db,{expectedMode="ACTIVE"}={}){
  const r=rows[0],heartbeat=age(r.heartbeat_age_s),failures=number(r.consecutive_failures);
  const allowed=["NEVER","RUNNING","OK","IDLE","PARTIAL","RATE_LIMIT","AUTH_REJECTED","PROVIDER_ERROR","TICK_ERROR"];
  if(!allowed.includes(r.last_outcome)||typeof r.cooling!=="boolean"||failures>20)throw Error("US_SAAS_WATCHDOG_INVALID");
+ // finish() atomically resets the streak on OK and increments it on failure.
+ // IDLE and RUNNING preserve the prior streak; NEVER retains its HOLD checks.
+ if((r.last_outcome==="OK"&&failures!==0)||
+    (["PARTIAL","RATE_LIMIT","AUTH_REJECTED","PROVIDER_ERROR","TICK_ERROR"].includes(r.last_outcome)&&failures===0))
+   throw Error("US_SAAS_WATCHDOG_INCONSISTENT");
  const health=await readUsSaasRuntimeHealth(db);
  // An intentional initial HOLD must not be reported as a dead worker.
  // Never infer HOLD from this independent process's missing worker flags.
