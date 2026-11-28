@@ -13,7 +13,7 @@ const watchdog=patch=>{
 };
 
 test("consistent aggregate subsets and disjoint statuses are preserved",async()=>{
- const h=await health({total:"5",active:"3",blocked:"2",orphaned:"1",due:"4",at_risk:"2",stale:"1",expired_active:"1",pending:"4",runnable:"3",oldest_runnable_s:"1",processing:"2",lease_expired:"1",recent_done:"9"});
+ const h=await health({total:"5",active:"3",blocked:"2",orphaned:"1",due:"4",at_risk:"2",stale:"1",expired_active:"1",max_active_age_s:"301",pending:"4",runnable:"3",oldest_runnable_s:"1",processing:"2",lease_expired:"1",recent_done:"9"});
  assert.equal(h.total,5);assert.equal(h.active,3);assert.equal(h.blocked,2);assert.equal(h.severity,"CRITICAL");
 });
 test("future stale evidence need not be due, and empty HOLD remains valid",async()=>{

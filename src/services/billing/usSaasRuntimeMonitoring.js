@@ -83,6 +83,13 @@ export async function readUsSaasRuntimeHealth(db){
     result.lease_expired>result.processing)
    throw Error("US_SAAS_MONITOR_INCONSISTENT");
  result.max_active_age_s=age(row.max_active_age_s);
+ // MAX ignores NULL verification timestamps. If every active timestamp is
+ // NULL, all active rows satisfy the due, at_risk and stale SQL predicates.
+ // A non-null MAX needs at least one active row; negative ages remain valid.
+ if((result.active===0&&result.max_active_age_s!==null)||
+    (result.active>0&&result.max_active_age_s===null&&
+     (result.stale!==result.active||result.at_risk!==result.active||result.due<result.active)))
+   throw Error("US_SAAS_MONITOR_INCONSISTENT");
  result.oldest_runnable_s=age(row.oldest_runnable_s);
  // COUNT and MAX use the same non-null runnable timestamps in the same snapshot.
  // Check the raw sign before rounding can turn a negative age into zero.
