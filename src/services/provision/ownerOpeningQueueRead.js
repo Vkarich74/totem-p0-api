@@ -28,7 +28,18 @@ const ID=/^[1-9][0-9]{0,18}$/;
 // PostgreSQL ISO DateStyle, including exact microseconds and optional UTC offset.
 const STAMP=/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:[+-]\d{2}(?::\d{2})?)?$/;
 function validId(id){return typeof id==="string"&&ID.test(id)&&BigInt(id)<=9223372036854775807n;}
-function validStamp(t){return t===null||(typeof t==="string"&&STAMP.test(t)&&Number.isFinite(Date.parse(t.replace(" ","T").replace(/([+-]\d{2})$/,"$1:00"))));}
+function validStamp(t){
+  if(t===null)return true;
+  if(typeof t!=="string"||!STAMP.test(t))return false;
+  // Date.parse normalizes impossible calendar days. PostgreSQL rejects them.
+  // Validate the original date without losing cursor microseconds or offsets.
+  const year=Number(t.slice(0,4)),month=Number(t.slice(5,7)),day=Number(t.slice(8,10));
+  if(year<1||month<1||month>12||day<1)return false;
+  const leap=year%4===0&&(year%100!==0||year%400===0);
+  const days=[31,leap?29:28,31,30,31,30,31,31,30,31,30,31];
+  if(day>days[month-1])return false;
+  return Number.isFinite(Date.parse(t.replace(" ","T").replace(/([+-]\d{2})$/,"$1:00")));
+}
 export function ownerQueuePage(query={}) {
   const result=ownerQueueScope(query);
   const {scope,values,conditions}=result;
