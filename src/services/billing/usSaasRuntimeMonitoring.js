@@ -66,10 +66,13 @@ function age(value){
 }
 // Only native pg Date values or explicitly zoned timestamp text are evidence.
 // Never let Date's coercion or calendar overflow fabricate a sample instant.
-function sampleTimestamp(value){
+function sampleTimestamp(value,precise=false){
  if(value instanceof Date){
    const ms=Date.prototype.getTime.call(value);
-   if(Number.isFinite(ms))return new Date(ms).toISOString();
+   if(Number.isFinite(ms)){
+     const iso=new Date(ms).toISOString();
+     return precise?iso.slice(0,-1)+"000Z":iso;
+   }
    throw Error("US_SAAS_MONITOR_INVALID");
  }
  const m=typeof value==="string"&&/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}(?::?\d{2})?)$/.exec(value);
@@ -89,16 +92,21 @@ function sampleTimestamp(value){
  const iso=m[1]+"-"+m[2]+"-"+m[3]+"T"+m[4]+":"+m[5]+":"+m[6]+"."+((m[7]||"")+"000").slice(0,3)+zone;
  const ms=Date.parse(iso);
  if(!Number.isFinite(ms))throw Error("US_SAAS_MONITOR_INVALID");
- return new Date(ms).toISOString();
+ const normalized=new Date(ms).toISOString();
+ return precise?normalized.slice(0,-1)+((m[7]||"")+"000000").slice(3,6)+"Z":normalized;
 }
 export async function readUsSaasRuntimeHealth(db){
  return readUsSaasRuntimeHealthAtClock(db,false);
 }
-async function readUsSaasRuntimeHealthAtClock(db,snapshotClock){
+async function readUsSaasRuntimeHealthAtClock(db,snapshotClock,expectedSample=null){
  const {rows}=await db.query(snapshotClock?SNAPSHOT_HEALTH_SQL:US_SAAS_RUNTIME_HEALTH_SQL);
  if(rows.length!==1)throw Error("US_SAAS_MONITOR_INVALID");
  const row=rows[0];
  const result={sampled_at:sampleTimestamp(row.sampled_at)};
+ // A standalone sample must be bound to the same validated transaction instant.
+ // Compare at the precision delivered by the adapter, including text microseconds.
+ if(snapshotClock&&sampleTimestamp(row.sampled_at,true)!==expectedSample)
+   throw Error("US_SAAS_WATCHDOG_SNAPSHOT_MISMATCH");
  for(const k of countKeys)result[k]=number(row[k]);
  // Every bound below follows directly from the same SQL snapshot: FILTER
  // subsets of their populations and mutually exclusive subscription statuses.
@@ -168,7 +176,8 @@ async function readUsSaasRuntimeWatchdogAtClock(db,{expectedMode="ACTIVE"}={},sn
  if((r.last_outcome==="OK"&&failures!==0)||
     (["PARTIAL","RATE_LIMIT","AUTH_REJECTED","PROVIDER_ERROR","TICK_ERROR"].includes(r.last_outcome)&&failures===0))
    throw Error("US_SAAS_WATCHDOG_INCONSISTENT");
- const health=await readUsSaasRuntimeHealthAtClock(db,snapshotClock);
+ const expectedSample=snapshotClock?sampleTimestamp(r.sampled_at,true):null;
+ const health=await readUsSaasRuntimeHealthAtClock(db,snapshotClock,expectedSample);
  // An intentional initial HOLD must not be reported as a dead worker.
  // Never infer HOLD from this independent process's missing worker flags.
  // Any evidence of active work or a non-pristine runtime is an incident,
