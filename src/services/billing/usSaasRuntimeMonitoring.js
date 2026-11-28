@@ -64,6 +64,33 @@ function age(value){
  if(!Number.isFinite(n)||!Number.isFinite(rounded))throw Error("US_SAAS_MONITOR_INVALID");
  return rounded;
 }
+// Only native pg Date values or explicitly zoned timestamp text are evidence.
+// Never let Date's coercion or calendar overflow fabricate a sample instant.
+function sampleTimestamp(value){
+ if(value instanceof Date){
+   const ms=Date.prototype.getTime.call(value);
+   if(Number.isFinite(ms))return new Date(ms).toISOString();
+   throw Error("US_SAAS_MONITOR_INVALID");
+ }
+ const m=typeof value==="string"&&/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}(?::?\d{2})?)$/.exec(value);
+ if(!m||m[0]!==value)throw Error("US_SAAS_MONITOR_INVALID");
+ const [y,mo,d,h,mi,s]=m.slice(1,7).map(Number);
+ const leap=y%4===0&&(y%100!==0||y%400===0);
+ const days=[31,leap?29:28,31,30,31,30,31,31,30,31,30,31];
+ if(y===0||mo<1||mo>12||d<1||d>days[mo-1]||h>23||mi>59||s>59)
+   throw Error("US_SAAS_MONITOR_INVALID");
+ let zone=m[8];
+ if(zone!=="Z"){
+   const z=zone.slice(1).replace(":","");
+   const zh=Number(z.slice(0,2)),zm=Number(z.slice(2)||"0");
+   if(zh>15||zm>59)throw Error("US_SAAS_MONITOR_INVALID");
+   zone=zone[0]+z.slice(0,2)+":"+String(zm).padStart(2,"0");
+ }
+ const iso=m[1]+"-"+m[2]+"-"+m[3]+"T"+m[4]+":"+m[5]+":"+m[6]+"."+((m[7]||"")+"000").slice(0,3)+zone;
+ const ms=Date.parse(iso);
+ if(!Number.isFinite(ms))throw Error("US_SAAS_MONITOR_INVALID");
+ return new Date(ms).toISOString();
+}
 export async function readUsSaasRuntimeHealth(db){
  return readUsSaasRuntimeHealthAtClock(db,false);
 }
@@ -71,10 +98,7 @@ async function readUsSaasRuntimeHealthAtClock(db,snapshotClock){
  const {rows}=await db.query(snapshotClock?SNAPSHOT_HEALTH_SQL:US_SAAS_RUNTIME_HEALTH_SQL);
  if(rows.length!==1)throw Error("US_SAAS_MONITOR_INVALID");
  const row=rows[0];
- if(row.sampled_at==null)throw Error("US_SAAS_MONITOR_INVALID");
- const time=new Date(row.sampled_at);
- if(!Number.isFinite(time.getTime()))throw Error("US_SAAS_MONITOR_INVALID");
- const result={sampled_at:time.toISOString()};
+ const result={sampled_at:sampleTimestamp(row.sampled_at)};
  for(const k of countKeys)result[k]=number(row[k]);
  // Every bound below follows directly from the same SQL snapshot: FILTER
  // subsets of their populations and mutually exclusive subscription statuses.
