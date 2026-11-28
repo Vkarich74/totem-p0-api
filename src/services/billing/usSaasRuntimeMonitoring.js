@@ -41,6 +41,7 @@ scope AS (
 )
 SELECT clock.t AS sampled_at,projection.*,queue.* FROM clock CROSS JOIN projection CROSS JOIN queue
 `;
+const SNAPSHOT_HEALTH_SQL=US_SAAS_RUNTIME_HEALTH_SQL.replace("statement_timestamp()", "transaction_timestamp()");
 const countKeys=["total","orphaned","due","at_risk","stale","expired_active","active","blocked",
  "pending","runnable","processing","lease_expired","recent_failed","recent_done"];
 function number(value){
@@ -64,7 +65,10 @@ function age(value){
  return rounded;
 }
 export async function readUsSaasRuntimeHealth(db){
- const {rows}=await db.query(US_SAAS_RUNTIME_HEALTH_SQL);
+ return readUsSaasRuntimeHealthAtClock(db,false);
+}
+async function readUsSaasRuntimeHealthAtClock(db,snapshotClock){
+ const {rows}=await db.query(snapshotClock?SNAPSHOT_HEALTH_SQL:US_SAAS_RUNTIME_HEALTH_SQL);
  if(rows.length!==1)throw Error("US_SAAS_MONITOR_INVALID");
  const row=rows[0];
  if(row.sampled_at==null)throw Error("US_SAAS_MONITOR_INVALID");
@@ -119,12 +123,17 @@ export async function readUsSaasRuntimeHealth(db){
 
 // Independent READ ONLY watchdog, intended for a separate process/sink.
 // Does not require Odoo credentials or start the scheduler.
-export async function readUsSaasRuntimeWatchdog(db,{expectedMode="ACTIVE"}={}){
+export async function readUsSaasRuntimeWatchdog(db,options={}){
+ return readUsSaasRuntimeWatchdogAtClock(db,options,false);
+}
+async function readUsSaasRuntimeWatchdogAtClock(db,{expectedMode="ACTIVE"}={},snapshotClock){
  if(!["ACTIVE","HOLD"].includes(expectedMode))throw Error("US_SAAS_WATCHDOG_MODE_INVALID");
- const {rows}=await db.query(`SELECT statement_timestamp() AS sampled_at,
+ // The standalone sampler owns a transaction; its clock is stable across both reads.
+ const clock=snapshotClock?"transaction_timestamp()":"statement_timestamp()";
+ const {rows}=await db.query(`SELECT ${clock} AS sampled_at,
  last_outcome,consecutive_failures,
- extract(epoch FROM statement_timestamp()-last_heartbeat_at) AS heartbeat_age_s,
- not_before>statement_timestamp() AS cooling
+ extract(epoch FROM ${clock}-last_heartbeat_at) AS heartbeat_age_s,
+ not_before>${clock} AS cooling
  FROM public.us_saas_runtime_control WHERE singleton=true`);
  if(rows.length!==1)throw Error("US_SAAS_WATCHDOG_STATE_MISSING");
  const r=rows[0],heartbeat=age(r.heartbeat_age_s),failures=number(r.consecutive_failures);
@@ -135,7 +144,7 @@ export async function readUsSaasRuntimeWatchdog(db,{expectedMode="ACTIVE"}={}){
  if((r.last_outcome==="OK"&&failures!==0)||
     (["PARTIAL","RATE_LIMIT","AUTH_REJECTED","PROVIDER_ERROR","TICK_ERROR"].includes(r.last_outcome)&&failures===0))
    throw Error("US_SAAS_WATCHDOG_INCONSISTENT");
- const health=await readUsSaasRuntimeHealth(db);
+ const health=await readUsSaasRuntimeHealthAtClock(db,snapshotClock);
  // An intentional initial HOLD must not be reported as a dead worker.
  // Never infer HOLD from this independent process's missing worker flags.
  // Any evidence of active work or a non-pristine runtime is an incident,
@@ -179,7 +188,7 @@ export async function sampleUsSaasRuntimeWatchdog(pool,options={}){
    const check=await db.query("SHOW transaction_read_only");
    if(check.rows.length!==1||check.rows[0].transaction_read_only!=="on")
      throw Error("US_SAAS_WATCHDOG_READONLY_REQUIRED");
-   const result=await readUsSaasRuntimeWatchdog(db,options);
+   const result=await readUsSaasRuntimeWatchdogAtClock(db,options,true);
    await db.query("ROLLBACK");begun=false;
    return result;
  }catch(e){
