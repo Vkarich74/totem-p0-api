@@ -1439,6 +1439,24 @@ function ownerQueueMarketDispatch(req){
   return market==="US"?"US":"LEGACY";
 }
 
+// US queue filters must not disappear when the extended query parser truncates
+// parameters or discards a malformed key. Legacy dispatch is unchanged.
+function ownerQueueWireError(req,keys,stats=false){
+  const url=String(req.originalUrl??req.url??"");
+  const question=url.indexOf("?");
+  const pairs=[...new URLSearchParams(question<0?"":url.slice(question+1))];
+  for(const key of keys){
+    const values=pairs.filter(([name])=>name===key||name.startsWith(key+"["));
+    const parsed=req.query?.[key];
+    if(values.length===0&&parsed===undefined)continue;
+    if(values.length===1&&values[0][0]===key&&
+       typeof parsed==="string"&&values[0][1]===parsed)continue;
+    return stats?"ADMIN_QUEUE_FILTER_INVALID":key==="cursor"?"ADMIN_QUEUE_CURSOR_INVALID":
+      key==="limit"?"ADMIN_QUEUE_LIMIT_INVALID":"ADMIN_QUEUE_FILTER_INVALID";
+  }
+  return null;
+}
+
 export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
   const r = express.Router();
 
@@ -1450,6 +1468,8 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
     const dispatch=ownerQueueMarketDispatch(req);
     if(dispatch==="INVALID")return res.status(400).json({ok:false,error:"ADMIN_QUEUE_FILTER_INVALID"});
     if(dispatch==="US"){
+      const wireError=ownerQueueWireError(req,["owner_type","status","cursor"],true);
+      if(wireError)return res.status(400).json({ok:false,error:wireError});
       try{return res.status(200).json(await readUsOwnerQueueStats(pool,req.query));}
       catch(e){return res.status(e?.status===400?400:500).json({ok:false,error:e?.status===400?e.code:"ADMIN_US_QUEUE_READ_FAILED"});}
     }
@@ -3541,6 +3561,8 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
     const dispatch=ownerQueueMarketDispatch(req);
     if(dispatch==="INVALID")return res.status(400).json({ok:false,error:"ADMIN_QUEUE_FILTER_INVALID"});
     if(dispatch==="US"){
+      const wireError=ownerQueueWireError(req,["owner_type","status","limit","cursor"],false);
+      if(wireError)return res.status(400).json({ok:false,error:wireError});
       try{return res.status(200).json(await readUsOwnerQueuePage(pool,req.query));}
       catch(e){return res.status(e?.status===400?400:500).json({ok:false,error:e?.status===400?e.code:"ADMIN_US_QUEUE_READ_FAILED"});}
     }
