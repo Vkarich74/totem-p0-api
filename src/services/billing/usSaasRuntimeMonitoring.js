@@ -84,6 +84,11 @@ export async function readUsSaasRuntimeHealth(db){
    throw Error("US_SAAS_MONITOR_INCONSISTENT");
  result.max_active_age_s=age(row.max_active_age_s);
  result.oldest_runnable_s=age(row.oldest_runnable_s);
+ // COUNT and MAX use the same non-null runnable timestamps in the same snapshot.
+ // Check the raw sign before rounding can turn a negative age into zero.
+ if((result.runnable===0)!==(result.oldest_runnable_s===null)||
+    (result.oldest_runnable_s!==null&&Number(row.oldest_runnable_s)<0))
+   throw Error("US_SAAS_MONITOR_INCONSISTENT");
  result.severity=result.stale||result.orphaned||result.expired_active?"CRITICAL":
    result.at_risk||result.lease_expired||result.recent_failed||
    (result.oldest_runnable_s??0)>60?"WARN":"OK";

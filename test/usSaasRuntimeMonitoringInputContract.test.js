@@ -24,7 +24,7 @@ const watchdog = (patch) => {
 };
 
 test("PostgreSQL decimal text and native numbers retain exact valid health semantics", async () => {
-  const h = await health({total: "2", active: 2, max_active_age_s: "-0.1255", oldest_runnable_s: "60.250"});
+  const h = await health({total: "2", active: 2, max_active_age_s: "-0.1255", pending: "1", runnable: "1", oldest_runnable_s: "60.250"});
   assert.equal(h.total,2);
   assert.equal(h.active,2);
   assert.equal(h.max_active_age_s,-0.125);

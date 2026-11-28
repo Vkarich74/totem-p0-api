@@ -13,7 +13,7 @@ const watchdog=patch=>{
 };
 
 test("consistent aggregate subsets and disjoint statuses are preserved",async()=>{
- const h=await health({total:"5",active:"3",blocked:"2",orphaned:"1",due:"4",at_risk:"2",stale:"1",expired_active:"1",pending:"4",runnable:"3",processing:"2",lease_expired:"1",recent_done:"9"});
+ const h=await health({total:"5",active:"3",blocked:"2",orphaned:"1",due:"4",at_risk:"2",stale:"1",expired_active:"1",pending:"4",runnable:"3",oldest_runnable_s:"1",processing:"2",lease_expired:"1",recent_done:"9"});
  assert.equal(h.total,5);assert.equal(h.active,3);assert.equal(h.blocked,2);assert.equal(h.severity,"CRITICAL");
 });
 test("future stale evidence need not be due, and empty HOLD remains valid",async()=>{
@@ -40,3 +40,38 @@ for(const [name,patch] of [
 test("an impossible nonzero active count cannot be reported as pristine HOLD",async()=>{
  await assert.rejects(watchdog({active:"1"}),/US_SAAS_MONITOR_INCONSISTENT/);
 });
+
+for(const [name,patch] of [
+ ["ready jobs without age",{pending:"1",runnable:"1"}],
+ ["zero ready jobs with zero age",{oldest_runnable_s:"0"}],
+ ["zero ready jobs with positive age",{pending:"2",oldest_runnable_s:"61"}],
+ ["negative ready age",{pending:"1",runnable:"1",oldest_runnable_s:"-1"}],
+ ["negative age hidden by rounding",{pending:"1",runnable:"1",oldest_runnable_s:"-0.000001"}]
+]){
+ test("queue age rejects "+name,async()=>{
+  await assert.rejects(health(patch),{message:"US_SAAS_MONITOR_INCONSISTENT"});
+ });
+}
+test("queue age cannot produce pristine HOLD from a non-null empty queue age",async()=>{
+ await assert.rejects(watchdog({oldest_runnable_s:"0"}),{message:"US_SAAS_MONITOR_INCONSISTENT"});
+});
+test("queue age cannot produce healthy ACTIVE from ready jobs without age",async()=>{
+ let n=0;
+ const db={query:async()=>({rows:[n++===0?
+ {last_outcome:"OK",consecutive_failures:"0",heartbeat_age_s:"1",cooling:false}:
+ row({pending:"1",runnable:"1"})]})};
+ await assert.rejects(readUsSaasRuntimeWatchdog(db,{expectedMode:"ACTIVE"}),{message:"US_SAAS_MONITOR_INCONSISTENT"});
+});
+for(const [name,patch,expectedAge,severity] of [
+ ["empty queue",{},null,"OK"],
+ ["pending not ready",{pending:"2"},null,"OK"],
+ ["ready exactly now",{pending:"1",runnable:"1",oldest_runnable_s:"0"},0,"OK"],
+ ["warning boundary",{pending:"1",runnable:"1",oldest_runnable_s:60},60,"OK"],
+ ["above warning boundary",{pending:"2",runnable:"2",oldest_runnable_s:"60.001"},60.001,"WARN"]
+]){
+ test("queue age preserves "+name,async()=>{
+  const result=await health(patch);
+  assert.equal(result.oldest_runnable_s,expectedAge);
+  assert.equal(result.severity,severity);
+ });
+}
