@@ -104,14 +104,16 @@ export async function readUsSaasRuntimeHealth(db){
    if(inconsistent)throw Error("US_SAAS_MONITOR_INCONSISTENT");
  }
  result.oldest_runnable_s=age(row.oldest_runnable_s);
+ // Classify with validated raw age; rounding is for output only.
+ const rawQueueAge=result.oldest_runnable_s===null?null:Number(row.oldest_runnable_s);
  // COUNT and MAX use the same non-null runnable timestamps in the same snapshot.
  // Check the raw sign before rounding can turn a negative age into zero.
  if((result.runnable===0)!==(result.oldest_runnable_s===null)||
-    (result.oldest_runnable_s!==null&&Number(row.oldest_runnable_s)<0))
+    (rawQueueAge!==null&&rawQueueAge<0))
    throw Error("US_SAAS_MONITOR_INCONSISTENT");
  result.severity=result.stale||result.orphaned||result.expired_active?"CRITICAL":
    result.at_risk||result.lease_expired||result.recent_failed||
-   (result.oldest_runnable_s??0)>60?"WARN":"OK";
+   (rawQueueAge??0)>60?"WARN":"OK";
  return Object.freeze(result);
 }
 
@@ -149,9 +151,11 @@ export async function readUsSaasRuntimeWatchdog(db,{expectedMode="ACTIVE"}={}){
      heartbeat_age_s:heartbeat,last_outcome:r.last_outcome,consecutive_failures:failures,
      cooling:r.cooling,health});
  }
- const dead=r.last_outcome==="NEVER"||heartbeat===null||heartbeat< -1||heartbeat>60;
+ // Preserve exact heartbeat thresholds before display rounding.
+ const rawHeartbeat=heartbeat===null?null:Number(r.heartbeat_age_s);
+ const dead=r.last_outcome==="NEVER"||rawHeartbeat===null||rawHeartbeat< -1||rawHeartbeat>60;
  const severity=dead||health.severity==="CRITICAL"||r.last_outcome==="AUTH_REJECTED"||r.last_outcome==="TICK_ERROR"?"CRITICAL":
-   heartbeat>45||failures>0||r.cooling&&r.last_outcome!=="RUNNING"||health.severity==="WARN"?"WARN":"OK";
+   rawHeartbeat>45||failures>0||r.cooling&&r.last_outcome!=="RUNNING"||health.severity==="WARN"?"WARN":"OK";
  return Object.freeze({severity,expected_mode:"ACTIVE",runtime_health_ok:severity==="OK",heartbeat_age_s:heartbeat,last_outcome:r.last_outcome,
    consecutive_failures:failures,cooling:r.cooling,
    reason:dead?"HEARTBEAT_MISSING_OR_STALE":severity==="OK"?"HEALTHY":"DEGRADED",
