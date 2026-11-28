@@ -72,6 +72,16 @@ export async function readUsSaasRuntimeHealth(db){
  if(!Number.isFinite(time.getTime()))throw Error("US_SAAS_MONITOR_INVALID");
  const result={sampled_at:time.toISOString()};
  for(const k of countKeys)result[k]=number(row[k]);
+ // Every bound below follows directly from the same SQL snapshot: FILTER
+ // subsets of their populations and mutually exclusive subscription statuses.
+ // Reject contradictory aggregates rather than misreporting a pristine HOLD.
+ // Use subtraction for the disjoint sum to avoid unsafe integer addition.
+ if(result.orphaned>result.total||result.due>result.total||
+    result.blocked>result.total||result.active>result.total-result.blocked||
+    result.at_risk>result.active||result.stale>result.at_risk||
+    result.expired_active>result.active||result.runnable>result.pending||
+    result.lease_expired>result.processing)
+   throw Error("US_SAAS_MONITOR_INCONSISTENT");
  result.max_active_age_s=age(row.max_active_age_s);
  result.oldest_runnable_s=age(row.oldest_runnable_s);
  result.severity=result.stale||result.orphaned||result.expired_active?"CRITICAL":
