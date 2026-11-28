@@ -90,6 +90,19 @@ export async function readUsSaasRuntimeHealth(db){
     (result.active>0&&result.max_active_age_s===null&&
      (result.stale!==result.active||result.at_risk!==result.active||result.due<result.active)))
    throw Error("US_SAAS_MONITOR_INCONSISTENT");
+ // For a numeric MAX, at least one active row has exactly that age.
+ // Other active ages are <= MAX or NULL; non-active rows affect only due.
+ // Use the validated raw age, not the rounded display value, at SQL boundaries.
+ if(result.max_active_age_s!==null){
+   const m=Number(row.max_active_age_s);
+   const {active:a,total:t,due:d,at_risk:r,stale:s}=result;
+   const inconsistent=m< -1?r!==a||s!==a||d>t-1:
+     m<=60?r!==s||r>=a||d>t-a+r:
+     m<=240?r!==s||r>=a||d<1:
+     m<=300?r<=s||d<r-s:
+     s<1||d<r-s+1;
+   if(inconsistent)throw Error("US_SAAS_MONITOR_INCONSISTENT");
+ }
  result.oldest_runnable_s=age(row.oldest_runnable_s);
  // COUNT and MAX use the same non-null runnable timestamps in the same snapshot.
  // Check the raw sign before rounding can turn a negative age into zero.
