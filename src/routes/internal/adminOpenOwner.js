@@ -1422,6 +1422,23 @@ export async function createVerifiedUsIntakeRequest(db,verified,proof){
     {id:null,email:"",actor:"system:us_odoo_intake"},verified.provenance,true);
 }
 
+// The legacy global read is intentional only for omitted market or the
+// existing exact non-US codes. An invalid selector must never choose it.
+function ownerQueueMarketDispatch(req){
+  const market=req.query?.market;
+  const url=String(req.originalUrl??req.url??"");
+  const question=url.indexOf("?");
+  const selectors=[...new URLSearchParams(question<0?"":url.slice(question+1))]
+    .filter(([key])=>key==="market"||key.startsWith("market["));
+  // Inspect the wire selector too: the extended parser may discard malformed
+  // keys or truncate parameters. Never infer global from a discarded selector.
+  if(selectors.length===0)return market===undefined?"LEGACY":"INVALID";
+  if(selectors.length!==1||selectors[0][0]!=="market"||
+     typeof market!=="string"||selectors[0][1]!==market||
+     !["US","KG","KZ","UNKNOWN"].includes(market))return "INVALID";
+  return market==="US"?"US":"LEGACY";
+}
+
 export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
   const r = express.Router();
 
@@ -1430,7 +1447,9 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
   }
 
   r.get("/stats", async (req,res)=>{
-    if(req.query?.market==="US"){
+    const dispatch=ownerQueueMarketDispatch(req);
+    if(dispatch==="INVALID")return res.status(400).json({ok:false,error:"ADMIN_QUEUE_FILTER_INVALID"});
+    if(dispatch==="US"){
       try{return res.status(200).json(await readUsOwnerQueueStats(pool,req.query));}
       catch(e){return res.status(e?.status===400?400:500).json({ok:false,error:e?.status===400?e.code:"ADMIN_US_QUEUE_READ_FAILED"});}
     }
@@ -3519,7 +3538,9 @@ export default function buildAdminOpenOwnerRouter(pool, internalReadRateLimit){
 
 
   r.get("/requests", async (req,res)=>{
-    if(req.query?.market==="US"){
+    const dispatch=ownerQueueMarketDispatch(req);
+    if(dispatch==="INVALID")return res.status(400).json({ok:false,error:"ADMIN_QUEUE_FILTER_INVALID"});
+    if(dispatch==="US"){
       try{return res.status(200).json(await readUsOwnerQueuePage(pool,req.query));}
       catch(e){return res.status(e?.status===400?400:500).json({ok:false,error:e?.status===400?e.code:"ADMIN_US_QUEUE_READ_FAILED"});}
     }
