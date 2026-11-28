@@ -43,9 +43,26 @@ SELECT clock.t AS sampled_at,projection.*,queue.* FROM clock CROSS JOIN projecti
 `;
 const countKeys=["total","orphaned","due","at_risk","stale","expired_active","active","blocked",
  "pending","runnable","processing","lease_expired","recent_failed","recent_done"];
-function number(value){if(value===null||value===undefined||value==="")throw Error("US_SAAS_MONITOR_INVALID");const n=Number(value);
- if(!Number.isSafeInteger(n)||n<0)throw Error("US_SAAS_MONITOR_INVALID");return n;}
-function age(value){if(value===null)return null;const n=Number(value);if(!Number.isFinite(n))throw Error("US_SAAS_MONITOR_INVALID");return Math.round(n*1000)/1000;}
+function number(value){
+ // pg int8 normally returns decimal text; custom parsers may return a number.
+ // Never coerce booleans, containers, blank strings or non-decimal syntax.
+ if(typeof value!=="number"&&
+   (typeof value!=="string"||value.trim()!==value||!/^(?:0|[1-9][0-9]*)$/.test(value)))
+   throw Error("US_SAAS_MONITOR_INVALID");
+ const n=Number(value);
+ if(!Number.isSafeInteger(n)||n<0)throw Error("US_SAAS_MONITOR_INVALID");return n;
+}
+function age(value){
+ if(value===null)return null;
+ // PostgreSQL extract(epoch ...) returns decimal numeric text or a number.
+ // Negative ages are valid evidence of clock skew; only null means absent.
+ if(typeof value!=="number"&&
+   (typeof value!=="string"||value.trim()!==value||!/^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(value)))
+   throw Error("US_SAAS_MONITOR_INVALID");
+ const n=Number(value), rounded=Math.round(n*1000)/1000;
+ if(!Number.isFinite(n)||!Number.isFinite(rounded))throw Error("US_SAAS_MONITOR_INVALID");
+ return rounded;
+}
 export async function readUsSaasRuntimeHealth(db){
  const {rows}=await db.query(US_SAAS_RUNTIME_HEALTH_SQL);
  if(rows.length!==1)throw Error("US_SAAS_MONITOR_INVALID");
