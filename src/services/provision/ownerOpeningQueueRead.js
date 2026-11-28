@@ -38,6 +38,10 @@ function validStamp(t){
   const leap=year%4===0&&(year%100!==0||year%400===0);
   const days=[31,leap?29:28,31,30,31,30,31,31,30,31,30,31];
   if(day>days[month-1])return false;
+  // PostgreSQL DecodeTimezone limits the numeric displacement hour to 15.
+  // Date.parse accepts larger offsets; reject them before binding SQL.
+  const offset=/[+-](\d{2})(?::(\d{2}))?$/.exec(t);
+  if(offset&&(Number(offset[1])>15||Number(offset[2]??0)>59))return false;
   return Number.isFinite(Date.parse(t.replace(" ","T").replace(/([+-]\d{2})$/,"$1:00")));
 }
 export function ownerQueuePage(query={}) {
